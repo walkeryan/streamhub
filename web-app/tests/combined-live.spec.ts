@@ -2,8 +2,18 @@ import { expect, test } from '@playwright/test'
 import { signIn } from './helpers'
 
 test('one Live TV destination shares filters and selection without a hidden preview player', async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const response = await original(request)
+      if (request.method === 'GET' && new URL(request.url).pathname === '/api/v1/sources' && response.ok) {
+        return Response.json([...(await response.json()), { id: 'second-fixture', type: 'm3u', name: 'Second fixture source', enabled: true, priority: 99, status: 'ok', counts: {} }])
+      }
+      return response
+    }
+  })
   await signIn(page)
-  await page.evaluate(() => fetch('/api/v1/sources', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer mock-access-p2' }, body: JSON.stringify({ type: 'm3u', name: 'Second fixture source' }) }))
   await page.getByRole('link', { name: 'Live TV', exact: true }).click()
   await expect(page.getByRole('link', { name: 'Guide', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'English', exact: true }).click()
