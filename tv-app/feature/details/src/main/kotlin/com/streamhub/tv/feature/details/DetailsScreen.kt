@@ -54,6 +54,7 @@ import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.metaLine
 import com.streamhub.tv.core.ui.components.shortLabel
+import com.streamhub.tv.core.ui.focus.InitialFocusOnce
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -94,13 +95,15 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
     val inApp = d.sources.filter { it.playableInApp }
     val handoff = d.sources.filterNot { it.playableInApp }
     var chosenSource by remember(d.id) { mutableStateOf(inApp.firstOrNull()) }
-    LaunchedEffect(d.id) { runCatching { playFocus.requestFocus() } }
+    val listFocus = remember { FocusRequester() }
+    // Play on first show of this title only; back from the player (or a related title) restores focus.
+    InitialFocusOnce(initial = playFocus, restore = listFocus, key = d.id)
     LaunchedEffect(s.toast) { if (s.toast != null) { delay(2500); vm.clearToast() } }
 
     Box(Modifier.fillMaxSize()) {
         HeroBackdrop(d.asTile())
         PivotScroll(0.dp) {
-            LazyColumn(Modifier.fillMaxSize().focusRestorer(), contentPadding = PaddingValues(vertical = Tokens.Canvas.SafeMarginY)) {
+            LazyColumn(Modifier.fillMaxSize().focusRequester(listFocus).focusRestorer(), contentPadding = PaddingValues(vertical = Tokens.Canvas.SafeMarginY)) {
                 item("head") {
                     Row(Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = 24.dp)) {
                         AsyncImage(

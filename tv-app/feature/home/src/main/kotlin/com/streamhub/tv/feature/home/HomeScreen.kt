@@ -35,6 +35,7 @@ import com.streamhub.tv.core.ui.components.LoadingView
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.MediaRow
 import com.streamhub.tv.core.ui.components.ShButton
+import com.streamhub.tv.core.ui.focus.InitialFocusOnce
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -64,6 +65,7 @@ private fun HomeContent(u: HomeUi.Ready) {
     var heroButtonsFocused by remember { mutableStateOf(false) }
     val heroTile = focusedTile ?: u.hero.getOrNull(heroIndex % u.hero.size.coerceAtLeast(1))
     val playFocus = remember { FocusRequester() }
+    val listFocus = remember { FocusRequester() }
 
     // Auto-advance every 8 s while the hero is showing its own items, paused while a hero button is focused.
     LaunchedEffect(focusedTile, heroButtonsFocused, u.hero.size) {
@@ -71,7 +73,9 @@ private fun HomeContent(u: HomeUi.Ready) {
             while (true) { delay(8_000); heroIndex = (heroIndex + 1) % u.hero.size }
         }
     }
-    LaunchedEffect(Unit) { runCatching { playFocus.requestFocus() } }
+    // Hero Play gets focus on first show only; after Back the list's focusRestorer returns focus to the
+    // tile that opened Details (each MediaRow's LazyRow has its own focusRestorer).
+    InitialFocusOnce(initial = playFocus, restore = listFocus)
 
     val listState = rememberLazyListState()
     Box(Modifier.fillMaxSize()) {
@@ -79,7 +83,7 @@ private fun HomeContent(u: HomeUi.Ready) {
         PivotScroll(leadingOffset = 0.dp) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().focusRestorer(),
+                modifier = Modifier.fillMaxSize().focusRequester(listFocus).focusRestorer(),
                 contentPadding = PaddingValues(bottom = Tokens.Canvas.SafeMarginY),
             ) {
                 item(key = "hero") {

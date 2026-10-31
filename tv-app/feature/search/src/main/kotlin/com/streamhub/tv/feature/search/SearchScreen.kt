@@ -1,5 +1,6 @@
 package com.streamhub.tv.feature.search
 
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -33,6 +33,7 @@ import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.PosterTile
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShTextField
+import com.streamhub.tv.core.ui.focus.InitialFocusOnce
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -53,9 +54,20 @@ fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
     val fieldFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { fieldFocus.requestFocus() } }
+    val screenFocus = remember { FocusRequester() }
+    // The field gets focus on first show only. After Back from Details the screen-level focusRestorer
+    // re-enters the results column, whose restorer (and each FocusRow's) lands on the opened tile —
+    // instead of jumping to the field and raising the IME.
+    InitialFocusOnce(initial = fieldFocus, restore = screenFocus)
 
-    Row(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
+    Row(
+        Modifier
+            .fillMaxSize()
+            .padding(vertical = Tokens.Canvas.SafeMarginY)
+            .focusRequester(screenFocus)
+            .focusRestorer()
+            .focusGroup(),
+    ) {
         Column(Modifier.width(320.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX, end = 16.dp)) {
             ShTextField(
                 value = q,
