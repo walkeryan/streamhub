@@ -1,0 +1,101 @@
+"""Static data for language inference (ISO 639 tables, country → language, keywords)."""
+
+from __future__ import annotations
+
+# ISO 639-3 code -> English name (the set likely to appear in IPTV playlists).
+LANG_NAMES: dict[str, str] = {
+    "eng": "English", "fra": "French", "deu": "German", "spa": "Spanish", "ita": "Italian",
+    "por": "Portuguese", "nld": "Dutch", "ara": "Arabic", "tur": "Turkish", "rus": "Russian",
+    "ukr": "Ukrainian", "pol": "Polish", "ces": "Czech", "slk": "Slovak", "hun": "Hungarian",
+    "ron": "Romanian", "bul": "Bulgarian", "hrv": "Croatian", "srp": "Serbian", "bos": "Bosnian",
+    "slv": "Slovenian", "mkd": "Macedonian", "sqi": "Albanian", "ell": "Greek", "heb": "Hebrew",
+    "fas": "Persian", "urd": "Urdu", "hin": "Hindi", "ben": "Bengali", "pan": "Punjabi",
+    "tam": "Tamil", "tel": "Telugu", "mal": "Malayalam", "kan": "Kannada", "mar": "Marathi",
+    "guj": "Gujarati", "zho": "Chinese", "jpn": "Japanese", "kor": "Korean", "vie": "Vietnamese",
+    "tha": "Thai", "ind": "Indonesian", "msa": "Malay", "fil": "Filipino", "swe": "Swedish",
+    "nor": "Norwegian", "dan": "Danish", "fin": "Finnish", "isl": "Icelandic", "est": "Estonian",
+    "lav": "Latvian", "lit": "Lithuanian", "kat": "Georgian", "hye": "Armenian", "aze": "Azerbaijani",
+    "kaz": "Kazakh", "uzb": "Uzbek", "kur": "Kurdish", "pus": "Pashto", "amh": "Amharic",
+    "som": "Somali", "swa": "Swahili", "hau": "Hausa", "yor": "Yoruba", "afr": "Afrikaans",
+    "cat": "Catalan", "eus": "Basque", "glg": "Galician", "gle": "Irish", "cym": "Welsh",
+    "mlt": "Maltese", "bel": "Belarusian", "tgl": "Tagalog", "sin": "Sinhala", "nep": "Nepali",
+    "mon": "Mongolian", "khm": "Khmer", "lao": "Lao", "mya": "Burmese", "und": "Unknown",
+}
+
+# ISO 639-1 -> 639-3
+ISO1_TO_3: dict[str, str] = {
+    "en": "eng", "fr": "fra", "de": "deu", "es": "spa", "it": "ita", "pt": "por", "nl": "nld",
+    "ar": "ara", "tr": "tur", "ru": "rus", "uk": "ukr", "pl": "pol", "cs": "ces", "sk": "slk",
+    "hu": "hun", "ro": "ron", "bg": "bul", "hr": "hrv", "sr": "srp", "bs": "bos", "sl": "slv",
+    "mk": "mkd", "sq": "sqi", "el": "ell", "he": "heb", "iw": "heb", "fa": "fas", "ur": "urd",
+    "hi": "hin", "bn": "ben", "pa": "pan", "ta": "tam", "te": "tel", "ml": "mal", "kn": "kan",
+    "mr": "mar", "gu": "guj", "zh": "zho", "ja": "jpn", "ko": "kor", "vi": "vie", "th": "tha",
+    "id": "ind", "ms": "msa", "tl": "tgl", "sv": "swe", "no": "nor", "nb": "nor", "nn": "nor",
+    "da": "dan", "fi": "fin", "is": "isl", "et": "est", "lv": "lav", "lt": "lit", "ka": "kat",
+    "hy": "hye", "az": "aze", "kk": "kaz", "uz": "uzb", "ku": "kur", "ps": "pus", "am": "amh",
+    "so": "som", "sw": "swa", "ha": "hau", "yo": "yor", "af": "afr", "ca": "cat", "eu": "eus",
+    "gl": "glg", "ga": "gle", "cy": "cym", "mt": "mlt", "be": "bel", "si": "sin", "ne": "nep",
+    "mn": "mon", "km": "khm", "lo": "lao", "my": "mya",
+}
+
+# ISO 639-2/B bibliographic codes -> 639-3 (terminology)
+ISO2B_TO_3: dict[str, str] = {
+    "fre": "fra", "ger": "deu", "dut": "nld", "gre": "ell", "chi": "zho", "per": "fas",
+    "cze": "ces", "slo": "slk", "rum": "ron", "alb": "sqi", "arm": "hye", "geo": "kat",
+    "mac": "mkd", "may": "msa", "baq": "eus", "wel": "cym", "ice": "isl", "bur": "mya",
+}
+
+# Dominant broadcast language per ISO 3166-1 alpha-2 country.
+COUNTRY_LANG: dict[str, str] = {
+    "US": "eng", "GB": "eng", "UK": "eng", "IE": "eng", "AU": "eng", "NZ": "eng", "CA": "eng",
+    "ZA": "eng", "JM": "eng", "TT": "eng", "NG": "eng", "GH": "eng", "KE": "eng",
+    "FR": "fra", "BE": "fra", "MC": "fra", "SN": "fra", "CI": "fra", "CM": "fra",
+    "DE": "deu", "AT": "deu", "CH": "deu", "LI": "deu",
+    "ES": "spa", "MX": "spa", "AR": "spa", "CO": "spa", "CL": "spa", "PE": "spa", "VE": "spa",
+    "EC": "spa", "GT": "spa", "CU": "spa", "BO": "spa", "DO": "spa", "HN": "spa", "PY": "spa",
+    "SV": "spa", "NI": "spa", "CR": "spa", "PA": "spa", "UY": "spa", "PR": "spa",
+    "IT": "ita", "SM": "ita", "VA": "ita",
+    "PT": "por", "BR": "por", "AO": "por", "MZ": "por",
+    "NL": "nld", "SR": "nld",
+    "SA": "ara", "AE": "ara", "EG": "ara", "MA": "ara", "DZ": "ara", "TN": "ara", "LY": "ara",
+    "IQ": "ara", "SY": "ara", "JO": "ara", "LB": "ara", "KW": "ara", "QA": "ara", "BH": "ara",
+    "OM": "ara", "YE": "ara", "SD": "ara", "PS": "ara",
+    "TR": "tur", "CY": "ell", "GR": "ell", "RU": "rus", "BY": "bel", "UA": "ukr", "PL": "pol",
+    "CZ": "ces", "SK": "slk", "HU": "hun", "RO": "ron", "MD": "ron", "BG": "bul", "HR": "hrv",
+    "RS": "srp", "ME": "srp", "BA": "bos", "SI": "slv", "MK": "mkd", "AL": "sqi", "XK": "sqi",
+    "IL": "heb", "IR": "fas", "AF": "pus", "PK": "urd", "IN": "hin", "BD": "ben", "LK": "sin",
+    "NP": "nep", "CN": "zho", "TW": "zho", "HK": "zho", "JP": "jpn", "KR": "kor", "VN": "vie",
+    "TH": "tha", "ID": "ind", "MY": "msa", "PH": "fil", "SE": "swe", "NO": "nor", "DK": "dan",
+    "FI": "fin", "IS": "isl", "EE": "est", "LV": "lav", "LT": "lit", "GE": "kat", "AM": "hye",
+    "AZ": "aze", "KZ": "kaz", "UZ": "uzb", "ET": "amh", "SO": "som", "TZ": "swa", "MT": "mlt",
+    "MN": "mon", "KH": "khm", "LA": "lao", "MM": "mya", "AD": "cat",
+}
+
+# Words appearing in group titles / channel names → language. Upper-case match.
+LANG_KEYWORDS: dict[str, str] = {
+    "ENGLISH": "eng", "FRENCH": "fra", "FRANCAIS": "fra", "FRANÇAIS": "fra", "GERMAN": "deu",
+    "DEUTSCH": "deu", "SPANISH": "spa", "ESPANOL": "spa", "ESPAÑOL": "spa", "LATINO": "spa",
+    "ITALIAN": "ita", "ITALIANO": "ita", "ITALIA": "ita", "PORTUGUESE": "por", "PORTUGUES": "por",
+    "BRASIL": "por", "BRAZIL": "por", "DUTCH": "nld", "NEDERLANDS": "nld", "ARABIC": "ara",
+    "ARAB": "ara", "TURKISH": "tur", "TURK": "tur", "TÜRK": "tur", "RUSSIAN": "rus", "POLISH": "pol",
+    "POLSKA": "pol", "GREEK": "ell", "HINDI": "hin", "URDU": "urd", "PUNJABI": "pan",
+    "TAMIL": "tam", "TELUGU": "tel", "MALAYALAM": "mal", "BANGLA": "ben", "BENGALI": "ben",
+    "PERSIAN": "fas", "FARSI": "fas", "KURDISH": "kur", "ALBANIAN": "sqi", "SHQIP": "sqi",
+    "ROMANIAN": "ron", "BULGARIAN": "bul", "SERBIAN": "srp", "CROATIAN": "hrv", "BOSNIAN": "bos",
+    "HUNGARIAN": "hun", "CZECH": "ces", "SWEDISH": "swe", "SVENSKA": "swe", "NORWEGIAN": "nor",
+    "DANISH": "dan", "FINNISH": "fin", "CHINESE": "zho", "JAPANESE": "jpn", "KOREAN": "kor",
+    "VIETNAMESE": "vie", "THAI": "tha", "FILIPINO": "fil", "PINOY": "fil", "HEBREW": "heb",
+    "UKRAINIAN": "ukr", "SOMALI": "som", "AMHARIC": "amh", "PASHTO": "pus", "AFGHAN": "pus",
+}
+
+# Two/three-letter tokens commonly used as group prefixes ("EN|", "FR -", "|AR|", "DE:").
+# Mixes language and country codes; we resolve through ISO1_TO_3 or COUNTRY_LANG.
+EXTRA_PREFIX_TOKENS: dict[str, str] = {
+    "UK": "eng", "USA": "eng", "US": "eng", "LAT": "spa", "LATAM": "spa", "BR": "por", "AR": "ara",
+    "TR": "tur", "PT": "por", "GR": "ell", "IR": "fas", "KU": "kur", "AF": "pus", "EX-YU": "srp",
+    "EXYU": "srp", "YU": "srp", "CN": "zho", "JP": "jpn", "KR": "kor", "IL": "heb", "SE": "swe",
+    "DK": "dan", "NO": "nor", "IN": "hin", "PK": "urd", "CA": "eng",
+}
+
+# Names of tokens that are NOT language indicators even though they look like codes.
+NON_LANG_TOKENS = {"HD", "FHD", "UHD", "SD", "4K", "VIP", "PPV", "24/7", "TV", "VOD", "HEVC", "H265", "RAW"}

@@ -8,6 +8,8 @@ adapters. Optional capabilities are separate protocols so a service can check
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from app.domain.entities import (
@@ -123,7 +125,19 @@ class InteractiveAuthProvider(Protocol):
         ...
 
 
-SourceFactory = Callable[[SourceRef, dict[str, Any]], SourceProvider]
+@dataclass(slots=True)
+class AdapterContext:
+    """Shared dependencies handed to adapter factories (no infra imports in adapters needed)."""
+
+    http_factory: Callable[..., Any]  # () -> httpx.AsyncClient
+    cache: Cache
+    data_dir: Path
+    client_id: str = "streamhub"
+    product: str = "StreamHub"
+    extras: dict[str, Any] = field(default_factory=dict)
+
+
+SourceFactory = Callable[[SourceRef, dict[str, Any], AdapterContext], SourceProvider]
 
 
 class LinkFlowProvider(Protocol):
