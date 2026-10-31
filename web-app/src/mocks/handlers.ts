@@ -28,6 +28,13 @@ const tileById = (id: string): Tile | undefined => {
 export const handlers = [
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),
   http.get(`${B}/health`, () => HttpResponse.json({ ok: true })),
+  http.get(`${B}/profiles/:id/prefs`, ({ params }) => HttpResponse.json(JSON.parse(sessionStorage.getItem(`mock.prefs.${params.id}`) ?? '{}'))),
+  http.put(`${B}/profiles/:id/prefs`, async ({ params, request }) => {
+    const document = await request.json()
+    sessionStorage.setItem(`mock.prefs.${params.id}`, JSON.stringify(document))
+    return HttpResponse.json(document)
+  }),
+  http.get(`${B}/browse/:section/genres`, () => HttpResponse.json([{ name: 'drama', count: 8 }, { name: 'comedy', count: 5 }])),
   http.get(`${B}/profiles`, () => HttpResponse.json(profiles.map((p) => withProfile(p.id)))),
   http.post(`${B}/auth/login`, async ({ request }) => {
     const b = (await request.json()) as { profile_id: string; pin?: string | null; password?: string | null }

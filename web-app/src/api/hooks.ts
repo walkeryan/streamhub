@@ -47,7 +47,7 @@ export const useTitle = (id: string | undefined) =>
     queryFn: () => unwrap<TitleDetail>(api.GET('/titles/{id}', { params: { path: { id: id! } } })),
   })
 
-export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
+export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
 export const useBrowse = (section: string, f: BrowseFilters, page = 1) =>
   useQuery({
     queryKey: ['browse', useProfileId(), section, f, page],

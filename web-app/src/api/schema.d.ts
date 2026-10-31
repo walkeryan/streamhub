@@ -1132,6 +1132,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/browse/{section}/genres": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Actual metadata genres with scoped distinct title counts */
+        get: {
+            parameters: {
+                query?: {
+                    source_id?: string;
+                    language?: string;
+                    category?: string;
+                    q?: string;
+                };
+                header?: never;
+                path: {
+                    section: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            count: number;
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/browse/{section}/languages": {
         parameters: {
             query?: never;
@@ -1185,6 +1231,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    country?: string;
                     source_id?: string;
                     group?: string;
                     language?: string;
@@ -1236,6 +1283,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    country?: string;
                     source_id?: string;
                     language?: string;
                     q?: string;
@@ -1401,6 +1449,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    country?: string;
                     channel_ids?: string;
                     from?: string;
                     to?: string;
