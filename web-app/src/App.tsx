@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './api/client'
 import type { Profile } from './api/types'
 import { useDisclaimer } from './api/hooks'
+import { useCatalogFreshness } from './api/catalogFreshness'
 import { Rail } from './components/Rail'
 import { ErrorState, Skeleton, Toasts } from './components/ui'
 import { FocusGroup } from './nav/Focusable'
@@ -43,6 +44,7 @@ function Shell() {
 export function App() {
   const profile = useSession((s) => s.profile)
   const setProfile = useSession((s) => s.setProfile)
+  useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')
   const current = useQuery({

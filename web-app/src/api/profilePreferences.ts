@@ -29,15 +29,19 @@ export function useProfilePreference<T>(namespace: string, defaults: T, validate
   const revision = useRef(0)
   const [local, setLocal] = useState<{ key: string; value: T; saving: boolean; error: string | null } | null>(null)
   const query = useQuery({
-    queryKey: ['profile-prefs', id], enabled: !!id, staleTime: 0,
+    queryKey: ['profile-prefs', id], enabled: !!id, staleTime: 0, refetchOnWindowFocus: true,
     queryFn: async () => { assertProfile(id); return unwrap<Document>(api.GET('/profiles/{id}/prefs', { params: { path: { id } } })) },
   })
   const stored = validate(query.data?.[namespace]) ?? defaults
   const own = local?.key === key ? local : null
   const value = own?.value ?? stored
+  const latest = useRef({ key, value })
+  latest.current = { key, value }
   const update = (next: T | ((current: T) => T)) => {
     if (!query.isSuccess || !id) return
-    const result = typeof next === 'function' ? (next as (current: T) => T)(value) : next
+    const current = latest.current.key === key ? latest.current.value : value
+    const result = typeof next === 'function' ? (next as (current: T) => T)(current) : next
+    latest.current = { key, value: result }
     const version = ++revision.current
     setLocal({ key, value: result, saving: true, error: null })
     void save(id, namespace, result).then((document) => {
