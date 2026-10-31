@@ -2290,6 +2290,11 @@ export interface components {
             /** @enum {string} */
             language_source?: "tag" | "db" | "country" | "group" | "flag" | "name" | "user";
             country?: string | null;
+            /**
+             * @description Explicit country tag or conservative provider group/flag hint; missing remains unknown.
+             * @enum {string|null}
+             */
+            country_source?: "tag" | "group" | "flag" | null;
             epg_id?: string | null;
             /** @default 0 */
             catchup_days: number;

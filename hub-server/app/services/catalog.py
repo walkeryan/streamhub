@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, func, or_, select, true
 
@@ -636,6 +638,27 @@ class CatalogService:
         }
 
     # ------------------------------------------------------------------ lists used by home
+    async def seasonal_movies(
+        self, profile_id: str, ctx: TileContext, *, now: datetime | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """October collection from explicit Halloween metadata, never inferred viewing history."""
+        if (now or datetime.now(UTC)).astimezone(ZoneInfo("America/New_York")).month != 10:
+            return []
+        async with self._db.session() as session:
+            profile = await session.get(Profile, profile_id)
+        # Ratings are not yet enforced; do not present these as safe children's picks.
+        if profile is None or profile.kids:
+            return []
+        query = select(Title).where(
+            Title.kind.in_(("movie", "vod")),
+            Title.source_id.in_(self._enabled(ctx)),
+            or_(Title.title.ilike("%halloween%"), Title.group_name.ilike("%halloween%")),
+        )
+        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, None))
+        async with self._db.session() as session:
+            rows = list((await session.execute(query.order_by(Title.title, Title.id).limit(limit * 2))).scalars())
+        return ctx.merge(ctx.title_tile(row) for row in rows)[:limit]
+
     async def recently_added(
         self,
         ctx: TileContext,
