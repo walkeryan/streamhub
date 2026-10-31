@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="112" height="32" viewBox="0 0 112 32" role="img" aria-label="TMDB">
+  <!-- Placeholder wordmark, not the official TMDB logo. Replace before public distribution (see README.md). -->
+  <rect width="112" height="32" rx="6" fill="#0d253f"/>
+  <text x="56" y="22.5" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" letter-spacing="2" fill="#01b4e4">TMDB</text>
+</svg>
