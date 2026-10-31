@@ -22,7 +22,6 @@ import { Sources } from './screens/Sources'
 import { Pair } from './screens/Pair'
 
 const Player = lazy(() => import('./screens/Player').then((m) => ({ default: m.Player })))
-const Guide = lazy(() => import('./screens/Guide').then((m) => ({ default: m.Guide })))
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })))
 
 bootTheme()
@@ -80,7 +79,7 @@ export function App() {
             <Route path="title/:id" element={<TitleScreen />} />
             <Route path="browse/:section" element={<Browse />} />
             <Route path="live" element={<LiveTV />} />
-            <Route path="guide" element={<Guide />} />
+            <Route path="guide" element={<Navigate to="/live?view=guide" replace />} />
             <Route path="favorites" element={<Favorites />} />
             <Route path="sources" element={<Sources />} />
             <Route path="settings" element={<Settings />} />

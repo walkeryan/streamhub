@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router'
 import { useChannelGroups, useChannels, useSources, useToggleFavorite } from '../api/hooks'
 import type { Channel } from '../api/types'
 import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
@@ -15,8 +16,11 @@ import { useUi } from '../store/ui'
 import { fmtTime, useDebounced } from '../lib/util'
 
 const PAGE = 80
+const Guide = lazy(() => import('./Guide').then((m) => ({ default: m.Guide })))
 
 export function LiveTV() {
+  const location = useLocation()
+  const [view, setView] = useHistoryState<'channels' | 'guide'>('live:view', new URLSearchParams(location.search).get('view') === 'guide' ? 'guide' : 'channels')
   const profile = useSession((s) => s.profile)
   const [lang, setLang] = useHistoryState('live:lang', profile?.languages.length ? 'mine' : 'all')
   const [group, setGroup] = useHistoryState('live:group', '')
@@ -25,7 +29,7 @@ export function LiveTV() {
   const [search, setSearch] = useHistoryState('live:search', '')
   const term = useDebounced(search, 300)
   const [page, setPage] = useHistoryState('live:page', 0)
-  const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [focusedId, setFocusedId] = useHistoryState<string | null>('live:selected-channel', null)
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const language = lang === 'mine' ? profile?.languages.join(',') || 'all' : lang
@@ -34,12 +38,12 @@ export function LiveTV() {
   // Reset paging synchronously with filters so no request briefly targets an old offset.
   if (pageKey !== filterKey) { setPageKey(filterKey); setPage(0) }
   const filters = { language, source_id: source || undefined, favorites: favOnly || undefined, q: term || undefined }
-  const q = useChannels({ ...filters, group: group || undefined, limit: PAGE, offset: page * PAGE })
+  const q = useChannels({ ...filters, group: group || undefined, limit: PAGE, offset: page * PAGE }, view === 'channels')
   const groups = useChannelGroups(filters)
   const sources = useSources()
   const channels = useMemo(() => q.data?.channels ?? [], [q.data])
   const total = q.data?.total ?? channels.length
-  const ready = !!q.data && !q.isPlaceholderData
+  const ready = view === 'channels' && !!q.data && !q.isPlaceholderData
   const focused = channels.find((c) => c.id === focusedId) ?? null
   const setChannelList = useUi((s) => s.setChannelList)
   const toggleFav = useToggleFavorite()
@@ -47,10 +51,10 @@ export function LiveTV() {
   useEffect(() => { if (ready && q.data) setChannelList(q.data.list_id ?? null, channels) }, [ready, q.data, channels, setChannelList])
   useRestoreFocus(ready, 'live:search')
   useEffect(() => {
-    if (!previewEnabled || !focused) { setPreviewId(null); return }
+    if (view !== 'channels' || !previewEnabled || !focused) { setPreviewId(null); return }
     const id = window.setTimeout(() => setPreviewId(focused.id), 600)
     return () => window.clearTimeout(id)
-  }, [focused, previewEnabled])
+  }, [focused, previewEnabled, view])
 
   // D-pad number entry searches the complete catalog, not just the current page.
   const digits = useRef('')
@@ -76,7 +80,11 @@ export function LiveTV() {
   const sourceOptions = [{ id: '', label: 'All sources' }, ...(sources.data ?? []).filter((s) => s.type === 'm3u' || s.type === 'xtream').map((s) => ({ id: s.id, label: s.name }))]
 
   return <div className="page-pad" data-testid="live" style={{ paddingBottom: '2rem' }}>
-    <div className="flex items-baseline gap-4 mb-3"><h1 className="display" style={{ fontSize: 'var(--text-title)' }}>Live TV</h1><p className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} channels`}</p></div>
+    <div className="flex items-baseline gap-4 mb-3"><h1 className="display" style={{ fontSize: 'var(--text-title)' }}>Live TV</h1>{view === 'channels' && <p className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} channels`}</p>}</div>
+    <FocusGroup focusKey="live:views" className="flex gap-2 mb-3" role="group" label="Live TV view">
+      <Chip focusKey="live:view:guide" pressed={view === 'guide'} onEnter={() => setView('guide')}>Guide</Chip>
+      <Chip focusKey="live:view:channels" pressed={view === 'channels'} onEnter={() => setView('channels')}>Channels</Chip>
+    </FocusGroup>
     <FocusGroup focusKey="live:filters" className="flex flex-col gap-3 mb-4">
       <LanguageFilter scope="live" value={lang} onChange={(v) => { setLang(v); setGroup('') }} />
       <div className="flex gap-2 flex-wrap items-center">
@@ -88,7 +96,7 @@ export function LiveTV() {
       </div>
       {groups.error && <p role="status" className="muted">Categories could not load. You can still search channels.</p>}
     </FocusGroup>
-    <div className="live-catalog-layout grid gap-6">
+    {view === 'guide' ? <Suspense fallback={<Skeleton style={{ height: '24rem' }} />}><Guide filters={{ ...filters, group: group || undefined }} selectedChannelId={focusedId} onSelectChannel={setFocusedId} /></Suspense> : <div className="live-catalog-layout grid gap-6" data-testid="live-channels">
       <div>
         {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !ready ? <div className="flex flex-col gap-2">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} style={{ height: '3.5rem' }} />)}</div> : !channels.length ?
           <Empty title="No channels match" hint="Clear the category or search, or choose All languages to include other and unknown languages."><Button focusKey="live:empty-reset" onEnter={reset}>Clear filters</Button><Button focusKey="live:empty-all" onEnter={() => { reset(); setLang('all') }}>All languages</Button></Empty> :
@@ -110,6 +118,6 @@ export function LiveTV() {
           <Button focusKey="live:togglefav" icon="heart" disabled={!focused} pressed={!!focused?.is_favorite} onEnter={() => focused && toggleFav.mutate({ kind: 'channel', id: focused.id, on: !focused.is_favorite })}>{focused?.is_favorite ? 'Remove favorite' : 'Add favorite'}</Button>
         </FocusGroup>
       </aside>
-    </div>
+    </div>}
   </div>
 }

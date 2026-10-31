@@ -11,7 +11,6 @@ export const NAV = [
   { to: '/', label: 'Home', icon: 'home' },
   { to: '/search', label: 'Search', icon: 'search' },
   { to: '/live', label: 'Live TV', icon: 'tv' },
-  { to: '/guide', label: 'Guide', icon: 'guide' },
   { to: '/browse/movies', label: 'Movies', icon: 'film' },
   { to: '/browse/shows', label: 'Shows', icon: 'shows' },
   { to: '/favorites', label: 'Favorites', icon: 'heart' },

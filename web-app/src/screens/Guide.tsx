@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useChannels, useEpg } from '../api/hooks'
+import { useChannels, useEpg, type ChannelFilters } from '../api/hooks'
 import type { Channel, Programme } from '../api/types'
 import { Button, Chip, Empty, ErrorState, LogoBlock, Modal, Skeleton } from '../components/ui'
-import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
+import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useUi } from '../store/ui'
-import { useSession } from '../store/session'
-import { LanguageFilter } from '../components/LanguageFilter'
+import { useHistoryState } from '../nav/historyState'
 import { fmtTime, useNow } from '../lib/util'
 
 const COL_REM = 13 // 30-minute column width, see .epg --col
@@ -15,22 +14,17 @@ const BACK_H = 3
 const FWD_H = 9
 const MAX_CH = 40
 
-export function Guide() {
+export function Guide({ filters, selectedChannelId, onSelectChannel }: {
+  filters: ChannelFilters; selectedChannelId: string | null; onSelectChannel: (id: string) => void
+}) {
   const now = useNow(30_000)
-  const profile = useSession((s) => s.profile)
-  const [language, setLanguage] = useState(profile?.languages?.length ? 'mine' : 'eng')
-  const [search, setSearch] = useState('')
-  const [query, setQuery] = useState('')
-  const [page, setPage] = useState(0)
-  const [scheduledOnly, setScheduledOnly] = useState(true)
-  useEffect(() => {
-    const timer = window.setTimeout(() => setQuery(search.trim()), 250)
-    return () => window.clearTimeout(timer)
-  }, [search])
-  const ch = useChannels({
-    q: query || undefined, language: language === 'mine' ? undefined : language,
-    has_epg: scheduledOnly || undefined, limit: MAX_CH, offset: page * MAX_CH,
-  })
+  const [page, setPage] = useHistoryState('guide:page', 0)
+  const [scheduledOnly, setScheduledOnly] = useHistoryState('guide:scheduled', true)
+  const [sel, setSel] = useHistoryState<Programme | null>('guide:selected-programme', null)
+  const key = JSON.stringify(filters)
+  const [filterKey, setFilterKey] = useHistoryState('guide:filters', key)
+  if (filterKey !== key) { setFilterKey(key); setPage(0); setSel(null) }
+  const ch = useChannels({ ...filters, has_epg: scheduledOnly || undefined, limit: MAX_CH, offset: page * MAX_CH })
   const channels = useMemo(() => ch.data?.channels ?? [], [ch.data])
   const total = ch.data?.total ?? channels.length
   const pages = Math.max(1, Math.ceil(total / MAX_CH))
@@ -38,10 +32,9 @@ export function Guide() {
   const toast = useUi((s) => s.toast)
   const go = useGo()
   const slot = 30 * 60_000
-  const [t0, setT0] = useState(() => Math.floor((Date.now() - BACK_H * 3600_000) / slot) * slot)
+  const [t0, setT0] = useHistoryState('guide:time', Math.floor((Date.now() - BACK_H * 3600_000) / slot) * slot)
   const t1 = t0 + (BACK_H + FWD_H) * 3600_000
   const epg = useEpg(channels.map((c) => c.id), new Date(t0).toISOString(), new Date(t1).toISOString())
-  const [sel, setSel] = useState<Programme | null>(null)
   const [catchup, setCatchup] = useState<{ ch: Channel; p: Programme } | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
 
@@ -52,10 +45,10 @@ export function Guide() {
   }, [epg.data, t0])
 
   const firstNow = useMemo(() => {
-    const c = channels[0]
+    const c = channels.find((c) => c.id === selectedChannelId) ?? channels[0]
     const p = c && epg.data?.[c.id]?.find((x) => Date.parse(x.start) <= Date.now() && Date.parse(x.stop) > Date.now())
-    return c && p ? `epg::${c.id}::${p.id}` : c ? `guide:ch:${c.id}` : 'guide:search'
-  }, [channels, epg.data])
+    return c && p ? `epg::${c.id}::${p.id}` : c ? `guide:ch:${c.id}` : 'live:search'
+  }, [channels, epg.data, selectedChannelId])
   useRestoreFocus(!!epg.data && channels.length > 0, firstNow)
 
   const totalMin = (BACK_H + FWD_H) * 60
@@ -73,11 +66,8 @@ export function Guide() {
 
   if (ch.error || epg.error) return <div className="page-pad"><ErrorState error={ch.error ?? epg.error} onRetry={() => { void ch.refetch(); void epg.refetch() }} /></div>
   return (
-    <div className="page-pad" data-testid="guide">
-      <h1 className="display mb-3" style={{ fontSize: 'var(--text-title)' }}>Guide</h1>
+    <div data-testid="guide" aria-label="Programme guide">
       <FocusGroup focusKey="guide:filters" className="flex flex-col gap-3 mb-3">
-        <FocusableInput focusKey="guide:search" label="Search guide channels" placeholder="Find a channel by name or number" inputMode="search" value={search} onChange={(v) => { setSearch(v); setPage(0) }} />
-        <LanguageFilter scope="guide" value={language} onChange={(v) => { setLanguage(v); setPage(0) }} />
         <div className="flex gap-2 flex-wrap items-center">
           <Chip focusKey="guide:scheduled" pressed={scheduledOnly} onEnter={() => { setScheduledOnly(true); setPage(0) }}>With schedules</Chip>
           <Chip focusKey="guide:all-channels" pressed={!scheduledOnly} onEnter={() => { setScheduledOnly(false); setPage(0) }}>All channels</Chip>
@@ -93,7 +83,7 @@ export function Guide() {
           <Button focusKey="guide:next" disabled={page + 1 >= pages || ch.isFetching} onEnter={() => { setPage((p) => p + 1); setSel(null) }}>Next channels</Button>
         </div>
       </FocusGroup>
-      {ch.isLoading || epg.isLoading ? <Skeleton style={{ height: '24rem' }} /> : channels.length === 0 ? (
+      {ch.isLoading || ch.isPlaceholderData || epg.isLoading ? <Skeleton style={{ height: '24rem' }} /> : channels.length === 0 ? (
         <Empty title="No channels match" hint={scheduledOnly ? 'No current schedules match these filters. Try All channels, another language, or a different search.' : 'Try another language or a different channel name.'}>
           {scheduledOnly && <Button focusKey="guide:show-all" onEnter={() => { setScheduledOnly(false); setPage(0) }}>Show channels without schedules</Button>}
         </Empty>
@@ -110,7 +100,7 @@ export function Guide() {
                   <FocusGroup key={c.id} focusKey={`guide:row:${c.id}`} className="" remember>
                     <div style={{ display: 'flex', height: '3.5rem' }}>
                       <div style={{ width: '13rem', flex: 'none', position: 'sticky', left: 0, zIndex: 10, background: 'var(--t-surface)', padding: '0.25rem' }}>
-                        <Focusable focusKey={`guide:ch:${c.id}`} className="flex items-center gap-2 h-full px-2 rounded-md fx-flat" label={`${c.number} ${c.name}`} onEnter={() => go(`/play/${encodeURIComponent(c.id)}`)}>
+                        <Focusable focusKey={`guide:ch:${c.id}`} className="flex items-center gap-2 h-full px-2 rounded-md fx-flat" label={`${c.number} ${c.name}`} onFocus={() => onSelectChannel(c.id)} onEnter={() => go(`/play/${encodeURIComponent(c.id)}`)}>
                           <span className="label" style={{ width: '1.75rem', textAlign: 'right' }}>{c.number}</span>
                           <LogoBlock name={c.name} logo={c.logo} />
                           <span className="truncate" style={{ fontSize: 'var(--text-label)', fontWeight: 600 }}>{c.name}</span>
@@ -129,7 +119,7 @@ export function Guide() {
                           const past = Date.parse(p.stop) <= now
                           return (
                             <Focusable key={p.id} focusKey={`epg::${c.id}::${p.id}`} className="epg-cell fx-flat" label={`${c.name}: ${p.title}, ${fmtTime(p.start)}`}
-                              data={{ now: isNow, past }} onEnter={() => open(c, p)} onFocus={() => setSel(p)}
+                              data={{ now: isNow, past }} onEnter={() => open(c, p)} onFocus={() => { setSel(p); onSelectChannel(c.id) }}
                               style={{ left: `${((s - t0) / 60_000) * REM_PER_MIN}rem`, width: `calc(${((e - s) / 60_000) * REM_PER_MIN}rem - 0.25rem)`, position: 'absolute' }}>
                               <span className="epg-label">
                                 <span className="truncate" style={{ fontWeight: 600 }}>{p.title}</span>
