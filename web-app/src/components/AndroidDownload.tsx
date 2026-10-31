@@ -1,6 +1,6 @@
 import { Button } from './ui'
 
-export const APK_FILENAME = 'streamhub-tv-debug-d99151e.apk'
+export const APK_FILENAME = 'streamhub-tv-debug-1b991e9.apk'
 export const APK_URL = `/downloads/${APK_FILENAME}`
 
 export function AndroidDownload({ focusKey }: { focusKey: string }) {
