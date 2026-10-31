@@ -206,6 +206,8 @@ h1, h2, h3, p { margin: 0; }
 .player .btn-primary { background: var(--t-accent); color: var(--t-accent-text); }
 .osd { position: absolute; z-index: 4; left: var(--safe-x); bottom: 2.5rem; right: var(--safe-x); padding: 1rem 1.25rem; border-radius: var(--radius-lg); background: rgba(8,10,16,.82); display: flex; flex-direction: column; gap: .5rem; transition: opacity var(--dur-base) var(--ease), transform var(--dur-base) var(--ease); }
 .osd[data-show='false'] { opacity: 0; transform: translateY(0.75rem); pointer-events: none; }
+/* while the control bar is visible, sit the channel OSD above it instead of on top of the buttons */
+.player-ui[data-show='true'] ~ .osd { bottom: 5.75rem; }
 .osd-num { font-size: var(--text-title); font-weight: 700; color: var(--t-accent); min-width: 3.5rem; }
 .numpad { position: absolute; z-index: 5; top: 2rem; right: var(--safe-x); font-size: var(--text-display); font-weight: 700; background: rgba(8,10,16,.75); padding: .25rem 1.25rem; border-radius: var(--radius-md); }
 
