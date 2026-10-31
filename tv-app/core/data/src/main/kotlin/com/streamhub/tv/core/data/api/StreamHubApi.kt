@@ -173,7 +173,10 @@ class StreamHubApi @Inject constructor(
         q?.let { parameter("q", it) }
     }
 
-    suspend fun channelGroups(): List<ChannelGroup> = get("/channels/groups")
+    suspend fun channelGroups(languages: List<String>? = null, favorites: Boolean? = null): List<ChannelGroup> = get("/channels/groups") {
+        languages?.let { parameter("language", it.joinToString(",")) }
+        favorites?.let { parameter("favorites", it) }
+    }
     suspend fun patchChannelGroup(groupId: String, patch: ChannelGroupPatch) =
         client.patch(url("/channels/groups/${id(groupId)}")) { setBody(patch) }.unit()
     suspend fun channelLanguages(): List<LanguageCount> = get("/channels/languages")

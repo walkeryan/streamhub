@@ -260,9 +260,9 @@ export function Player() {
       <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>
       <video ref={videoRef} playsInline loop={live && desc?.mime === 'video/webm'} style={{ objectFit: aspect }} data-testid="video" aria-label={title} onDoubleClick={fullscreen} onClick={togglePlay} />
 
-      {(state === 'resolving' || state === 'loading' || state === 'reconnecting') && (
+      {(state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }} role="status">
-          <div className="flex flex-col items-center gap-3"><span className="skel" style={{ width: 48, height: 48, borderRadius: 999 }} /><span>{state === 'reconnecting' ? 'Connection lost. Reconnecting…' : 'Starting stream…'}</span></div>
+          <div className="flex flex-col items-center gap-3"><span className="skel" style={{ width: 48, height: 48, borderRadius: 999 }} /><span>{state === 'reconnecting' ? 'Connection lost. Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Starting stream…'}</span></div>
         </div>
       )}
 

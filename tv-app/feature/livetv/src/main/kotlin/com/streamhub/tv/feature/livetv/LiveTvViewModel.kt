@@ -14,6 +14,7 @@ import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.player.PlayerFactory
 import com.streamhub.tv.core.player.StreamHubPlayer
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,8 @@ data class LiveTvState(
     val profileLanguages: List<String> = emptyList(),
     val selectedLanguages: Set<String>? = null,
     val groups: List<ChannelGroup> = emptyList(),
+    val groupsLoading: Boolean = true,
+    val groupsError: String? = null,
     val selectedGroup: String? = null,
     val favoritesOnly: Boolean = false,
     val channels: List<Channel> = emptyList(),
@@ -54,14 +57,28 @@ class LiveTvViewModel @Inject constructor(
     val preview: StreamHubPlayer = playerFactory.create(reportProgress = false)
     private var previewJob: Job? = null
     private var loadJob: Job? = null
+    private var groupsJob: Job? = null
 
     init {
         viewModelScope.launch {
             val profileLangs = session.session.first().profile?.languages.orEmpty()
             _state.update { it.copy(profileLanguages = profileLangs, selectedLanguages = profileLangs.toSet().ifEmpty { null }) }
             launch { runCatching { api.channelLanguages() }.onSuccess { l -> _state.update { it.copy(languages = l.sortedByDescending { x -> x.count }) } } }
-            launch { runCatching { api.channelGroups() }.onSuccess { g -> _state.update { it.copy(groups = g.filterNot { x -> x.hidden }) } } }
+            refreshGroups()
             load()
+        }
+    }
+
+    fun refreshGroups() {
+        groupsJob?.cancel()
+        _state.update { it.copy(groupsLoading = true, groupsError = null) }
+        groupsJob = viewModelScope.launch {
+            val s = _state.value
+            try {
+                val groups = api.channelGroups(languages = s.selectedLanguages?.toList() ?: emptyList(), favorites = s.favoritesOnly)
+                _state.update { it.copy(groups = groups.filterNot { g -> g.hidden }, groupsLoading = false) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(groupsLoading = false, groupsError = e.message ?: "Couldn't load groups") } }
         }
     }
 
@@ -74,7 +91,10 @@ class LiveTvViewModel @Inject constructor(
             val langs = s.selectedLanguages?.toList() ?: emptyList()
             runCatching { cache.fetch(group = s.selectedGroup, languages = langs, favorites = s.favoritesOnly.takeIf { it }) }
                 .onSuccess { l -> _state.update { it.copy(loading = false, channels = l.channels, listId = l.listId) } }
-                .onFailure { e -> _state.update { it.copy(loading = false, error = e.message) } }
+                .onFailure { e ->
+                    if (e is CancellationException) throw e
+                    _state.update { it.copy(loading = false, error = e.message) }
+                }
         }
     }
 
@@ -87,11 +107,12 @@ class LiveTvViewModel @Inject constructor(
                 it.copy(selectedLanguages = next.ifEmpty { null })
             }
         }
+        refreshGroups()
         load()
     }
 
     fun selectGroup(name: String?) { _state.update { it.copy(selectedGroup = name) }; load() }
-    fun toggleFavoritesOnly() { _state.update { it.copy(favoritesOnly = !it.favoritesOnly) }; load() }
+    fun toggleFavoritesOnly() { _state.update { it.copy(favoritesOnly = !it.favoritesOnly) }; refreshGroups(); load() }
 
     /** BRIEF: preview plays the focused channel after 600 ms dwell. */
     fun onChannelFocused(ch: Channel) {
@@ -115,6 +136,7 @@ class LiveTvViewModel @Inject constructor(
                 if (ch.isFavorite) api.removeFavorite(MediaKind.CHANNEL, ch.id) else api.addFavorite(Favorite(MediaKind.CHANNEL, ch.id))
             }.onSuccess {
                 _state.update { s -> s.copy(channels = s.channels.map { if (it.id == ch.id) it.copy(isFavorite = !ch.isFavorite) else it }) }
+                if (_state.value.favoritesOnly) { refreshGroups(); load() }
             }
         }
     }

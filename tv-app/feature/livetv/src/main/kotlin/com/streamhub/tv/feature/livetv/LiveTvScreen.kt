@@ -1,6 +1,9 @@
 package com.streamhub.tv.feature.livetv
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,11 +28,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,15 +54,19 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.Channel
+import com.streamhub.tv.core.data.model.ChannelGroup
 import com.streamhub.tv.core.player.VideoSurface
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.ProgressLine
 import com.streamhub.tv.core.ui.components.ShChip
+import com.streamhub.tv.core.ui.components.ShButton
+import com.streamhub.tv.core.ui.components.ShTextField
 import com.streamhub.tv.core.ui.components.programmeProgress
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
+import com.streamhub.tv.core.ui.theme.LocalReducedMotion
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 import java.time.ZoneId
@@ -66,6 +83,25 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
     DisposableEffect(Unit) { onDispose { vm.stopPreview() } }
+    var groupsOpen by remember { mutableStateOf(false) }
+    var restoreGroupFocus by remember { mutableStateOf(false) }
+    val groupOpener = remember { FocusRequester() }
+    val choices = remember(s.groups) { groupChoices(s.groups) }
+    LaunchedEffect(groupsOpen) {
+        if (!groupsOpen && restoreGroupFocus) {
+            withFrameNanos { }
+            groupOpener.requestFocus()
+            restoreGroupFocus = false
+        }
+    }
+    if (groupsOpen) GroupDrawer(
+        groups = s.groups, selected = s.selectedGroup,
+        loading = s.groupsLoading, error = s.groupsError,
+        onRetry = vm::refreshGroups,
+        onDismiss = { groupsOpen = false },
+        onSelect = { vm.selectGroup(it); groupsOpen = false },
+    )
+
 
     Column(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
         // Language chips (profile languages + All) and favorites filter.
@@ -84,14 +120,17 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
                 ShChip(name, s.selectedLanguages?.contains(code) == true, { vm.toggleLanguage(code) })
             }
         }
-        // Groups
-        LazyRow(
-            Modifier.fillMaxWidth().padding(top = 10.dp).focusRestorer(),
-            contentPadding = PaddingValues(horizontal = Tokens.Canvas.SafeMarginX),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item("all-groups") { ShChip("All groups", s.selectedGroup == null, { vm.selectGroup(null) }, Modifier.leftOpensRail(rail)) }
-            items(s.groups, key = { it.id }) { g -> ShChip("${g.name} · ${g.channelCount}", s.selectedGroup == g.name, { vm.selectGroup(g.name) }) }
+        Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            ShButton("Groups: ${s.selectedGroup ?: "All groups"}", {
+                restoreGroupFocus = true
+                groupsOpen = true
+                vm.stopPreview()
+            }, Modifier.width(360.dp).focusRequester(groupOpener).leftOpensRail(rail))
+            Text(if (s.groupsLoading) "Updating groups…" else if (s.groupsError != null) "Group counts unavailable" else {
+                val count = if (s.selectedGroup == null) choices.sumOf { it.channelCount } else choices.firstOrNull { it.name == s.selectedGroup }?.channelCount ?: 0
+                "$count channels · ${choices.size} groups"
+            }, color = t.textMuted, style = MaterialTheme.typography.labelMedium)
         }
 
         Row(Modifier.fillMaxSize().padding(top = 16.dp)) {
@@ -169,6 +208,63 @@ private fun ChannelRow(ch: Channel, playing: Boolean, onClick: () -> Unit, onLon
                 }
                 Text(ch.now?.title ?: "—", style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 programmeProgress(ch.now)?.let { ProgressLine(it, Modifier.padding(top = 3.dp), height = 2.dp) }
+            }
+        }
+    }
+}
+
+
+/** Separate modal focus window: D-pad cannot escape into the channel list behind the drawer. */
+@Composable
+private fun GroupDrawer(
+    groups: List<ChannelGroup>, selected: String?, loading: Boolean, error: String?,
+    onRetry: () -> Unit, onDismiss: () -> Unit, onSelect: (String?) -> Unit,
+) {
+    val t = LocalThemeTokens.current
+    var query by remember { mutableStateOf("") }
+    val all = remember(groups) { groupChoices(groups) }
+    val matches = remember(groups, query) { groupChoices(groups, query) }
+    val first = remember { FocusRequester() }
+    val listState = rememberLazyListState()
+    var entered by remember { mutableStateOf(false) }
+    val reducedMotion = LocalReducedMotion.current
+    val slide by animateFloatAsState(if (entered) 0f else -1f, tween(if (reducedMotion) 0 else 180), label = "groupDrawerSlide")
+    LaunchedEffect(Unit) { entered = true; withFrameNanos { }; first.requestFocus() }
+    LaunchedEffect(query) { listState.scrollToItem(0) }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.align(Alignment.CenterStart).width(460.dp).fillMaxHeight()
+                .graphicsLayer { translationX = slide * size.width }
+                .background(t.surface.copy(alpha = 0.97f), RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp))
+                .border(1.dp, t.textMuted.copy(alpha = 0.2f), RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp))
+                .padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Channel groups", style = MaterialTheme.typography.titleLarge, color = t.text)
+                    ShButton("Close", onDismiss)
+                }
+                ShTextField(query, { query = it }, "Search groups", Modifier.fillMaxWidth(), placeholder = "Sports, news, movies…")
+                ShButton(if (selected == null) "✓ All groups" else "All groups", { onSelect(null) }, Modifier.fillMaxWidth().focusRequester(first))
+                when {
+                    loading -> Text("Updating group counts…", color = t.textMuted)
+                    error != null -> { Text("Couldn't load groups", color = t.danger); ShButton("Retry", onRetry) }
+                    else -> Text("${matches.size} of ${all.size} groups · current language and favorites filters", color = t.textMuted, style = MaterialTheme.typography.labelSmall)
+                }
+                LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(4.dp)) {
+                    items(matches, key = { it.name }) { group ->
+                        FocusSurface(onClick = { onSelect(group.name) }, modifier = Modifier.fillMaxWidth().height(60.dp),
+                            containerColor = if (selected == group.name) t.surfaceAlt else t.surface,
+                            focusedContainerColor = t.text, scaleOnFocus = false) { focused ->
+                            Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text((if (selected == group.name) "✓ " else "") + group.name,
+                                    Modifier.weight(1f), color = if (focused) t.bg else t.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(if (loading || error != null) "—" else group.channelCount.toString(), color = if (focused) t.bg else t.textMuted,
+                                    modifier = Modifier.padding(start = 10.dp))
+                            }
+                        }
+                    }
+                    if (matches.isEmpty() && !loading && error == null) item { Text("No matching groups. Try another search.", color = t.textMuted) }
+                }
             }
         }
     }
