@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
 import type { Tile } from '../api/types'
-import { Button, Crossfade, Empty, ErrorState, Meta, Skeleton, SourceChips } from '../components/ui'
+import { Button, Crossfade, Empty, ErrorState, Meta, Skeleton, SourceChips, useLoadedImage } from '../components/ui'
+import { SafeImg } from '../components/SafeImg'
 import { TileRow } from '../components/Tile'
 import { FocusGroup } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -28,6 +29,9 @@ export function Home() {
 
   const active = driver ?? hero[idx % Math.max(1, hero.length)] ?? rows[0]?.tiles[0] ?? null
   useAdaptiveAccent(active?.backdrop ?? active?.poster)
+  // with no usable backdrop the hero shrinks instead of leaving an empty band
+  const art = useLoadedImage(active?.backdrop ?? active?.poster)
+  const noArt = art.settled && !art.url
 
   // Auto-advance every 8 s; paused while a hero button is focused or a row tile is driving the hero.
   useEffect(() => {
@@ -56,10 +60,10 @@ export function Home() {
   const playable = isPlayable(active)
   return (
     <div data-testid="home">
-      <section className="hero" aria-label="Featured" data-testid="hero">
+      <section className="hero" aria-label="Featured" data-testid="hero" data-art={noArt ? 'none' : undefined}>
         <Crossfade src={active.backdrop ?? active.poster} />
         <div className="hero-body">
-          <h1 className="display" data-testid="hero-title">{active.logo ? <img src={active.logo} alt={active.title} style={{ maxHeight: '5rem' }} /> : active.title}</h1>
+          <h1 className="display" data-testid="hero-title"><SafeImg key={active.id} src={active.logo} alt={active.title} style={{ maxHeight: '5rem' }} fallback={active.title} /></h1>
           <Meta items={[active.year, active.subtitle, active.rating ? `★ ${active.rating.toFixed(1)}` : null]} />
           <div className="flex gap-2 flex-wrap"><SourceChips sources={active.sources} max={3} /></div>
           <FocusGroup focusKey="hero" className="flex gap-3 flex-wrap items-center" onFocusChange={setHeroFocused} remember={false} preferred="hero:play">

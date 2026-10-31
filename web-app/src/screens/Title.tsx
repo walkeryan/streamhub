@@ -4,6 +4,7 @@ import { useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '.
 import { reportProgress } from '../api/client'
 import type { SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Meta, Modal, Skeleton } from '../components/ui'
+import { SafeImg } from '../components/SafeImg'
 import { MediaTile } from '../components/Tile'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useRestoreFocus } from '../nav/back'
@@ -64,7 +65,7 @@ export function TitleScreen() {
       <div className="page-pad" style={{ position: 'relative', zIndex: 2, paddingTop: 'max(var(--safe-y), 4rem)' }}>
         <div className="flex gap-8 flex-wrap md:flex-nowrap">
           <div className="tile tile-poster" style={{ flex: 'none', width: 'calc(var(--tile-poster-w) * 1.4)', height: 'calc(var(--tile-poster-h) * 1.4)', position: 'relative' }}>
-            {t.poster ? <img className="art" src={t.poster} alt="" /> : <div className="grid place-items-center h-full p-4 text-center heading">{t.title}</div>}
+            <SafeImg className="art" src={t.poster} alt="" fallback={<div className="grid place-items-center h-full p-4 text-center heading">{t.title}</div>} />
           </div>
           <div className="flex flex-col gap-4 min-w-0" style={{ maxWidth: '44rem' }}>
             <h1 className="display">{t.title}</h1>

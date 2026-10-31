@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useBackHandler, useOverlayFocus } from '../nav/back'
 import { Icon } from './Icon'
-import { hueOf, cn, reducedMotion } from '../lib/util'
+import { Initials, SafeImg } from './SafeImg'
+import { cn, reducedMotion } from '../lib/util'
 import { useUi } from '../store/ui'
 import type { SourceBadge, Tile } from '../api/types'
 
@@ -138,11 +139,32 @@ export function Toasts() {
   )
 }
 
-/** Crossfading backdrop (hero / title detail). */
-export function Crossfade({ src, className }: { src: string | null | undefined; className?: string }) {
+/** Resolves to the URL once it has loaded, or null when it is empty or fails (404, blocked, bad host). */
+export function useLoadedImage(src: string | null | undefined): { url: string | null; settled: boolean } {
+  const [state, setState] = useState<{ src: string | null | undefined; ok: boolean | null }>({ src, ok: src ? null : false })
+  useEffect(() => {
+    if (!src) { setState({ src, ok: false }); return }
+    let live = true
+    setState({ src, ok: null })
+    const img = new Image()
+    img.onload = () => { if (live) setState({ src, ok: true }) }
+    img.onerror = () => { if (live) setState({ src, ok: false }) }
+    img.src = src
+    return () => { live = false; img.onload = null; img.onerror = null }
+  }, [src])
+  const current = state.src === src
+  return { url: current && state.ok ? (src ?? null) : null, settled: current ? state.ok !== null : !src }
+}
+
+/** Crossfading backdrop (hero / title detail). Missing or broken art falls back to a token gradient, never a blank band. */
+export function Crossfade({ src: raw, className }: { src: string | null | undefined; className?: string }) {
+  const { url, settled } = useLoadedImage(raw)
+  // keep the previous layer while the next image is still loading, so the crossfade starts from a loaded image
+  const src = settled ? url : undefined
   const [layers, setLayers] = useState<{ src: string | null | undefined; key: number }[]>([{ src, key: 0 }])
   const seq = useRef(0)
   useEffect(() => {
+    if (src === undefined) return
     setLayers((l) => (l[l.length - 1]?.src === src ? l : [...l.slice(-1), { src, key: ++seq.current }]))
     const t = window.setTimeout(() => setLayers((l) => l.slice(-1)), reducedMotion() ? 20 : 600)
     return () => window.clearTimeout(t)
@@ -152,17 +174,22 @@ export function Crossfade({ src, className }: { src: string | null | undefined; 
     <>
       {layers.map((l) => (
         <div key={l.key} className={cn('hero-layer', className)} data-on={l.key === last}
-          style={l.src ? { backgroundImage: `url("${l.src}")` } : { background: 'var(--t-surface)' }} />
+          data-art={!!l.src}
+          style={l.src ? { backgroundImage: `url("${l.src}")` } : { background: FALLBACK_BACKDROP }} />
       ))}
     </>
   )
 }
 
+/** Backdrop used when a title has no usable art: built only from theme tokens, so it follows every theme. */
+export const FALLBACK_BACKDROP =
+  'radial-gradient(120% 90% at 85% 10%, color-mix(in srgb, var(--t-accent) 38%, transparent), transparent 60%), ' +
+  'linear-gradient(160deg, var(--t-surface-alt), var(--t-surface) 55%, var(--t-bg))'
+
 export function LogoBlock({ name, logo }: { name: string; logo?: string | null }) {
-  const h = hueOf(name)
   return (
-    <div className="logo-block" style={{ background: `linear-gradient(135deg, hsl(${h} 45% 32%), hsl(${(h + 40) % 360} 50% 22%))` }}>
-      {logo ? <img src={logo} alt="" loading="lazy" /> : name.slice(0, 3).toUpperCase()}
+    <div className="logo-block" style={{ position: 'relative' }}>
+      <SafeImg src={logo} alt="" loading="lazy" fallback={<Initials name={name} />} />
     </div>
   )
 }

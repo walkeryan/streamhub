@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { Icon } from './Icon'
 import { ProgressBar, SourceChips } from './ui'
+import { Initials, SafeImg } from './SafeImg'
 import { cn, hueOf, progressOf, useNow } from '../lib/util'
 import { useGo } from '../nav/back'
 import type { Tile as TileT, Channel } from '../api/types'
@@ -47,7 +48,7 @@ export const MediaTile = memo(function MediaTile(p: {
     >
       {({ focused }) => (
         <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className="tile" style={{ position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
-          {art ? <img className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} /> : <Fallback title={p.tile.title} />}
+          <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} fallback={<Fallback title={p.tile.title} />} />
           <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
           <div className="tile-badges"><SourceChips sources={p.tile.sources} max={1} /></div>
           {p.tile.is_favorite && <span style={{ position: 'absolute', top: 6, left: 6, color: 'var(--t-accent)' }}><Icon name="heart" size={16} filled /></span>}
@@ -78,7 +79,8 @@ export function ChannelTile(p: { tile: TileT; scope: string; onFocusTile?: (t: T
       onFocus={() => p.onFocusTile?.(t)}
     >
       <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg, hsl(${h} 45% 30%), hsl(${(h + 45) % 360} 50% 18%))` }}>
-        {t.logo && <img src={t.logo} alt="" loading="lazy" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', padding: 14, filter: 'blur(0)' }} />}
+        <SafeImg src={t.logo} alt="" loading="lazy" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', padding: 14, filter: 'blur(0)' }}
+          fallback={<Initials name={t.title} style={{ fontSize: 'var(--text-title)', paddingBottom: '1.25rem' }} />} />
         <div style={{ position: 'absolute', left: 10, top: 8, fontWeight: 700, fontSize: 'var(--text-label)' }}>{t.subtitle ?? ''}</div>
         <div style={{ position: 'absolute', left: 10, right: 10, bottom: 12, fontSize: 'var(--text-label)', fontWeight: 600 }} className="truncate">
           {t.title}{t.now_playing ? ` · ${t.now_playing.title}` : ''}
