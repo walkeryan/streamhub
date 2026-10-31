@@ -107,6 +107,7 @@ class XtreamClient:
 
     def timeshift_url(self, stream_id: str, start: datetime, duration_min: int, ext: str = "ts") -> str:
         start_s = start.astimezone(UTC).strftime("%Y-%m-%d:%H-%M")
+        # Panels expect a literal "YYYY-MM-DD:HH-MM" (several reject "%3A"), so keep ':' unescaped.
         q = urlencode(
             {
                 "username": self.username,
@@ -114,7 +115,8 @@ class XtreamClient:
                 "stream": stream_id,
                 "start": start_s,
                 "duration": duration_min,
-            }
+            },
+            safe=":",
         )
         return f"{self.server}/streaming/timeshift.php?{q}"
 

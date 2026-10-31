@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv>
+  <channel id="bbc1.uk"><display-name>BBC One</display-name><icon src="http://l/bbc.png"/></channel>
+  <programme start="20261031120000 +0100" stop="20261031130000 +0100" channel="bbc1.uk">
+    <title lang="en">News at Noon</title><desc>Headlines.</desc><category>News</category>
+  </programme>
+  <programme start="20261031130000 +0100" stop="20261031140000 +0100" channel="bbc1.uk">
+    <title>Afternoon Show</title>
+  </programme>
+  <programme start="20261031110000" stop="20261031113000" channel="tf1.fr">
+    <title>Le Journal</title>
+  </programme>
+  <programme start="20261031110000 +0000" channel="other.ch"><title>Unwanted</title></programme>
+</tv>

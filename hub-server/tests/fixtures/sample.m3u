@@ -1,0 +1,18 @@
+#EXTM3U x-tvg-url="http://epg.example/guide.xml.gz" catchup="default" catchup-days="3"
+#EXTINF:-1 tvg-id="bbc1.uk" tvg-name="BBC One" tvg-logo="http://logos.example/bbc1.png" tvg-language="English" group-title="UK | General",BBC One HD
+http://streams.example/live/bbc1.m3u8
+#EXTINF:-1 tvg-id="tf1.fr" tvg-country="FR" group-title="FR - Généraliste" catchup-source="http://streams.example/tf1/{utc}-{duration}.ts",TF1
+#EXTVLCOPT:http-user-agent=SuperPlayer/2.0
+#EXTVLCOPT:http-referrer=http://ref.example/
+http://streams.example/live/tf1.ts
+#EXTINF:-1 tvg-id="mbc.ae" group-title="|AR| Entertainment",MBC 1
+http://streams.example/live/mbc1.ts
+#EXTINF:-1 tvg-id="" group-title="DE: Sport",Sky Sport 1
+http://streams.example/live/sky1.ts|User-Agent=PipeUA&Referer=http://pipe.example/
+#EXTINF:-1 group-title="Music",Radio España 🇪🇸
+http://streams.example/live/radio.ts
+#EXTINF:-1 group-title="Misc",ARABIC NEWS 24
+http://streams.example/live/arnews.ts
+#EXTINF:-1,Bare Channel
+#EXTGRP:Extras
+http://streams.example/live/bare.ts

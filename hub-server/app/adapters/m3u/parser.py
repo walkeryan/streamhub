@@ -92,7 +92,10 @@ def _split_pipe_headers(url: str) -> tuple[str, dict[str, str]]:
 
 
 async def iter_lines(chunks: AsyncIterable[bytes], encoding: str = "utf-8") -> AsyncIterator[str]:
-    """Decode an async byte stream into lines without buffering the whole body."""
+    """Decode an async byte stream into lines without buffering the whole body.
+
+    Handles LF, CRLF and CR endings, including CRLF / multi-byte characters split across chunks.
+    """
     import codecs
 
     decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
@@ -100,22 +103,25 @@ async def iter_lines(chunks: AsyncIterable[bytes], encoding: str = "utf-8") -> A
     first = True
     async for chunk in chunks:
         text = decoder.decode(chunk)
-        if first:
-            text = text.lstrip("﻿")
+        if first and text:
+            text = text.lstrip("\ufeff")
             first = False
         buf += text
-        if "\n" not in buf and "\r" not in buf:
+        # a trailing CR may be the first half of CRLF: keep it until we see the next char
+        cut = len(buf) - 1 if buf.endswith("\r") else len(buf)
+        complete = buf[:cut]
+        if "\n" not in complete and "\r" not in complete:
             continue
-        lines = buf.splitlines(keepends=True)
-        buf = ""
+        lines = complete.splitlines(keepends=True)
+        rest = buf[cut:]
         if lines and not lines[-1].endswith(("\n", "\r")):
-            buf = lines.pop()
+            rest = lines.pop() + rest
+        buf = rest
         for ln in lines:
             yield ln.rstrip("\r\n")
     buf += decoder.decode(b"", final=True)
-    if buf:
-        for ln in buf.splitlines():
-            yield ln
+    for ln in buf.splitlines():
+        yield ln
 
 
 class M3UParser:
