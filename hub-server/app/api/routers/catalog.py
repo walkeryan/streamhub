@@ -55,7 +55,8 @@ async def browse(
         section,
         p.profile_id,
         source_id=source_id,
-        genre=category if category is not None else genre,
+        genre=genre,
+        category=category,
         sort=sort,
         page=page,
         language=language,
@@ -80,6 +81,21 @@ async def browse_languages(section: str, c: C, p: P, source_id: str | None = Non
     return await c.catalog.browse_languages(section, p.profile_id, source_id)
 
 
+@router.get("/browse/{section}/genres", tags=["catalog"])
+async def browse_genres(
+    section: str,
+    c: C,
+    p: P,
+    source_id: str | None = None,
+    language: str | None = None,
+    category: str | None = None,
+    q: str | None = Query(None, max_length=200),
+) -> list[dict[str, Any]]:
+    return await c.catalog.genre_facets(
+        section, p.profile_id, source_id=source_id, language=language, category=category, q=q
+    )
+
+
 # ---------------------------------------------------------------- channels
 @router.get("/channels", response_model=S.ChannelList, tags=["live"])
 async def channels(
@@ -88,6 +104,7 @@ async def channels(
     source_id: str | None = None,
     group: str | None = None,
     language: str | None = None,
+    country: str | None = None,
     favorites: bool = False,
     q: str | None = None,
     list_id: str | None = None,
@@ -100,6 +117,7 @@ async def channels(
         source_id=source_id,
         group=group,
         language=language,
+        country=country,
         favorites=favorites,
         q=q,
         list_id=list_id,
@@ -114,13 +132,20 @@ async def channel_groups(
     c: C,
     p: P,
     language: str | None = None,
+    country: str | None = None,
     source_id: str | None = None,
     q: str | None = None,
     favorites: bool = False,
     include_hidden: bool = False,
 ) -> list[dict[str, Any]]:
     return await c.channels.groups(
-        p.profile_id, language=language, source_id=source_id, q=q, favorites=favorites, include_hidden=include_hidden
+        p.profile_id,
+        language=language,
+        country=country,
+        source_id=source_id,
+        q=q,
+        favorites=favorites,
+        include_hidden=include_hidden,
     )
 
 
@@ -144,11 +169,12 @@ async def epg(
     c: C,
     p: P,
     channel_ids: str | None = None,
+    country: str | None = None,
     from_: datetime | None = Query(None, alias="from"),
     to: datetime | None = None,
 ) -> dict[str, Any]:
     cids = [x.strip() for x in channel_ids.split(",") if x.strip()] if channel_ids else None
-    return await c.channels.epg_grid(p.profile_id, cids, from_, to)
+    return await c.channels.epg_grid(p.profile_id, cids, from_, to, country=country)
 
 
 # ---------------------------------------------------------------- favorites / watchlist / history

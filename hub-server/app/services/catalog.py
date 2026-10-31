@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import Select, String, cast, func, or_, select
+from sqlalchemy import Select, func, or_, select, true
 
 from app.adapters.language.inferrer import lang_from_flag, lang_from_group, normalise_code
 from app.domain.entities import CatalogItem, MediaKind
@@ -375,11 +375,9 @@ class CatalogService:
         if source_id:
             q = q.where(Title.source_id == source_id)
         if genre:
+            values = func.json_each(Title.genres).table_valued("value")
             q = q.where(
-                or_(
-                    func.lower(cast(Title.genres, String)).like(f'%"{_escape_like(genre.lower())}"%', escape="\\"),
-                    Title.group_name == genre,
-                )
+                select(values.c.value).where(func.lower(func.trim(values.c.value)) == genre.strip().lower()).exists()
             )
         return q
 
@@ -472,6 +470,7 @@ class CatalogService:
         page: int,
         language: str | None = None,
         q: str | None = None,
+        category: str | None = None,
     ) -> dict[str, Any]:
         kinds = BROWSE_KINDS.get(section)
         if kinds is None:
@@ -481,6 +480,8 @@ class CatalogService:
         page = max(1, page)
         text_query = q
         query = self._browse_query(kinds, enabled, source_id, genre)
+        if category is not None:
+            query = query.where(Title.group_name == category)
         if text_query and text_query.strip():
             query = query.where(
                 Title.norm_title.like("%" + _escape_like(ids.normalise_title(text_query)) + "%", escape="\\")
@@ -502,14 +503,54 @@ class CatalogService:
         tiles = ctx.merge(ctx.title_tile(r) for r in rows)
         return {"tiles": tiles, "page": page, "total": int(total), "has_more": page * PAGE_SIZE < int(total)}
 
+    async def genre_facets(
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        source_id: str | None = None,
+        language: str | None = None,
+        category: str | None = None,
+        q: str | None = None,
+    ) -> list[dict[str, Any]]:
+        kinds = BROWSE_KINDS.get(section)
+        if kinds is None:
+            raise NotFound("unknown section")
+        ctx = await self.tile_context(profile_id)
+        query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
+        if category is not None:
+            query = query.where(Title.group_name == category)
+        if q and q.strip():
+            query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
+        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        scoped = query.with_only_columns(Title.id, Title.genres).subquery()
+        values = func.json_each(scoped.c.genres).table_valued("value", "type")
+        name = func.lower(func.trim(values.c.value))
+        statement = (
+            select(name.label("name"), func.count(func.distinct(scoped.c.id)))
+            .select_from(scoped.join(values, true()))
+            .where(values.c.type == "text", name != "")
+            .group_by(name)
+            .order_by(name)
+        )
+        async with self._db.session() as session:
+            rows = (await session.execute(statement)).all()
+        return [{"name": name, "count": count} for name, count in rows]
+
     async def genres(self, section: str) -> list[str]:
-        kinds = BROWSE_KINDS.get(section, ())
-        async with self._db.session() as s:
-            rows = (await s.execute(select(Title.genres).where(Title.kind.in_(kinds)).limit(5000))).scalars()
-        out: set[str] = set()
-        for g in rows:
-            out.update(x for x in g or [] if isinstance(x, str))
-        return sorted(out)
+        # Legacy internal helper; full enabled catalog, without arbitrary truncation.
+        values = func.json_each(Title.genres).table_valued("value", "type")
+        statement = (
+            select(values.c.value)
+            .select_from(Title)
+            .join(Source, Source.id == Title.source_id)
+            .join(values, true())
+            .where(Source.enabled.is_(True), Title.kind.in_(BROWSE_KINDS.get(section, ())), values.c.type == "text")
+            .distinct()
+            .order_by(values.c.value)
+        )
+        async with self._db.session() as session:
+            return list((await session.execute(statement)).scalars())
 
     # ------------------------------------------------------------------ search
     async def search(

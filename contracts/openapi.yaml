@@ -350,10 +350,10 @@ paths:
       parameters:
         - { name: section, in: path, required: true, schema: {type: string} }
         - { name: source_id, in: query, schema: {type: string} }
-        - { name: genre, in: query, schema: {type: string} }
+        - { name: genre, in: query, schema: {type: string, description: "Actual genre metadata; combines with category."} }
         - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
         - { name: page, in: query, schema: {type: integer, default: 1} }
-        - { name: category, in: query, schema: {type: string} }
+        - { name: category, in: query, schema: {type: string, description: "Exact provider category; combines with genre."} }
         - { name: language, in: query, schema: {type: string, description: "Category language hint. Omitted = profile languages; all = all; und = unknown."} }
         - { name: q, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }, page: {type: integer}, total: {type: integer}, has_more: {type: boolean}, page_size: {type: integer} } } } } } }
@@ -366,6 +366,16 @@ paths:
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [name, count], properties: {name: {type: string}, count: {type: integer}}} } } } } }
+  /browse/{section}/genres:
+    get:
+      summary: Actual metadata genres with scoped distinct title counts
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string} }
+        - { name: category, in: query, schema: {type: string} }
+        - { name: q, in: query, schema: {type: string} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [name, count], properties: {name: {type: string}, count: {type: integer}}} } } } } }
   /browse/{section}/languages:
     get:
       parameters:
@@ -375,6 +385,7 @@ paths:
   /channels:
     get:
       parameters:
+        - { name: country, in: query, schema: {type: string, description: "Explicit country ISO codes CSV; all or omitted = all; und = missing country. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: group, in: query, schema: {type: string} }
         - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3. Omitted = the profile's languages. Present but empty (`language=`) or `all` = all languages (the TV's All chip)."} }
@@ -388,6 +399,7 @@ paths:
   /channels/groups:
     get:
       parameters:
+        - { name: country, in: query, schema: {type: string, description: "Explicit country ISO codes CSV; all or omitted = all; und = missing country. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
@@ -404,6 +416,7 @@ paths:
     get:
       summary: Guide grid
       parameters:
+        - { name: country, in: query, schema: {type: string, description: "Explicit country ISO codes CSV; all or omitted = all; und = missing country. Independent of language."} }
         - { name: channel_ids, in: query, schema: {type: string, description: csv} }
         - { name: from, in: query, schema: {type: string, format: date-time} }
         - { name: to, in: query, schema: {type: string, format: date-time} }
