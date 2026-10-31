@@ -294,7 +294,7 @@ function AboutTab() {
       <section className="flex flex-col gap-1"><h2 className="heading">StreamHub 1.0.0</h2><p className="muted">A self-hosted hub for your own media and IPTV sources.</p></section>
       <section className="flex flex-col gap-3 panel">
         <h2 className="heading">Android TV app</h2>
-        <p>Debug build d99151e · Android 7 or newer · 29 MB. The webpage may include newer features than this APK.</p>
+        <p>Debug build 1b991e9 · Android 7 or newer · 29 MB. The webpage may include newer features than this APK.</p>
         <AndroidDownload focusKey="about:android" />
         <p className="muted">If Android reports a signing conflict, this APK cannot update that installation. Keep your existing app and data; do not uninstall to work around it.</p>
       </section>
