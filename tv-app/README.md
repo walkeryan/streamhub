@@ -118,10 +118,11 @@ values and replaces accent and glow with `ThemeRepository.setAdaptiveAccent()`.
 |---|---|---|
 | Up / Down, CH+ / CH− | zap (OSD updates immediately; stream switches 350 ms after the last press) | show OSD |
 | 0–9 | channel number; commits after 2 s or on OK | — |
-| OK | mini channel list | play/pause |
+| OK (short press) | mini channel list | play/pause |
+| OK (hold ½ s) | audio track · subtitles · aspect ratio · sleep timer | same |
 | Back | exit; pressed twice within 500 ms → last channel | exit |
 | Left / Right, RW / FF | — | seek ±10 s / ±30 s |
-| Menu | audio track · subtitles · aspect ratio · sleep timer | same |
+| Menu / Settings key (if the remote has one) | same as holding OK | same |
 
 ## FFmpeg decoder extension (AC-3 / E-AC-3 / DTS / MP2 audio)
 

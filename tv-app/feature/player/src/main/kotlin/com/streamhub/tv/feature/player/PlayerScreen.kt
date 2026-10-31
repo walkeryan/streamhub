@@ -79,6 +79,17 @@ private fun fmt(ms: Long): String {
     return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s / 60) % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
 }
 
+/** Hold time after which OK counts as a long press (Android's default long-press timeout). */
+private const val LONG_PRESS_MS = 500L
+
+private fun isOk(key: Key) = key == Key.DirectionCenter || key == Key.Enter || key == Key.NumPadEnter
+
+/** Tracks one OK press across its KeyDown / auto-repeat / KeyUp events (not state: no recomposition). */
+private class OkPress {
+    var down = false
+    var longHandled = false
+}
+
 private fun digitOf(key: Key): Int? = when (key.nativeKeyCode) {
     in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9 -> key.nativeKeyCode - android.view.KeyEvent.KEYCODE_0
     in android.view.KeyEvent.KEYCODE_NUMPAD_0..android.view.KeyEvent.KEYCODE_NUMPAD_9 -> key.nativeKeyCode - android.view.KeyEvent.KEYCODE_NUMPAD_0
@@ -88,8 +99,10 @@ private fun digitOf(key: Key): Int? = when (key.nativeKeyCode) {
 /**
  * Remote mapping
  *  Live:  Up/Down, CH+/CH- = zap · 0-9 = channel number (commits after 2 s or OK) · OK = mini channel list
- *         Back = exit; Back twice within 500 ms = last channel · Menu = audio/subtitles/aspect/sleep
- *  VOD:   OK / Play-Pause = toggle · Left/Right / FF/RW = seek ∓10 s/30 s · Up/Down = show OSD · Menu as above
+ *         Back = exit; Back twice within 500 ms = last channel
+ *  VOD:   OK / Play-Pause = toggle · Left/Right / FF/RW = seek ∓10 s/30 s · Up/Down = show OSD
+ *  Both:  hold OK (or Menu/Settings key) = audio/subtitles/aspect/sleep menu. Most Google TV remotes
+ *         have no Menu key, so the short-press OK action fires on key *up* and a hold opens the menu.
  */
 @Composable
 fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
@@ -99,6 +112,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
     val scope = rememberCoroutineScope()
     var lastBackAt by remember { mutableLongStateOf(0L) }
     var pendingExit by remember { mutableStateOf<Job?>(null) }
+    val ok = remember { OkPress() }
 
     LaunchedEffect(Unit) { vm.exit.collect { onExit() } }
     LaunchedEffect(s.overlay) {
@@ -130,20 +144,39 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                     }
                     return@onPreviewKeyEvent true
                 }
+                // OK / D-pad centre: short press acts on key up; holding it opens the menu. Every edge of a
+                // press that started here is consumed, including the KeyUp after the menu has opened, so the
+                // release can't click the menu item that just took focus.
+                if (isOk(e.key) && (ok.down || (!overlayOpen && e.type == KeyEventType.KeyDown))) {
+                    val n = e.nativeKeyEvent
+                    when (e.type) {
+                        KeyEventType.KeyDown -> when {
+                            !ok.down -> { ok.down = true; ok.longHandled = false }
+                            !ok.longHandled && (n.isLongPress || n.eventTime - n.downTime >= LONG_PRESS_MS) -> {
+                                ok.longHandled = true; vm.openMenu()
+                            }
+                        }
+                        KeyEventType.KeyUp -> {
+                            val wasLong = ok.longHandled || n.eventTime - n.downTime >= LONG_PRESS_MS
+                            val handled = ok.longHandled
+                            ok.down = false; ok.longHandled = false
+                            when {
+                                handled -> Unit
+                                wasLong -> vm.openMenu() // remotes that send no auto-repeat while held
+                                vm.commitNumber() -> Unit
+                                s.live -> vm.openMiniList()
+                                else -> { vm.player.togglePlayPause(); vm.showOsd() }
+                            }
+                        }
+                    }
+                    return@onPreviewKeyEvent true
+                }
                 if (overlayOpen) return@onPreviewKeyEvent false // let the overlay's focusables handle D-pad
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 digitOf(e.key)?.let { vm.digit(it); return@onPreviewKeyEvent true }
                 when (e.key) {
                     Key.DirectionUp, Key.ChannelUp -> { if (s.live) vm.zap(+1) else vm.showOsd(); true }
                     Key.DirectionDown, Key.ChannelDown -> { if (s.live) vm.zap(-1) else vm.showOsd(); true }
-                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                        when {
-                            vm.commitNumber() -> Unit
-                            s.live -> vm.openMiniList()
-                            else -> { vm.player.togglePlayPause(); vm.showOsd() }
-                        }
-                        true
-                    }
                     Key.DirectionLeft -> { vm.player.seekBy(-10_000); vm.showOsd(); true }
                     Key.DirectionRight -> { vm.player.seekBy(10_000); vm.showOsd(); true }
                     Key.MediaRewind -> { vm.player.seekBy(-30_000); vm.showOsd(); true }
@@ -235,7 +268,7 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
             }
         }
         Text(
-            if (s.live) "▲▼ zap · 0–9 channel · OK list · ☰ Menu · Back×2 last channel" else "OK play/pause · ◀▶ seek · ☰ Menu",
+            if (s.live) "▲▼ zap · 0–9 channel · OK list · hold OK menu · Back×2 last channel" else "OK play/pause · ◀▶ seek · hold OK menu",
             style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(top = 10.dp),
         )
         s.sleepEndsAt?.let {
