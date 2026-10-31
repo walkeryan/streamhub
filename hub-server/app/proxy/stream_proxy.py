@@ -311,7 +311,7 @@ class StreamProxy:
         req_headers = dict(headers)
         if range_header:
             req_headers["Range"] = range_header
-        client = self._client_factory(timeout=httpx.Timeout(30.0, read=None), headers=req_headers)
+        client = self._client_factory(timeout=httpx.Timeout(30.0, connect=10.0, read=None), headers=req_headers)
         try:
             req = client.build_request("GET", url)
             resp = await client.send(req, stream=True)

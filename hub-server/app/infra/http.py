@@ -15,11 +15,17 @@ log = logging.getLogger(__name__)
 DEFAULT_UA = "StreamHub/1.0 (+https://github.com/streamhub)"
 
 
-def make_client(timeout: float = 20.0, **kw: Any) -> httpx.AsyncClient:
+def make_client(timeout: float | httpx.Timeout | None = 20.0, **kw: Any) -> httpx.AsyncClient:
+    """Build the shared outbound client.
+
+    ``timeout`` may be a number (seconds; ``None`` = no limit) or a ready-made ``httpx.Timeout``,
+    which is used as-is. A plain number gets a 10 s connect timeout.
+    """
     headers = {"User-Agent": DEFAULT_UA}
     headers.update(kw.pop("headers", {}) or {})
+    to = timeout if isinstance(timeout, httpx.Timeout) else httpx.Timeout(timeout, connect=10.0)
     return httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout, connect=10.0),
+        timeout=to,
         follow_redirects=True,
         headers=headers,
         **kw,

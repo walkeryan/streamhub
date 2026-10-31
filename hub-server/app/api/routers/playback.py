@@ -105,7 +105,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
     except (ConnectionError, OSError) as exc:
         raise BadGateway("upstream unavailable") from exc
     except Exception as exc:
-        log.info("stream proxy failed", extra={"err": type(exc).__name__})
+        log.warning("stream proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
     return StreamingResponse(
         gen, status_code=status, headers=headers, media_type=headers.get("content-type", "application/octet-stream")
@@ -127,6 +127,9 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
         status, headers, gen = await c.proxy.passthrough(url, g.headers, g.source_id, request.headers.get("range"))
     except (ConnectionError, OSError) as exc:
         raise BadGateway("upstream unavailable") from exc
+    except Exception as exc:
+        log.warning("stream segment proxy failed", exc_info=True, extra={"err": type(exc).__name__})
+        raise BadGateway("upstream unavailable") from exc
     return StreamingResponse(
         gen, status_code=status, headers=headers, media_type=headers.get("content-type", "video/mp2t")
     )
@@ -142,6 +145,9 @@ async def stream_hls(token: str, c: C) -> Response:
     try:
         sess = await c.proxy.hls_session(key, g.url, g.headers, live=g.live, transcode=transcode)
     except (ConnectionError, TimeoutError, OSError) as exc:
+        raise BadGateway("could not start HLS session") from exc
+    except Exception as exc:
+        log.warning("hls session failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("could not start HLS session") from exc
     text = (sess.workdir / "index.m3u8").read_text(errors="ignore")
     base = f"/api/v1/stream/{token}/hls/{sess.sid}/"
