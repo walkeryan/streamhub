@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import func, or_, select
 
+from app.adapters.language.country import channel_country, group_country
 from app.infra.db import Database
 from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Progress, Setting, Source
 from app.services import ids
@@ -210,9 +211,17 @@ class ChannelService:
         if country and country.lower() != "all":
             codes = [code.strip().upper() for code in country.split(",") if code.strip()]
             known = [code for code in codes if code not in ("UND", "UNKNOWN")]
+            missing = or_(Channel.country.is_(None), func.trim(Channel.country) == "")
+            async with self._db.session() as session:
+                groups = list((await session.execute(select(Channel.group_name).distinct())).scalars())
+            inferred = {label: group_country(label)[0] for label in groups}
+            matched = [label for label, code in inferred.items() if code in known]
             country_terms: list[Any] = [func.upper(func.trim(Channel.country)).in_(known)]
+            if matched:
+                country_terms.append(missing & Channel.group_name.in_(matched))
             if any(code in ("UND", "UNKNOWN") for code in codes):
-                country_terms.append(or_(Channel.country.is_(None), func.trim(Channel.country) == ""))
+                unknown = [label for label, code in inferred.items() if code is None]
+                country_terms.append(missing & Channel.group_name.in_(unknown))
             query = query.where(or_(*country_terms))
         if source_id:
             query = query.where(Channel.source_id == source_id)
@@ -296,6 +305,7 @@ class ChannelService:
         for c in chans:
             cid = ids.channel_id(c.source_id, c.ext_id)
             cur, nxt = nn.get((c.source_id, c.epg_id or ""), (None, None))
+            country, country_source = channel_country(c.country, c.group_name)
             out.append(
                 {
                     "id": cid,
@@ -307,7 +317,8 @@ class ChannelService:
                     "group": c.group_override or c.group_name,
                     "language": c.language or "und",
                     "language_source": c.language_source,
-                    "country": c.country,
+                    "country": country,
+                    "country_source": country_source,
                     "epg_id": c.epg_id,
                     "catchup_days": c.catchup_days,
                     "is_favorite": cid in favs,

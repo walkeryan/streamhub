@@ -144,6 +144,7 @@ components:
         language: {type: string, description: "ISO 639-3 or 'und'"}
         language_source: {type: string, enum: [tag, db, country, group, flag, name, user]}
         country: {type: string, nullable: true}
+        country_source: {type: string, enum: [tag, group, flag], nullable: true, description: "Explicit country tag or conservative provider group/flag hint; missing remains unknown."}
         epg_id: {type: string, nullable: true}
         catchup_days: {type: integer, default: 0}
         is_favorite: {type: boolean}
@@ -424,7 +425,7 @@ paths:
   /channels:
     get:
       parameters:
-        - { name: country, in: query, schema: {type: string, description: "Explicit country ISO codes CSV; all or omitted = all; und = missing country. Independent of language."} }
+        - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: group, in: query, schema: {type: string} }
         - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3. Omitted = the profile's languages. Present but empty (`language=`) or `all` = all languages (the TV's All chip)."} }
@@ -438,7 +439,7 @@ paths:
   /channels/groups:
     get:
       parameters:
-        - { name: country, in: query, schema: {type: string, description: "Explicit country ISO codes CSV; all or omitted = all; und = missing country. Independent of language."} }
+        - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
@@ -470,7 +471,7 @@ paths:
     get:
       summary: Guide grid
       parameters:
-        - { name: country, in: query, schema: {type: string, description: "Explicit country ISO codes CSV; all or omitted = all; und = missing country. Independent of language."} }
+        - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: channel_ids, in: query, schema: {type: string, description: csv} }
         - { name: from, in: query, schema: {type: string, format: date-time} }
         - { name: to, in: query, schema: {type: string, format: date-time} }

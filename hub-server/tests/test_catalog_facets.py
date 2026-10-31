@@ -53,11 +53,52 @@ async def test_country_independent_language_unknown_and_guide(api: Api) -> None:
     assert [ch["ext_id"] for ch in us["channels"]] == ["0"]
     assert (await api.get("/channels", params={"country": "US", "language": "all"})).json()["total"] == 2
     unknown = (await api.get("/channels", params={"country": "und", "language": "all"})).json()
-    assert {ch["ext_id"] for ch in unknown["channels"]} == {"2", "4", "5"}
+    assert {ch["ext_id"] for ch in unknown["channels"]} == {"2", "5"}
     groups = (await api.get("/channels/groups", params={"country": "US", "language": "all"})).json()
     assert {g["name"]: g["channel_count"] for g in groups} == {"UK| News": 1, "FR| News": 1}
-    grid = (await api.get("/epg", params={"country": "US", "channel_ids": "ch:catalog:0,ch:catalog:1,ch:catalog:3"})).json()
+    grid = (
+        await api.get("/epg", params={"country": "US", "channel_ids": "ch:catalog:0,ch:catalog:1,ch:catalog:3"})
+    ).json()
     assert set(grid) == {"ch:catalog:0", "ch:catalog:1"}
     assert set((await api.get("/epg", params={"country": "US"})).json()) == {"ch:catalog:0"}
     normal = (await api.get("/channels")).json()
     assert normal["list_id"] != us["list_id"] and normal["total"] == 2
+
+
+async def test_explicit_provider_country_hints_and_provenance(api: Api) -> None:
+    from app.adapters.language.country import group_country
+
+    await seed_catalog(api, channel_count=9)
+    labels = [
+        "US| ABC ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ",
+        "US| French",
+        "UK| English",
+        "English",
+        "AFR| AFRICA VIP",
+        "4K| RELAX",
+        "🇺🇸 News",
+        "US| UK| Mixed",
+        "USA| News",
+    ]
+    async with api.c.db.session() as session:
+        for i, label in enumerate(labels):
+            await session.execute(update(Channel).where(Channel.ext_id == str(i)).values(group_name=label))
+        await session.commit()
+    result = (await api.get("/channels", params={"language": "all", "country": "US"})).json()
+    assert result["total"] == 4
+    assert {ch["ext_id"] for ch in result["channels"]} == {"0", "1", "6", "8"}
+    assert next(ch for ch in result["channels"] if ch["ext_id"] == "1")["language"] == "fra"
+    assert next(ch for ch in result["channels"] if ch["ext_id"] == "0")["country_source"] == "group"
+    assert next(ch for ch in result["channels"] if ch["ext_id"] == "6")["country_source"] == "flag"
+    unknown = (await api.get("/channels", params={"language": "all", "country": "und"})).json()
+    assert {ch["ext_id"] for ch in unknown["channels"]} == {"3", "4", "5", "7"}
+    assert group_country("United States | News") == ("US", "group")
+    assert group_country("English | News") == (None, None)
+    async with api.c.db.session() as session:
+        from sqlalchemy import select
+
+        assert all(country is None for country in (await session.execute(select(Channel.country))).scalars())
+        await session.execute(update(Channel).where(Channel.ext_id == "0").values(country="CA"))
+        await session.commit()
+    explicit = (await api.get("/channels", params={"country": "CA", "language": "all"})).json()["channels"][0]
+    assert explicit["country"] == "CA" and explicit["country_source"] == "tag"

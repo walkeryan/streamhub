@@ -230,6 +230,7 @@ class Channel(_M):
     language: str
     language_source: Literal["tag", "db", "country", "group", "flag", "name", "user"] | None = None
     country: str | None = None
+    country_source: Literal["tag", "group", "flag"] | None = None
     epg_id: str | None = None
     catchup_days: int = 0
     is_favorite: bool
