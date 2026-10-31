@@ -108,7 +108,7 @@ export function Guide() {
             {sel ? (
               <>
                 <h2 className="heading">{sel.title}</h2>
-                <p className="muted">{fmtTime(sel.start)} to {fmtTime(sel.stop)}{sel.category ? `   ${sel.category}` : ''}</p>
+                <p className="muted">{fmtTime(sel.start)} to {fmtTime(sel.stop)}{sel.category ? ` · ${sel.category}` : ''}</p>
                 {sel.description && <p className="label clamp2">{sel.description}</p>}
               </>
             ) : <p className="muted">Move over a programme for details. Press OK on a past programme to watch it again where catch-up is offered.</p>}
