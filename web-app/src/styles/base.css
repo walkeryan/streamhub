@@ -299,7 +299,7 @@ h1, h2, h3, p { margin: 0; }
 
 /* Programme-first discovery: wide artwork, persistent metadata and one remote
    target per card. Art falls back to real channel branding or neutral initials. */
-.home-destinations { display: flex; gap: .625rem; padding: 1rem var(--safe-x) .25rem; overflow-x: auto; scroll-padding-inline: var(--safe-x); }
+.home-destinations { display: flex; flex-wrap: wrap; gap: .625rem; padding: 1rem var(--safe-x) .25rem; overflow-x: auto; scroll-padding-inline: var(--safe-x); }
 .home-destinations .btn { flex: none; min-width: 6.5rem; }
 .home-discovery .hero { height: min(38dvh, 25rem); min-height: 17rem; }
 .home-discovery .hero-body { bottom: 1.5rem; }
