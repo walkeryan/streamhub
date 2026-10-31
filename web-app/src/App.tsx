@@ -7,7 +7,8 @@ import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
 import { bootTheme, useTheme } from './lib/theme'
 import { useSession } from './store/session'
-import { DisclaimerGate, ProfilePicker } from './screens/Gate'
+import { DisclaimerGate } from './screens/Gate'
+import { LoginGate } from './screens/GoogleLogin'
 import { Home } from './screens/Home'
 import { Search } from './screens/Search'
 import { TitleScreen } from './screens/Title'
@@ -44,7 +45,7 @@ export function App() {
   useGlobalBack()
 
   let body
-  if (!profile) body = <ProfilePicker />
+  if (!profile) body = <LoginGate />
   else if (disclaimer.data && profile.disclaimer_accepted_version !== disclaimer.data.version) {
     body = <DisclaimerGate onAccepted={() => setProfile({ ...profile, disclaimer_accepted_version: disclaimer.data!.version })} />
   } else if (disclaimer.isLoading) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>

@@ -26,6 +26,7 @@ const tileById = (id: string): Tile | undefined => {
 }
 
 export const handlers = [
+  http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),
   http.get(`${B}/health`, () => HttpResponse.json({ ok: true })),
   http.get(`${B}/profiles`, () => HttpResponse.json(profiles.map((p) => withProfile(p.id)))),
   http.post(`${B}/auth/login`, async ({ request }) => {

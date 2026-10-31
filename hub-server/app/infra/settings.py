@@ -22,6 +22,12 @@ class AppSettings(BaseSettings):
     config_dir: Path = Field(default=Path("/config"))
     secret_key: str | None = None
     admin_password: str | None = None
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "https://streamhub.ryan-walker.dev/api/v1/auth/google/callback"
+    google_allowed_emails: str = ""
+    google_owner_profile_id: str = ""
+    google_auth_required: bool = False
     tmdb_api_key: str | None = None
     web_dist: Path = Field(default=Path("/app/web-dist"))
     transcode_dir: Path | None = None

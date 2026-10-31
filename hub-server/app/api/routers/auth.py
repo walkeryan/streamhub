@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
+from fastapi.responses import RedirectResponse
 
 from app.api import schemas as S
 from app.api.deps import C, P
 from app.infra.models import Profile as ProfileRow
-from app.services.errors import NotFound, ServiceError
+from app.services.errors import Forbidden, NotFound, ServiceError, Unauthorized
 
 router = APIRouter()
 
@@ -35,6 +36,8 @@ async def tokens_out(c: C, prof: ProfileRow, tokens: dict[str, str]) -> dict[str
 # ---------------------------------------------------------------- auth
 @router.post("/auth/login", response_model=S.AuthTokens, tags=["auth"])
 async def login(body: S.LoginRequest, c: C) -> dict[str, Any]:
+    if c.settings.google_auth_required:
+        raise Forbidden("Use Google sign-in or device pairing")
     prof, tokens = await c.auth.login(body.profile_id, body.pin, body.password)
     return await tokens_out(c, prof, tokens)
 
@@ -69,7 +72,12 @@ async def device_approve(body: S.DeviceApprove, c: C, p: P) -> Response:
 
 # ---------------------------------------------------------------- profiles
 @router.get("/profiles", response_model=list[S.Profile], tags=["profiles"])
-async def list_profiles(c: C) -> list[dict[str, Any]]:
+async def list_profiles(request: Request, c: C) -> list[dict[str, Any]]:
+    if c.settings.google_auth_required:
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise Unauthorized("Sign in to list profiles")
+        c.auth.principal_from_access(token)
     return [await profile_out(c, p) for p in await c.auth.list_profiles()]
 
 
@@ -148,3 +156,50 @@ async def get_disclaimer(c: C) -> dict[str, str]:
 async def accept_disclaimer(body: S.DisclaimerAccept, c: C, p: P) -> Response:
     await c.disclaimer.accept(p.profile_id, body.version)
     return Response(status_code=204)
+
+
+# Google owner login deliberately does not change native JWT/device-code routes.
+@router.get("/auth/config", tags=["auth"])
+async def auth_config(c: C) -> dict[str, bool]:
+    return {"google_enabled": c.google_auth.enabled, "google_required": c.settings.google_auth_required}
+
+
+@router.get("/auth/google/start", tags=["auth"])
+async def google_start(c: C, return_to: str = "/") -> Response:
+    url, browser = c.google_auth.start(return_to)
+    response = RedirectResponse(url, status_code=303, headers={"Cache-Control": "no-store"})
+    response.set_cookie(
+        "__Host-sh-google-state", browser, max_age=600, secure=True, httponly=True, samesite="lax", path="/"
+    )
+    return response
+
+
+@router.get("/auth/google/callback", tags=["auth"])
+async def google_callback(request: Request, c: C, state: str = "", code: str = "") -> Response:
+    # Always redirect errors to a fixed page; no provider errors or credentials in the URL.
+    try:
+        handoff, destination = await c.google_auth.finish(
+            state, request.cookies.get("__Host-sh-google-state", ""), code
+        )
+    except ServiceError:
+        response = RedirectResponse("/?google_error=1", status_code=303)
+    else:
+        separator = "&" if "?" in destination else "?"
+        response = RedirectResponse(destination + separator + "google_complete=1", status_code=303)
+        response.set_cookie(
+            "__Host-sh-google-handoff", handoff, max_age=60, secure=True, httponly=True, samesite="strict", path="/"
+        )
+    response.delete_cookie("__Host-sh-google-state", secure=True, httponly=True, samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@router.post("/auth/google/complete", response_model=S.AuthTokens, tags=["auth"])
+async def google_complete(request: Request, response: Response, c: C) -> dict[str, Any]:
+    prof = await c.google_auth.consume(
+        request.cookies.get("__Host-sh-google-handoff", ""), request.headers.get("origin", "")
+    )
+    response.delete_cookie("__Host-sh-google-handoff", secure=True, httponly=True, samesite="strict", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return await tokens_out(c, prof, c.auth.issue(prof))

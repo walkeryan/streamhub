@@ -30,6 +30,7 @@ from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.disclaimer import DisclaimerService
+from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.registry import SourceRegistry
@@ -60,6 +61,7 @@ class Container:
     app_settings: SettingsService
     disclaimer: DisclaimerService
     auth: AuthService
+    google_auth: GoogleAuthService
     language: LanguageChain
     tmdb: TmdbClient
     sources: SourceService
@@ -159,6 +161,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         app_settings=app_settings,
         disclaimer=disclaimer,
         auth=auth,
+        google_auth=GoogleAuthService(settings, auth),
         language=language,
         tmdb=tmdb,
         sources=sources,
@@ -190,7 +193,7 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
     await c.app_settings.load()
     await c.service_registry.seed()
     generated = await c.auth.ensure_admin(c.settings.admin_password)
-    if generated:
+    if generated and not c.settings.google_auth_required:
         # Logged exactly once, at first boot. Deliberately bypasses the redaction registry.
         logging.getLogger("streamhub.bootstrap").warning(
             "Admin profile created. Generated admin password (shown once): %s", generated
