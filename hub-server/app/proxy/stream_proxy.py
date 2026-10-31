@@ -184,6 +184,8 @@ def ffmpeg_args(
             args += ["-headers", other]
     if url.startswith("http"):
         args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
+        if live:
+            args += ["-reconnect_at_eof", "1"]
     args += ["-fflags", "+genpts", "-i", url, "-map", "0:v:0?", "-map", "0:a?"]
     if transcode == "none" or not transcode:
         args += ["-c", "copy"]
