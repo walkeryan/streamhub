@@ -382,3 +382,37 @@ class Health(_M):
     status: str
     version: str
     db: bool
+
+
+class SportsListing(_M):
+    id: str
+    sport: str
+    programme_id: str
+    title: str
+    category: str | None = None
+    start: datetime
+    stop: datetime
+    channel_id: str
+    channel_name: str
+    channel_number: int
+    source_name: str
+
+
+class SportCount(_M):
+    name: str
+    count: int
+
+
+class SportsCoverage(_M):
+    eligible_channels: int
+    channels_with_current_schedule: int
+
+
+class SportsPage(_M):
+    as_of: datetime
+    items: list[SportsListing]
+    total: int
+    limit: int
+    offset: int
+    sports: list[SportCount]
+    coverage: SportsCoverage

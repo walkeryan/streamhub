@@ -1438,6 +1438,47 @@ export interface paths {
         };
         trace?: never;
     };
+    "/sports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    language?: string;
+                    sport?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Current sports programme listings; coverage reflects selected languages and visible enabled channels. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/epg": {
         parameters: {
             query?: never;
@@ -2392,6 +2433,37 @@ export interface components {
         Disclaimer: {
             version: string;
             text: string;
+        };
+        SportsListing: {
+            id: string;
+            sport: string;
+            programme_id: string;
+            title: string;
+            category?: string | null;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            stop: string;
+            channel_id: string;
+            channel_name: string;
+            channel_number: number;
+            source_name: string;
+        };
+        SportsPage: {
+            /** Format: date-time */
+            as_of: string;
+            items: components["schemas"]["SportsListing"][];
+            total: number;
+            limit: number;
+            offset: number;
+            sports: {
+                name: string;
+                count: number;
+            }[];
+            coverage: {
+                eligible_channels: number;
+                channels_with_current_schedule: number;
+            };
         };
     };
     responses: never;

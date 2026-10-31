@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, Response
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.services.errors import ServiceError
+from app.services.sports import sports_on_now
 
 router = APIRouter()
 
@@ -17,6 +18,21 @@ router = APIRouter()
 @router.get("/home", response_model=S.Home, tags=["catalog"])
 async def home(c: C, p: P) -> dict[str, Any]:
     return await c.home.home(p.profile_id)
+
+
+@router.get("/sports", response_model=S.SportsPage, tags=["live"])
+async def sports(
+    c: C,
+    p: P,
+    language: str | None = None,
+    sport: str | None = None,
+    q: str | None = Query(None, max_length=200),
+    limit: int = Query(40, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    return await sports_on_now(
+        c.channels, p.profile_id, language=language, sport=sport, q=q, limit=limit, offset=offset
+    )
 
 
 @router.get("/search", response_model=S.SearchResults, tags=["catalog"])
