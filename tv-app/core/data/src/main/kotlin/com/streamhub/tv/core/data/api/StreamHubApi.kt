@@ -87,6 +87,9 @@ class StreamHubApi @Inject constructor(
     suspend fun createProfile(p: Profile) = client.post(url("/profiles")) { setBody(p) }.unit()
     suspend fun updateProfile(p: Profile) = client.patch(url("/profiles/${id(p.id)}")) { setBody(p) }.unit()
     suspend fun deleteProfile(profileId: String) = client.delete(url("/profiles/${id(profileId)}")).unit()
+    suspend fun homeLayout(profileId: String): HomeLayout = get("/profiles/${id(profileId)}/home_layout")
+    suspend fun putHomeLayout(profileId: String, layout: HomeLayout): HomeLayout =
+        client.put(url("/profiles/${id(profileId)}/home_layout")) { setBody(layout) }.ok()
     suspend fun setPin(profileId: String, pin: String?) =
         client.put(url("/profiles/${id(profileId)}/pin")) { setBody(PinUpdate(pin)) }.unit()
 
@@ -119,7 +122,6 @@ class StreamHubApi @Inject constructor(
         }
     }
 
-    /** Schema is open in the contract; decode leniently. */
     suspend fun serviceRegistry(): List<ServiceRegistryEntry> = get("/services/registry")
 
     // ---- Catalog -------------------------------------------------------------------------------
@@ -155,7 +157,9 @@ class StreamHubApi @Inject constructor(
         languages: List<String>? = null,
         favorites: Boolean? = null,
         q: String? = null,
+        listId: String? = null,
     ): ChannelList = get("/channels") {
+        listId?.let { parameter("list_id", it) }
         sourceId?.let { parameter("source_id", it) }
         group?.let { parameter("group", it) }
         languages?.let { parameter("language", it.joinToString(",")) }
@@ -193,7 +197,7 @@ class StreamHubApi @Inject constructor(
     suspend fun reorderFavorites(list: List<Favorite>) =
         client.post(url("/favorites/reorder")) { setBody(list) }.unit()
 
-    suspend fun watchlist(): List<Tile> = runCatching { get<List<Tile>>("/watchlist") }.getOrDefault(emptyList())
+    suspend fun watchlist(): List<Tile> = get("/watchlist")
     suspend fun addToWatchlist(itemId: String) = client.put(url("/watchlist")) { setBody(WatchlistPut(itemId)) }.unit()
     suspend fun removeFromWatchlist(itemId: String) =
         client.delete(url("/watchlist")) { parameter("id", itemId) }.unit()
@@ -202,6 +206,8 @@ class StreamHubApi @Inject constructor(
     // ---- Themes / settings ---------------------------------------------------------------------
 
     suspend fun themes(): List<Theme> = get("/themes")
+    /** Version + TMDB/JustWatch attribution strings (schema open in the contract). */
+    suspend fun about(): JsonObject = get("/about")
     suspend fun settings(): Settings = get("/settings")
     suspend fun patchSettings(s: Settings) = client.patch(url("/settings")) { setBody(s) }.unit()
     suspend fun setTmdbKey(key: String) =

@@ -40,6 +40,8 @@ class HomeViewModel @Inject constructor(
     private val themes: ThemeRepository,
 ) : ViewModel() {
     private val raw = MutableStateFlow<Result<HomeResponse>?>(null)
+    private val sessionStore = session
+    private val localPrefs = prefs
 
     private val profileId = session.session.map { it.profile?.id ?: "default" }
 
@@ -59,7 +61,19 @@ class HomeViewModel @Inject constructor(
     init { refresh() }
 
     fun refresh() {
-        viewModelScope.launch { raw.value = runCatching { api.home() } }
+        viewModelScope.launch {
+            // Per-profile layout lives on the server (GET /profiles/{id}/home_layout); mirror it into
+            // LocalPrefs so Home renders in the right order even if that call fails/offline.
+            sessionStore.current().profile?.id?.let { pid ->
+                runCatching { api.homeLayout(pid) }.onSuccess { l ->
+                    if (l.rows.isNotEmpty()) {
+                        localPrefs.setRowOrder(pid, l.rows.sortedBy { it.sort ?: Int.MAX_VALUE }.map { it.id })
+                        localPrefs.setHiddenRows(pid, l.rows.filter { it.hidden }.map { it.id }.toSet())
+                    }
+                }
+            }
+            raw.value = runCatching { api.home() }
+        }
     }
 
     /** Poster Adaptive theme: feed the focused poster's dominant colour. */

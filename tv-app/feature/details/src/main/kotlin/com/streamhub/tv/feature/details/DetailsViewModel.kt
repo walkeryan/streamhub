@@ -72,7 +72,7 @@ class DetailsViewModel @Inject constructor(
         }
     }
 
-    /** Mark watched: contract has no dedicated endpoint → report a stopped position at 100 %. */
+    /** Mark watched: contract — state=stopped with position_ms >= duration_ms marks the item watched. */
     fun markWatched() {
         val d = _state.value.detail ?: return
         val dur = (d.runtimeMin ?: 1) * 60_000L

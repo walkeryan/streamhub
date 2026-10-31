@@ -240,7 +240,7 @@ private fun ServicesGrid(s: SourcesState, vm: SourcesViewModel) {
                     Column(Modifier.weight(1f)) {
                         Text(e.name, style = MaterialTheme.typography.titleSmall, color = t.text)
                         Text(
-                            (if (installed) "Installed" else "Not installed") + " · title links: ${e.supportsTitleLink ?: "?"}",
+                            (if (installed) "Installed" else "Not installed") + if (e.supportsTitleLink) " · opens titles" else " · opens app",
                             style = MaterialTheme.typography.labelSmall, color = t.textMuted,
                         )
                     }

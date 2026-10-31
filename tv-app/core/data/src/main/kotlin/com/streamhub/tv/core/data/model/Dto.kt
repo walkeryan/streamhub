@@ -117,19 +117,29 @@ data class PlexPin(
     @SerialName("link_url") val linkUrl: String,
 )
 
-/** Entry of GET /services/registry. Contract leaves the schema open; we model DEEPLINKS.md columns. */
+/**
+ * GET /services/registry → ServiceInfo[] (contract 19d699d). android_title_uri / android_component
+ * are not in ServiceInfo (title URIs are built server-side into PlaybackDescriptor.handoff); they're
+ * kept optional here so the DEEPLINKS.md seed / a future registry editor can supply them.
+ */
 @Serializable
 data class ServiceRegistryEntry(
-    val key: String,
+    @SerialName("service_key") val key: String,
     val name: String,
-    @SerialName("tmdb_provider_ids") val tmdbProviderIds: List<Int> = emptyList(),
     @SerialName("android_package") val androidPackage: String? = null,
+    @SerialName("web_url") val webUrl: String = "",
+    @SerialName("supports_title_link") val supportsTitleLink: Boolean = false,
+    @SerialName("tmdb_provider_ids") val tmdbProviderIds: List<Int> = emptyList(),
     @SerialName("android_title_uri") val androidTitleUri: String? = null,
     @SerialName("android_component") val androidComponent: String? = null,
-    @SerialName("web_title_url") val webTitleUrl: String? = null,
-    @SerialName("supports_title_link") val supportsTitleLink: String? = null,
-    val notes: String? = null,
 )
+
+@Serializable
+data class HomeLayoutRow(val id: String, val hidden: Boolean = false, val sort: Int? = null)
+
+/** Per-profile Home row order / hidden rows: GET/PUT /profiles/{id}/home_layout. */
+@Serializable
+data class HomeLayout(val rows: List<HomeLayoutRow> = emptyList())
 
 // ---- Catalog -----------------------------------------------------------------------------------
 

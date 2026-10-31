@@ -6,6 +6,8 @@ import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.ChannelGroup
 import com.streamhub.tv.core.data.model.ChannelGroupPatch
+import com.streamhub.tv.core.data.model.HomeLayout
+import com.streamhub.tv.core.data.model.HomeLayoutRow
 import com.streamhub.tv.core.data.model.LanguageCount
 import com.streamhub.tv.core.data.model.LoginRequest
 import com.streamhub.tv.core.data.model.Profile
@@ -70,8 +72,9 @@ class SettingsViewModel @Inject constructor(
         launch { runCatching { api.settings() }.onSuccess { st -> _state.update { it.copy(serverSettings = st) } } }
         launch {
             runCatching { api.home() }.onSuccess { h ->
-                val order = prefs.rowOrder(pid()).first()
-                val hidden = prefs.hiddenRows(pid()).first()
+                val server = s.profile?.id?.let { p -> runCatching { api.homeLayout(p) }.getOrNull() }
+                val order = server?.rows?.takeIf { it.isNotEmpty() }?.sortedBy { it.sort ?: Int.MAX_VALUE }?.map { it.id } ?: prefs.rowOrder(pid()).first()
+                val hidden = server?.rows?.takeIf { it.isNotEmpty() }?.filter { it.hidden }?.map { it.id }?.toSet() ?: prefs.hiddenRows(pid()).first()
                 val rows = h.rows.sortedBy { r -> order.indexOf(r.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
                 _state.update { it.copy(rows = rows, rowOrder = rows.map { r -> r.id }, hiddenRows = hidden) }
             }
@@ -112,12 +115,21 @@ class SettingsViewModel @Inject constructor(
         order.removeAt(i); order.add(j, id)
         prefs.setRowOrder(pid(), order)
         _state.update { s -> s.copy(rowOrder = order, rows = order.mapNotNull { rid -> s.rows.firstOrNull { it.id == rid } }) }
+        pushLayout()
+    }
+
+    private suspend fun pushLayout() {
+        val p = _state.value.current ?: return
+        val s = _state.value
+        val layout = HomeLayout(s.rowOrder.mapIndexed { i, id -> HomeLayoutRow(id = id, hidden = id in s.hiddenRows, sort = i) })
+        runCatching { api.putHomeLayout(p.id, layout) }
     }
 
     fun toggleRowHidden(id: String) = viewModelScope.launch {
         val h = _state.value.hiddenRows.let { if (id in it) it - id else it + id }
         prefs.setHiddenRows(pid(), h)
         _state.update { it.copy(hiddenRows = h) }
+        pushLayout()
     }
 
     // ---- Parental / groups --------------------------------------------------------------------

@@ -31,17 +31,18 @@ import javax.inject.Inject
 
 /** Fallback when /services/registry is unavailable: docs/DEEPLINKS.md seed data. */
 val SEED_SERVICES = listOf(
-    ServiceRegistryEntry("netflix", "Netflix", listOf(8), "com.netflix.ninja", "https://www.netflix.com/title/{netflix_id}?source=30", null, "https://www.netflix.com/title/{netflix_id}", "true"),
-    ServiceRegistryEntry("hulu", "Hulu", listOf(15), "com.hulu.livingroomplus", "https://www.hulu.com/watch/{hulu_id}", ".WKFactivity", "https://www.hulu.com/watch/{hulu_id}", "partial"),
-    ServiceRegistryEntry("disney", "Disney+", listOf(337), "com.disney.disneyplus", "https://www.disneyplus.com/browse/entity-{id}", null, "https://www.disneyplus.com/browse/entity-{id}", "unverified"),
-    ServiceRegistryEntry("prime", "Prime Video", listOf(9, 119), "com.amazon.amazonvideo.livingroom", "https://app.primevideo.com", null, "https://www.primevideo.com/detail/{asin}", "false"),
-    ServiceRegistryEntry("max", "HBO Max", listOf(1899), "com.wbd.stream", "https://play.max.com/video/watch/{id}", null, "https://play.max.com/video/watch/{id}", "unverified"),
-    ServiceRegistryEntry("appletv", "Apple TV+", listOf(350), "com.apple.atve.androidtv.appletv", null, null, "https://tv.apple.com", "false"),
-    ServiceRegistryEntry("peacock", "Peacock", listOf(386, 387), "com.peacocktv.peacockandroid", null, null, "https://www.peacocktv.com/watch/playback/vod/{id}", "false"),
-    ServiceRegistryEntry("paramount", "Paramount+", listOf(531), "com.cbs.ott", null, null, "https://www.paramountplus.com", "false"),
-    ServiceRegistryEntry("youtube", "YouTube", listOf(192), "com.google.android.youtube.tv", "https://www.youtube.com/watch?v={id}", null, "https://www.youtube.com/watch?v={id}", "true"),
-    ServiceRegistryEntry("tubi", "Tubi", listOf(73), "com.tubitv", null, null, "https://tubitv.com", "false"),
-    ServiceRegistryEntry("pluto", "Pluto TV", listOf(300), "tv.pluto.android", null, null, "https://pluto.tv", "false"),
+    // key, name, package, web_url, supports_title_link, tmdb ids, title URI template, component
+    ServiceRegistryEntry("netflix", "Netflix", "com.netflix.ninja", "https://www.netflix.com/title/{netflix_id}", true, listOf(8), "https://www.netflix.com/title/{netflix_id}?source=30"),
+    ServiceRegistryEntry("hulu", "Hulu", "com.hulu.livingroomplus", "https://www.hulu.com/watch/{hulu_id}", true, listOf(15), "https://www.hulu.com/watch/{hulu_id}", ".WKFactivity"),
+    ServiceRegistryEntry("disney", "Disney+", "com.disney.disneyplus", "https://www.disneyplus.com/browse/entity-{id}", false, listOf(337), "https://www.disneyplus.com/browse/entity-{id}"),
+    ServiceRegistryEntry("prime", "Prime Video", "com.amazon.amazonvideo.livingroom", "https://www.primevideo.com/detail/{asin}", false, listOf(9, 119), "https://app.primevideo.com"),
+    ServiceRegistryEntry("max", "HBO Max", "com.wbd.stream", "https://play.max.com/video/watch/{id}", false, listOf(1899), "https://play.max.com/video/watch/{id}"),
+    ServiceRegistryEntry("appletv", "Apple TV+", "com.apple.atve.androidtv.appletv", "https://tv.apple.com", false, listOf(350)),
+    ServiceRegistryEntry("peacock", "Peacock", "com.peacocktv.peacockandroid", "https://www.peacocktv.com/watch/playback/vod/{id}", false, listOf(386, 387)),
+    ServiceRegistryEntry("paramount", "Paramount+", "com.cbs.ott", "https://www.paramountplus.com", false, listOf(531)),
+    ServiceRegistryEntry("youtube", "YouTube", "com.google.android.youtube.tv", "https://www.youtube.com/watch?v={id}", true, listOf(192), "https://www.youtube.com/watch?v={id}"),
+    ServiceRegistryEntry("tubi", "Tubi", "com.tubitv", "https://tubitv.com", false, listOf(73)),
+    ServiceRegistryEntry("pluto", "Pluto TV", "tv.pluto.android", "https://pluto.tv", false, listOf(300)),
 )
 
 sealed interface AddFlow {
@@ -79,7 +80,13 @@ class SourcesViewModel @Inject constructor(
     fun refresh() = viewModelScope.launch {
         runCatching { api.sources() }.onSuccess { l -> _state.update { it.copy(loading = false, sources = l.sortedBy { s -> s.priority }) } }
             .onFailure { e -> _state.update { it.copy(loading = false, message = e.message) } }
-        runCatching { api.serviceRegistry() }.onSuccess { r -> if (r.isNotEmpty()) _state.update { it.copy(registry = r) } }
+        runCatching { api.serviceRegistry() }.onSuccess { r ->
+            if (r.isNotEmpty()) {
+                val seed = SEED_SERVICES.associateBy { it.key }
+                val merged = r.map { e -> seed[e.key]?.let { sd -> e.copy(androidTitleUri = e.androidTitleUri ?: sd.androidTitleUri, androidComponent = e.androidComponent ?: sd.androidComponent) } ?: e }
+                _state.update { it.copy(registry = merged) }
+            }
+        }
     }
 
     private suspend fun disclaimerAccepted(): Boolean {

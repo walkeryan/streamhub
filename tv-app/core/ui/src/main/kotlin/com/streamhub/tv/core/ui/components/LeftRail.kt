@@ -81,10 +81,14 @@ fun LeftRail(
             .focusRestorer(requesters.getOrElse(selectedIndex) { FocusRequester.Default })
             .focusGroup()
             .onPreviewKeyEvent { e ->
-                if (e.type == KeyEventType.KeyDown && (e.key == Key.DirectionRight || e.key == Key.Back)) {
-                    onExit(); true
-                } else {
-                    false
+                when {
+                    e.key == Key.Back -> {
+                        // Consume both edges so the KeyUp can't reach a screen BackHandler and re-open us.
+                        if (e.type == KeyEventType.KeyDown) onExit()
+                        true
+                    }
+                    e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight -> { onExit(); true }
+                    else -> false
                 }
             },
         verticalArrangement = Arrangement.spacedBy(6.dp),

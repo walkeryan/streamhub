@@ -51,4 +51,23 @@ class ContractTest {
         val s = StreamHubJson.encodeToString(PlaybackRequest.serializer(), PlaybackRequest(id = "x"))
         assertTrue(s.contains("\"client\":\"android_tv\""))
     }
+
+    @Test fun decodesServiceInfoRegistry() {
+        val l = StreamHubJson.decodeFromString(
+            kotlinx.serialization.builtins.ListSerializer(com.streamhub.tv.core.data.model.ServiceRegistryEntry.serializer()),
+            """[{"service_key":"netflix","name":"Netflix","android_package":"com.netflix.ninja",
+                "web_url":"https://www.netflix.com","supports_title_link":true,"tmdb_provider_ids":[8]}]""",
+        )
+        assertEquals("netflix", l.single().key)
+        assertTrue(l.single().supportsTitleLink)
+    }
+
+    @Test fun decodesHomeLayout() {
+        val l = StreamHubJson.decodeFromString(
+            com.streamhub.tv.core.data.model.HomeLayout.serializer(),
+            """{"rows":[{"id":"on_now","sort":1},{"id":"continue_watching","sort":0,"hidden":true}]}""",
+        )
+        assertEquals(2, l.rows.size)
+        assertTrue(l.rows[1].hidden)
+    }
 }

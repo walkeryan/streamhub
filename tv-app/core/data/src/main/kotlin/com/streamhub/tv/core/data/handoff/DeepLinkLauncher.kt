@@ -57,7 +57,7 @@ class DeepLinkLauncher @Inject constructor(@ApplicationContext private val conte
             uri = sampleUri,
             extras = emptyMap(),
             component = entry.androidComponent,
-            webUrl = entry.webTitleUrl?.replace(Regex("\\{[^}]+\\}"), "")?.trimEnd('/') ?: "",
+            webUrl = entry.webUrl.replace(Regex("\\{[^}]+\\}"), "").trimEnd('/'),
             serviceName = entry.name,
         )
     }
