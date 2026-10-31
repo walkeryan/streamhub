@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.streamhub.tv.core.ui.components.ButtonStyle
+import com.streamhub.tv.core.ui.components.DisclaimerGate
 import com.streamhub.tv.core.ui.components.QrCode
 import com.streamhub.tv.core.ui.components.SafeArea
 import com.streamhub.tv.core.ui.components.ScreenBackground
@@ -87,54 +88,6 @@ private fun ServerStep(s: OnboardingState, onInput: (String) -> Unit, onSubmit: 
         )
         s.error?.let { Text(it, color = t.danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp)) }
         ShButton(if (s.checking) "Connecting…" else "Continue", onSubmit, Modifier.padding(top = 24.dp), style = ButtonStyle.Primary, enabled = !s.checking)
-    }
-}
-
-/**
- * docs/LEGAL.md gate: full-screen, "I accept" (default focus) + "Exit"; Accept disabled for 3 s.
- * Reused by Settings → About and the Add Source dialog (with [showExit] = false).
- */
-@Composable
-fun DisclaimerGate(
-    text: String,
-    version: String,
-    onAccept: () -> Unit,
-    onExit: () -> Unit,
-    acceptLabel: String = "I accept",
-    exitLabel: String = "Exit",
-) {
-    val t = LocalThemeTokens.current
-    var remaining by remember { mutableIntStateOf(3) }
-    val acceptFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        runCatching { acceptFocus.requestFocus() }
-        while (remaining > 0) { delay(1000); remaining-- }
-    }
-    Box(Modifier.fillMaxSize().background(t.bg).padding(SafeArea), contentAlignment = Alignment.Center) {
-        Column(Modifier.width(760.dp)) {
-            Text("Legal notice & disclaimer", style = MaterialTheme.typography.headlineMedium, color = t.text)
-            Text("Version $version", style = MaterialTheme.typography.labelMedium, color = t.textMuted, modifier = Modifier.padding(bottom = 16.dp))
-            val scroll = rememberScrollState()
-            Box(
-                Modifier.fillMaxWidth().heightIn(max = 300.dp)
-                    .background(t.surface, RoundedCornerShape(Tokens.Radius.Md))
-                    .verticalScroll(scroll)
-                    .padding(20.dp),
-            ) {
-                Text(text, style = MaterialTheme.typography.bodyLarge, color = t.text)
-            }
-            Row(Modifier.padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                // Accept keeps focus while disabled (focusable but inert) so it is the default focus.
-                ShButton(
-                    if (remaining > 0) "$acceptLabel ($remaining)" else acceptLabel,
-                    onClick = { if (remaining == 0) onAccept() },
-                    modifier = Modifier.focusRequester(acceptFocus),
-                    style = ButtonStyle.Primary,
-                    enabled = remaining == 0,
-                )
-                ShButton(exitLabel, onExit)
-            }
-        }
     }
 }
 

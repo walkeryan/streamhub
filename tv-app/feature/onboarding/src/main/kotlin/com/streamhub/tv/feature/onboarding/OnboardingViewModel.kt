@@ -19,18 +19,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.streamhub.tv.core.ui.components.DISCLAIMER_TEXT
+import com.streamhub.tv.core.ui.components.DISCLAIMER_VERSION
 
-/** Built-in copy of docs/LEGAL.md v1.0 — shown if the server is unreachable or before pairing. */
-const val DISCLAIMER_VERSION = "1.0"
-val DISCLAIMER_TEXT = """
-StreamHub is a media player and organizer. It does not provide, host, sell, promote or distribute any channels, playlists, subscriptions, EPG data or streams.
-
-You may only add sources you are legally authorized to access. You are solely responsible for the sources you configure and for complying with the laws of your jurisdiction and the rights of content owners. The authors and contributors of StreamHub accept no liability for how you use this software.
-
-Streaming-service names and logos are trademarks of their respective owners. StreamHub is not affiliated with, endorsed by or certified by any of them, including Plex, Jellyfin, Netflix, Hulu, Disney, Amazon, Warner Bros. Discovery, Apple, NBCUniversal or Paramount.
-
-This product uses the TMDB API but is not endorsed or certified by TMDB. Availability ("where to watch") data is provided by JustWatch.
-""".trimIndent()
 
 enum class OnboardingStep { Server, Disclaimer, Pairing, Done }
 
