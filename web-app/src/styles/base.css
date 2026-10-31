@@ -7,8 +7,10 @@ html {
   background: var(--t-bg);
   color: var(--t-text);
   -webkit-text-size-adjust: 100%;
+  /* focus-driven scrollIntoView keeps the focused control inside the TV safe area, not flush with the edge */
+  scroll-padding-block: calc(var(--safe-y) + 0.5rem);
 }
-@media (max-width: 720px) { html { font-size: 15px; } }
+@media (max-width: 720px) { html { font-size: 15px; scroll-padding-block: 1rem 4.5rem; } }
 body {
   margin: 0;
   background: var(--t-bg);
@@ -208,7 +210,8 @@ h1, h2, h3, p { margin: 0; }
 .numpad { position: absolute; z-index: 5; top: 2rem; right: var(--safe-x); font-size: var(--text-display); font-weight: 700; background: rgba(8,10,16,.75); padding: .25rem 1.25rem; border-radius: var(--radius-md); }
 
 /* guide */
-.epg { --col: 13rem; position: relative; }
+/* scroll-padding = sticky channel column + time header, so a focused cell is never hidden underneath them */
+.epg { --col: 13rem; position: relative; scroll-padding: 2rem 0 0 13rem; }
 .epg-cell { position: absolute; top: 0.25rem; bottom: 0.25rem; border-radius: var(--radius-sm); background: var(--t-surface-alt); padding: 0.25rem 0.625rem; overflow: clip; font-size: var(--text-label); display: flex; align-items: center; }
 .epg-label { position: sticky; left: 13.75rem; display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .epg-cell[data-now='true'] { background: color-mix(in srgb, var(--t-accent) 24%, var(--t-surface-alt)); }
