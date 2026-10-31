@@ -12,9 +12,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.api import schemas as S
 from app.api.deps import C, P
 from app.domain.ports import ImageAuthProvider
+from app.proxy.stream_proxy import HlsSourceBusy
 from app.services import ids
 from app.services.context import is_https
-from app.services.errors import BadGateway, NotFound, Unauthorized
+from app.services.errors import BadGateway, Conflict, NotFound, Unauthorized
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -143,7 +144,18 @@ async def stream_hls(token: str, c: C) -> Response:
         transcode = "software"
     key = f"{g.source_id}:{g.url}:{transcode}"
     try:
-        sess = await c.proxy.hls_session(key, g.url, g.headers, live=g.live, transcode=transcode)
+        source = await c.sources.get(g.source_id)
+        sess = await c.proxy.hls_session(
+            key,
+            g.url,
+            g.headers,
+            live=g.live,
+            transcode=transcode,
+            source_id=g.source_id,
+            max_connections=c.sources.max_connections(source),
+        )
+    except HlsSourceBusy as exc:
+        raise Conflict("Another channel is using this source. Stop it and retry.", code="source_busy") from exc
     except (ConnectionError, TimeoutError, OSError) as exc:
         raise BadGateway("could not start HLS session") from exc
     except Exception as exc:
