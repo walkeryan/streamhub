@@ -73,7 +73,7 @@ function ProfilesTab() {
   const addProfile = async () => {
     if (!name.trim()) return
     try {
-      await ok(api.POST('/profiles', { body: { id: '', name: name.trim(), is_admin: false, theme_id: 'midnight', languages: [], has_pin: false, kids } }))
+      await ok(api.POST('/profiles', { body: { id: '', name: name.trim(), is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids } }))
       setName(''); setKids(false); refresh(); toast('Profile added.', 'success')
     } catch (e) { toast(e instanceof Error ? e.message : 'Could not add the profile.', 'error') }
   }
@@ -172,8 +172,8 @@ function LanguagesTab() {
   const toggle = (code: string) => save({ languages: me.languages.includes(code) ? me.languages.filter((c) => c !== code) : [...me.languages, code] })
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="heading">Live TV languages</h2>
-      <p className="muted">Live TV shows channels in these languages first. Choose none to show every language.</p>
+      <h2 className="heading">Preferred languages</h2>
+      <p className="muted">Live TV, Guide, library browsing and Search default to these languages. Other languages remain available through All languages. Choose none to show every language.</p>
       {langs.error ? <ErrorState error={langs.error} onRetry={() => void langs.refetch()} /> : (
         <FocusGroup focusKey="lang:list" className="flex gap-2 flex-wrap">
           <Chip focusKey="lang:all" pressed={me.languages.length === 0} onEnter={() => save({ languages: [] })}>All languages</Chip>
@@ -224,22 +224,29 @@ function RowsTab() {
 function ParentalTab() {
   const me = useCurrent()
   const save = useSaveProfile()
-  const groups = useChannelGroups()
+  const groups = useChannelGroups({ language: 'all', include_hidden: true })
+  const [groupSearch, setGroupSearch] = useState('')
+  const [groupPage, setGroupPage] = useState(0)
+  const matchingGroups = (groups.data ?? []).filter((g) => g.name.toLowerCase().includes(groupSearch.trim().toLowerCase()))
+  const groupPageIndex = Math.min(groupPage, Math.max(0, Math.ceil(matchingGroups.length / 40) - 1))
   const qc = useQueryClient()
   const toggleGroup = async (id: string, hidden: boolean) => { await ok(api.PATCH('/channels/groups/{id}', { params: { path: { id } }, body: { hidden } })); void qc.invalidateQueries({ queryKey: ['channel-groups'] }); void qc.invalidateQueries({ queryKey: ['channels'] }) }
   return (
     <div className="flex flex-col gap-5">
       <section className="flex flex-col gap-2">
         <h2 className="heading">Kids profile</h2>
-        <p className="muted">Kids profiles hide adult-rated titles. Set a PIN on the other profiles so kids cannot switch to them.</p>
-        <div><Chip focusKey="par:kids" pressed={me.kids} onEnter={() => save({ kids: !me.kids }, me.kids ? 'Kids mode off.' : 'Kids mode on.')}>{me.kids ? 'Kids mode on' : 'Kids mode off'}</Chip></div>
+        <p className="muted">The kids profile label is saved, but rating-based restrictions are not yet enforced. Do not rely on this setting to block content.</p>
+        <div><Chip focusKey="par:kids" pressed={me.kids} onEnter={() => save({ kids: !me.kids }, me.kids ? 'Kids label off.' : 'Kids label on.')}>{me.kids ? 'Kids label on' : 'Kids label off'}</Chip></div>
       </section>
       <section className="flex flex-col gap-2">
         <h2 className="heading">Hide channel groups</h2>
+        <p className="muted">This display preference applies to all profiles. It does not block playback or restrict access to a group.</p>
+        <FocusableInput focusKey="par:search" label="Search channel groups" placeholder="Search channel groups" value={groupSearch} onChange={(v) => { setGroupSearch(v); setGroupPage(0) }} />
         <FocusGroup focusKey="par:groups" className="flex gap-2 flex-wrap">
-          {(groups.data ?? []).map((g) => <Chip key={g.id} focusKey={`par:g:${g.id}`} pressed={g.hidden} onEnter={() => void toggleGroup(g.id, !g.hidden)}>{g.hidden ? 'Hidden' : 'Shown'} · {g.name}</Chip>)}
-          {groups.data?.length === 0 && <span className="muted">No channel groups yet.</span>}
+          {matchingGroups.slice(groupPageIndex * 40, (groupPageIndex + 1) * 40).map((g) => <Chip key={g.id} focusKey={`par:g:${g.id}`} pressed={g.hidden} onEnter={() => void toggleGroup(g.id, !g.hidden)}>{g.hidden ? 'Hidden' : 'Shown'} · {g.name}</Chip>)}
+          {!matchingGroups.length && <span className="muted">No matching channel groups.</span>}
         </FocusGroup>
+        <div className="flex gap-3 items-center flex-wrap"><Button focusKey="par:prev" disabled={!groupPageIndex} onEnter={() => setGroupPage(groupPageIndex - 1)}>Previous</Button><span className="label">Page {groupPageIndex + 1} of {Math.max(1, Math.ceil(matchingGroups.length / 40))}</span><Button focusKey="par:next" disabled={(groupPageIndex + 1) * 40 >= matchingGroups.length} onEnter={() => setGroupPage(groupPageIndex + 1)}>Next</Button></div>
       </section>
     </div>
   )

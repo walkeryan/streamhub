@@ -16,6 +16,7 @@ export interface PlayerHandle {
 }
 
 export interface AttachOptions {
+  signal?: AbortSignal
   onFatal: (reason: string) => void
   onTracks?: () => void
 }
@@ -55,6 +56,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
 
   if (kind === 'hls') {
     const { default: Hls } = await import('hls.js')
+    opt.signal?.throwIfAborted()
     if (isSafari() && video.canPlayType('application/vnd.apple.mpegurl') || !Hls.isSupported()) {
       video.src = url
       return { kind: 'native', destroy: () => { video.removeAttribute('src'); video.load() }, ...noTracks, ...nativeTextTracks(video) }
@@ -84,6 +86,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
 
   if (kind === 'mpegts') {
     const { default: mpegts } = await import('mpegts.js')
+    opt.signal?.throwIfAborted()
     if (!mpegts.isSupported()) throw new Error('This browser cannot play MPEG-TS streams')
     const p = mpegts.createPlayer(
       { type: 'mpegts', isLive: live, url },
@@ -97,6 +100,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
 
   if (kind === 'dash') {
     const mod = await import('shaka-player')
+    opt.signal?.throwIfAborted()
     const shaka = ((mod as unknown as { default?: typeof shakaNs }).default ?? mod) as typeof shakaNs
     shaka.polyfill.installAll()
     if (!shaka.Player.isBrowserSupported()) throw new Error('This browser cannot play DASH streams')
@@ -104,7 +108,11 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     await player.attach(video)
     player.addEventListener('error', (e: Event) => opt.onFatal(`dash: ${String((e as unknown as { detail?: { code?: number } }).detail?.code ?? 'error')}`))
     player.addEventListener('trackschanged', () => opt.onTracks?.())
-    await player.load(url)
+    try {
+      opt.signal?.throwIfAborted()
+      await player.load(url)
+      opt.signal?.throwIfAborted()
+    } catch (e) { await player.destroy(); throw e }
     return {
       kind: 'dash',
       destroy: () => { void player.destroy() },

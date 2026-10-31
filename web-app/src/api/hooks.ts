@@ -1,10 +1,18 @@
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 import { api, ok, unwrap } from './client'
+import { useSession } from '../store/session'
 import type {
   BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
   Settings, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind,
 } from './types'
+
+const useProfileId = () => useSession((s) => s.profile?.id ?? null)
+// Previous pages may be retained only within the same profile.
+function useProfilePlaceholder<T>() {
+  const profileId = useProfileId()
+  return (data: T | undefined, query?: { queryKey: readonly unknown[] }) => query?.queryKey[1] === profileId ? data : undefined
+}
 
 export const qk = {
   profiles: ['profiles'] as const,
@@ -17,70 +25,74 @@ export const qk = {
 }
 
 export const useProfiles = () =>
-  useQuery({ queryKey: qk.profiles, queryFn: () => unwrap<Profile[]>(api.GET('/profiles')) })
+  useQuery({ queryKey: [...qk.profiles, useProfileId()], queryFn: () => unwrap<Profile[]>(api.GET('/profiles')) })
 
 export const useDisclaimer = () =>
   useQuery({ queryKey: qk.disclaimer, queryFn: () => unwrap<Disclaimer>(api.GET('/disclaimer')), staleTime: Infinity })
 
-export const useHome = () => useQuery({ queryKey: qk.home, queryFn: () => unwrap<HomeData>(api.GET('/home')), staleTime: 30_000 })
+export const useHome = () => useQuery({ queryKey: [...qk.home, useProfileId()], queryFn: () => unwrap<HomeData>(api.GET('/home')), staleTime: 30_000 })
 
-export const useSearch = (q: string) =>
+export const useSearch = (q: string, filters: { language?: string; source_id?: string } = {}) =>
   useQuery({
-    queryKey: ['search', q],
+    queryKey: ['search', useProfileId(), q, filters],
     enabled: q.trim().length > 1,
-    placeholderData: keepPreviousData,
-    queryFn: () => unwrap<SearchResult>(api.GET('/search', { params: { query: { q: q.trim() } } })),
+    placeholderData: useProfilePlaceholder<SearchResult>(),
+    queryFn: () => unwrap<SearchResult>(api.GET('/search', { params: { query: { q: q.trim(), ...filters } } })),
   })
 
 export const useTitle = (id: string | undefined) =>
   useQuery({
-    queryKey: ['title', id],
+    queryKey: ['title', useProfileId(), id],
     enabled: !!id,
     queryFn: () => unwrap<TitleDetail>(api.GET('/titles/{id}', { params: { path: { id: id! } } })),
   })
 
-export interface BrowseFilters { source_id?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
-export const useBrowse = (section: string, f: BrowseFilters) =>
-  useInfiniteQuery({
-    queryKey: ['browse', section, f],
-    initialPageParam: 1,
-    queryFn: ({ pageParam }) =>
-      unwrap<BrowsePage>(api.GET('/browse/{section}', { params: { path: { section }, query: { ...f, page: pageParam } } })),
-    getNextPageParam: (last, all) => {
-      const loaded = all.reduce((n, p) => n + (p.tiles?.length ?? 0), 0)
-      return last.total !== undefined && loaded < last.total && (last.tiles?.length ?? 0) > 0 ? all.length + 1 : undefined
-    },
-  })
-
-export interface ChannelFilters { group?: string; language?: string; favorites?: boolean; q?: string; source_id?: string }
-export const useChannels = (f: ChannelFilters) =>
+export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
+export const useBrowse = (section: string, f: BrowseFilters, page = 1) =>
   useQuery({
-    queryKey: ['channels', f],
-    placeholderData: keepPreviousData,
-    queryFn: () => unwrap<ChannelsResult>(api.GET('/channels', { params: { query: f } })),
+    queryKey: ['browse', useProfileId(), section, f, page],
+    placeholderData: useProfilePlaceholder<BrowsePage>(),
+    queryFn: () => unwrap<BrowsePage>(api.GET('/browse/{section}', { params: { path: { section }, query: { ...f, page } } })),
   })
 
-export const useChannelGroups = () =>
-  useQuery({ queryKey: ['channel-groups'], queryFn: () => unwrap<ChannelGroup[]>(api.GET('/channels/groups')) })
+export const useBrowseCategories = (section: string, f: BrowseFilters) =>
+  useQuery({ queryKey: ['browse-categories', useProfileId(), section, f], queryFn: () => unwrap<Array<{ name: string; count: number }>>(api.GET('/browse/{section}/categories', { params: { path: { section }, query: f } })) })
+export const useBrowseLanguages = (section: string, source_id?: string) =>
+  useQuery({ queryKey: ['browse-languages', useProfileId(), section, source_id], queryFn: () => unwrap<LanguageCount[]>(api.GET('/browse/{section}/languages', { params: { path: { section }, query: { source_id } } })) })
+
+export interface ChannelFilters { group?: string; language?: string; favorites?: boolean; q?: string; source_id?: string; limit?: number; offset?: number; has_epg?: boolean; include_hidden?: boolean }
+export const useChannels = (f: ChannelFilters) => {
+  const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
+  return useQuery({
+    queryKey: ['channels', useProfileId(), f, preferred],
+    placeholderData: useProfilePlaceholder<ChannelsResult & { total?: number; offset?: number; limit?: number }>(),
+    queryFn: () => unwrap<ChannelsResult & { total?: number; offset?: number; limit?: number }>(api.GET('/channels', { params: { query: f } })),
+  })
+}
+
+export const useChannelGroups = (filters: ChannelFilters = {}) => {
+  const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
+  return useQuery({ queryKey: ['channel-groups', useProfileId(), filters, preferred], queryFn: () => unwrap<ChannelGroup[]>(api.GET('/channels/groups', { params: { query: filters } })) })
+}
 
 export const useLanguages = () =>
-  useQuery({ queryKey: ['channel-languages'], queryFn: () => unwrap<LanguageCount[]>(api.GET('/channels/languages')) })
+  useQuery({ queryKey: ['channel-languages', useProfileId()], queryFn: () => unwrap<LanguageCount[]>(api.GET('/channels/languages')) })
 
 export const useEpg = (ids: string[], from: string, to: string) =>
   useQuery({
-    queryKey: ['epg', ids.join(','), from, to],
+    queryKey: ['epg', useProfileId(), ids.join(','), from, to],
     enabled: ids.length > 0,
     staleTime: 60_000,
     queryFn: () => unwrap<EpgData>(api.GET('/epg', { params: { query: { channel_ids: ids.join(','), from, to } } })),
   })
 
 export const useFavorites = () =>
-  useQuery({ queryKey: qk.favorites, queryFn: () => unwrap<Tile[]>(api.GET('/favorites')) })
+  useQuery({ queryKey: [...qk.favorites, useProfileId()], queryFn: () => unwrap<Tile[]>(api.GET('/favorites')) })
 
 // Contract leaves the /watchlist GET response untyped; the server returns Tile[] (assumed).
 export const useWatchlist = () =>
   useQuery({
-    queryKey: qk.watchlist,
+    queryKey: [...qk.watchlist, useProfileId()],
     queryFn: async () => {
       const r = await fetch('/api/v1/watchlist', { headers: authHeader() })
       if (!r.ok) throw new Error('watchlist')
@@ -98,8 +110,8 @@ function authHeader(): Record<string, string> {
   }
 }
 
-export const useSources = () => useQuery({ queryKey: qk.sources, queryFn: () => unwrap<Source[]>(api.GET('/sources')) })
-export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: () => unwrap<Settings>(api.GET('/settings')) })
+export const useSources = () => useQuery({ queryKey: [...qk.sources, useProfileId()], queryFn: () => unwrap<Source[]>(api.GET('/sources')) })
+export const useSettings = () => useQuery({ queryKey: [...qk.settings, useProfileId()], queryFn: () => unwrap<Settings>(api.GET('/settings')) })
 export const useThemes = () => useQuery({ queryKey: ['themes'], queryFn: () => unwrap<Theme[]>(api.GET('/themes')) })
 
 const registrySchema = z.array(
@@ -178,6 +190,8 @@ export function usePatchProfile() {
   return useMutation({
     mutationFn: (v: { id: string; patch: Partial<Profile> }) =>
       ok(api.PATCH('/profiles/{id}', { params: { path: { id: v.id } }, body: v.patch as Profile })),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.profiles }),
+    onSuccess: () => {
+      for (const queryKey of [qk.profiles, ['current-profile'], qk.home, ['channels'], ['channel-groups'], ['search'], ['browse'], ['epg']]) void qc.invalidateQueries({ queryKey })
+    },
   })
 }

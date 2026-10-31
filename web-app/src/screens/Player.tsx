@@ -35,7 +35,7 @@ export function Player() {
   const setLast = useUi((s) => s.setLastChannelId)
   const sleepMinutes = useUi((s) => s.sleepMinutes)
   const setSleep = useUi((s) => s.setSleepMinutes)
-  const fallback = useChannels({})
+  const fallback = useChannels({ limit: 80 })
   useEffect(() => { if (isChannel && stored.channels.length === 0 && fallback.data) setChannelList(fallback.data.list_id ?? null, fallback.data.channels ?? []) }, [isChannel, stored.channels.length, fallback.data, setChannelList])
   const list = stored.channels
   const idx = list.findIndex((c) => c.id === id)
@@ -64,7 +64,7 @@ export function Player() {
   // Live starts with only the channel OSD so Up/Down zap straight away; VOD starts with the control bar visible.
   const [ui, setUi] = useState(() => !isChannel)
   const [osd, setOsd] = useState(true)
-  const [paused, setPaused] = useState(false)
+  const [paused, setPaused] = useState(true)
   const [time, setTime] = useState({ cur: 0, dur: 0 })
   const [aspect, setAspect] = useState<Aspect>('contain')
   const [digits, setDigits] = useState('')

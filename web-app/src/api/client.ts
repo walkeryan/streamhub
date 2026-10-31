@@ -14,12 +14,14 @@ export class ApiError extends Error {
   }
 }
 
-let refreshing: Promise<boolean> | null = null
+const refreshes = new Map<string, Promise<boolean>>()
 
 async function refreshTokens(): Promise<boolean> {
   const { refresh, setSession, clear } = useSession.getState()
   if (!refresh) return false
-  refreshing ??= (async () => {
+  const existing = refreshes.get(refresh)
+  if (existing) return existing
+  const pending = (async () => {
     try {
       const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: 'POST',
@@ -28,16 +30,19 @@ async function refreshTokens(): Promise<boolean> {
       })
       if (!res.ok) throw new Error('refresh failed')
       const t = (await res.json()) as AuthTokens
+      // A pending refresh must not restore a logged-out or replaced profile.
+      if (useSession.getState().refresh !== refresh) return false
       setSession(t.access_token, t.refresh_token, t.profile)
       return true
     } catch {
-      clear()
+      if (useSession.getState().refresh === refresh) clear()
       return false
     } finally {
-      window.setTimeout(() => (refreshing = null), 0)
+      window.setTimeout(() => refreshes.delete(refresh), 0)
     }
   })()
-  return refreshing
+  refreshes.set(refresh, pending)
+  return pending
 }
 
 function withAuth(req: Request): Request {
@@ -50,10 +55,12 @@ function withAuth(req: Request): Request {
 
 /** fetch wrapper: bearer auth + single refresh-and-retry on 401. */
 const authedFetch = async (input: Request): Promise<Response> => {
+  const initialProfile = useSession.getState().profile?.id
+  const initialRefresh = useSession.getState().refresh
   const retry = input.clone()
   const res = await fetch(withAuth(input))
-  if (res.status === 401 && useSession.getState().refresh) {
-    if (await refreshTokens()) return fetch(withAuth(retry))
+  if (res.status === 401 && initialRefresh && useSession.getState().refresh === initialRefresh) {
+    if (await refreshTokens() && useSession.getState().profile?.id === initialProfile) return fetch(withAuth(retry))
   }
   return res
 }

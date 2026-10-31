@@ -50,7 +50,7 @@ export const handlers = [
   }),
   http.post(`${B}/profiles`, async ({ request }) => {
     const b = (await request.json()) as Partial<(typeof profiles)[number]>
-    profiles.push({ id: `p${profiles.length + 1}`, name: b.name ?? 'New', avatar: null, is_admin: false, theme_id: 'midnight', languages: [], has_pin: false, kids: !!b.kids, disclaimer_accepted_version: null })
+    profiles.push({ id: `p${profiles.length + 1}`, name: b.name ?? 'New', avatar: null, is_admin: false, theme_id: 'midnight', languages: b.languages ?? ['eng'], has_pin: false, kids: !!b.kids, disclaimer_accepted_version: null })
     return HttpResponse.json({}, { status: 201 })
   }),
   http.delete(`${B}/profiles/:id`, ({ params }) => {
@@ -131,19 +131,22 @@ export const handlers = [
       attribution: 'Availability data by JustWatch',
     })
   }),
+  http.get(`${B}/browse/:section/categories`, () => HttpResponse.json([])),
+  http.get(`${B}/browse/:section/languages`, () => HttpResponse.json([{ code: 'eng', name: 'English', count: titles.length }])),
   http.get(`${B}/browse/:section`, async ({ params, request }) => {
     const u = new URL(request.url)
     const page = Number(u.searchParams.get('page') ?? 1)
     const source = u.searchParams.get('source_id')
     const sort = u.searchParams.get('sort')
+    const query = u.searchParams.get('q')?.toLowerCase()
     const kind = params.section === 'movies' || params.section === 'vod' ? 'movie' : 'show'
-    let list = titles.filter((t) => t.kind === kind && (!source || t.sources.some((s) => s.source_id === source)))
+    let list = titles.filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
     if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title))
     if (sort === 'year') list = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
     if (sort === 'rating') list = [...list].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
-    const size = 12
+    const size = 60
     await delay(80)
-    return HttpResponse.json({ tiles: list.slice((page - 1) * size, page * size), page, total: list.length })
+    return HttpResponse.json({ tiles: list.slice((page - 1) * size, page * size), page, page_size: size, has_more: page * size < list.length, total: list.length })
   }),
 
   http.get(`${B}/channels`, async ({ request }) => {
@@ -153,15 +156,24 @@ export const handlers = [
     const favs = u.searchParams.get('favorites') === 'true'
     const q = u.searchParams.get('q')?.toLowerCase()
     const pid = currentProfileId(request)
-    const langs = lang ? lang.split(',') : profiles.find((p) => p.id === pid)?.languages ?? []
+    const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === pid)?.languages ?? []
+    const groupNames = [...new Set(channels.map((c) => c.group))]
+    const selectedGroup = group?.startsWith('g') && /^g\d+$/.test(group) ? groupNames[Number(group.slice(1))] : group
     const list = channels
-      .filter((c) => !hiddenGroups.has(c.group) && (!group || c.group === group) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q)))
-      .map(withNowNext)
-    return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list })
+      .filter((c) => !hiddenGroups.has(c.group) && (!selectedGroup || c.group === selectedGroup) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
+
+    const offset = Number(u.searchParams.get('offset') ?? 0), limit = Number(u.searchParams.get('limit') ?? list.length)
+    return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list.slice(offset, offset + limit).map(withNowNext), total: list.length, limit, offset })
   }),
-  http.get(`${B}/channels/groups`, () => HttpResponse.json(
-    [...new Set(channels.map((c) => c.group))].map((g, i) => ({ id: `g${i}`, source_id: 's_xt', name: g, channel_count: channels.filter((c) => c.group === g).length, hidden: hiddenGroups.has(g), language_override: null })),
-  )),
+  http.get(`${B}/channels/groups`, ({ request }) => {
+    const u = new URL(request.url), lang = u.searchParams.get('language')
+    const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === currentProfileId(request))?.languages ?? []
+    const q = u.searchParams.get('q')?.toLowerCase()
+    const all = [...new Set(channels.map((c) => c.group))]
+    return HttpResponse.json(all.map((g, i) => ({ id: `g${i}`, source_id: 's_xt', name: g,
+      channel_count: channels.filter((c) => c.group === g && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)).length,
+      hidden: hiddenGroups.has(g), language_override: null })).filter((g) => g.channel_count > 0))
+  }),
   http.patch(`${B}/channels/groups/:id`, async ({ params, request }) => {
     const b = (await request.json()) as { hidden?: boolean }
     const name = [...new Set(channels.map((c) => c.group))][Number(String(params.id).slice(1))]

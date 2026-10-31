@@ -238,3 +238,60 @@ h1, h2, h3, p { margin: 0; }
 
 /* theme preview swatches */
 .theme-card { border-radius: var(--radius-lg); padding: 0.75rem; background: var(--t-surface); }
+
+/* Keep large catalog controls compact and channel rows visible on narrow screens. */
+.live-catalog-layout { grid-template-columns: minmax(0, 28rem) minmax(0, 1fr); }
+@media (max-width: 767px) {
+  .live-catalog-layout { grid-template-columns: minmax(0, 1fr); }
+  .live-catalog-preview { display: none; }
+}
+
+/* Layered surfaces: opaque cards stay cheap to scroll; frost is reserved for
+   bounded navigation and dialogs, never the full-screen scrim or a tile grid. */
+:root {
+  --surface-edge: color-mix(in srgb, var(--t-text) 12%, transparent);
+  --surface-sheen: color-mix(in srgb, var(--t-text) 5%, transparent);
+  --surface-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, .16);
+}
+.panel, .theme-card, .chan-row, .dialog {
+  background-image: linear-gradient(145deg, var(--surface-sheen), transparent 65%);
+  border: 1px solid var(--surface-edge);
+}
+.panel, .theme-card, .dialog { box-shadow: var(--surface-shadow); }
+.tile { box-shadow: var(--surface-shadow); }
+.chan-row { transition: background-color var(--dur-fast) var(--ease), outline-color var(--dur-fast) var(--ease), transform var(--dur-focus) var(--ease); }
+.chan-row[data-focused='true'] { background-color: color-mix(in srgb, var(--t-accent) 12%, var(--t-surface)); }
+.btn:not(.btn-ghost), .chip, .field { border: 1px solid var(--surface-edge); }
+.btn-primary, .chip[aria-pressed='true'] { border-color: transparent; box-shadow: 0 0.125rem 0.375rem rgba(0, 0, 0, .2); }
+.field { box-shadow: inset 0 1px 2px rgba(0, 0, 0, .12); }
+.field:focus-within { outline: var(--focus-border) solid var(--t-focus-ring); outline-offset: 0.125rem; }
+.rail { background-image: linear-gradient(180deg, var(--surface-sheen), transparent 65%); }
+.rail-item[aria-current='page'] { box-shadow: inset 0.1875rem 0 var(--t-accent); }
+.scrim { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.dialog { box-shadow: 0 1rem 3rem rgba(0, 0, 0, .36); }
+.osd { border: 1px solid rgba(255, 255, 255, .18); box-shadow: var(--surface-shadow); }
+.epg-cell { border: 1px solid var(--surface-edge); }
+.epg-cell[data-now='true'] { border-left: 0.1875rem solid var(--t-accent); }
+/* Poster captions keep a dark, readable floor even over bright artwork. */
+.tile .cap { color: #fff; background: linear-gradient(to top, rgba(5, 8, 14, .96), rgba(5, 8, 14, .64) 65%, transparent); }
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .rail, .rail[data-expanded='true'], .dialog {
+    background-color: color-mix(in srgb, var(--t-surface) 94%, transparent);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+}
+/* Remote/TV surfaces remain solid: no moving-video backdrop sampling. */
+@media (hover: none) and (pointer: coarse), (min-width: 1800px), (prefers-reduced-transparency: reduce) {
+  .rail, .rail[data-expanded='true'], .dialog {
+    background-color: var(--t-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  :root { --surface-edge: var(--t-text-muted); }
+  .rail, .rail[data-expanded='true'], .dialog { background-color: var(--t-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .fx[data-focused='true'] { outline-width: 0.25rem; }
+}

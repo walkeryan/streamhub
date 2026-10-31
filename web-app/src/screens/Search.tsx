@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigationType } from 'react-router'
 import { useSearch } from '../api/hooks'
+import { LanguageFilter } from '../components/LanguageFilter'
+import { useSession } from '../store/session'
 import { Attribution, Button, Chip, Empty, ErrorState } from '../components/ui'
 import { MediaTile } from '../components/Tile'
 import { ChannelRow } from '../components/ChannelRow'
@@ -17,7 +19,9 @@ export function Search() {
   const setSearchQuery = useUi((s) => s.setSearchQuery)
   useEffect(() => { setSearchQuery(q) }, [q, setSearchQuery])
   const dq = useDebounced(q, 400)
-  const { data, error, isFetching, refetch } = useSearch(dq)
+  const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
+  const [language, setLanguage] = useState(preferred ? 'mine' : 'all')
+  const { data, error, isFetching, refetch } = useSearch(dq, { language: language === 'mine' ? preferred || 'all' : language })
   const recents = useUi((s) => s.recentSearches)
   const addSearch = useUi((s) => s.addSearch)
   const clear = useUi((s) => s.clearSearches)
@@ -44,6 +48,7 @@ export function Search() {
         <h1 className="title-xl">Search</h1>
         <FocusableInput focusKey="search:input" label="Search titles and channels" placeholder="Titles, shows, channels" value={q} onChange={setQ}
           inputRef={input} inputMode="search" onSubmit={() => setQ((v) => v.trim())} />
+        <LanguageFilter scope="search" value={language} onChange={setLanguage} />
         {!q && recents.length > 0 && (
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between"><span className="label">Recent searches</span><Button focusKey="search:clear" ghost onEnter={clear}>Clear</Button></div>
@@ -54,7 +59,8 @@ export function Search() {
       </FocusGroup>
       <div className="flex-1 min-w-0" style={{ minHeight: '20rem' }}>
         {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : none ? (
-          <Empty title={`No results for “${dq}”`} hint="Check the spelling, or add more sources so there is more to search.">
+          <Empty title={`No results for “${dq}”`} hint="Try a shorter title or All languages to include other and unknown languages.">
+            <Button focusKey="search:all" onEnter={() => setLanguage('all')}>Search all languages</Button>
             <Button focusKey="search:add" icon="plus" onEnter={() => go('/sources')}>Add a source</Button>
           </Empty>
         ) : (

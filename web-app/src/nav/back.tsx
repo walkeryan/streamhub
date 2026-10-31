@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useSession } from '../store/session'
 import { useLocation, useNavigate } from 'react-router'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from './spatial'
 
@@ -56,6 +57,9 @@ export function useGlobalBack(): void {
 
 /* ---------------- Focus memory: Back restores the element that opened the screen ---------------- */
 const memory = new Map<string, string>()
+useSession.subscribe((session, previous) => {
+  if (session.profile?.id !== previous.profile?.id) memory.clear()
+})
 
 export function useGo() {
   const navigate = useNavigate()

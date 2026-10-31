@@ -10,7 +10,7 @@ export interface PlaybackReq { id: string; sourceId?: string | null; catchupProg
 export async function resolve(req: PlaybackReq): Promise<PlaybackDescriptor> {
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, source_id: req.sourceId ?? null, client: 'web', catchup_programme_id: req.catchupProgrammeId ?? null },
+      body: { id: req.id, source_id: req.sourceId ?? null, client: 'web', prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), catchup_programme_id: req.catchupProgrammeId ?? null },
     }),
   )
 }
@@ -30,23 +30,31 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const handle = useRef<PlayerHandle | null>(null)
   const descRef = useRef<PlaybackDescriptor | null>(null)
   const retry = useRef(0)
+  const retryTimer = useRef<number | null>(null)
+  const clearRetry = useCallback(() => {
+    if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
+    retryTimer.current = null
+  }, [])
   const key = req ? `${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}` : ''
 
-  const reconnect = useCallback((reason: string) => {
+  const reconnect = useCallback((_reason: string) => {
+    if (retryTimer.current !== null) return
     if (retry.current >= MAX_RETRIES) {
       setState('error')
-      setError(`Playback failed: ${reason}`)
+      setError('The stream could not start or lost its connection. Try again or choose another channel.')
       return
     }
     const wait = Math.min(15_000, 500 * 2 ** retry.current++)
     setState('reconnecting')
-    window.setTimeout(() => setAttempt((a) => a + 1), wait)
+    retryTimer.current = window.setTimeout(() => { retryTimer.current = null; setAttempt((a) => a + 1) }, wait)
   }, [])
 
   // resolve + attach
   useEffect(() => {
     if (!req) return
     let cancelled = false
+    const controller = new AbortController()
+    let owned: PlayerHandle | null = null
     const video = videoRef.current
     setState((s) => (s === 'reconnecting' ? s : 'resolving'))
     setError(null)
@@ -60,21 +68,27 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         if (!video) return
         setState('loading')
         handle.current?.destroy()
-        handle.current = await attachSource(video, d, {
+        owned = await attachSource(video, d, {
+          signal: controller.signal,
           onFatal: (r) => !cancelled && reconnect(r),
-          onTracks: () => setTracksVersion((v) => v + 1),
+          onTracks: () => { if (!cancelled) setTracksVersion((v) => v + 1) },
         })
-        if (cancelled) { handle.current.destroy(); handle.current = null; return }
+        if (cancelled) { owned.destroy(); return }
+        handle.current = owned
         video.muted = !!opts.muted
-        try { await video.play() } catch { /* autoplay blocked: user presses play */ }
+        try { await video.play() } catch (e) {
+          if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') setState('paused')
+        }
       } catch (e) {
         if (!cancelled) reconnect(e instanceof Error ? e.message : 'unknown error')
       }
     })()
     return () => {
       cancelled = true
-      handle.current?.destroy()
-      handle.current = null
+      controller.abort()
+      clearRetry()
+      owned?.destroy()
+      if (handle.current === owned) handle.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, attempt])
@@ -83,13 +97,14 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
 
   // media element events
   useEffect(() => {
+    if (!key) return
     const v = videoRef.current
     if (!v) return
     const onMeta = () => {
       const d = descRef.current
       if (d && !d.live && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
     }
-    const onPlaying = () => { retry.current = 0; setState('playing') }
+    const onPlaying = () => { clearRetry(); setState('playing') }
     const onPause = () => { if (!v.ended) setState((s) => (s === 'playing' ? 'paused' : s)) }
     const onWaiting = () => setState((s) => (s === 'playing' ? 'loading' : s))
     const onError = () => reconnect(v.error?.message || 'media error')
@@ -102,7 +117,20 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       v.removeEventListener('loadedmetadata', onMeta); v.removeEventListener('playing', onPlaying); v.removeEventListener('pause', onPause)
       v.removeEventListener('waiting', onWaiting); v.removeEventListener('error', onError)
     }
-  }, [videoRef, reconnect])
+  }, [videoRef, reconnect, clearRetry, key])
+
+  // A server can connect without delivering decodable frames. Do not leave the
+  // viewer on an endless spinner, or reset the retry budget on a single frame.
+  useEffect(() => {
+    if (!key) return
+    if (state === 'playing') {
+      const timer = window.setTimeout(() => { retry.current = 0 }, 30_000)
+      return () => window.clearTimeout(timer)
+    }
+    if (state !== 'loading' && state !== 'resolving') return
+    const timer = window.setTimeout(() => reconnect('stream timed out'), 25_000)
+    return () => window.clearTimeout(timer)
+  }, [state, key, attempt, reconnect])
 
   // progress reporting
   useEffect(() => {
@@ -142,6 +170,6 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     desc, state, error, tracks,
     setAudio: (i: number) => { handle.current?.setAudio(i); setTracksVersion((v) => v + 1) },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
-    retryNow: () => { retry.current = 0; setAttempt((a) => a + 1) },
+    retryNow: () => { clearRetry(); retry.current = 0; setAttempt((a) => a + 1) },
   }
 }

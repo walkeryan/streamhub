@@ -8,8 +8,8 @@ async function openLiveChannel(page: Page) {
   await signIn(page)
   await page.goto('/live')
   await expect(page.getByTestId('channel-row').first()).toBeVisible()
-  await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown')
-  await page.keyboard.press('Enter')
+  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await page.getByTestId('channel-row').first().click()
   await expect(page).toHaveURL(/\/play\/ch/)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing', { timeout: 15_000 })
 }

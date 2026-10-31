@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useChannels, useEpg } from '../api/hooks'
 import type { Channel, Programme } from '../api/types'
-import { Button, Empty, ErrorState, LogoBlock, Modal, Skeleton } from '../components/ui'
-import { FocusGroup, Focusable } from '../nav/Focusable'
+import { Button, Chip, Empty, ErrorState, LogoBlock, Modal, Skeleton } from '../components/ui'
+import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useUi } from '../store/ui'
+import { useSession } from '../store/session'
+import { LanguageFilter } from '../components/LanguageFilter'
 import { fmtTime, useNow } from '../lib/util'
 
 const COL_REM = 13 // 30-minute column width, see .epg --col
@@ -15,13 +17,28 @@ const MAX_CH = 40
 
 export function Guide() {
   const now = useNow(30_000)
-  const ch = useChannels({})
-  const channels = useMemo(() => (ch.data?.channels ?? []).slice(0, MAX_CH), [ch.data])
+  const profile = useSession((s) => s.profile)
+  const [language, setLanguage] = useState(profile?.languages?.length ? 'mine' : 'eng')
+  const [search, setSearch] = useState('')
+  const [query, setQuery] = useState('')
+  const [page, setPage] = useState(0)
+  const [scheduledOnly, setScheduledOnly] = useState(true)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
+  const ch = useChannels({
+    q: query || undefined, language: language === 'mine' ? undefined : language,
+    has_epg: scheduledOnly || undefined, limit: MAX_CH, offset: page * MAX_CH,
+  })
+  const channels = useMemo(() => ch.data?.channels ?? [], [ch.data])
+  const total = ch.data?.total ?? channels.length
+  const pages = Math.max(1, Math.ceil(total / MAX_CH))
   const setChannelList = useUi((s) => s.setChannelList)
   const toast = useUi((s) => s.toast)
   const go = useGo()
   const slot = 30 * 60_000
-  const [t0] = useState(() => Math.floor((Date.now() - BACK_H * 3600_000) / slot) * slot)
+  const [t0, setT0] = useState(() => Math.floor((Date.now() - BACK_H * 3600_000) / slot) * slot)
   const t1 = t0 + (BACK_H + FWD_H) * 3600_000
   const epg = useEpg(channels.map((c) => c.id), new Date(t0).toISOString(), new Date(t1).toISOString())
   const [sel, setSel] = useState<Programme | null>(null)
@@ -37,7 +54,7 @@ export function Guide() {
   const firstNow = useMemo(() => {
     const c = channels[0]
     const p = c && epg.data?.[c.id]?.find((x) => Date.parse(x.start) <= Date.now() && Date.parse(x.stop) > Date.now())
-    return c && p ? `epg::${p.id}` : 'guide:none'
+    return c && p ? `epg::${c.id}::${p.id}` : c ? `guide:ch:${c.id}` : 'guide:search'
   }, [channels, epg.data])
   useRestoreFocus(!!epg.data && channels.length > 0, firstNow)
 
@@ -58,11 +75,31 @@ export function Guide() {
   return (
     <div className="page-pad" data-testid="guide">
       <h1 className="display mb-3" style={{ fontSize: 'var(--text-title)' }}>Guide</h1>
+      <FocusGroup focusKey="guide:filters" className="flex flex-col gap-3 mb-3">
+        <FocusableInput focusKey="guide:search" label="Search guide channels" placeholder="Find a channel by name or number" inputMode="search" value={search} onChange={(v) => { setSearch(v); setPage(0) }} />
+        <LanguageFilter scope="guide" value={language} onChange={(v) => { setLanguage(v); setPage(0) }} />
+        <div className="flex gap-2 flex-wrap items-center">
+          <Chip focusKey="guide:scheduled" pressed={scheduledOnly} onEnter={() => { setScheduledOnly(true); setPage(0) }}>With schedules</Chip>
+          <Chip focusKey="guide:all-channels" pressed={!scheduledOnly} onEnter={() => { setScheduledOnly(false); setPage(0) }}>All channels</Chip>
+          <Button focusKey="guide:now" onEnter={() => {
+            const start = Math.floor((Date.now() - BACK_H * 3600_000) / slot) * slot
+            setT0(start)
+            if (scroller.current) scroller.current.scrollLeft = Math.max(0, ((Date.now() - 30 * 60_000 - start) / 60_000) * REM_PER_MIN * parseFloat(getComputedStyle(document.documentElement).fontSize))
+          }}>Now</Button>
+        </div>
+        <div className="flex gap-3 flex-wrap items-center" aria-label="Guide pages">
+          <Button focusKey="guide:previous" disabled={page === 0 || ch.isFetching} onEnter={() => { setPage((p) => Math.max(0, p - 1)); setSel(null) }}>Previous channels</Button>
+          <span className="label" role="status">{ch.isFetching ? 'Loading channels…' : `${total.toLocaleString()} channels · Page ${page + 1} of ${pages}`}</span>
+          <Button focusKey="guide:next" disabled={page + 1 >= pages || ch.isFetching} onEnter={() => { setPage((p) => p + 1); setSel(null) }}>Next channels</Button>
+        </div>
+      </FocusGroup>
       {ch.isLoading || epg.isLoading ? <Skeleton style={{ height: '24rem' }} /> : channels.length === 0 ? (
-        <Empty title="No channels in the guide" hint="Add an IPTV source with an EPG to see schedules here." />
+        <Empty title="No channels match" hint={scheduledOnly ? 'No current schedules match these filters. Try All channels, another language, or a different search.' : 'Try another language or a different channel name.'}>
+          {scheduledOnly && <Button focusKey="guide:show-all" onEnter={() => { setScheduledOnly(false); setPage(0) }}>Show channels without schedules</Button>}
+        </Empty>
       ) : (
         <>
-          <div ref={scroller} className="epg" style={{ overflow: 'auto', maxHeight: 'calc(100dvh - 14.5rem)', minHeight: '14rem', borderRadius: 'var(--radius-md)', background: 'var(--t-surface)' }}>
+          <div ref={scroller} className="epg" style={{ overflow: 'auto', maxHeight: 'calc(100dvh - 24rem)', minHeight: '14rem', borderRadius: 'var(--radius-md)', background: 'var(--t-surface)' }}>
             <div style={{ width: `calc(${totalMin * REM_PER_MIN}rem + 13rem)`, position: 'relative' }}>
               <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, background: 'var(--t-surface)', height: '2rem' }}>
                 <div style={{ width: '13rem', flex: 'none', position: 'sticky', left: 0, zIndex: 21, background: 'var(--t-surface)' }} />
@@ -73,20 +110,25 @@ export function Guide() {
                   <FocusGroup key={c.id} focusKey={`guide:row:${c.id}`} className="" remember>
                     <div style={{ display: 'flex', height: '3.5rem' }}>
                       <div style={{ width: '13rem', flex: 'none', position: 'sticky', left: 0, zIndex: 10, background: 'var(--t-surface)', padding: '0.25rem' }}>
-                        <Focusable focusKey={`guide:ch:${c.id}`} className="flex items-center gap-2 h-full px-2 rounded-md fx-flat" label={`${c.number} ${c.name}`} onEnter={() => go(`/play/${encodeURIComponent(c.id)}`)} scroll={false}>
+                        <Focusable focusKey={`guide:ch:${c.id}`} className="flex items-center gap-2 h-full px-2 rounded-md fx-flat" label={`${c.number} ${c.name}`} onEnter={() => go(`/play/${encodeURIComponent(c.id)}`)}>
                           <span className="label" style={{ width: '1.75rem', textAlign: 'right' }}>{c.number}</span>
                           <LogoBlock name={c.name} logo={c.logo} />
                           <span className="truncate" style={{ fontSize: 'var(--text-label)', fontWeight: 600 }}>{c.name}</span>
                         </Focusable>
                       </div>
                       <div style={{ position: 'relative', flex: 1, borderTop: '1px solid color-mix(in srgb, var(--t-text) 8%, transparent)' }}>
+                        {(epg.data?.[c.id] ?? []).length === 0 && (
+                          <span className="label muted" style={{ position: 'sticky', left: '13.5rem', display: 'inline-block', padding: '1rem 0.5rem' }}>
+                            {c.epg_id ? 'No schedule supplied for this time' : 'No guide mapping supplied'}
+                          </span>
+                        )}
                         {(epg.data?.[c.id] ?? []).map((p) => {
                           const s = Math.max(Date.parse(p.start), t0), e = Math.min(Date.parse(p.stop), t1)
                           if (e <= s) return null
                           const isNow = Date.parse(p.start) <= now && Date.parse(p.stop) > now
                           const past = Date.parse(p.stop) <= now
                           return (
-                            <Focusable key={p.id} focusKey={`epg::${p.id}`} className="epg-cell fx-flat" label={`${c.name}: ${p.title}, ${fmtTime(p.start)}`}
+                            <Focusable key={p.id} focusKey={`epg::${c.id}::${p.id}`} className="epg-cell fx-flat" label={`${c.name}: ${p.title}, ${fmtTime(p.start)}`}
                               data={{ now: isNow, past }} onEnter={() => open(c, p)} onFocus={() => setSel(p)}
                               style={{ left: `${((s - t0) / 60_000) * REM_PER_MIN}rem`, width: `calc(${((e - s) / 60_000) * REM_PER_MIN}rem - 0.25rem)`, position: 'absolute' }}>
                               <span className="epg-label">

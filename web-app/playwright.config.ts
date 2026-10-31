@@ -8,7 +8,7 @@ export default defineConfig({
   fullyParallel: true,
   reporter: [['list']],
   use: { baseURL: 'http://localhost:5199', trace: 'retain-on-failure', viewport: { width: 1280, height: 720 } },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 } } }],
+  projects: [{ name: 'chrome', use: { channel: 'chrome', ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 } } }],
   webServer: {
     command: 'VITE_MOCK=1 npx vite --port 5199 --strictPort',
     url: 'http://localhost:5199',

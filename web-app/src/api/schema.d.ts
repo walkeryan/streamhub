@@ -966,6 +966,8 @@ export interface paths {
                     q: string;
                     kinds?: string;
                     limit?: number;
+                    language?: string;
+                    source_id?: string;
                 };
                 header?: never;
                 path?: never;
@@ -1049,6 +1051,9 @@ export interface paths {
                     genre?: string;
                     sort?: "added" | "title" | "year" | "rating";
                     page?: number;
+                    category?: string;
+                    language?: string;
+                    q?: string;
                 };
                 header?: never;
                 path: {
@@ -1068,7 +1073,96 @@ export interface paths {
                             tiles?: components["schemas"]["Tile"][];
                             page?: number;
                             total?: number;
+                            has_more?: boolean;
+                            page_size?: number;
                         };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/browse/{section}/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    source_id?: string;
+                    language?: string;
+                    q?: string;
+                };
+                header?: never;
+                path: {
+                    section: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            count: number;
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/browse/{section}/languages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    source_id?: string;
+                };
+                header?: never;
+                path: {
+                    section: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            code: string;
+                            name: string;
+                            count: number;
+                        }[];
                     };
                 };
             };
@@ -1097,6 +1191,9 @@ export interface paths {
                     favorites?: boolean;
                     q?: string;
                     list_id?: string;
+                    limit?: number;
+                    offset?: number;
+                    has_epg?: boolean;
                 };
                 header?: never;
                 path?: never;
@@ -1112,6 +1209,9 @@ export interface paths {
                     content: {
                         "application/json": {
                             list_id?: string;
+                            total?: number | null;
+                            offset?: number;
+                            limit?: number | null;
                             channels?: components["schemas"]["Channel"][];
                         };
                     };
@@ -1135,7 +1235,13 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    source_id?: string;
+                    language?: string;
+                    q?: string;
+                    favorites?: boolean;
+                    include_hidden?: boolean;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -2133,6 +2239,11 @@ export interface components {
              * @enum {string}
              */
             client: "android_tv" | "web";
+            /**
+             * @description Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.
+             * @default false
+             */
+            prefer_hls: boolean;
             catchup_programme_id?: string | null;
         };
         PlaybackDescriptor: {

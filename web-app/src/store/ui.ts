@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useSession } from './session'
 import type { Channel } from '../api/types'
 import { lsGet, lsSet, safeJson } from '../lib/util'
 
@@ -49,6 +50,21 @@ function ssSet(k: string, v: string | null): void {
   try { if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v) } catch { /* ignore */ }
 }
 
+const scopeKey = (base: string) => `${base}:${useSession.getState().profile?.id ?? 'signed-out'}`
+function migratePreferences() {
+  const id = useSession.getState().profile?.id
+  if (!id || lsGet('sh.uiProfileMigration.v1')) return
+  for (const key of [HOME_KEY, SEARCH_KEY]) {
+    const legacy = lsGet(key)
+    if (legacy !== null && lsGet(scopeKey(key)) === null) lsSet(scopeKey(key), legacy)
+  }
+  const query = ssGet(QUERY_KEY)
+  if (query !== null && ssGet(scopeKey(QUERY_KEY)) === null) ssSet(scopeKey(QUERY_KEY), query)
+  // Keep legacy values intact, but migrate them to only the first signed-in profile.
+  lsSet('sh.uiProfileMigration.v1', id)
+}
+migratePreferences()
+
 export const useUi = create<UiState>((set, get) => ({
   railPinned: false,
   setRailPinned: (railPinned) => set({ railPinned }),
@@ -59,25 +75,25 @@ export const useUi = create<UiState>((set, get) => ({
     window.setTimeout(() => get().dismissToast(id), 5000)
   },
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
-  recentSearches: safeJson<string[]>(lsGet(SEARCH_KEY), []),
-  searchQuery: ssGet(QUERY_KEY) ?? '',
+  recentSearches: safeJson<string[]>(lsGet(scopeKey(SEARCH_KEY)), []),
+  searchQuery: ssGet(scopeKey(QUERY_KEY)) ?? '',
   setSearchQuery: (searchQuery) => {
     set({ searchQuery })
-    ssSet(QUERY_KEY, searchQuery || null)
+    ssSet(scopeKey(QUERY_KEY), searchQuery || null)
   },
   addSearch: (q) => {
     const next = [q, ...get().recentSearches.filter((s) => s !== q)].slice(0, 8)
     set({ recentSearches: next })
-    lsSet(SEARCH_KEY, JSON.stringify(next))
+    lsSet(scopeKey(SEARCH_KEY), JSON.stringify(next))
   },
   clearSearches: () => {
     set({ recentSearches: [] })
-    lsSet(SEARCH_KEY, null)
+    lsSet(scopeKey(SEARCH_KEY), null)
   },
-  homePrefs: safeJson<HomePrefs>(lsGet(HOME_KEY), { order: [], hidden: [] }),
+  homePrefs: safeJson<HomePrefs>(lsGet(scopeKey(HOME_KEY)), { order: [], hidden: [] }),
   setHomePrefs: (homePrefs) => {
     set({ homePrefs })
-    lsSet(HOME_KEY, JSON.stringify(homePrefs))
+    lsSet(scopeKey(HOME_KEY), JSON.stringify(homePrefs))
   },
   channelList: { listId: null, channels: [] },
   setChannelList: (listId, channels) => set({ channelList: { listId, channels } }),
@@ -86,3 +102,15 @@ export const useUi = create<UiState>((set, get) => ({
   sleepMinutes: null,
   setSleepMinutes: (sleepMinutes) => set({ sleepMinutes }),
 }))
+
+useSession.subscribe((session, previous) => {
+  if (session.profile?.id === previous.profile?.id) return
+  migratePreferences()
+  useUi.setState({
+    recentSearches: safeJson<string[]>(lsGet(scopeKey(SEARCH_KEY)), []),
+    searchQuery: ssGet(scopeKey(QUERY_KEY)) ?? '',
+    homePrefs: safeJson<HomePrefs>(lsGet(scopeKey(HOME_KEY)), { order: [], hidden: [] }),
+    railPinned: false, toasts: [], channelList: { listId: null, channels: [] },
+    lastChannelId: null, sleepMinutes: null,
+  })
+})
