@@ -42,5 +42,11 @@ export function applyAccent(rgb: [number, number, number] | null): void {
   const css = `rgb(${c[0]} ${c[1]} ${c[2]})`
   s.setProperty('--t-accent', css)
   s.setProperty('--t-focus-glow', css)
-  s.setProperty('--t-accent-text', luminance(c) > 0.4 ? '#0B0F17' : '#FFFFFF')
+  // pick whichever text colour contrasts more with the accent (crossover is ~0.18, not 0.4; a 0.4 threshold put
+  // white text on mid-luminance accents at 2.3–4.5:1, failing WCAG AA on primary buttons and active chips)
+  const L = luminance(c)
+  // (pure black rather than #0B0F17 keeps the worst case at ~4.6:1 instead of ~4.4:1)
+  const onDark = (L + 0.05) / 0.05
+  const onLight = 1.05 / (L + 0.05)
+  s.setProperty('--t-accent-text', onDark >= onLight ? '#000000' : '#FFFFFF')
 }
