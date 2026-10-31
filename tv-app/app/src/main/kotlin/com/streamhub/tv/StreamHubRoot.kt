@@ -27,6 +27,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,10 +50,10 @@ import com.streamhub.tv.core.ui.components.LeftRail
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.PlayLauncher
 import com.streamhub.tv.core.ui.components.RailItem
+import com.streamhub.tv.core.ui.components.RailMetrics
 import com.streamhub.tv.core.ui.components.ScreenBackground
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.RailController
-import com.streamhub.tv.core.ui.theme.Tokens
 import com.streamhub.tv.feature.details.DetailsScreen
 import com.streamhub.tv.feature.favorites.FavoritesScreen
 import com.streamhub.tv.feature.guide.GuideScreen
@@ -173,7 +174,7 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
             Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(start = if (showRail) Tokens.Rail.CollapsedW else Tokens.Rail.CollapsedW * 0)
+                    .padding(start = if (showRail) RailMetrics.CollapsedW else 0.dp)
                     .focusRequester(contentFocus)
                     .focusRestorer(),
             ) {

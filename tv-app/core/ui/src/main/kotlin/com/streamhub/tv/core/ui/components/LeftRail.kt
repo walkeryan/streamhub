@@ -47,7 +47,24 @@ import com.streamhub.tv.core.ui.theme.Tokens
 data class RailItem(val route: String, val label: String, val icon: ImageVector)
 
 /**
- * Collapsible left rail. Icons only when collapsed (72 dp), icon+label when expanded (240 dp).
+ * Rail geometry. Items are inset to the TV safe area (BRIEF UAT #3: nothing interactive outside
+ * 48/27 dp); only the rail background bleeds to the screen edge. tokens.json still says 72/240 dp,
+ * which predates the safe-area inset (72 dp minus a 48 dp margin leaves no room for a 44 dp item),
+ * so the shell uses these widths instead of Tokens.Rail.
+ */
+object RailMetrics {
+    /** Width of a rail item (icon button) when collapsed. */
+    val ItemW = 44.dp
+    /** Gap between the items and the content edge. */
+    val InnerGutter = 12.dp
+    /** SafeMarginX (48) + item (44) + gutter (12) = 104 dp. Content is offset by this. */
+    val CollapsedW = Tokens.Canvas.SafeMarginX + ItemW + InnerGutter
+    /** Expanded width keeps the 240 dp token's label room (240 − 72 + 104). */
+    val ExpandedW = Tokens.Rail.ExpandedW + (CollapsedW - Tokens.Rail.CollapsedW)
+}
+
+/**
+ * Collapsible left rail. Icons only when collapsed ([RailMetrics.CollapsedW]), icon+label when expanded.
  * Expands while any item has focus. Right/Back hands focus back to content via [onExit].
  * Rendered as an overlay over content (content is laid out with collapsed width offset), so
  * expanding never shifts layout.
@@ -67,7 +84,7 @@ fun LeftRail(
 ) {
     val t = LocalThemeTokens.current
     val dur = if (LocalReducedMotion.current) 0 else Tokens.Motion.BASE_MS
-    val width by animateDpAsState(if (expanded) Tokens.Rail.ExpandedW else Tokens.Rail.CollapsedW, tween(dur), label = "rail")
+    val width by animateDpAsState(if (expanded) RailMetrics.ExpandedW else RailMetrics.CollapsedW, tween(dur), label = "rail")
     val selectedIndex = items.indexOfFirst { it.route == selectedRoute }.coerceAtLeast(0)
     val requesters = remember(items.size) { List(items.size) { FocusRequester() } }
 
@@ -76,7 +93,13 @@ fun LeftRail(
             .fillMaxHeight()
             .width(width)
             .background(if (expanded) t.surface else t.bg.copy(alpha = 0.85f))
-            .padding(vertical = Tokens.Canvas.SafeMarginY, horizontal = 12.dp)
+            // Background above bleeds to the edges; focusable items start inside the 48/27 dp safe area.
+            .padding(
+                start = Tokens.Canvas.SafeMarginX,
+                end = RailMetrics.InnerGutter,
+                top = Tokens.Canvas.SafeMarginY,
+                bottom = Tokens.Canvas.SafeMarginY,
+            )
             .onFocusChanged { onExpandedChange(it.hasFocus) }
             .focusRestorer(requesters.getOrElse(selectedIndex) { FocusRequester.Default })
             .focusGroup()
