@@ -75,6 +75,8 @@ jobs:
           java-version: "21"
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.1.0
       - name: Build debug APK
         run: chmod +x ./gradlew && ./gradlew :app:assembleDebug --no-daemon
       - name: Upload APK
