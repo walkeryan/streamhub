@@ -7,6 +7,7 @@ import type { components } from '../api/schema'
 import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
 import { LanguageFilter } from '../components/LanguageFilter'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
+import { FeatureCard } from '../components/FeatureCard'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useSession } from '../store/session'
 import { fmtTime, useDebounced } from '../lib/util'
@@ -58,16 +59,13 @@ export function Sports() {
     {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : q.isPending ? <Skeleton style={{ height: '16rem' }} /> : data && <>
       <p className="muted mb-4" role="status">{data.coverage.channels_with_current_schedule.toLocaleString()} of {data.coverage.eligible_channels.toLocaleString()} eligible channels have a current schedule. Missing or unclassified guide data may omit sports. Updated {fmtTime(data.as_of)} · times are local.</p>
       {!data.items.length ? <Empty title="No matching sports listings" hint="Try All sports, another language or a shorter search. No listings does not mean no sport is airing." /> :
-        <FocusGroup focusKey="sports:list" className="flex flex-col gap-3" label="Current sports listings">
-          {data.items.map((item) => <article key={item.id} data-testid="sports-listing" style={{ padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--t-text-muted)', background: 'var(--t-surface)' }}>
-            <div className="flex gap-3 flex-wrap items-center" style={{ justifyContent: 'space-between' }}>
-              <div style={{ minWidth: 0, flex: '1 1 15rem' }}>
-                <p className="label muted">{item.sport} · {fmtTime(item.start)}–{fmtTime(item.stop)}</p>
-                <h2 className="heading" style={{ overflowWrap: 'anywhere' }}>{item.title}</h2>
-                <p className="muted" style={{ overflowWrap: 'anywhere' }}>{item.channel_number} · {item.channel_name} · {item.source_name}</p>
-              </div>
-              <Button focusKey={`sports:watch:${item.id}`} primary label={`Watch ${item.channel_name}`} onEnter={() => go(`/play/${encodeURIComponent(item.channel_id)}`)}>Watch channel</Button>
-            </div>
+        <FocusGroup focusKey="sports:list" className="feature-grid" label="Current sports listings">
+          {data.items.map((item) => <article key={item.id} data-testid="sports-listing">
+            <FeatureCard role="button" focusKey={`sports:watch:${item.id}`} label={`Watch ${item.channel_name}`}
+              title={item.title} eyebrow={`${item.channel_name} · ${fmtTime(item.start)}–${fmtTime(item.stop)}`}
+              fallbackName={item.channel_name} badge="On now" onEnter={() => go(`/play/${encodeURIComponent(item.channel_id)}`)}>
+              <p className="label">{item.sport} · {item.source_name}</p>
+            </FeatureCard>
           </article>)}
         </FocusGroup>}
       <div className="flex gap-3 items-center flex-wrap mt-4">

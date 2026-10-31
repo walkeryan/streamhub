@@ -41,6 +41,7 @@ test('keyboard only: Home -> title -> player, Escape restores focus', async ({ p
 
 test('keyboard only: left from the first tile opens the rail, Enter navigates, Escape collapses', async ({ page }) => {
   await signIn(page)
+  await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowLeft') // hero Play -> rail
   await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
   await page.keyboard.press('ArrowDown') // Search

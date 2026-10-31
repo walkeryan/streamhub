@@ -296,3 +296,32 @@ h1, h2, h3, p { margin: 0; }
   .rail, .rail[data-expanded='true'], .dialog { background-color: var(--t-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .fx[data-focused='true'] { outline-width: 0.25rem; }
 }
+
+/* Programme-first discovery: wide artwork, persistent metadata and one remote
+   target per card. Art falls back to real channel branding or neutral initials. */
+.home-destinations { display: flex; flex-wrap: wrap; gap: .625rem; padding: 1rem var(--safe-x) .25rem; overflow-x: auto; scroll-padding-inline: var(--safe-x); }
+.home-destinations .btn { flex: none; min-width: 6.5rem; }
+.home-discovery .hero { height: min(38dvh, 25rem); min-height: 17rem; }
+.home-discovery .hero-body { bottom: 1.5rem; }
+.feature-card { display: block; min-width: 0; border-radius: var(--radius-lg); background: var(--t-surface); overflow: hidden; }
+.feature-row .feature-card { flex: 0 0 clamp(17rem, 27vw, 24rem); }
+.feature-art { aspect-ratio: 16 / 9; position: relative; overflow: hidden; background: var(--t-surface-alt); }
+.feature-image { width: 100%; height: 100%; object-fit: cover; }
+.feature-logo { width: 100%; height: 100%; object-fit: contain; padding: 1.5rem; }
+.feature-art [data-testid='img-fallback'] { font-size: 3rem; background: linear-gradient(145deg, var(--t-surface-alt), var(--t-surface)); }
+.feature-status { position: absolute; left: .625rem; bottom: .625rem; border-radius: .3rem; background: rgba(8, 10, 16, .9); color: #fff; padding: .125rem .5rem; font-size: var(--text-label); font-weight: 700; }
+.feature-progress { position: absolute; inset: auto 0 0; }
+.feature-copy { padding: .75rem .875rem 1rem; display: flex; flex-direction: column; gap: .35rem; min-height: 6.5rem; }
+.feature-copy .heading { overflow-wrap: anywhere; }
+.feature-card[data-focused='true'] { outline-offset: .2rem; outline-width: .2rem; }
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); gap: 1.25rem; padding: .5rem .25rem; }
+.feature-grid article { min-width: 0; }
+.feature-grid .feature-card { height: 100%; }
+@media (max-width: 720px) {
+  .home-destinations { padding-inline: 1rem; scroll-padding-inline: 1rem; }
+  .home-discovery .hero { height: 19rem; min-height: 19rem; }
+  .feature-row .feature-card { flex-basis: min(19rem, 82vw); }
+  .feature-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) { .feature-card[data-focused='true'] { transform: none; } }
+.feature-copy > .badge { align-self: flex-start; }
