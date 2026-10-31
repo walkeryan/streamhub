@@ -30,6 +30,7 @@ fun VideoSurface(player: StreamHubPlayer, modifier: Modifier = Modifier, aspect:
                 useController = false
                 isFocusable = false
                 isFocusableInTouchMode = false
+                keepScreenOn = true
                 setKeepContentOnPlayerReset(true)
                 setShutterBackgroundColor(android.graphics.Color.BLACK)
                 this.player = player.exoPlayer
