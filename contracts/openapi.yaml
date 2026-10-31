@@ -71,7 +71,8 @@ components:
           type: object
           description: >
             xtream: {server_url, username, password, output: ts|m3u8} ·
-            m3u: {url|file, epg_url?, user_agent?, referer?, refresh_hours} ·
+            m3u: {url|file, epg_url?, user_agent?, referer?, refresh_hours} — file is the playlist TEXT
+            (uploaded content), persisted server-side under /config/playlists/ ·
             plex: {token?} (use /sources/plex/pin) · jellyfin: {server_url, username?, password?, quick_connect?} ·
             streaming_service: {} (service_key required)
           additionalProperties: true
@@ -206,6 +207,10 @@ components:
             supports_title_link: {type: boolean}
     ProgressReport:
       type: object
+      description: >
+        Sent every 10 s while playing and on pause/stop (ordinary bearer-auth POST).
+        state=stopped with position_ms >= duration_ms marks the item watched (resume resets to 0);
+        position >= 95% of duration also counts as watched.
       required: [id, position_ms, state]
       properties:
         id: {type: string}
@@ -214,6 +219,27 @@ components:
         duration_ms: {type: integer, nullable: true}
         state: {type: string, enum: [playing, paused, stopped]}
 
+    ServiceInfo:
+      type: object
+      required: [service_key, name, web_url, supports_title_link, tmdb_provider_ids]
+      properties:
+        service_key: {type: string}
+        name: {type: string}
+        android_package: {type: string, nullable: true}
+        web_url: {type: string}
+        supports_title_link: {type: boolean}
+        tmdb_provider_ids: {type: array, items: {type: integer}}
+    HomeLayout:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          description: "Row ids: continue_watching, on_now, recently_added, watchlist, favorites, trending, source:<id>. Ordered by sort."
+          items:
+            type: object
+            required: [id]
+            properties: { id: {type: string}, hidden: {type: boolean, default: false}, sort: {type: integer} }
     Favorite:
       type: object
       required: [kind, id]
@@ -261,6 +287,10 @@ paths:
   /profiles/{id}/pin:
     put: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true} } } } } }, responses: { '204': { description: ok } } }
 
+  /profiles/{id}/home_layout:
+    get: { summary: Per-profile Home row order / hidden rows, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
+    put: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
+
   /disclaimer:
     get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Disclaimer' } } } } } }
   /disclaimer/accept:
@@ -285,7 +315,7 @@ paths:
   /sources/plex/pin/{pin_id}:
     get: { summary: Poll; on success creates one Source per reachable server, parameters: [{name: pin_id, in: path, required: true, schema: {type: integer}}], responses: { '200': { description: linked, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Source' } } } } }, '428': { description: pending } } }
   /services/registry:
-    get: { summary: Known hand-off services (netflix, hulu…) with provider ids and link support, responses: { '200': { description: ok } } }
+    get: { summary: Known hand-off services (netflix, hulu…) with provider ids and link support, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ServiceInfo' } } } } } } }
 
   /home:
     get:
@@ -319,6 +349,7 @@ paths:
         - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3; default = profile languages"} }
         - { name: favorites, in: query, schema: {type: boolean} }
         - { name: q, in: query, schema: {type: string} }
+        - { name: list_id, in: query, schema: {type: string, description: "Re-fetch the exact ordered list returned earlier (e.g. channel_context.list_id) for Up/Down zapping; other filters are ignored. 404 if unknown."} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { list_id: {type: string}, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } } } } } } } }
   /channels/groups:
     get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChannelGroup' } } } } } } }
@@ -353,7 +384,7 @@ paths:
   /favorites/reorder:
     post: { requestBody: { content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Favorite' } } } } }, responses: { '204': { description: ok } } }
   /watchlist:
-    get: { responses: { '200': { description: ok } } }
+    get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
     put: { requestBody: { content: { application/json: { schema: { type: object, properties: { id: {type: string} } } } } }, responses: { '204': { description: ok } } }
     delete: { parameters: [{name: id, in: query, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
   /history:
@@ -369,3 +400,11 @@ paths:
     put: { requestBody: { content: { application/json: { schema: { type: object, properties: { api_key: {type: string} } } } } }, responses: { '204': { description: ok } } }
   /health:
     get: { security: [], responses: { '200': { description: ok } } }
+  /about:
+    get: { security: [], summary: Version + TMDB/JustWatch attribution strings, responses: { '200': { description: ok } } }
+  /qr:
+    get:
+      security: []
+      summary: SVG QR code (TV pairing / Plex link screens)
+      parameters: [{ name: data, in: query, required: true, schema: {type: string} }]
+      responses: { '200': { description: svg, content: { image/svg+xml: {} } } }
