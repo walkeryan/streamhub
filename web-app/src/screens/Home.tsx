@@ -1,3 +1,4 @@
+import { AndroidDownload } from '../components/AndroidDownload'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
 import type { Tile } from '../api/types'
@@ -65,6 +66,7 @@ export function Home() {
         <Button focusKey="home:movies" onEnter={() => go('/browse/movies')}>Movies</Button>
         <Button focusKey="home:shows" onEnter={() => go('/browse/shows')}>Shows</Button>
         <Button focusKey="home:sports" onEnter={() => go('/sports')}>Sports</Button>
+        <AndroidDownload focusKey="home:android" />
       </FocusGroup>
       <section className="hero" aria-label="Featured" data-testid="hero" data-art={noArt ? 'none' : undefined}>
         <Crossfade src={active.backdrop ?? active.poster} />
