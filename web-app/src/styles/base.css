@@ -99,6 +99,9 @@ h1, h2, h3, p { margin: 0; }
 @keyframes skel { to { background-position: -200% 0; } }
 
 /* ---------- shell ---------- */
+/* collapsed rail = TV safe margin + 56 dp of icons (≈104 dp), so rail items sit inside the 48/27 dp safe area.
+   Web-only override of tokens.rail.collapsed_w (72) until the shared token is updated with the Android rail. */
+:root { --rail-collapsed: calc(var(--safe-x) + 3.5rem); }
 .shell { display: block; min-height: 100dvh; }
 .main { margin-left: var(--rail-collapsed); min-height: 100dvh; }
 @media (max-width: 720px) {
@@ -110,14 +113,16 @@ h1, h2, h3, p { margin: 0; }
 /* rail */
 .rail {
   position: fixed; inset: 0 auto 0 0; z-index: 40; width: var(--rail-collapsed);
-  display: flex; flex-direction: column; padding: 1rem 0.5rem;
+  /* background stays full-bleed; items are inset to the safe area */
+  display: flex; flex-direction: column; gap: 0.125rem;
+  padding: var(--safe-y) 0.25rem var(--safe-y) var(--safe-x);
   background: var(--t-bg);
   border-right: 1px solid color-mix(in srgb, var(--t-text) 8%, transparent);
   transition: width var(--dur-base) var(--ease), background-color var(--dur-base) var(--ease);
   overflow: hidden;
 }
 .rail[data-expanded='true'] { width: var(--rail-expanded); background: var(--t-surface); box-shadow: 0 0 2.5rem rgba(0,0,0,0.45); }
-.rail-item { display: flex; align-items: center; gap: 1rem; height: 2.75rem; padding: 0 0.875rem; border-radius: var(--radius-md); color: var(--t-text-muted); white-space: nowrap; }
+.rail-item { display: flex; align-items: center; gap: 1rem; flex: none; height: 2.75rem; padding: 0 0.875rem; border-radius: var(--radius-md); color: var(--t-text-muted); white-space: nowrap; }
 .rail-item svg { flex: none; }
 .rail-item .lbl { opacity: 0; transition: opacity var(--dur-fast) var(--ease); font-weight: 500; }
 .rail[data-expanded='true'] .rail-item .lbl { opacity: 1; }
