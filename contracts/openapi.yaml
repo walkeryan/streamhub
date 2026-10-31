@@ -1,0 +1,371 @@
+openapi: 3.1.0
+info:
+  title: StreamHub API
+  version: 1.0.0
+  description: Unified streaming hub. All clients (Android TV, web) use this contract. Base path /api/v1.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    Error: { type: object, properties: { code: {type: string}, message: {type: string} }, required: [code, message] }
+
+    AuthTokens:
+      type: object
+      required: [access_token, refresh_token, profile]
+      properties:
+        access_token: {type: string}
+        refresh_token: {type: string}
+        profile: { $ref: '#/components/schemas/Profile' }
+    DeviceCode:
+      type: object
+      required: [device_code, user_code, expires_in, interval]
+      properties:
+        device_code: {type: string}
+        user_code: {type: string, description: "6-char code shown on TV"}
+        expires_in: {type: integer}
+        interval: {type: integer}
+
+    Profile:
+      type: object
+      required: [id, name, is_admin, theme_id, languages, has_pin, kids]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        avatar: {type: string, nullable: true}
+        is_admin: {type: boolean}
+        theme_id: {type: string}
+        languages: {type: array, items: {type: string}, description: "ISO 639-3 filter for live TV; empty = all"}
+        has_pin: {type: boolean}
+        kids: {type: boolean}
+        disclaimer_accepted_version: {type: string, nullable: true}
+
+    SourceType: { type: string, enum: [plex, jellyfin, xtream, m3u, streaming_service] }
+    Source:
+      type: object
+      required: [id, type, name, enabled, priority, status]
+      properties:
+        id: {type: string}
+        type: { $ref: '#/components/schemas/SourceType' }
+        name: {type: string}
+        enabled: {type: boolean}
+        priority: {type: integer}
+        region: {type: string, description: "ISO 3166-1 alpha-2", default: US}
+        status: {type: string, enum: [ok, syncing, error, unauthenticated]}
+        last_sync: {type: string, format: date-time, nullable: true}
+        counts: { type: object, additionalProperties: {type: integer} }
+        service_key: {type: string, nullable: true, description: "for streaming_service: netflix, hulu, …"}
+        config_summary: { type: object, additionalProperties: true, description: "never includes secrets" }
+    SourceCreate:
+      type: object
+      required: [type, name, config]
+      properties:
+        type: { $ref: '#/components/schemas/SourceType' }
+        name: {type: string}
+        region: {type: string}
+        service_key: {type: string, nullable: true}
+        config:
+          type: object
+          description: >
+            xtream: {server_url, username, password, output: ts|m3u8} ·
+            m3u: {url|file, epg_url?, user_agent?, referer?, refresh_hours} ·
+            plex: {token?} (use /sources/plex/pin) · jellyfin: {server_url, username?, password?, quick_connect?} ·
+            streaming_service: {} (service_key required)
+          additionalProperties: true
+    PlexPin:
+      type: object
+      required: [pin_id, code, link_url]
+      properties: { pin_id: {type: integer}, code: {type: string}, link_url: {type: string} }
+
+    MediaKind: { type: string, enum: [movie, show, season, episode, channel, vod, series] }
+    SourceBadge:
+      type: object
+      required: [source_id, source_type, name, playable_in_app]
+      properties:
+        source_id: {type: string}
+        source_type: { $ref: '#/components/schemas/SourceType' }
+        name: {type: string}
+        playable_in_app: {type: boolean}
+        kind: {type: string, enum: [library, vod, live, flatrate, free, ads, rent, buy]}
+        quality: {type: string, nullable: true}
+    Tile:
+      type: object
+      required: [id, kind, title, sources]
+      properties:
+        id: {type: string, description: "hub id, e.g. tmdb:movie:603 or ch:<source>:<ext_id>"}
+        kind: { $ref: '#/components/schemas/MediaKind' }
+        title: {type: string}
+        subtitle: {type: string, nullable: true}
+        year: {type: integer, nullable: true}
+        poster: {type: string, nullable: true}
+        backdrop: {type: string, nullable: true}
+        logo: {type: string, nullable: true}
+        rating: {type: number, nullable: true}
+        progress_pct: {type: number, nullable: true}
+        is_favorite: {type: boolean, default: false}
+        sources: { type: array, items: { $ref: '#/components/schemas/SourceBadge' } }
+        now_playing: { $ref: '#/components/schemas/Programme', nullable: true }
+    Row:
+      type: object
+      required: [id, title, tiles]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        layout: {type: string, enum: [poster, landscape, hero, channel], default: poster}
+        tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+    TitleDetail:
+      allOf:
+        - $ref: '#/components/schemas/Tile'
+        - type: object
+          properties:
+            overview: {type: string}
+            genres: {type: array, items: {type: string}}
+            runtime_min: {type: integer, nullable: true}
+            cast: {type: array, items: {type: object, properties: {name: {type: string}, character: {type: string}, photo: {type: string, nullable: true}}}}
+            seasons: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+            episodes: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+            attribution: {type: string, description: "e.g. 'Availability data by JustWatch'"}
+
+    Channel:
+      type: object
+      required: [id, source_id, name, number, language, group]
+      properties:
+        id: {type: string}
+        source_id: {type: string}
+        ext_id: {type: string}
+        number: {type: integer}
+        name: {type: string}
+        logo: {type: string, nullable: true}
+        group: {type: string}
+        language: {type: string, description: "ISO 639-3 or 'und'"}
+        language_source: {type: string, enum: [tag, db, country, group, flag, name, user]}
+        country: {type: string, nullable: true}
+        epg_id: {type: string, nullable: true}
+        catchup_days: {type: integer, default: 0}
+        is_favorite: {type: boolean}
+        now: { $ref: '#/components/schemas/Programme', nullable: true }
+        next: { $ref: '#/components/schemas/Programme', nullable: true }
+    ChannelGroup:
+      type: object
+      required: [id, source_id, name, channel_count, hidden]
+      properties: { id: {type: string}, source_id: {type: string}, name: {type: string}, channel_count: {type: integer}, hidden: {type: boolean}, language_override: {type: string, nullable: true} }
+    Programme:
+      type: object
+      required: [id, channel_id, start, stop, title]
+      properties:
+        id: {type: string}
+        channel_id: {type: string}
+        start: {type: string, format: date-time}
+        stop: {type: string, format: date-time}
+        title: {type: string}
+        description: {type: string, nullable: true}
+        category: {type: string, nullable: true}
+        icon: {type: string, nullable: true}
+        catchup_available: {type: boolean, default: false}
+
+    PlaybackRequest:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string, description: "tile/channel/programme id"}
+        source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
+        client: {type: string, enum: [android_tv, web], default: web}
+        catchup_programme_id: {type: string, nullable: true}
+    PlaybackDescriptor:
+      type: object
+      required: [mode, id]
+      properties:
+        id: {type: string}
+        mode: {type: string, enum: [direct, proxy, hls, handoff]}
+        url: {type: string, nullable: true}
+        mime: {type: string, nullable: true, description: "video/mp2t, application/x-mpegURL, video/mp4, application/dash+xml"}
+        headers: { type: object, additionalProperties: {type: string} }
+        live: {type: boolean, default: false}
+        resume_position_ms: {type: integer, default: 0}
+        duration_ms: {type: integer, nullable: true}
+        title: {type: string}
+        subtitle: {type: string, nullable: true}
+        poster: {type: string, nullable: true}
+        channel_context:
+          type: object
+          nullable: true
+          description: "for live: allow channel up/down within this ordered list"
+          properties: { list_id: {type: string}, index: {type: integer}, count: {type: integer} }
+        handoff:
+          type: object
+          nullable: true
+          properties:
+            service_key: {type: string}
+            android_package: {type: string}
+            android_uri: {type: string, nullable: true}
+            android_extras: { type: object, additionalProperties: {type: string} }
+            web_url: {type: string}
+            supports_title_link: {type: boolean}
+    ProgressReport:
+      type: object
+      required: [id, position_ms, state]
+      properties:
+        id: {type: string}
+        source_id: {type: string, nullable: true}
+        position_ms: {type: integer}
+        duration_ms: {type: integer, nullable: true}
+        state: {type: string, enum: [playing, paused, stopped]}
+
+    Favorite:
+      type: object
+      required: [kind, id]
+      properties: { kind: { $ref: '#/components/schemas/MediaKind' }, id: {type: string}, sort: {type: integer} }
+    Theme:
+      type: object
+      required: [id, name, tokens]
+      properties: { id: {type: string}, name: {type: string}, builtin: {type: boolean}, tokens: {type: object, additionalProperties: true} }
+    Settings:
+      type: object
+      properties:
+        tmdb_api_key_set: {type: boolean}
+        region: {type: string}
+        sleep_timer_min: {type: integer, nullable: true}
+        epg_refresh_hours: {type: integer}
+        transcode_hw: {type: string, enum: [none, vaapi, nvenc, qsv]}
+        proxy_mode: {type: string, enum: [auto, always, never]}
+    Disclaimer:
+      type: object
+      required: [version, text]
+      properties: { version: {type: string}, text: {type: string} }
+
+paths:
+  /auth/login:
+    post:
+      security: []
+      summary: Profile login (password for admin, PIN for profiles)
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string}, pin: {type: string, nullable: true}, password: {type: string, nullable: true} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
+  /auth/refresh:
+    post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
+  /auth/device:
+    post: { security: [], summary: TV starts pairing; shows user_code, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceCode' } } } } } }
+  /auth/device/poll:
+    post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { device_code: {type: string} } } } } }, responses: { '200': { description: approved, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }, '428': { description: pending } } }
+  /auth/device/approve:
+    post: { summary: Logged-in user approves a TV code (web), requestBody: { content: { application/json: { schema: { type: object, properties: { user_code: {type: string}, profile_id: {type: string} } } } } }, responses: { '204': { description: ok } } }
+
+  /profiles:
+    get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } } } } }
+    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '201': { description: created } } }
+  /profiles/{id}:
+    patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '200': { description: ok } } }
+    delete: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
+  /profiles/{id}/pin:
+    put: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true} } } } } }, responses: { '204': { description: ok } } }
+
+  /disclaimer:
+    get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Disclaimer' } } } } } }
+  /disclaimer/accept:
+    post: { requestBody: { content: { application/json: { schema: { type: object, properties: { version: {type: string} } } } } }, responses: { '204': { description: ok } } }
+
+  /sources:
+    get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Source' } } } } } } }
+    post:
+      description: Rejected with 412 if the disclaimer has not been accepted and type is xtream or m3u.
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/SourceCreate' } } } }
+      responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Source' } } } }, '412': { description: disclaimer not accepted } }
+  /sources/{id}:
+    get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Source' } } } } } }
+    patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/SourceCreate' } } } }, responses: { '200': { description: ok } } }
+    delete: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
+  /sources/{id}/sync:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '202': { description: accepted } } }
+  /sources/{id}/test:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { ok: {type: boolean}, message: {type: string} } } } } } } }
+  /sources/plex/pin:
+    post: { summary: Start Plex PIN link, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlexPin' } } } } } }
+  /sources/plex/pin/{pin_id}:
+    get: { summary: Poll; on success creates one Source per reachable server, parameters: [{name: pin_id, in: path, required: true, schema: {type: integer}}], responses: { '200': { description: linked, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Source' } } } } }, '428': { description: pending } } }
+  /services/registry:
+    get: { summary: Known hand-off services (netflix, hulu…) with provider ids and link support, responses: { '200': { description: ok } } }
+
+  /home:
+    get:
+      summary: Home rows for the current profile (Continue Watching, On Now, Recently Added, Watchlist, Favorites, per-source rows)
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { hero: { type: array, items: { $ref: '#/components/schemas/Tile' } }, rows: { type: array, items: { $ref: '#/components/schemas/Row' } } } } } } } }
+  /search:
+    get:
+      parameters:
+        - { name: q, in: query, required: true, schema: {type: string} }
+        - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind"} }
+        - { name: limit, in: query, schema: {type: integer, default: 40} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+  /titles/{id}:
+    get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }
+  /browse/{section}:
+    get:
+      summary: movies | shows | vod | series — paged grid with filters
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: genre, in: query, schema: {type: string} }
+        - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
+        - { name: page, in: query, schema: {type: integer, default: 1} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }, page: {type: integer}, total: {type: integer} } } } } } }
+
+  /channels:
+    get:
+      parameters:
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: group, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3; default = profile languages"} }
+        - { name: favorites, in: query, schema: {type: boolean} }
+        - { name: q, in: query, schema: {type: string} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { list_id: {type: string}, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } } } } } } } }
+  /channels/groups:
+    get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChannelGroup' } } } } } } }
+  /channels/groups/{id}:
+    patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { hidden: {type: boolean}, language_override: {type: string, nullable: true}, sort: {type: integer} } } } } }, responses: { '200': { description: ok } } }
+  /channels/languages:
+    get: { summary: Languages present with counts, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { type: object, properties: { code: {type: string}, name: {type: string}, count: {type: integer} } } } } } } } }
+  /channels/{id}:
+    patch: { summary: User override (number, language, group, epg_id), parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Channel' } } } }, responses: { '200': { description: ok } } }
+  /epg:
+    get:
+      summary: Guide grid
+      parameters:
+        - { name: channel_ids, in: query, schema: {type: string, description: csv} }
+        - { name: from, in: query, schema: {type: string, format: date-time} }
+        - { name: to, in: query, schema: {type: string, format: date-time} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, additionalProperties: { type: array, items: { $ref: '#/components/schemas/Programme' } } } } } } }
+
+  /playback/resolve:
+    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } } } }
+  /playback/progress:
+    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok } } }
+  /stream/{token}:
+    get: { security: [], summary: Proxied/remuxed stream (token is short-lived and profile-bound), parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: stream } } }
+  /stream/{token}/index.m3u8:
+    get: { security: [], parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: hls playlist } } }
+
+  /favorites:
+    get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
+    put: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Favorite' } } } }, responses: { '204': { description: ok } } }
+    delete: { parameters: [{name: kind, in: query, required: true, schema: {type: string}}, {name: id, in: query, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
+  /favorites/reorder:
+    post: { requestBody: { content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Favorite' } } } } }, responses: { '204': { description: ok } } }
+  /watchlist:
+    get: { responses: { '200': { description: ok } } }
+    put: { requestBody: { content: { application/json: { schema: { type: object, properties: { id: {type: string} } } } } }, responses: { '204': { description: ok } } }
+    delete: { parameters: [{name: id, in: query, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
+  /history:
+    get: { summary: Recently watched, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
+
+  /themes:
+    get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Theme' } } } } } } }
+    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Theme' } } } }, responses: { '201': { description: created } } }
+  /settings:
+    get: { responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } } } }
+    patch: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } }, responses: { '200': { description: ok } } }
+  /settings/tmdb_key:
+    put: { requestBody: { content: { application/json: { schema: { type: object, properties: { api_key: {type: string} } } } } }, responses: { '204': { description: ok } } }
+  /health:
+    get: { security: [], responses: { '200': { description: ok } } }
