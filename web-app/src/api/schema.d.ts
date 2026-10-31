@@ -369,6 +369,140 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/profiles/{id}/home_layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-profile Home row order / hidden rows */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["HomeLayout"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["HomeLayout"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["HomeLayout"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/profiles/{id}/prefs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Free-form client prefs for a profile (recent searches */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description JSON object ({} when unset) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ClientPrefs"];
+                    };
+                };
+            };
+        };
+        /** Replace the profile's client prefs (JSON object */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ClientPrefs"];
+                };
+            };
+            responses: {
+                /** @description stored object */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ClientPrefs"];
+                    };
+                };
+                /** @description too large */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/disclaimer": {
         parameters: {
             query?: never;
@@ -766,7 +900,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["ServiceInfo"][];
+                    };
                 };
             };
         };
@@ -960,6 +1096,7 @@ export interface paths {
                     language?: string;
                     favorites?: boolean;
                     q?: string;
+                    list_id?: string;
                 };
                 header?: never;
                 path?: never;
@@ -1470,7 +1607,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Tile"][];
+                    };
                 };
             };
         };
@@ -1744,6 +1883,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/about": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version + TMDB/JustWatch attribution strings */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/qr": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SVG QR code (TV pairing / Plex link screens) */
+        get: {
+            parameters: {
+                query: {
+                    data: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description svg */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/svg+xml": unknown;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1808,7 +2019,7 @@ export interface components {
             name: string;
             region?: string;
             service_key?: string | null;
-            /** @description xtream: {server_url, username, password, output: ts|m3u8} · m3u: {url|file, epg_url?, user_agent?, referer?, refresh_hours} · plex: {token?} (use /sources/plex/pin) · jellyfin: {server_url, username?, password?, quick_connect?} · streaming_service: {} (service_key required) */
+            /** @description xtream: {server_url, username, password, output: ts|m3u8} · m3u: {url|file, epg_url?, user_agent?, referer?, refresh_hours} — file is the playlist TEXT (uploaded content), persisted server-side under /config/playlists/ · plex: {token?} (use /sources/plex/pin) · jellyfin: {server_url, username?, password?, quick_connect?} · streaming_service: {} (service_key required) */
             config: {
                 [key: string]: unknown;
             };
@@ -1913,7 +2124,7 @@ export interface components {
             catchup_available: boolean;
         };
         PlaybackRequest: {
-            /** @description tile/channel/programme id */
+            /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false) */
             id: string;
             /** @description pick a specific source when a title has several */
             source_id?: string | null;
@@ -1952,6 +2163,8 @@ export interface components {
                 service_key?: string;
                 android_package?: string;
                 android_uri?: string | null;
+                /** @description Explicit activity as package/.Class (e.g. com.hulu.livingroomplus/.WKFactivity); null = use the package's leanback launch/VIEW intent */
+                android_component?: string | null;
                 android_extras?: {
                     [key: string]: string;
                 };
@@ -1959,6 +2172,7 @@ export interface components {
                 supports_title_link?: boolean;
             } | null;
         };
+        /** @description Sent every 10 s while playing and on pause/stop (ordinary bearer-auth POST). state=stopped with position_ms >= duration_ms marks the item watched (resume resets to 0); position >= 95% of duration also counts as watched. */
         ProgressReport: {
             id: string;
             source_id?: string | null;
@@ -1966,6 +2180,31 @@ export interface components {
             duration_ms?: number | null;
             /** @enum {string} */
             state: "playing" | "paused" | "stopped";
+        };
+        ServiceInfo: {
+            service_key: string;
+            name: string;
+            android_package?: string | null;
+            /** @description package/.Class, e.g. com.hulu.livingroomplus/.WKFactivity */
+            android_component?: string | null;
+            /** @description VIEW-intent URI with {placeholders} (e.g. {netflix_id}); null when unknown. Clients normally use handoff from /playback/resolve. */
+            android_title_uri_template?: string | null;
+            web_url: string;
+            supports_title_link: boolean;
+            tmdb_provider_ids: number[];
+        };
+        /** @description Opaque client-owned preferences. Max 16 KB when serialized. */
+        ClientPrefs: {
+            [key: string]: unknown;
+        };
+        HomeLayout: {
+            /** @description Row ids: continue_watching, on_now, recently_added, watchlist, favorites, trending, source:<id>. Ordered by sort. */
+            rows: {
+                id: string;
+                /** @default false */
+                hidden: boolean;
+                sort?: number;
+            }[];
         };
         Favorite: {
             kind: components["schemas"]["MediaKind"];
