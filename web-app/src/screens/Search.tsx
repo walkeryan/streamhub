@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigationType } from 'react-router'
 import { useSearch } from '../api/hooks'
 import { Attribution, Button, Chip, Empty, ErrorState } from '../components/ui'
 import { MediaTile } from '../components/Tile'
@@ -10,7 +11,11 @@ import { useDebounced } from '../lib/util'
 import type { Tile } from '../api/types'
 
 export function Search() {
-  const [q, setQ] = useState('')
+  // Back (POP) returns to the previous query and its results; opening Search fresh (rail, link) starts empty.
+  const navType = useNavigationType()
+  const [q, setQ] = useState(() => (navType === 'POP' ? useUi.getState().searchQuery : ''))
+  const setSearchQuery = useUi((s) => s.setSearchQuery)
+  useEffect(() => { setSearchQuery(q) }, [q, setSearchQuery])
   const dq = useDebounced(q, 400)
   const { data, error, isFetching, refetch } = useSearch(dq)
   const recents = useUi((s) => s.recentSearches)
@@ -18,7 +23,8 @@ export function Search() {
   const clear = useUi((s) => s.clearSearches)
   const go = useGo()
   const input = useRef<HTMLInputElement>(null)
-  useRestoreFocus(true, 'search:input')
+  // wait for the (cached) results so the remembered result tile exists before focus is restored to it
+  useRestoreFocus(dq.trim().length < 2 || !!data || !!error, 'search:input')
 
   useEffect(() => { if (data && dq.trim().length > 1) addSearch(dq.trim()) }, [data, dq, addSearch])
 
