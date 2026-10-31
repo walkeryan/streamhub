@@ -16,7 +16,7 @@ import hashlib
 import logging
 import shutil
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +34,15 @@ LINGER_S = 10.0
 MAX_BACKOFF = 15.0
 HLS_IDLE_S = 60.0
 HLS_READY_TIMEOUT = 20.0
+HLS_SWITCH_GRACE_S = 5.0
+HLS_ADMISSION_WAIT_S = 5.0
+HLS_STOP_TIMEOUT_S = 0.5
+
+
+class HlsSourceBusy(Exception):
+    """Another recently polled HLS channel occupies this source’s connection budget."""
+
+
 HOP_HEADERS = {"content-type", "content-length", "accept-ranges", "content-range", "last-modified", "etag"}
 
 
@@ -156,6 +165,9 @@ class HlsSession:
     workdir: Path
     proc: asyncio.subprocess.Process
     last_access: float = field(default_factory=time.monotonic)
+    source_id: str | None = None
+    stderr_bytes: int = 0
+    stderr_task: asyncio.Task[None] | None = None
 
 
 def ffmpeg_args(
@@ -184,6 +196,8 @@ def ffmpeg_args(
             args += ["-headers", other]
     if url.startswith("http"):
         args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
+        if live:
+            args += ["-reconnect_at_eof", "1"]
     args += ["-fflags", "+genpts", "-i", url, "-map", "0:v:0?", "-map", "0:a?"]
     if transcode == "none" or not transcode:
         args += ["-c", "copy"]
@@ -222,8 +236,12 @@ class StreamProxy:
         vaapi_device: str = "/dev/dri/renderD128",
         on_start: Callable[[str], None] | None = None,
         on_stop: Callable[[str], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._client_factory = client_factory
+        self._clock = clock
+        self._sleep = sleep
         self._shared: dict[str, SharedUpstream] = {}
         self._hls: dict[str, HlsSession] = {}
         self._hls_lock = asyncio.Lock()
@@ -245,8 +263,9 @@ class StreamProxy:
     async def shutdown(self) -> None:
         if self._reaper:
             self._reaper.cancel()
-        for key in list(self._hls):
-            await self._stop_hls(key)
+        async with self._hls_lock:
+            for key in list(self._hls):
+                await self._stop_hls(key)
         for up in list(self._shared.values()):
             if up._task:
                 up._task.cancel()
@@ -255,10 +274,11 @@ class StreamProxy:
     async def _reap_loop(self) -> None:
         while True:
             await asyncio.sleep(10)
-            now = time.monotonic()
-            for key, sess in list(self._hls.items()):
-                if now - sess.last_access > HLS_IDLE_S or sess.proc.returncode is not None:
-                    await self._stop_hls(key)
+            async with self._hls_lock:
+                now = self._clock()
+                for key, sess in list(self._hls.items()):
+                    if now - sess.last_access > HLS_IDLE_S or sess.proc.returncode is not None:
+                        await self._stop_hls(key, expected=sess)
 
     @property
     def stats(self) -> dict[str, Any]:
@@ -384,62 +404,128 @@ class StreamProxy:
     def session_id(token_key: str) -> str:
         return hashlib.sha1(token_key.encode(), usedforsecurity=False).hexdigest()[:20]
 
+    async def _drain_hls_stderr(self, sess: HlsSession) -> None:
+        # Never retain/log raw ffmpeg stderr: it may contain upstream credentials.
+        if sess.proc.stderr is not None:
+            while chunk := await sess.proc.stderr.read(4096):
+                sess.stderr_bytes = min(1_000_000, sess.stderr_bytes + len(chunk))
+
     async def hls_session(
-        self, key: str, url: str, headers: dict[str, str], *, live: bool, transcode: str
+        self,
+        key: str,
+        url: str,
+        headers: dict[str, str],
+        *,
+        live: bool,
+        transcode: str,
+        source_id: str | None = None,
+        max_connections: int | None = None,
     ) -> HlsSession:
-        async with self._hls_lock:
-            sess = self._hls.get(key)
-            if sess is not None and sess.proc.returncode is None:
-                sess.last_access = time.monotonic()
-                return sess
-            if sess is not None:
-                await self._stop_hls(key)
-            sid = self.session_id(key)
-            workdir = self.transcode_dir / sid
-            shutil.rmtree(workdir, ignore_errors=True)
-            workdir.mkdir(parents=True, exist_ok=True)
-            args = ffmpeg_args(
-                self.ffmpeg, url, headers, workdir, live=live, transcode=transcode, vaapi_device=self.vaapi_device
-            )
-            proc = await asyncio.create_subprocess_exec(
-                *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
-            )
-            sess = HlsSession(sid=sid, workdir=workdir, proc=proc)
-            self._hls[key] = sess
-        # wait for the first playlist to appear
-        deadline = time.monotonic() + HLS_READY_TIMEOUT
-        playlist = workdir / "index.m3u8"
-        while time.monotonic() < deadline:
+        capacity = max_connections or 0
+        admission_deadline = self._clock() + HLS_ADMISSION_WAIT_S
+        while True:
+            async with self._hls_lock:
+                now = self._clock()
+                sess = self._hls.get(key)
+                if sess is not None and sess.proc.returncode is None:
+                    sess.last_access = now
+                    break  # Same channel shares its process, including during startup.
+                if sess is not None:
+                    await self._stop_hls(key, expected=sess)
+                peers = [(k, s) for k, s in self._hls.items() if source_id and s.source_id == source_id]
+                for peer_key, peer in peers:
+                    if peer.proc.returncode is not None:
+                        await self._stop_hls(peer_key, expected=peer)
+                peers = [(k, s) for k, s in self._hls.items() if source_id and s.source_id == source_id]
+                full = capacity > 0 and len(peers) >= capacity
+                if full:
+                    # A long target duration can mean legitimately slow playlist polling.
+                    # Protect it rather than assuming every five-second gap is abandonment.
+                    for peer_key, peer in sorted(peers, key=lambda pair: pair[1].last_access):
+                        grace = HLS_SWITCH_GRACE_S
+                        playlist = peer.workdir / "index.m3u8"
+                        if playlist.exists():
+                            for line in playlist.read_text(errors="ignore").splitlines():
+                                if line.startswith("#EXT-X-TARGETDURATION:"):
+                                    with contextlib.suppress(ValueError):
+                                        grace = max(grace, float(line.split(":", 1)[1]) + 2)
+                                    break
+                        if now - peer.last_access >= grace:
+                            await self._stop_hls(peer_key, expected=peer)
+                            full = len([s for s in self._hls.values() if s.source_id == source_id]) >= capacity
+                            if not full:
+                                break
+                if not full:
+                    sid = self.session_id(key)
+                    workdir = self.transcode_dir / sid
+                    shutil.rmtree(workdir, ignore_errors=True)
+                    workdir.mkdir(parents=True, exist_ok=True)
+                    args = ffmpeg_args(
+                        self.ffmpeg,
+                        url,
+                        headers,
+                        workdir,
+                        live=live,
+                        transcode=transcode,
+                        vaapi_device=self.vaapi_device,
+                    )
+                    proc = await asyncio.create_subprocess_exec(
+                        *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+                    )
+                    sess = HlsSession(
+                        sid=sid, workdir=workdir, proc=proc, source_id=source_id, last_access=self._clock()
+                    )
+                    sess.stderr_task = asyncio.create_task(self._drain_hls_stderr(sess))
+                    self._hls[key] = sess
+                    break
+                if now >= admission_deadline:
+                    raise HlsSourceBusy("Source connection limit is occupied by another active channel")
+            # Crucially release the lock so the existing viewer can refresh its lease.
+            await self._sleep(min(0.25, max(0, admission_deadline - self._clock())))
+
+        deadline = self._clock() + HLS_READY_TIMEOUT
+        playlist = sess.workdir / "index.m3u8"
+        while self._clock() < deadline:
+            if self._hls.get(key) is not sess:
+                raise ConnectionError("HLS session stopped")
+            sess.last_access = self._clock()  # An outstanding startup request is active.
             if playlist.exists() and "#EXTINF" in playlist.read_text(errors="ignore"):
                 return sess
-            if proc.returncode is not None:
-                err = b""
-                if proc.stderr is not None:
-                    err = await proc.stderr.read()
-                await self._stop_hls(key)
-                detail = redact_url(err.decode(errors="ignore")[-300:]) or "" if err else ""
-                raise ConnectionError(f"ffmpeg exited: {detail}".strip(": "))
-            await asyncio.sleep(0.25)
-        await self._stop_hls(key)
+            if sess.proc.returncode is not None:
+                code = sess.proc.returncode
+                async with self._hls_lock:
+                    await self._stop_hls(key, expected=sess)
+                raise ConnectionError(f"ffmpeg exited (code {code}; stderr bytes {sess.stderr_bytes})")
+            await self._sleep(0.25)
+        async with self._hls_lock:
+            await self._stop_hls(key, expected=sess)
         raise TimeoutError("hls not ready")
 
     def hls_by_sid(self, sid: str) -> HlsSession | None:
         for s in self._hls.values():
             if s.sid == sid:
-                s.last_access = time.monotonic()
+                s.last_access = self._clock()
                 return s
         return None
 
-    async def _stop_hls(self, key: str) -> None:
-        sess = self._hls.pop(key, None)
-        if sess is None:
+    async def _stop_hls(self, key: str, *, expected: HlsSession | None = None) -> None:
+        """Caller holds _hls_lock, including throughout process termination."""
+        sess = self._hls.get(key)
+        if sess is None or (expected is not None and sess is not expected):
             return
         if sess.proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 sess.proc.terminate()
             try:
-                await asyncio.wait_for(sess.proc.wait(), 5)
+                await asyncio.wait_for(sess.proc.wait(), HLS_STOP_TIMEOUT_S)
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError):
                     sess.proc.kill()
+                await asyncio.wait_for(sess.proc.wait(), HLS_STOP_TIMEOUT_S)
+                # A timeout leaves the slot occupied; never admit while an old upstream lives.
+        self._hls.pop(key, None)
+        if sess.stderr_task is not None:
+            sess.stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sess.stderr_task
         shutil.rmtree(sess.workdir, ignore_errors=True)

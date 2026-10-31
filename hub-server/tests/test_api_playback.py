@@ -146,11 +146,11 @@ async def test_playback_direct_proxy_hls_and_channel_context(api: Api) -> None:
     d = (await api.post("/playback/resolve", json={"id": bbc["id"]}, headers={"X-Forwarded-Proto": "https"})).json()
     assert d["mode"] == "proxy" and d["url"].startswith("https://hub.test/api/v1/stream/") and d["headers"] == {}
 
-    # EXTVLCOPT headers: web → proxy, android_tv → direct with headers
+    # Raw live TS with custom upstream headers is remuxed server-side for both clients.
     d = (await api.post("/playback/resolve", json={"id": tf1["id"]})).json()
-    assert d["mode"] == "proxy"
+    assert d["mode"] == "hls"
     d = (await api.post("/playback/resolve", json={"id": tf1["id"], "client": "android_tv"})).json()
-    assert d["mode"] == "direct" and d["headers"]["User-Agent"] == "SuperPlayer/2.0"
+    assert d["mode"] == "hls" and d["headers"] == {}
 
     # global proxy_mode=always / source hls policy
     await api.patch("/settings", json={"proxy_mode": "always"})
@@ -489,7 +489,7 @@ def test_native_hls_mode_preserves_explicit_never_and_android() -> None:
         assert mode(client="web_hls", mime="video/mp2t", **options) == PlaybackMode.HLS
     assert mode(client="web_hls", mime="video/mp2t", source_policy="never") == PlaybackMode.DIRECT
     assert mode(client="web_hls", mime="video/mp2t", global_mode="never") == PlaybackMode.DIRECT
-    assert mode(client="android_tv", mime="video/mp2t") == PlaybackMode.DIRECT
+    assert mode(client="android_tv", mime="video/mp2t") == PlaybackMode.HLS
     assert (
         mode(client="web_hls", mime="video/mp4", live=False, https_site=True, url="http://cdn/movie.mp4")
         == PlaybackMode.PROXY
@@ -511,3 +511,26 @@ async def test_web_hls_capability_request_is_scoped_to_web(api: Api) -> None:
             )
             assert response.status_code == 200
             assert resolver.call_args.kwargs["client"] == expected
+
+
+@pytest.mark.parametrize("client", ["web", "android_tv"])
+def test_auto_live_ts_normalizes_timeline_without_changing_vod(client: str) -> None:
+    assert mode(client=client, mime="video/mp2t") == PlaybackMode.HLS
+    assert mode(client=client, mime="video/mp2t", live=False) == PlaybackMode.DIRECT
+    assert mode(client=client, mime="video/mp4", live=False) == PlaybackMode.DIRECT
+    assert mode(client=client, mime="video/mp2t", source_policy="never") == PlaybackMode.DIRECT
+    assert mode(client=client, mime="video/mp2t", global_mode="never") == PlaybackMode.DIRECT
+    assert mode(client=client, mime="video/mp2t", source_policy="always") == PlaybackMode.PROXY
+    assert mode(client=client, mime="video/mp2t", max_connections=1, active_on_source=1) == PlaybackMode.HLS
+
+
+def test_hls_reconnects_live_eof_but_not_vod(tmp_path: Any) -> None:
+    from app.proxy.stream_proxy import ffmpeg_args
+
+    options = dict(live=True, transcode="none", vaapi_device="")
+    live = ffmpeg_args("ffmpeg", "https://example.test/live.ts", {}, tmp_path, **options)
+    assert live[live.index("-c") + 1] == "copy"
+    assert live[live.index("-reconnect_at_eof") + 1] == "1"
+    options["live"] = False
+    vod = ffmpeg_args("ffmpeg", "https://example.test/movie.ts", {}, tmp_path, **options)
+    assert "-reconnect_at_eof" not in vod

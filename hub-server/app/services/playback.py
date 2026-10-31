@@ -1,17 +1,10 @@
 """PlaybackResolver: id → PlaybackDescriptor (direct | proxy | hls | handoff).
 
 Mode decision for in-app sources (``decide_mode``):
-- android_tv: ``direct`` unless the source policy is ``proxy=always``/``hls`` or the global
-  proxy_mode is ``always`` (ExoPlayer handles http, mpeg-ts and custom headers).
-- web:
-  - global ``proxy_mode=never`` → ``direct``
-  - global ``always`` or source ``proxy=always`` → ``proxy`` (``hls`` for raw MPEG-TS live)
-  - source ``proxy=hls`` → ``hls``
-  - ``auto``: proxy when the upstream is http:// on an https deployment (mixed content,
-    X-Forwarded-Proto aware), when custom headers are required (browsers cannot set UA/Referer),
-    or when the source caps connections at 1 and another client is already streaming;
-    when the source is flagged ``cors: false`` raw MPEG-TS live is remuxed to ``hls``,
-    anything else is passed through ``proxy`` (mpegts.js plays TS directly otherwise).
+- Explicit source/global policies retain their existing precedence.
+- In auto mode, live MPEG-TS is codec-copy remuxed to HLS for stable client timelines.
+  Direct progressive TS can freeze hardware video while audio advances on real IPTV feeds.
+- VOD and existing adaptive streams retain their existing direct/proxy routing.
 """
 
 from __future__ import annotations
@@ -144,6 +137,9 @@ def decide_mode(
         return PlaybackMode.PROXY
     if policy == "never" or gmode == "never":
         return PlaybackMode.DIRECT
+    # Normalize live transport timestamps without re-encoding. Keep VOD unchanged.
+    if ts_live:
+        return PlaybackMode.HLS
     # auto
     if max_connections == 1 and active_on_source >= 1:
         return PlaybackMode.PROXY  # one upstream, fanned out by the shared proxy
