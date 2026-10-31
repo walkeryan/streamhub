@@ -1,42 +1,61 @@
 package com.streamhub.tv.core.data.repo
 
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.data.model.ChannelList
-import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * PlaybackDescriptor.channel_context gives {list_id, index, count}. Lists fetched by Live TV /
- * Guide are cached here; on a miss the player re-fetches the exact ordered list with
- * GET /channels?list_id=… (404 if the server forgot it → unfiltered /channels as last resort).
- */
+/** Ordered playback lists are scoped to the paired server and current profile. */
 @Singleton
-class ChannelListCache @Inject constructor(private val api: StreamHubApi) {
-    private val lists = ConcurrentHashMap<String, List<Channel>>()
-    @Volatile private var lastListId: String? = null
+class ChannelListCache @Inject constructor(private val api: StreamHubApi, private val session: SessionStore) {
+    private val lists = LinkedHashMap<Pair<String, String>, List<Channel>>()
+    private var lastKey: Pair<String, String>? = null
 
-    fun put(list: ChannelList) {
-        if (list.listId.isNotBlank()) {
-            lists[list.listId] = list.channels
-            lastListId = list.listId
-        }
+    private suspend fun scope(): String {
+        val s = session.current()
+        return "${s.apiBase}|${s.profile?.id}"
     }
 
-    /** Fetch /channels with the given filters and cache it. */
+    private suspend fun put(list: ChannelList, owner: String): ChannelList {
+        if (scope() != owner) throw CancellationException("Profile changed")
+        if (list.listId.isNotBlank()) synchronized(lists) {
+            val key = owner to list.listId
+            lists[key] = list.channels
+            lastKey = key
+            while (lists.size > 32) lists.remove(lists.keys.first())
+        }
+        return list
+    }
+
+    /** Existing callers remain unpaged; Guide explicitly requests a bounded page. */
     suspend fun fetch(
         group: String? = null,
         languages: List<String>? = null,
         favorites: Boolean? = null,
-    ): ChannelList = api.channels(group = group, languages = languages, favorites = favorites).also(::put)
+        q: String? = null,
+        hasEpg: Boolean? = null,
+        limit: Int? = null,
+        offset: Int? = null,
+    ): ChannelList {
+        val owner = scope()
+        return put(api.channels(group = group, languages = languages, favorites = favorites,
+            q = q, hasEpg = hasEpg, limit = limit, offset = offset), owner)
+    }
 
     suspend fun resolve(listId: String?, currentChannelId: String): List<Channel> {
-        listId?.let { lists[it] }?.let { return it }
+        val owner = scope()
+        synchronized(lists) { lists[owner to listId.orEmpty()] }?.let { return it }
         if (listId != null) {
-            runCatching { api.channels(listId = listId) }.getOrNull()?.let { put(it); return it.channels }
+            try {
+                return put(api.channels(listId = listId), owner).channels
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { /* expired server list */ }
         }
-        lastListId?.let { lists[it] }?.takeIf { l -> l.any { it.id == currentChannelId } }?.let { return it }
-        return runCatching { fetch().channels }.getOrDefault(emptyList())
+        synchronized(lists) {
+            lastKey?.takeIf { it.first == owner }?.let { lists[it] }
+        }?.takeIf { l -> l.any { it.id == currentChannelId } }?.let { return it }
+        return try { fetch().channels } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
     }
 }

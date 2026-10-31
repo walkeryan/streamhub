@@ -158,8 +158,14 @@ class StreamHubApi @Inject constructor(
         favorites: Boolean? = null,
         q: String? = null,
         listId: String? = null,
+        hasEpg: Boolean? = null,
+        limit: Int? = null,
+        offset: Int? = null,
     ): ChannelList = get("/channels") {
         listId?.let { parameter("list_id", it) }
+        hasEpg?.let { parameter("has_epg", it) }
+        limit?.let { parameter("limit", it) }
+        offset?.let { parameter("offset", it) }
         sourceId?.let { parameter("source_id", it) }
         group?.let { parameter("group", it) }
         languages?.let { parameter("language", it.joinToString(",")) }

@@ -2,6 +2,7 @@ package com.streamhub.tv.core.data
 
 import com.streamhub.tv.core.data.api.StreamHubJson
 import com.streamhub.tv.core.data.auth.normalizeServerUrl
+import com.streamhub.tv.core.data.model.ChannelList
 import com.streamhub.tv.core.data.model.HomeResponse
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackMode
@@ -12,6 +13,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContractTest {
+    @Test fun decodesPagedChannelTotalWithoutTreatingItAsPageSize() {
+        val page = StreamHubJson.decodeFromString(ChannelList.serializer(),
+            """{"list_id":"filtered-page-2","channels":[],"total":52366,"offset":40,"limit":40}""")
+        assertEquals(52366, page.total)
+        assertEquals(40, page.offset)
+        assertEquals(40, page.limit)
+    }
+
+    @Test fun legacyChannelListsKeepUnknownTotal() {
+        val page = StreamHubJson.decodeFromString(ChannelList.serializer(), """{"list_id":"legacy","channels":[]}""")
+        assertEquals(null, page.total)
+        assertEquals(null, page.limit)
+        assertEquals(0, page.offset)
+    }
+
     @Test fun normalizesServerUrls() {
         assertEquals("http://192.168.1.10:8787", normalizeServerUrl("192.168.1.10"))
         assertEquals("http://192.168.1.10:8787", normalizeServerUrl("http://192.168.1.10:8787/"))
