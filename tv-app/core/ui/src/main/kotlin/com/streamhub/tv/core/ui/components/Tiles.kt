@@ -41,6 +41,7 @@ import com.streamhub.tv.core.data.model.Tile
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
+import com.streamhub.tv.core.ui.theme.rememberAdaptiveArt
 import java.time.Instant
 
 /** Image request sized to the tile (BRIEF performance budget: "images sized to tile"). */
@@ -74,13 +75,14 @@ fun PosterTile(
 ) {
     val t = LocalThemeTokens.current
     var isFocused by remember { mutableStateOf(false) }
+    val art = rememberAdaptiveArt(tile.poster)
     Column(modifier.width(Tokens.Tile.PosterW)) {
         FocusSurface(
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = Modifier
                 .size(Tokens.Tile.PosterW, Tokens.Tile.PosterH)
-                .onFocusChanged { isFocused = it.isFocused; if (it.isFocused) onFocus(tile) },
+                .onFocusChanged { isFocused = it.isFocused; art.onFocusChanged(it.isFocused); if (it.isFocused) onFocus(tile) },
         ) {
             if (tile.poster != null) {
                 AsyncImage(
@@ -88,6 +90,7 @@ fun PosterTile(
                     contentDescription = tile.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
+                    onSuccess = art.onSuccess,
                 )
             } else {
                 Text(
@@ -120,16 +123,19 @@ fun LandscapeTile(
     onFocus: (Tile) -> Unit = {},
 ) {
     val t = LocalThemeTokens.current
+    val art = rememberAdaptiveArt(tile.backdrop ?: tile.poster)
     Column(modifier.width(Tokens.Tile.LandscapeW)) {
         FocusSurface(
             onClick = onClick,
-            modifier = Modifier.size(Tokens.Tile.LandscapeW, Tokens.Tile.LandscapeH).onFocusChanged { if (it.isFocused) onFocus(tile) },
+            modifier = Modifier.size(Tokens.Tile.LandscapeW, Tokens.Tile.LandscapeH)
+                .onFocusChanged { art.onFocusChanged(it.isFocused); if (it.isFocused) onFocus(tile) },
         ) {
             AsyncImage(
                 model = sizedImage(tile.backdrop ?: tile.poster, Tokens.Tile.LandscapeW, Tokens.Tile.LandscapeH),
                 contentDescription = tile.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
+                onSuccess = art.onSuccess,
             )
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.5f to Color.Transparent, 1f to t.scrimBottom)))
             Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {

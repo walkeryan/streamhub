@@ -112,7 +112,11 @@ Cleartext HTTP is allowed (`network_security_config.xml`) because the server and
 Themes switch at runtime through `ThemeRepository` (DataStore) and `LocalThemeTokens`. In the Settings
 theme picker, focusing a swatch previews that theme across the whole app, and pressing OK applies it.
 The applied theme is also written to the profile's `theme_id`. *Poster Adaptive* takes the Midnight
-values and replaces accent and glow with `ThemeRepository.setAdaptiveAccent()`.
+values and replaces accent and glow with `ThemeRepository.setAdaptiveAccent()`: when a poster or
+landscape tile gains focus, its Coil-decoded bitmap goes through `androidx.palette` off the main thread
+(`AdaptiveAccent.kt`; dominant swatch, falling back to vibrant/muted when the dominant is grey or
+near-black/white, dark colours lifted ×1.8 like the web client). Results are cached per artwork URL.
+Accent text is black or white, whichever contrasts more with the extracted accent.
 
 ### Remote control in the player
 
@@ -155,6 +159,5 @@ FFmpeg is LGPL/GPL depending on the configure flags, so check the licence before
 See the "Status" section of the hand-off report. In short:
 
 - Not run on real hardware or an emulator yet. Only the build and JVM unit tests have been verified.
-- Poster Adaptive dominant-colour extraction is not implemented yet (the hook exists; it falls back to Midnight accents).
 - The trailer button sends `trailer:<id>` to `/playback/resolve`; the server must map that to a YouTube hand-off.
 - Profile create/edit happens in the web app; the TV can switch profiles and set or remove a PIN.

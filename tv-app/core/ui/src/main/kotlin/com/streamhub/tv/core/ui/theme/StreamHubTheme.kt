@@ -94,7 +94,7 @@ fun StreamHubTheme(
     content: @Composable () -> Unit,
 ) {
     val effective = if (tokens.dynamicAccent && adaptiveAccent != null) {
-        tokens.copy(accent = adaptiveAccent, focusGlow = adaptiveAccent)
+        tokens.copy(accent = adaptiveAccent, focusGlow = adaptiveAccent, accentText = accentTextFor(adaptiveAccent))
     } else {
         tokens
     }

@@ -22,6 +22,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.zxing.core)
+    // Poster Adaptive: dominant colour of the focused artwork
+    implementation(libs.androidx.palette)
 }
 
 // ---------------------------------------------------------------------------------------------
