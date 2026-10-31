@@ -94,17 +94,23 @@ def redact_url(url: str | None) -> str | None:
 
 
 class RedactionFilter(logging.Filter):
+    """Redacts the message and any string args in place (keeps args, which some formatters,
+    e.g. uvicorn's access formatter, read positionally)."""
+
     def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage()
-        except Exception:
-            msg = str(record.msg)
-        record.msg = redact_text(msg)
-        record.args = ()
+        if getattr(record, "_redacted", False):
+            return True
+        if isinstance(record.msg, str):
+            record.msg = redact_text(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact_text(a) if isinstance(a, str) else a for a in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {k: redact_text(v) if isinstance(v, str) else v for k, v in record.args.items()}
         if record.exc_info and not record.exc_text:
             record.exc_text = logging.Formatter().formatException(record.exc_info)
         if record.exc_text:
             record.exc_text = redact_text(record.exc_text)
+        record._redacted = True
         return True
 
 

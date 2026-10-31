@@ -173,3 +173,22 @@ async def test_m3u_upload_persisted(api: Api) -> None:
     # a path-like file reference is rejected
     r = await api.post("/sources", json={"type": "m3u", "name": "x", "config": {"file": "../../etc/passwd"}})
     assert r.status_code == 400
+
+
+def test_redaction_filter_keeps_args_for_access_log() -> None:
+    import logging
+
+    from app.infra.logging import RedactionFilter
+
+    rec = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        "",
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        ("1.2.3.4:1", "GET", "/x?password=hunter2", "1.1", 200),
+        None,
+    )
+    assert RedactionFilter().filter(rec)
+    assert len(rec.args) == 5  # type: ignore[arg-type]
+    assert "hunter2" not in rec.getMessage() and "password=***" in rec.getMessage()

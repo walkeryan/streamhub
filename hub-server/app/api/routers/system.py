@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 from sqlalchemy import text
 
 from app.adapters.tmdb.client import JUSTWATCH_ATTRIBUTION, TMDB_ATTRIBUTION
@@ -54,6 +54,20 @@ async def health(c: C) -> dict[str, Any]:
     except Exception:
         ok = False
     return {"status": "ok" if ok else "degraded", "version": APP_VERSION, "db": ok}
+
+
+@router.get("/qr", tags=["system"], response_class=Response)
+async def qr(data: str = Query(..., min_length=1, max_length=1024)) -> Response:
+    """SVG QR code for pairing / Plex link screens (TV shows it next to the 6-char code)."""
+    import io
+
+    import qrcode
+    import qrcode.image.svg
+
+    img = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(buf.getvalue(), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=600"})
 
 
 @router.get("/about", tags=["system"])
