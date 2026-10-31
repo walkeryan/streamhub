@@ -1,9 +1,10 @@
 import { memo } from 'react'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { Icon } from './Icon'
+import { FeatureCard } from './FeatureCard'
 import { ProgressBar, SourceChips } from './ui'
 import { Initials, SafeImg } from './SafeImg'
-import { cn, hueOf, progressOf, useNow } from '../lib/util'
+import { cn, fmtTime, hueOf, progressOf, useNow } from '../lib/util'
 import { useGo } from '../nav/back'
 import type { Tile as TileT, Channel } from '../api/types'
 
@@ -99,18 +100,34 @@ export function channelAsTile(c: Channel): TileT {
   }
 }
 
+function FeatureTile({ tile, scope, onFocusTile, now }: { tile: TileT; scope: string; onFocusTile?: (tile: TileT) => void; now: number }) {
+  const open = useOpenTile()
+  const programme = tile.now_playing
+  const airing = programme && Date.parse(programme.start) <= now && Date.parse(programme.stop) > now
+  const channel = tile.kind === 'channel'
+  const eyebrow = channel ? `${tile.title}${programme ? ` · ${fmtTime(programme.start)}–${fmtTime(programme.stop)}` : ''}` : [tile.year, tile.sources.map((s) => s.name).slice(0, 2).join(' · ')].filter(Boolean).join(' · ')
+  return <FeatureCard focusKey={`${scope}::${tile.id}`} label={tile.title} title={programme?.title ?? tile.title} eyebrow={eyebrow}
+    art={channel ? tile.backdrop : tile.backdrop ?? tile.poster} logo={tile.logo} fallbackName={tile.title}
+    badge={airing ? 'On now' : channel ? 'Channel' : undefined}
+    progress={airing ? progressOf(programme.start, programme.stop, now) : tile.progress_pct}
+    onEnter={() => open(tile)} onFocus={() => onFocusTile?.(tile)} testId="tile">
+    {!channel && <SourceChips sources={tile.sources} max={1} />}
+  </FeatureCard>
+}
+
 export function TileRow(p: {
   id: string; title: string; tiles: TileT[]; layout?: 'poster' | 'landscape' | 'hero' | 'channel'
-  onFocusTile?: (t: TileT) => void; empty?: string
+  onFocusTile?: (t: TileT) => void; empty?: string; presentation?: 'wide'
 }) {
   const layout = p.layout ?? 'poster'
+  const now = useNow(30_000) // one clock per row, not per media card
   if (!p.tiles.length) return null
   return (
     <section aria-label={p.title} data-testid="row" data-row={p.id} style={{ marginBottom: '0.5rem' }}>
       <h2 className="row-title">{p.title}</h2>
-      <FocusGroup focusKey={`row:${p.id}`} className="row-scroll" remember>
+      <FocusGroup focusKey={`row:${p.id}`} className={cn('row-scroll', p.presentation === 'wide' && 'feature-row')} remember>
         {p.tiles.map((t) =>
-          layout === 'channel' || t.kind === 'channel' ? (
+          p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
             <ChannelTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
           ) : (
             <MediaTile key={t.id} tile={t} scope={p.id} layout={layout === 'landscape' ? 'landscape' : 'poster'} onFocusTile={p.onFocusTile} />
