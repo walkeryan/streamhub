@@ -9,11 +9,12 @@ from typing import Any
 
 from sqlalchemy import Select, String, cast, func, or_, select
 
+from app.adapters.language.inferrer import lang_from_flag, lang_from_group, normalise_code
 from app.domain.entities import CatalogItem, MediaKind
 from app.domain.ports import DetailProvider, ImageAuthProvider, MetadataProvider
 from app.infra.crypto import Crypto
 from app.infra.db import Database
-from app.infra.models import Channel, Favorite, Progress, Source, Title, Watchlist
+from app.infra.models import Channel, Favorite, Profile, Progress, Source, Title, Watchlist
 from app.services import ids
 from app.services.availability import ATTRIBUTION, AvailabilityService
 from app.services.context import absolute
@@ -145,7 +146,7 @@ class CatalogService:
 
             nn = await now_next(self._db, chans)
             for ch in chans:
-                now = nn.get(ch.epg_id or "", (None, None))[0]
+                now = nn.get((ch.source_id, ch.epg_id or ""), (None, None))[0]
                 now_map[ch.ext_id] = programme_dict(now, ch) if now else None
                 t = ctx.channel_tile(ch, now_map[ch.ext_id])
                 out[t["id"]] = t
@@ -382,6 +383,84 @@ class CatalogService:
             )
         return q
 
+    async def preferred_languages(self, profile_id: str, language: str | None) -> list[str]:
+        if language is None:
+            async with self._db.session() as s:
+                profile = await s.get(Profile, profile_id)
+            values = profile.languages if profile else []
+        else:
+            values = language.split(",")
+        if any(str(v).strip().lower() == "all" for v in values):
+            return []
+        return [normalise_code(str(v)) or str(v).strip() for v in values if str(v).strip()]
+
+    @staticmethod
+    def category_language(group: str | None) -> str:
+        # Categories are a provider hint, not verified audio metadata. Never guess English
+        # from a Latin-script title or treat missing metadata as English.
+        return lang_from_group(group) or lang_from_flag(group) or "und"
+
+    async def _filter_title_languages(self, query: Select[Any], languages: list[str]) -> Select[Any]:
+        if not languages:
+            return query
+        async with self._db.session() as s:
+            groups = list((await s.execute(query.with_only_columns(Title.group_name).distinct())).scalars())
+        matching = [g for g in groups if g is not None and self.category_language(g) in languages]
+        terms = [Title.group_name.in_(matching)]
+        if "und" in languages:
+            terms.append(Title.group_name.is_(None))
+        return query.where(or_(*terms))
+
+    async def browse_categories(
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        source_id: str | None = None,
+        language: str | None = None,
+        q: str | None = None,
+    ) -> list[dict[str, Any]]:
+        kinds = BROWSE_KINDS.get(section)
+        if kinds is None:
+            raise NotFound("unknown section")
+        ctx = await self.tile_context(profile_id)
+        query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
+        if q and q.strip():
+            query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
+        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        async with self._db.session() as s:
+            rows = (
+                await s.execute(
+                    query.with_only_columns(Title.group_name, func.count(Title.id))
+                    .group_by(Title.group_name)
+                    .order_by(Title.group_name)
+                )
+            ).all()
+        return [{"name": group, "count": int(count)} for group, count in rows if group]
+
+    async def browse_languages(
+        self, section: str, profile_id: str, source_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        kinds = BROWSE_KINDS.get(section)
+        if kinds is None:
+            raise NotFound("unknown section")
+        ctx = await self.tile_context(profile_id)
+        query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
+        async with self._db.session() as s:
+            rows = (
+                await s.execute(
+                    query.with_only_columns(Title.group_name, func.count(Title.id)).group_by(Title.group_name)
+                )
+            ).all()
+        counts: dict[str, int] = {}
+        for group, count in rows:
+            code = self.category_language(group)
+            counts[code] = counts.get(code, 0) + int(count)
+        return [
+            {"code": code, "name": self.sources.language.language_name(code), "count": count}
+            for code, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        ]
+
     async def browse(
         self,
         section: str,
@@ -391,6 +470,8 @@ class CatalogService:
         genre: str | None,
         sort: str | None,
         page: int,
+        language: str | None = None,
+        q: str | None = None,
     ) -> dict[str, Any]:
         kinds = BROWSE_KINDS.get(section)
         if kinds is None:
@@ -398,7 +479,13 @@ class CatalogService:
         ctx = await self.tile_context(profile_id)
         enabled = self._enabled(ctx)
         page = max(1, page)
-        q = self._browse_query(kinds, enabled, source_id, genre)
+        text_query = q
+        query = self._browse_query(kinds, enabled, source_id, genre)
+        if text_query and text_query.strip():
+            query = query.where(
+                Title.norm_title.like("%" + _escape_like(ids.normalise_title(text_query)) + "%", escape="\\")
+            )
+        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
         orders: dict[str, list[Any]] = {
             "title": [Title.norm_title.asc()],
             "year": [Title.year.desc().nulls_last(), Title.norm_title],
@@ -406,10 +493,14 @@ class CatalogService:
         }
         order = orders.get(sort or "added", [Title.added_at.desc().nulls_last(), Title.id.desc()])
         async with self._db.session() as s:
-            total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
-            rows = list((await s.execute(q.order_by(*order).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE))).scalars())
+            total = (await s.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+            rows = list(
+                (
+                    await s.execute(query.order_by(*order, Title.id).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE))
+                ).scalars()
+            )
         tiles = ctx.merge(ctx.title_tile(r) for r in rows)
-        return {"tiles": tiles, "page": page, "total": int(total)}
+        return {"tiles": tiles, "page": page, "total": int(total), "has_more": page * PAGE_SIZE < int(total)}
 
     async def genres(self, section: str) -> list[str]:
         kinds = BROWSE_KINDS.get(section, ())
@@ -421,7 +512,15 @@ class CatalogService:
         return sorted(out)
 
     # ------------------------------------------------------------------ search
-    async def search(self, q: str, profile_id: str, kinds: set[str] | None, limit: int) -> dict[str, Any]:
+    async def search(
+        self,
+        q: str,
+        profile_id: str,
+        kinds: set[str] | None,
+        limit: int,
+        language: str | None = None,
+        source_id: str | None = None,
+    ) -> dict[str, Any]:
         from app.services.channels import ChannelService
 
         ctx = await self.tile_context(profile_id)
@@ -429,34 +528,35 @@ class CatalogService:
         q = q.strip()
         limit = max(1, min(limit, 100))
         norm = ids.normalise_title(q)
+        languages = await self.preferred_languages(profile_id, language)
+        if source_id:
+            enabled = [sid for sid in enabled if sid == source_id]
         want = kinds or {"movie", "show", "vod", "series", "episode", "channel"}
         lib_kinds = [k for k in ("movie", "show", "vod", "series", "episode") if k in want]
         rows: list[Title] = []
         if norm and lib_kinds:
             like = f"%{_escape_like(norm)}%"
+            query = select(Title).where(
+                Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.norm_title.like(like, escape="\\")
+            )
+            query = await self._filter_title_languages(query, languages)
             async with self._db.session() as s:
                 rows = list(
                     (
                         await s.execute(
-                            select(Title)
-                            .where(
-                                Title.source_id.in_(enabled),
-                                Title.kind.in_(lib_kinds),
-                                Title.norm_title.like(like, escape="\\"),
-                            )
-                            .order_by(
+                            query.order_by(
                                 (Title.norm_title == norm).desc(),
                                 Title.norm_title.like(f"{_escape_like(norm)}%", escape="\\").desc(),
                                 Title.added_at.desc().nulls_last(),
-                            )
-                            .limit(limit * 3)
+                                Title.id,
+                            ).limit(limit * 3)
                         )
                     ).scalars()
                 )
         play_here = ctx.merge(ctx.title_tile(r) for r in rows)
         seen = {t["id"] for t in play_here}
         open_in_app: list[dict[str, Any]] = []
-        if self.meta.enabled and ({"movie", "show"} & want):
+        if self.meta.enabled and not languages and not source_id and ({"movie", "show"} & want):
             metas = await self.meta.search(q, limit=20)
             results = await asyncio.gather(
                 *[
@@ -485,7 +585,7 @@ class CatalogService:
         channels: list[dict[str, Any]] = []
         if "channel" in want:
             chsvc = ChannelService(self._db, self.sources)
-            res = await chsvc.list_channels(profile_id, q=q, language=None, all_languages=True, limit=limit)
+            res = await chsvc.list_channels(profile_id, q=q, language=language, source_id=source_id, limit=limit)
             channels = res["channels"]
         return {
             "play_here": play_here[:limit],
@@ -501,13 +601,17 @@ class CatalogService:
         limit: int = 30,
         source_id: str | None = None,
         kinds: tuple[str, ...] = ("movie", "show", "vod", "series"),
+        languages: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         enabled = self._enabled(ctx)
         q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(enabled), Title.added_at.is_not(None))
         if source_id:
             q = q.where(Title.source_id == source_id)
+        q = await self._filter_title_languages(q, languages or [])
         async with self._db.session() as s:
-            rows = list((await s.execute(q.order_by(Title.added_at.desc()).limit(limit * 2))).scalars())
+            rows = list(
+                (await s.execute(q.order_by(Title.added_at.desc(), Title.id.desc()).limit(limit * 2))).scalars()
+            )
         return ctx.merge(ctx.title_tile(r) for r in rows)[:limit]
 
     async def watchlist_ids(self, profile_id: str) -> list[str]:

@@ -13,10 +13,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 
 from app.infra.db import Database
-from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Setting, Source
+from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Progress, Setting, Source
 from app.services import ids
 from app.services.errors import NotFound, ServiceError
 from app.services.sources import SourceService, apply_overrides
@@ -43,9 +43,11 @@ def programme_dict(p: Programme, ch: Channel | None = None, now: datetime | None
     }
 
 
-async def now_next(db: Database, chans: Sequence[Channel]) -> dict[str, tuple[Programme | None, Programme | None]]:
+async def now_next(
+    db: Database, chans: Sequence[Channel]
+) -> dict[tuple[str, str], tuple[Programme | None, Programme | None]]:
     epg_ids = list({c.epg_id for c in chans if c.epg_id})
-    out: dict[str, tuple[Programme | None, Programme | None]] = {}
+    out: dict[tuple[str, str], tuple[Programme | None, Programme | None]] = {}
     if not epg_ids:
         return out
     now = datetime.now(UTC)
@@ -64,12 +66,12 @@ async def now_next(db: Database, chans: Sequence[Channel]) -> dict[str, tuple[Pr
                 )
             ).scalars()
             for p in rows:
-                cur, nxt = out.get(p.epg_channel, (None, None))
+                cur, nxt = out.get((p.feed, p.epg_channel), (None, None))
                 if p.start <= now < p.stop and cur is None:
                     cur = p
                 elif p.start >= now and nxt is None:
                     nxt = p
-                out[p.epg_channel] = (cur, nxt)
+                out[(p.feed, p.epg_channel)] = (cur, nxt)
     return out
 
 
@@ -120,6 +122,8 @@ class ChannelService:
         all_languages: bool = False,
         limit: int | None = None,
         list_id: str | None = None,
+        offset: int = 0,
+        has_epg: bool = False,
     ) -> dict[str, Any]:
         if list_id:
             order = await self.load_list(list_id, profile_id)
@@ -129,53 +133,22 @@ class ChannelService:
             chans = [by_id[i] for i in order if i in by_id]
             return {"list_id": list_id, "channels": await self.to_api(chans, profile_id)}
 
-        prof = await self._profile(profile_id)
-        langs: list[str] = []
-        if language is not None:
-            # explicit parameter wins; empty string / "all" mean every language
-            langs = [x.strip() for x in language.split(",") if x.strip() and x.strip().lower() != "all"]
-        elif prof and prof.languages and not all_languages:
-            langs = list(prof.languages)
-        norm_langs = [self._sources.language.normalise(x) or x for x in langs]
-
+        query, norm_langs = await self._channel_query(
+            profile_id,
+            source_id=source_id,
+            group=group,
+            language=language,
+            favorites=favorites,
+            q=q,
+            all_languages=all_languages,
+            has_epg=has_epg,
+        )
         async with self._db.session() as s:
-            enabled = list((await s.execute(select(Source.id).where(Source.enabled.is_(True)))).scalars())
-            query = (
-                select(Channel)
-                .join(ChannelGroup, ChannelGroup.id == Channel.group_id)
-                .where(Channel.source_id.in_(enabled))
-            )
-            if source_id:
-                query = query.where(Channel.source_id == source_id)
-            if group:
-                query = query.where(
-                    or_(ChannelGroup.id == group, ChannelGroup.name == group, Channel.group_override == group)
-                )
-            else:
-                query = query.where(ChannelGroup.hidden.is_(False))
-            if norm_langs:
-                query = query.where(Channel.language.in_(norm_langs))
-            if q:
-                like = "%" + ids.normalise_title(q).replace("%", "").replace("_", "") + "%"
-                conds: list[Any] = [Channel.norm_name.like(like)]
-                if q.strip().isdigit():
-                    conds.append(Channel.number == int(q.strip()))
-                query = query.where(or_(*conds))
-            if favorites:
-                fav_ids = list(
-                    (
-                        await s.execute(
-                            select(Favorite.ref_id).where(Favorite.profile_id == profile_id, Favorite.kind == "channel")
-                        )
-                    ).scalars()
-                )
-                pairs = [ids.parse(f) for f in fav_ids if f.startswith("ch:")]
-                if not pairs:
-                    query = query.where(Channel.id == -1)
-                else:
-                    query = query.where(or_(*[and_(Channel.source_id == p.a, Channel.ext_id == p.b) for p in pairs]))
+            total = int((await s.execute(select(func.count()).select_from(query.subquery()))).scalar_one())
             query = query.order_by(Channel.number, ChannelGroup.sort, Channel.id)
-            if limit:
+            if offset:
+                query = query.offset(offset)
+            if limit is not None:
                 query = query.limit(limit)
             chans = list((await s.execute(query)).scalars())
         params = {
@@ -184,9 +157,118 @@ class ChannelService:
             "language": sorted(norm_langs),
             "favorites": favorites,
             "q": q or None,
+            "offset": offset,
+            "limit": limit,
+            "has_epg": has_epg,
         }
         lid = await self._store_list(profile_id, params, [c.id for c in chans])
-        return {"list_id": lid, "channels": await self.to_api(chans, profile_id)}
+        return {
+            "list_id": lid,
+            "channels": await self.to_api(chans, profile_id),
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    async def _channel_query(
+        self,
+        profile_id: str | None,
+        *,
+        source_id: str | None = None,
+        group: str | None = None,
+        language: str | None = None,
+        favorites: bool = False,
+        q: str | None = None,
+        all_languages: bool = False,
+        has_epg: bool = False,
+        include_hidden: bool = False,
+    ) -> tuple[Any, list[str]]:
+        prof = await self._profile(profile_id) if profile_id else None
+        raw = (
+            language.split(",")
+            if language is not None
+            else (list(prof.languages) if prof and not all_languages else [])
+        )
+        langs = (
+            []
+            if any(x.strip().lower() == "all" for x in raw)
+            else [self._sources.language.normalise(x.strip()) or x.strip() for x in raw if x.strip()]
+        )
+        query = (
+            select(Channel)
+            .join(ChannelGroup, ChannelGroup.id == Channel.group_id)
+            .join(Source, Source.id == Channel.source_id)
+            .where(Source.enabled.is_(True))
+        )
+        if not group and not include_hidden:
+            query = query.where(ChannelGroup.hidden.is_(False))
+        if source_id:
+            query = query.where(Channel.source_id == source_id)
+        if group:
+            query = query.where(
+                or_(ChannelGroup.id == group, ChannelGroup.name == group, Channel.group_override == group)
+            )
+        if langs:
+            query = query.where(Channel.language.in_(langs))
+        if q and q.strip():
+            from app.services.catalog import _escape_like
+
+            like = "%" + _escape_like(ids.normalise_title(q)) + "%"
+            conds: list[Any] = [Channel.norm_name.like(like, escape="\\")]
+            if q.strip().isdigit():
+                conds.append(Channel.number == int(q.strip()))
+            query = query.where(or_(*conds))
+        if favorites and profile_id:
+            # Correlated EXISTS keeps filtering in SQL even for large favorite collections.
+            ref = "ch:" + Channel.source_id + ":" + Channel.ext_id
+            query = query.where(
+                select(Favorite.id)
+                .where(
+                    Favorite.profile_id == profile_id,
+                    Favorite.kind == "channel",
+                    Favorite.ref_id == ref,
+                )
+                .exists()
+            )
+        if has_epg:
+            now = datetime.now(UTC)
+            query = query.where(
+                select(Programme.id)
+                .where(
+                    Programme.epg_channel == Channel.epg_id,
+                    Programme.feed == Channel.source_id,
+                    Programme.stop > now,
+                    Programme.start < now + timedelta(hours=12),
+                )
+                .exists()
+            )
+        return query, langs
+
+    async def context_for_channel(self, profile_id: str, channel_id: int) -> dict[str, Any] | None:
+        """Resolve zap order without serializing thousands of channels or querying programme rows."""
+        query, langs = await self._channel_query(profile_id)
+        async with self._db.session() as s:
+            order = list(
+                (
+                    await s.execute(
+                        query.with_only_columns(Channel.id).order_by(Channel.number, ChannelGroup.sort, Channel.id)
+                    )
+                ).scalars()
+            )
+        if channel_id not in order:
+            return None
+        params = {
+            "source_id": None,
+            "group": None,
+            "language": sorted(langs),
+            "favorites": False,
+            "q": None,
+            "offset": 0,
+            "limit": None,
+            "has_epg": False,
+        }
+        list_id = await self._store_list(profile_id, params, order)
+        return {"list_id": list_id, "index": order.index(channel_id), "count": len(order)}
 
     async def to_api(self, chans: Sequence[Channel], profile_id: str) -> list[dict[str, Any]]:
         async with self._db.session() as s:
@@ -201,7 +283,7 @@ class ChannelService:
         out = []
         for c in chans:
             cid = ids.channel_id(c.source_id, c.ext_id)
-            cur, nxt = nn.get(c.epg_id or "", (None, None))
+            cur, nxt = nn.get((c.source_id, c.epg_id or ""), (None, None))
             out.append(
                 {
                     "id": cid,
@@ -274,16 +356,30 @@ class ChannelService:
         ch = await self.channel_by_hub_id(hub_id)
         return (await self.to_api([ch], profile_id))[0]
 
-    async def groups(self) -> list[dict[str, Any]]:
+    async def groups(
+        self,
+        profile_id: str | None = None,
+        *,
+        language: str | None = None,
+        source_id: str | None = None,
+        q: str | None = None,
+        favorites: bool = False,
+        include_hidden: bool = False,
+    ) -> list[dict[str, Any]]:
+        query, _ = await self._channel_query(
+            profile_id, language=language, source_id=source_id, q=q, favorites=favorites, include_hidden=include_hidden
+        )
+        matched = query.with_only_columns(Channel.id, Channel.group_id).subquery()
         async with self._db.session() as s:
-            counts = dict(
-                (await s.execute(select(Channel.group_id, func.count(Channel.id)).group_by(Channel.group_id))).all()
+            counts: dict[str, int] = dict(
+                (await s.execute(select(matched.c.group_id, func.count()).group_by(matched.c.group_id))).all()
             )
             rows = list(
                 (
                     await s.execute(
                         select(ChannelGroup)
                         .join(Source, Source.id == ChannelGroup.source_id)
+                        .where(Source.enabled.is_(True))
                         .order_by(Source.priority, ChannelGroup.sort, ChannelGroup.name)
                     )
                 ).scalars()
@@ -299,6 +395,7 @@ class ChannelService:
                 "sort": g.sort,
             }
             for g in rows
+            if counts.get(g.id, 0) or profile_id is None
         ]
 
     async def update_group(self, group_id: str, patch: dict[str, Any]) -> dict[str, Any]:
@@ -379,15 +476,15 @@ class ChannelService:
                 if order:
                     by_id = {r.id: r for r in (await s.execute(select(Channel).where(Channel.id.in_(order)))).scalars()}
                     chans = [by_id[i] for i in order if i in by_id]
-        by_epg: dict[str, list[Channel]] = {}
+        by_epg: dict[tuple[str, str], list[Channel]] = {}
         for c in chans:
             if c.epg_id:
-                by_epg.setdefault(c.epg_id, []).append(c)
+                by_epg.setdefault((c.source_id, c.epg_id), []).append(c)
         out: dict[str, list[dict[str, Any]]] = {ids.channel_id(c.source_id, c.ext_id): [] for c in chans}
         if not by_epg:
             return out
         async with self._db.session() as s:
-            keys = list(by_epg)
+            keys = list({epg_id for _, epg_id in by_epg})
             for i in range(0, len(keys), 500):
                 rows = (
                     await s.execute(
@@ -399,7 +496,7 @@ class ChannelService:
                     )
                 ).scalars()
                 for p in rows:
-                    for c in by_epg.get(p.epg_channel, []):
+                    for c in by_epg.get((p.feed, p.epg_channel), []):
                         out[ids.channel_id(c.source_id, c.ext_id)].append(programme_dict(p, c, now))
         return out
 
@@ -415,20 +512,61 @@ class ChannelService:
             raise NotFound("programme not found")
         return p
 
-    async def on_now(self, profile_id: str, limit: int = 20) -> list[tuple[Channel, Programme | None]]:
-        """Favorite channels (fallback: first channels) with what's on now."""
-        res = await self.list_channels(profile_id, favorites=True, all_languages=True)
-        order = await self.load_list(res["list_id"], profile_id)
-        if not order:
-            res = await self.list_channels(profile_id, limit=limit)
-            order = await self.load_list(res["list_id"], profile_id)
-        order = order[:limit]
-        async with self._db.session() as s:
-            rows = (
-                {r.id: r for r in (await s.execute(select(Channel).where(Channel.id.in_(order)))).scalars()}
-                if order
-                else {}
+    async def on_now(self, profile_id: str, limit: int = 20) -> tuple[list[tuple[Channel, Programme | None]], bool]:
+        """Currently scheduled channels, prioritizing this profile's recent viewing."""
+        now = datetime.now(UTC)
+        query, _ = await self._channel_query(profile_id)
+        history = (
+            select(Progress.ref_id, Progress.updated_at)
+            .where(
+                Progress.profile_id == profile_id,
+                Progress.ref_id.like("ch:%"),
+                Progress.updated_at >= now - timedelta(days=90),
             )
-        chans = [rows[i] for i in order if i in rows]
+            .subquery()
+        )
+        ref = "ch:" + Channel.source_id + ":" + Channel.ext_id
+        query = (
+            query.outerjoin(history, history.c.ref_id == ref)
+            .where(
+                select(Programme.id)
+                .where(
+                    Programme.feed == Channel.source_id,
+                    Programme.epg_channel == Channel.epg_id,
+                    Programme.start <= now,
+                    Programme.stop > now,
+                )
+                .exists()
+            )
+            .add_columns(history.c.updated_at)
+            .order_by(history.c.updated_at.desc().nullslast(), Channel.number, ChannelGroup.sort, Channel.id)
+            .limit(min(max(limit, 1), 100))
+        )
+        async with self._db.session() as session:
+            rows = (await session.execute(query)).all()
+        if not rows:
+            # A missing guide must not leave an otherwise playable live library empty.
+            # Favorites are explicit choices, but still obey language/hidden filters.
+            fallback, _ = await self._channel_query(profile_id, favorites=True)
+            async with self._db.session() as session:
+                chans = list(
+                    (
+                        await session.execute(
+                            fallback.order_by(Channel.number, Channel.id).limit(min(max(limit, 1), 100))
+                        )
+                    ).scalars()
+                )
+                if not chans:
+                    fallback, _ = await self._channel_query(profile_id)
+                    chans = list(
+                        (
+                            await session.execute(
+                                fallback.order_by(Channel.number, Channel.id).limit(min(max(limit, 1), 100))
+                            )
+                        ).scalars()
+                    )
+            return [(ch, None) for ch in chans], False
+        chans = [row[0] for row in rows]
         nn = await now_next(self._db, chans)
-        return [(c, nn.get(c.epg_id or "", (None, None))[0]) for c in chans]
+        pairs = [(c, nn.get((c.source_id, c.epg_id or ""), (None, None))[0]) for c in chans]
+        return pairs, any(row[1] is not None for row in rows)

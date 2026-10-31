@@ -21,10 +21,16 @@ async def home(c: C, p: P) -> dict[str, Any]:
 
 @router.get("/search", response_model=S.SearchResults, tags=["catalog"])
 async def search(
-    c: C, p: P, q: str = Query(..., min_length=1, max_length=200), kinds: str | None = None, limit: int = 40
+    c: C,
+    p: P,
+    q: str = Query(..., min_length=1, max_length=200),
+    kinds: str | None = None,
+    limit: int = Query(40, ge=1, le=100),
+    language: str | None = None,
+    source_id: str | None = None,
 ) -> dict[str, Any]:
     kind_set = {k.strip() for k in kinds.split(",") if k.strip()} if kinds else None
-    return await c.catalog.search(q, p.profile_id, kind_set, limit)
+    return await c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id)
 
 
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
@@ -39,10 +45,39 @@ async def browse(
     p: P,
     source_id: str | None = None,
     genre: str | None = None,
+    category: str | None = None,
+    language: str | None = None,
+    q: str | None = Query(None, max_length=200),
     sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
     page: int = Query(1, ge=1),
 ) -> dict[str, Any]:
-    return await c.catalog.browse(section, p.profile_id, source_id=source_id, genre=genre, sort=sort, page=page)
+    return await c.catalog.browse(
+        section,
+        p.profile_id,
+        source_id=source_id,
+        genre=category if category is not None else genre,
+        sort=sort,
+        page=page,
+        language=language,
+        q=q,
+    )
+
+
+@router.get("/browse/{section}/categories", tags=["catalog"])
+async def browse_categories(
+    section: str,
+    c: C,
+    p: P,
+    source_id: str | None = None,
+    language: str | None = None,
+    q: str | None = Query(None, max_length=200),
+) -> list[dict[str, Any]]:
+    return await c.catalog.browse_categories(section, p.profile_id, source_id=source_id, language=language, q=q)
+
+
+@router.get("/browse/{section}/languages", response_model=list[S.LanguageCount], tags=["catalog"])
+async def browse_languages(section: str, c: C, p: P, source_id: str | None = None) -> list[dict[str, Any]]:
+    return await c.catalog.browse_languages(section, p.profile_id, source_id)
 
 
 # ---------------------------------------------------------------- channels
@@ -56,6 +91,9 @@ async def channels(
     favorites: bool = False,
     q: str | None = None,
     list_id: str | None = None,
+    limit: int | None = Query(None, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    has_epg: bool = False,
 ) -> dict[str, Any]:
     return await c.channels.list_channels(
         p.profile_id,
@@ -65,12 +103,25 @@ async def channels(
         favorites=favorites,
         q=q,
         list_id=list_id,
+        limit=limit,
+        offset=offset,
+        has_epg=has_epg,
     )
 
 
 @router.get("/channels/groups", response_model=list[S.ChannelGroup], tags=["live"])
-async def channel_groups(c: C, p: P) -> list[dict[str, Any]]:
-    return await c.channels.groups()
+async def channel_groups(
+    c: C,
+    p: P,
+    language: str | None = None,
+    source_id: str | None = None,
+    q: str | None = None,
+    favorites: bool = False,
+    include_hidden: bool = False,
+) -> list[dict[str, Any]]:
+    return await c.channels.groups(
+        p.profile_id, language=language, source_id=source_id, q=q, favorites=favorites, include_hidden=include_hidden
+    )
 
 
 @router.patch("/channels/groups/{id}", response_model=S.ChannelGroup, tags=["live"])

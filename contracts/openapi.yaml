@@ -174,6 +174,7 @@ components:
         id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false)"}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
         client: {type: string, enum: [android_tv, web], default: web}
+        prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         catchup_programme_id: {type: string, nullable: true}
     PlaybackDescriptor:
       type: object
@@ -338,6 +339,8 @@ paths:
         - { name: q, in: query, required: true, schema: {type: string} }
         - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind"} }
         - { name: limit, in: query, schema: {type: integer, default: 40} }
+        - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
+        - { name: source_id, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
   /titles/{id}:
     get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }
@@ -350,8 +353,25 @@ paths:
         - { name: genre, in: query, schema: {type: string} }
         - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
         - { name: page, in: query, schema: {type: integer, default: 1} }
-      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }, page: {type: integer}, total: {type: integer} } } } } } }
+        - { name: category, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string, description: "Category language hint. Omitted = profile languages; all = all; und = unknown."} }
+        - { name: q, in: query, schema: {type: string} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }, page: {type: integer}, total: {type: integer}, has_more: {type: boolean}, page_size: {type: integer} } } } } } }
 
+  /browse/{section}/categories:
+    get:
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string} }
+        - { name: q, in: query, schema: {type: string} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [name, count], properties: {name: {type: string}, count: {type: integer}}} } } } } }
+  /browse/{section}/languages:
+    get:
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [code, name, count], properties: {code: {type: string}, name: {type: string}, count: {type: integer}}} } } } } }
   /channels:
     get:
       parameters:
@@ -361,9 +381,19 @@ paths:
         - { name: favorites, in: query, schema: {type: boolean} }
         - { name: q, in: query, schema: {type: string} }
         - { name: list_id, in: query, schema: {type: string, description: "Re-fetch the exact ordered list returned earlier (e.g. channel_context.list_id) for Up/Down zapping; other filters are ignored. 404 if unknown."} }
-      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { list_id: {type: string}, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } } } } } } } }
+        - { name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500} }
+        - { name: offset, in: query, schema: {type: integer, minimum: 0, default: 0} }
+        - { name: has_epg, in: query, schema: {type: boolean, default: false} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { list_id: {type: string}, total: {type: integer, nullable: true}, offset: {type: integer}, limit: {type: integer, nullable: true}, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } } } } } } } }
   /channels/groups:
-    get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChannelGroup' } } } } } } }
+    get:
+      parameters:
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string} }
+        - { name: q, in: query, schema: {type: string} }
+        - { name: favorites, in: query, schema: {type: boolean} }
+        - { name: include_hidden, in: query, schema: {type: boolean, default: false} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChannelGroup' } } } } } }
   /channels/groups/{id}:
     patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { hidden: {type: boolean}, language_override: {type: string, nullable: true}, sort: {type: integer} } } } } }, responses: { '200': { description: ok } } }
   /channels/languages:

@@ -26,7 +26,7 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         p.profile_id,
         body.id,
         source_id=body.source_id,
-        client=body.client,
+        client="web_hls" if body.client == "web" and body.prefer_hls else body.client,
         catchup_programme_id=body.catchup_programme_id,
         https_site=is_https.get(),
     )

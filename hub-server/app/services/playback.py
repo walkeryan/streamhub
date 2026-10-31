@@ -134,6 +134,10 @@ def decide_mode(
     policy = (source_policy or "auto").lower()
     gmode = (global_mode or "auto").lower()
     ts_live = live and (mime or "").lower() == "video/mp2t"
+    if client == "web_hls" and ts_live:
+        if policy == "never" or gmode == "never":
+            return PlaybackMode.DIRECT
+        return PlaybackMode.HLS
     if policy == "hls":
         return PlaybackMode.HLS
     if policy == "always" or gmode == "always":
@@ -143,7 +147,7 @@ def decide_mode(
     # auto
     if max_connections == 1 and active_on_source >= 1:
         return PlaybackMode.PROXY  # one upstream, fanned out by the shared proxy
-    if client != "web":
+    if client not in ("web", "web_hls"):
         return PlaybackMode.DIRECT
     if not cors_ok:
         # browser can't fetch it directly; raw MPEG-TS is remuxed so hls.js can play it
@@ -191,7 +195,7 @@ class PlaybackResolver:
         catchup_programme_id: str | None = None,
         https_site: bool = False,
     ) -> dict[str, Any]:
-        client = client if client in ("web", "android_tv") else "web"
+        client = client if client in ("web", "web_hls", "android_tv") else "web"
         if hub_id.startswith("trailer:"):
             return await self._resolve_trailer(profile_id, hub_id)
         if hub_id.startswith("prog:") and not catchup_programme_id:
@@ -317,10 +321,7 @@ class PlaybackResolver:
         # channel context: position within the profile's current default list
         ctx = None
         try:
-            res = await self._channels.list_channels(profile_id)
-            order = await self._channels.load_list(res["list_id"], profile_id)
-            if ch.id in order:
-                ctx = {"list_id": res["list_id"], "index": order.index(ch.id), "count": len(order)}
+            ctx = await self._channels.context_for_channel(profile_id, ch.id)
         except Exception:
             ctx = None
         desc = self._descriptor(
@@ -371,7 +372,8 @@ class PlaybackResolver:
         lib = ids.lib_id(row.source_id, row.ext_id)
         keys = [hub_id, lib, *(progress_ids or [])]
         p = await self._progress.get(profile_id, *keys)
-        resume = target.resume_position_ms
+        # Provider resume belongs to the shared source account, not this profile.
+        resume = 0
         if p is not None:
             resume = 0 if p.completed else p.position_ms
         target.resume_position_ms = resume

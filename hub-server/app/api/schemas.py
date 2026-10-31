@@ -215,6 +215,8 @@ class BrowsePage(_M):
     tiles: list[Tile]
     page: int
     total: int
+    has_more: bool = False
+    page_size: int = 60
 
 
 class Channel(_M):
@@ -238,6 +240,9 @@ class Channel(_M):
 class ChannelList(_M):
     list_id: str
     channels: list[Channel]
+    total: int | None = None
+    offset: int = 0
+    limit: int | None = None
 
 
 class ChannelPatch(_M):
@@ -280,6 +285,7 @@ class PlaybackRequest(_M):
     id: str
     source_id: str | None = None
     client: Literal["android_tv", "web"] = "web"
+    prefer_hls: bool = False
     catchup_programme_id: str | None = None
 
 

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
 from app.domain.entities import SourceType
-from app.domain.ports import ContinueWatchingProvider, MetadataProvider
+from app.domain.ports import MetadataProvider
 from app.services import ids
 from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
@@ -45,46 +44,18 @@ class HomeService:
     async def continue_watching(self, profile_id: str, ctx: TileContext) -> list[dict[str, Any]]:
         local = await self._progress.in_progress(profile_id, 30)
         tiles = await self._catalog.tiles_for_ids([p.ref_id for p in local], ctx)
-        seen = {t["id"] for t in tiles}
-        # merge library-side continue watching (Plex/Jellyfin) – progress made in their own apps
-        for src in ctx.sources.values():
-            if not src.enabled or src.type not in (SourceType.PLEX.value, SourceType.JELLYFIN.value):
-                continue
-            try:
-                prov = self._sources.provider(src)
-                if not isinstance(prov, ContinueWatchingProvider):
-                    continue
-                items = await asyncio.wait_for(prov.continue_watching(20), timeout=6)
-            except Exception as exc:
-                log.info("continue watching failed", extra={"source": src.id, "err": type(exc).__name__})
-                continue
-            for it, pos in items:
-                hub = ids.lib_id(src.id, it.ext_id)
-                if hub in seen:
-                    continue
-                row = await self._catalog.title_row(src.id, it.ext_id)
-                if row is None:
-                    from app.services.sources import LAZY_GEN, item_row, upsert_titles
-
-                    await upsert_titles(self._sources._db, [item_row(src.id, it, LAZY_GEN)])
-                    row = await self._catalog.title_row(src.id, it.ext_id)
-                if row is None:
-                    continue
-                t = ctx.title_tile(row)
-                t["id"] = hub
-                t["kind"] = row.kind
-                if it.duration_ms and pos:
-                    t["progress_pct"] = round(100.0 * pos / it.duration_ms, 1)
-                tiles.append(t)
-                seen.add(hub)
+        # Shared provider credentials cannot attribute external history to a profile.
         return tiles[:30]
 
-    async def on_now(self, profile_id: str, ctx: TileContext) -> list[dict[str, Any]]:
-        pairs = await self._channels.on_now(profile_id, 20)
+    async def on_now(self, profile_id: str, ctx: TileContext) -> tuple[list[dict[str, Any]], str]:
+        pairs, used_history = await self._channels.on_now(profile_id, 20)
         out = []
         for ch, prog in pairs:
             out.append(ctx.channel_tile(ch, programme_dict(prog, ch) if prog else None))
-        return out
+        title = "On now · Recent channels first" if used_history else "On now · Explore live TV"
+        if not any(prog for _, prog in pairs):
+            title = "Explore live TV"
+        return out, title
 
     async def trending(self, ctx: TileContext, limit: int = 20) -> list[dict[str, Any]]:
         if not self._meta.enabled:
@@ -119,7 +90,8 @@ class HomeService:
 
         built: dict[str, dict[str, Any]] = {}
         cw = await self.continue_watching(profile_id, ctx)
-        recent = await self._catalog.recently_added(ctx, 30)
+        languages = await self._catalog.preferred_languages(profile_id, None)
+        recent = await self._catalog.recently_added(ctx, 30, languages=languages)
         trending: list[dict[str, Any]] = []
         has_library = any(s.enabled and s.type != SourceType.STREAMING_SERVICE.value for s in ctx.sources.values())
         if "trending" in visible or not (cw or recent):
@@ -131,7 +103,7 @@ class HomeService:
             if rid == "continue_watching":
                 tiles = cw
             elif rid == "on_now":
-                tiles = await self.on_now(profile_id, ctx)
+                tiles, title = await self.on_now(profile_id, ctx)
             elif rid == "recently_added":
                 tiles = recent
             elif rid == "watchlist":
@@ -149,7 +121,7 @@ class HomeService:
                 if src is None:
                     continue
                 title = f"{src.name} · Recently added"
-                tiles = await self._catalog.recently_added(ctx, 30, source_id=sid)
+                tiles = await self._catalog.recently_added(ctx, 30, source_id=sid, languages=languages)
             if tiles:
                 built[rid] = {"id": rid, "title": title, "layout": ROW_LAYOUT.get(rid, "poster"), "tiles": tiles}
 

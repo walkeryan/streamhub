@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -327,7 +328,9 @@ async def test_playback_progress_resume_and_watched(api: Api) -> None:
 
     class FakePlayable:
         async def stream_for_item(self, item: Any) -> StreamTarget:
-            return StreamTarget(url=item.stream_url, mime="video/mp4", duration_ms=item.duration_ms)
+            return StreamTarget(
+                url=item.stream_url, mime="video/mp4", duration_ms=item.duration_ms, resume_position_ms=900_000
+            )
 
     real = api.c.sources.provider
 
@@ -338,6 +341,9 @@ async def test_playback_progress_resume_and_watched(api: Api) -> None:
         return p
 
     api.c.sources.provider = provider  # type: ignore[method-assign]
+    # Shared provider account progress must not leak into a new profile.
+    initial = (await api.post("/playback/resolve", json={"id": lib})).json()
+    assert initial["resume_position_ms"] == 0
     assert (
         await api.post(
             "/playback/progress", json={"id": lib, "position_ms": 120_000, "duration_ms": 6_000_000, "state": "paused"}
@@ -379,6 +385,8 @@ async def test_favorites_any_kind_and_reorder(api: Api) -> None:
     home = (await api.get("/home")).json()
     on_now = next(r for r in home["rows"] if r["id"] == "on_now")
     assert [t["id"] for t in on_now["tiles"]] == [b]
+    assert on_now["tiles"][0]["is_favorite"] is True
+    assert on_now["title"] == "Explore live TV"
 
 
 async def test_watchlist_and_home_layout(api: Api) -> None:
@@ -474,3 +482,32 @@ async def test_channels_language_param_semantics(api: Api) -> None:
     empty = (await api.get("/channels", params={"language": ""})).json()["channels"]  # empty → all
     assert {c["language"] for c in empty} > {"eng", "fra"}
     assert len(empty) == len((await api.get("/channels", params={"language": "all"})).json()["channels"])
+
+
+def test_native_hls_mode_preserves_explicit_never_and_android() -> None:
+    for options in ({}, {"cors_ok": False}, {"max_connections": 1, "active_on_source": 1}, {"global_mode": "always"}):
+        assert mode(client="web_hls", mime="video/mp2t", **options) == PlaybackMode.HLS
+    assert mode(client="web_hls", mime="video/mp2t", source_policy="never") == PlaybackMode.DIRECT
+    assert mode(client="web_hls", mime="video/mp2t", global_mode="never") == PlaybackMode.DIRECT
+    assert mode(client="android_tv", mime="video/mp2t") == PlaybackMode.DIRECT
+    assert (
+        mode(client="web_hls", mime="video/mp4", live=False, https_site=True, url="http://cdn/movie.mp4")
+        == PlaybackMode.PROXY
+    )
+
+
+async def test_web_hls_capability_request_is_scoped_to_web(api: Api) -> None:
+    await add_m3u(api, FIXTURES / "sample.m3u")
+    channel = (await channels(api))[0]
+    original = api.c.playback.resolve
+    with patch.object(api.c.playback, "resolve", new=AsyncMock(wraps=original)) as resolver:
+        for client, prefer_hls, expected in [
+            ("web", True, "web_hls"),
+            ("web", False, "web"),
+            ("android_tv", True, "android_tv"),
+        ]:
+            response = await api.post(
+                "/playback/resolve", json={"id": channel["id"], "client": client, "prefer_hls": prefer_hls}
+            )
+            assert response.status_code == 200
+            assert resolver.call_args.kwargs["client"] == expected

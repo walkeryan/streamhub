@@ -6,11 +6,13 @@ Each run is recorded in ``sync_run``; ``Source.status`` reflects the latest run.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import tempfile
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, insert, select, update
 
 from app.domain.entities import SourceStatus, SourceType
 from app.domain.ports import EpgProvider, EpgSourceProvider, InteractiveAuthProvider
@@ -159,43 +161,61 @@ class SyncService:
             run_id = await self._start_run(source_id, "epg")
             total = 0
             errors: list[str] = []
-            seen_feed = False
-            for spec in specs:
-                try:
-                    first = True
-                    async for batch in self._epg.iter_programmes(spec, wanted):
-                        async with self._db.session() as s:
-                            if first and not seen_feed:
-                                # replace this feed's future programmes atomically with the first batch
-                                await s.execute(delete(Programme).where(Programme.feed == source_id))
-                                first = False
-                                seen_feed = True
-                            s.add_all(
-                                Programme(
-                                    epg_channel=p.channel,
-                                    feed=source_id,
-                                    start=p.start,
-                                    stop=p.stop,
-                                    title=p.title[:512],
-                                    description=p.description,
-                                    category=(p.category or None) and p.category[:128],
-                                    icon=p.icon,
+            # Stage the whole refresh before replacing anything. A later feed or parser
+            # failure must not erase a previously usable schedule. Disk staging also
+            # keeps large provider feeds out of memory and avoids a network-long DB lock.
+            with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as staged:
+                for spec in specs:
+                    try:
+                        async for batch in self._epg.iter_programmes(spec, wanted):
+                            for p in batch:
+                                staged.write(
+                                    json.dumps(
+                                        {
+                                            "epg_channel": p.channel,
+                                            "feed": source_id,
+                                            "start": p.start.isoformat(),
+                                            "stop": p.stop.isoformat(),
+                                            "title": p.title[:512],
+                                            "description": p.description,
+                                            "category": (p.category or None) and p.category[:128],
+                                            "icon": p.icon,
+                                        }
+                                    )
+                                    + "\n"
                                 )
-                                for p in batch
-                            )
-                            await s.commit()
-                        total += len(batch)
-                except Exception as exc:
-                    errors.append(redact_text(f"{type(exc).__name__}: {exc}")[:200])
-            await self._finish_run(run_id, not errors or total > 0, "; ".join(errors) or None, {"programmes": total})
-            if total:
+                            total += len(batch)
+                    except Exception as exc:
+                        errors.append(redact_text(f"{type(exc).__name__}: {exc}")[:200])
+                if errors or not total:
+                    await self._finish_run(
+                        run_id,
+                        False,
+                        "; ".join(errors) or "No matching programmes; previous guide retained",
+                        {"programmes": 0, "previous_guide_retained": True},
+                    )
+                    return 0
+                staged.seek(0)
                 async with self._db.session() as s:
+                    await s.execute(delete(Programme).where(Programme.feed == source_id))
+                    values: list[dict[str, Any]] = []
+                    for line in staged:
+                        value = json.loads(line)
+                        value["start"] = datetime.fromisoformat(value["start"])
+                        value["stop"] = datetime.fromisoformat(value["stop"])
+                        values.append(value)
+                        if len(values) >= 2000:
+                            await s.execute(insert(Programme), values)
+                            values.clear()
+                    if values:
+                        await s.execute(insert(Programme), values)
                     src = await s.get(Source, source_id)
                     if src:
                         counts = dict(src.counts or {})
                         counts["programmes"] = total
                         src.counts = counts
-                        await s.commit()
+                    await s.commit()
+            await self._finish_run(run_id, True, None, {"programmes": total})
             return total
 
     async def cleanup_epg(self) -> int:
