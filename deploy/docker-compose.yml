@@ -1,0 +1,33 @@
+# StreamHub docker-compose.
+# Usage (from this directory):
+#   echo "SECRET_KEY=$(openssl rand -hex 32)" > .env
+#   docker compose up -d
+# Set the image to a locally built tag instead of pulling by uncommenting `build`.
+
+services:
+  streamhub:
+    image: ghcr.io/walkeryan/streamhub:latest
+    # build:
+    #   context: ..
+    #   dockerfile: deploy/Dockerfile
+    container_name: streamhub
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./config:/config
+    tmpfs:
+      - /transcode
+    # Optional: Intel/AMD VA-API hardware transcoding. The entrypoint adds the
+    # app user to the render group automatically.
+    # devices:
+    #   - /dev/dri:/dev/dri
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+      SECRET_KEY: "${SECRET_KEY:?Set SECRET_KEY in .env (a long random string)}"
+      # TMDB_API_KEY: "${TMDB_API_KEY:-}"        # optional; can also be set in the UI
+      # ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"    # optional; otherwise set on first run
+      # Trust X-Forwarded-* only from your reverse proxy network (see README).
+      # FORWARDED_ALLOW_IPS: "172.18.0.0/16"
+    restart: unless-stopped

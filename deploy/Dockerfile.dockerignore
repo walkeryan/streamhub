@@ -1,0 +1,20 @@
+# Build-context exclusions for deploy/Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+**/.git
+**/.github
+**/.env
+**/.env.*
+**/node_modules
+**/dist
+**/dist-mock
+**/build
+**/*.egg-info
+**/__pycache__
+**/*.pyc
+**/.venv
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.gradle
+**/*.apk
+tv-app
+docs

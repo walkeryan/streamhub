@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!-- Unraid Community Applications template for StreamHub. Icon URL is a placeholder (marked REPLACE).
+     Example host web UI: http://192.168.1.101:8787 . See README for the docker run one-liner. -->
+<Container version="2">
+  <Name>StreamHub</Name>
+  <Repository>ghcr.io/walkeryan/streamhub:latest</Repository>
+  <Registry>https://github.com/walkeryan/streamhub/pkgs/container/streamhub</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/walkeryan/streamhub/issues</Support>
+  <Project>https://github.com/walkeryan/streamhub</Project>
+  <Overview>StreamHub is a self-hosted, unified streaming hub. It brings your Plex and Jellyfin libraries, IPTV (Xtream and M3U) live TV, EPG guide, and deep links to installed streaming apps into one interface for the web and Android TV. Everything runs on your server; clients never talk to source services directly.
+
+Requires you to supply sources you are legally authorized to use. See the legal notice in the app.</Overview>
+  <Category>MediaApp:Video MediaServer:Video</Category>
+  <WebUI>http://[IP]:[PORT:8787]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://example.com/REPLACE-icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI Port" Target="8787" Default="8787" Mode="tcp" Description="Port the StreamHub web interface and API listen on." Type="Port" Display="always" Required="true" Mask="false">8787</Config>
+  <Config Name="Config Path" Target="/config" Default="/mnt/user/appdata/streamhub" Mode="rw" Description="Database, settings and encryption keys. Back this up." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/streamhub</Config>
+  <Config Name="Transcode Path" Target="/transcode" Default="/mnt/user/appdata/streamhub/transcode" Mode="rw" Description="Scratch space for proxy remux and transcode segments. A RAM-backed path such as /tmp/streamhub-transcode avoids wear on the array." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/streamhub/transcode</Config>
+  <Config Name="VA-API Device" Target="/dev/dri" Default="" Mode="" Description="Optional. Intel/AMD GPU render device for hardware transcoding. Leave empty for software encoding." Type="Device" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID the app runs as. Unraid default for nobody is 99." Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID the app runs as. Unraid default for users is 100." Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
+  <Config Name="Timezone" Target="TZ" Default="Etc/UTC" Mode="" Description="Container timezone, for example America/New_York." Type="Variable" Display="advanced" Required="false" Mask="false">Etc/UTC</Config>
+  <Config Name="Secret Key" Target="SECRET_KEY" Default="" Mode="" Description="Required. A long random string used to sign tokens and encrypt source credentials. Changing it invalidates sessions and stored credentials." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="TMDB API Key" Target="TMDB_API_KEY" Default="" Mode="" Description="Optional. TMDB v3 API key for artwork and metadata. Can also be set in the web UI." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Admin Password" Target="ADMIN_PASSWORD" Default="" Mode="" Description="Optional. Sets the initial admin password. If empty, the first-run screen asks for one." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+</Container>
