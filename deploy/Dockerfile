@@ -12,7 +12,10 @@ WORKDIR /src/web-app
 
 # Dependency layer first so it caches across source edits.
 COPY web-app/package.json web-app/package-lock.json ./
-RUN npm ci
+# Optional "ca" secret: trust a TLS-intercepting proxy in sandboxed builders (no-op otherwise).
+RUN --mount=type=secret,id=ca,target=/run/secrets/ca,required=false \
+    if [ -s /run/secrets/ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca; fi \
+    && npm ci
 
 # The web build reads ../design (tokens.json) and may reference ../contracts,
 # so keep the repository layout intact inside the builder.
@@ -78,7 +81,11 @@ WORKDIR /app
 
 # Backend: install the hub-server package and its dependencies.
 COPY hub-server/ /app/
-RUN pip install /app \
+# The optional "ca" secret lets corporate/sandboxed builders trust a TLS-intercepting
+# proxy; it is absent (and harmless) in normal builds and CI.
+RUN --mount=type=secret,id=ca,target=/run/secrets/ca,required=false \
+    if [ -s /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca; fi \
+    && pip install /app \
     && rm -rf /app/build /app/*.egg-info
 
 # Frontend build output, served by the API at /.
