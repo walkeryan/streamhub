@@ -45,7 +45,6 @@ from app.services.user_state import ProgressService
 log = logging.getLogger(__name__)
 
 
-
 @dataclass(slots=True)
 class StreamGrant:
     """Decoded contents of a /stream/{token}."""
@@ -219,7 +218,7 @@ class PlaybackResolver:
     async def _channels_for_epg(self, epg_channel: str, feed: str) -> list[Channel]:
         from sqlalchemy import select
 
-        async with self._sources._db.session() as s:  # noqa: SLF001 - same package
+        async with self._sources._db.session() as s:
             return list(
                 (
                     await s.execute(
@@ -259,9 +258,16 @@ class PlaybackResolver:
         except Exception:
             ctx = None
         desc = self._descriptor(
-            profile_id, src, hub_id, target, client, https_site,
+            profile_id,
+            src,
+            hub_id,
+            target,
+            client,
+            https_site,
             channel_key=None if catchup_programme_id else f"{src.id}:{ch.ext_id}",
-            title=title, subtitle=subtitle, poster=ch.logo,
+            title=title,
+            subtitle=subtitle,
+            poster=ch.logo,
         )
         desc["channel_context"] = ctx
         return desc
@@ -279,7 +285,12 @@ class PlaybackResolver:
         return eps[0]
 
     async def _resolve_title(
-        self, profile_id: str, row: Title, hub_id: str, client: str, https_site: bool,
+        self,
+        profile_id: str,
+        row: Title,
+        hub_id: str,
+        client: str,
+        https_site: bool,
         progress_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         src, prov = await self._sources.provider_for(row.source_id)
@@ -305,20 +316,38 @@ class PlaybackResolver:
             )
         image = self._catalog.image_fn({src.id: src})
         return self._descriptor(
-            profile_id, src, hub_id, target, client, https_site, channel_key=None,
-            title=row.title, subtitle=subtitle, poster=image(src, row.poster),
+            profile_id,
+            src,
+            hub_id,
+            target,
+            client,
+            https_site,
+            channel_key=None,
+            title=row.title,
+            subtitle=subtitle,
+            poster=image(src, row.poster),
         )
 
     async def _resolve_tmdb(
-        self, profile_id: str, media_type: str, tmdb_id: int, hub_id: str, source_id: str | None,
-        client: str, https_site: bool,
+        self,
+        profile_id: str,
+        media_type: str,
+        tmdb_id: int,
+        hub_id: str,
+        source_id: str | None,
+        client: str,
+        https_site: bool,
     ) -> dict[str, Any]:
         sources = await self._sources.rows_by_id()
         meta = await self._meta.details(media_type, tmdb_id) if self._meta.enabled else None
         badges, matches = await self._availability.badges_for(
-            media_type, tmdb_id=tmdb_id, imdb_id=meta.imdb_id if meta else None,
-            title=meta.title if meta else None, year=meta.year if meta else None,
-            sources=sources, is_in_app=self._sources.registry.is_in_app,
+            media_type,
+            tmdb_id=tmdb_id,
+            imdb_id=meta.imdb_id if meta else None,
+            title=meta.title if meta else None,
+            year=meta.year if meta else None,
+            sources=sources,
+            is_in_app=self._sources.registry.is_in_app,
         )
         by_source = {m.source_id: m for m in matches}
         chosen = None
@@ -334,8 +363,9 @@ class PlaybackResolver:
             row = by_source[chosen["source_id"]]
             if row.kind in ("show", "series"):
                 row = await self._next_episode(profile_id, row)
-                return await self._resolve_title(profile_id, row, ids.lib_id(row.source_id, row.ext_id),
-                                                 client, https_site)
+                return await self._resolve_title(
+                    profile_id, row, ids.lib_id(row.source_id, row.ext_id), client, https_site
+                )
             return await self._resolve_title(profile_id, row, hub_id, client, https_site)
         # hand-off
         svc = sources[chosen["source_id"]]

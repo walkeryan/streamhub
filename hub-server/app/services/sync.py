@@ -150,7 +150,8 @@ class SyncService:
                 return 0
             async with self._db.session() as s:
                 wanted = {
-                    e for e in (await s.execute(select(Channel.epg_id).where(Channel.source_id == source_id))).scalars()
+                    e
+                    for e in (await s.execute(select(Channel.epg_id).where(Channel.source_id == source_id))).scalars()
                     if e
                 }
             if not wanted:
@@ -171,9 +172,14 @@ class SyncService:
                                 seen_feed = True
                             s.add_all(
                                 Programme(
-                                    epg_channel=p.channel, feed=source_id, start=p.start, stop=p.stop,
-                                    title=p.title[:512], description=p.description,
-                                    category=(p.category or None) and p.category[:128], icon=p.icon,
+                                    epg_channel=p.channel,
+                                    feed=source_id,
+                                    start=p.start,
+                                    stop=p.stop,
+                                    title=p.title[:512],
+                                    description=p.description,
+                                    category=(p.category or None) and p.category[:128],
+                                    icon=p.icon,
                                 )
                                 for p in batch
                             )
@@ -246,7 +252,9 @@ class SyncService:
             await s.execute(
                 update(Source).where(Source.status == SourceStatus.SYNCING.value).values(status="error", last_sync=None)
             )
-            await s.execute(update(SyncRun).where(SyncRun.status == "running").values(status="error", message="interrupted"))
+            await s.execute(
+                update(SyncRun).where(SyncRun.status == "running").values(status="error", message="interrupted")
+            )
             await s.commit()
 
 
@@ -259,10 +267,24 @@ class SyncScheduler:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
         sched = AsyncIOScheduler(timezone="UTC")
-        sched.add_job(self._sync.tick, "interval", minutes=5, id="catalog", max_instances=1, coalesce=True,
-                      next_run_time=datetime.now(UTC) + timedelta(seconds=10))
-        sched.add_job(self._sync.epg_tick, "interval", minutes=30, id="epg", max_instances=1, coalesce=True,
-                      next_run_time=datetime.now(UTC) + timedelta(minutes=2))
+        sched.add_job(
+            self._sync.tick,
+            "interval",
+            minutes=5,
+            id="catalog",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=10),
+        )
+        sched.add_job(
+            self._sync.epg_tick,
+            "interval",
+            minutes=30,
+            id="epg",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(UTC) + timedelta(minutes=2),
+        )
         sched.start()
         self._sched = sched
 

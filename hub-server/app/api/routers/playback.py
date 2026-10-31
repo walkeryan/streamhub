@@ -23,8 +23,12 @@ router = APIRouter()
 @router.post("/playback/resolve", response_model=S.PlaybackDescriptor, tags=["playback"])
 async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
     return await c.playback.resolve(
-        p.profile_id, body.id, source_id=body.source_id, client=body.client,
-        catchup_programme_id=body.catchup_programme_id, https_site=is_https.get(),
+        p.profile_id,
+        body.id,
+        source_id=body.source_id,
+        client=body.client,
+        catchup_programme_id=body.catchup_programme_id,
+        https_site=is_https.get(),
     )
 
 
@@ -56,8 +60,14 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
     elif h.scheme == "ch":
         source_id = source_id or h.a
     await c.progress.report(
-        p.profile_id, ref_id, position_ms=body.position_ms, duration_ms=body.duration_ms, state=body.state,
-        source_id=source_id, forward_item=forward, aliases=aliases,
+        p.profile_id,
+        ref_id,
+        position_ms=body.position_ms,
+        duration_ms=body.duration_ms,
+        state=body.state,
+        source_id=source_id,
+        forward_item=forward,
+        aliases=aliases,
     )
     return Response(status_code=204)
 
@@ -85,8 +95,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
         if is_hls_upstream:
             final, text = await c.proxy.fetch_text(g.url, g.headers)
             body = c.proxy.rewrite_playlist(text, final, lambda u: _proxy_url(token, u, c))
-            return Response(body, media_type="application/vnd.apple.mpegurl",
-                            headers={"Cache-Control": "no-cache"})
+            return Response(body, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"})
         if g.live and g.channel_key:
             ctype, gen = await c.proxy.live_shared(g.channel_key, g.url, g.headers, g.source_id)
             return StreamingResponse(gen, media_type=ctype, headers={"Cache-Control": "no-cache"})
@@ -98,8 +107,9 @@ async def stream(token: str, request: Request, c: C) -> Response:
     except Exception as exc:
         log.info("stream proxy failed", extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
-    return StreamingResponse(gen, status_code=status, headers=headers,
-                             media_type=headers.get("content-type", "application/octet-stream"))
+    return StreamingResponse(
+        gen, status_code=status, headers=headers, media_type=headers.get("content-type", "application/octet-stream")
+    )
 
 
 @router.get("/stream/{token}/seg/{sub}", tags=["playback"], include_in_schema=False)
@@ -117,8 +127,9 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
         status, headers, gen = await c.proxy.passthrough(url, g.headers, g.source_id, request.headers.get("range"))
     except (ConnectionError, OSError) as exc:
         raise BadGateway("upstream unavailable") from exc
-    return StreamingResponse(gen, status_code=status, headers=headers,
-                             media_type=headers.get("content-type", "video/mp2t"))
+    return StreamingResponse(
+        gen, status_code=status, headers=headers, media_type=headers.get("content-type", "video/mp2t")
+    )
 
 
 @router.get("/stream/{token}/index.m3u8", tags=["playback"])
@@ -135,8 +146,9 @@ async def stream_hls(token: str, c: C) -> Response:
     text = (sess.workdir / "index.m3u8").read_text(errors="ignore")
     base = f"/api/v1/stream/{token}/hls/{sess.sid}/"
     lines = [base + ln if ln and not ln.startswith("#") else ln for ln in text.splitlines()]
-    return Response("\n".join(lines) + "\n", media_type="application/vnd.apple.mpegurl",
-                    headers={"Cache-Control": "no-cache"})
+    return Response(
+        "\n".join(lines) + "\n", media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"}
+    )
 
 
 @router.get("/stream/{token}/hls/{sid}/{name}", tags=["playback"], include_in_schema=False)
@@ -148,8 +160,11 @@ async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
     path: Path = sess.workdir / name
     if not path.is_file():
         raise NotFound("segment not found")
-    return FileResponse(path, media_type="video/mp2t" if name.endswith(".ts") else "application/octet-stream",
-                        headers={"Cache-Control": "max-age=60"})
+    return FileResponse(
+        path,
+        media_type="video/mp2t" if name.endswith(".ts") else "application/octet-stream",
+        headers={"Cache-Control": "max-age=60"},
+    )
 
 
 @router.get("/images/{token}", tags=["catalog"], include_in_schema=False)
@@ -159,7 +174,7 @@ async def image_proxy(token: str, c: C) -> Response:
     if not isinstance(d, dict):
         raise NotFound("image not found")
     try:
-        src, prov = await c.sources.provider_for(str(d.get("s")))
+        _src, prov = await c.sources.provider_for(str(d.get("s")))
     except NotFound:
         raise
     url = str(d.get("u") or "")
@@ -175,5 +190,8 @@ async def image_proxy(token: str, c: C) -> Response:
         raise BadGateway("image unavailable") from exc
     if resp.status_code >= 400:
         raise NotFound("image not found")
-    return Response(resp.content, media_type=resp.headers.get("content-type", "image/jpeg"),
-                    headers={"Cache-Control": "public, max-age=86400"})
+    return Response(
+        resp.content,
+        media_type=resp.headers.get("content-type", "image/jpeg"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )

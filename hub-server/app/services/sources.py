@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import logging
 import secrets
@@ -102,7 +103,7 @@ class SourceService:
             return None
 
     # ------------------------------------------------------------------ queries
-    async def list(self) -> list[Source]:
+    async def list(self) -> builtins.list[Source]:
         async with self._db.session() as s:
             return list((await s.execute(select(Source).order_by(Source.priority, Source.created_at))).scalars())
 
@@ -158,7 +159,9 @@ class SourceService:
         hints: dict[str, Any] = {"sync_gen": 0}
         async with self._db.session() as s:
             if st in IPTV_SOURCE_TYPES:
-                rows = (await s.execute(select(Source).where(Source.type.in_([t.value for t in IPTV_SOURCE_TYPES])))).scalars()
+                rows = (
+                    await s.execute(select(Source).where(Source.type.in_([t.value for t in IPTV_SOURCE_TYPES])))
+                ).scalars()
                 offsets = [int((r.hints or {}).get("channel_offset") or 0) for r in rows]
                 hints["channel_offset"] = (max(offsets) + CHANNEL_OFFSET_STEP) if offsets else 0
             if priority is None:
@@ -235,8 +238,15 @@ class SourceService:
             row.config_enc = self._crypto.encrypt_json(cfg)
             await s.commit()
 
-    async def set_status(self, source_id: str, status: SourceStatus, *, error: str | None = None,
-                         last_sync: datetime | None = None, counts: dict[str, int] | None = None) -> None:
+    async def set_status(
+        self,
+        source_id: str,
+        status: SourceStatus,
+        *,
+        error: str | None = None,
+        last_sync: datetime | None = None,
+        counts: dict[str, int] | None = None,
+    ) -> None:
         values: dict[str, Any] = {"status": status.value, "last_error": error}
         if last_sync is not None:
             values["last_sync"] = last_sync
@@ -258,14 +268,15 @@ class SourceService:
             await s.delete(row)
             await s.commit()
 
-    async def create_drafts(self, profile_id: str, drafts: Iterable[Any]) -> list[Source]:
+    async def create_drafts(self, profile_id: str, drafts: Iterable[Any]) -> builtins.list[Source]:
         out: list[Source] = []
         existing = await self.list()
         for d in drafts:
             machine = d.config.get("machine_id")
             dup = next(
                 (
-                    r for r in existing
+                    r
+                    for r in existing
                     if r.type == d.type.value and machine and self.decrypt_config(r).get("machine_id") == machine
                 ),
                 None,
@@ -407,9 +418,7 @@ class DbCatalogSink:
         """Sweep rows not seen in this run; apply overrides; return counts."""
         sid = self._source.id
         async with self._db.session() as s:
-            await s.execute(
-                delete(Channel).where(Channel.source_id == sid, Channel.sync_gen != self._gen)
-            )
+            await s.execute(delete(Channel).where(Channel.source_id == sid, Channel.sync_gen != self._gen))
             await s.execute(
                 delete(ChannelGroup).where(ChannelGroup.source_id == sid, ChannelGroup.sync_gen != self._gen)
             )
@@ -482,15 +491,11 @@ async def apply_overrides(db: Database, source_id: str | None = None) -> None:
         cond = [Channel.source_id == source_id] if source_id else []
         # effective number
         await s.execute(
-            update(Channel)
-            .where(*cond)
-            .values(number=func.coalesce(Channel.number_override, Channel.number_auto))
+            update(Channel).where(*cond).values(number=func.coalesce(Channel.number_override, Channel.number_auto))
         )
         # epg override
         await s.execute(
-            update(Channel)
-            .where(*cond, Channel.epg_override.is_not(None))
-            .values(epg_id=Channel.epg_override)
+            update(Channel).where(*cond, Channel.epg_override.is_not(None)).values(epg_id=Channel.epg_override)
         )
         # group language overrides (unless the channel has its own override)
         for g in groups:

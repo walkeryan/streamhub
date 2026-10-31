@@ -34,8 +34,16 @@ log = logging.getLogger(__name__)
 PLEX_TV = "https://clients.plex.tv"
 PAGE = 200
 _KIND = {"movie": MediaKind.MOVIE, "show": MediaKind.SHOW, "season": MediaKind.SEASON, "episode": MediaKind.EPISODE}
-_MIME = {"mp4": "video/mp4", "mkv": "video/x-matroska", "ts": "video/mp2t", "mpegts": "video/mp2t",
-         "avi": "video/x-msvideo", "mov": "video/mp4", "m4v": "video/mp4", "webm": "video/webm"}
+_MIME = {
+    "mp4": "video/mp4",
+    "mkv": "video/x-matroska",
+    "ts": "video/mp2t",
+    "mpegts": "video/mp2t",
+    "avi": "video/x-msvideo",
+    "mov": "video/mp4",
+    "m4v": "video/mp4",
+    "webm": "video/webm",
+}
 
 
 def plex_headers(client_id: str, product: str, token: str | None = None) -> dict[str, str]:
@@ -199,9 +207,7 @@ class PlexSource:
         tmdb, imdb = parse_guids(m)
         added = m.get("addedAt")
         parent = None
-        if kind == MediaKind.SEASON:
-            parent = m.get("parentRatingKey")
-        elif kind == MediaKind.EPISODE:
+        if kind == MediaKind.SEASON or kind == MediaKind.EPISODE:
             parent = m.get("parentRatingKey")
         part_key = None
         container = None
@@ -218,7 +224,9 @@ class PlexSource:
             title=str(m.get("title") or ""),
             year=m.get("year"),
             overview=m.get("summary") or None,
-            poster=self._img(m.get("thumb") if kind != MediaKind.EPISODE else (m.get("thumb") or m.get("grandparentThumb"))),
+            poster=self._img(
+                m.get("thumb") if kind != MediaKind.EPISODE else (m.get("thumb") or m.get("grandparentThumb"))
+            ),
             backdrop=self._img(m.get("art")),
             rating=m.get("audienceRating") or m.get("rating"),
             genres=[g.get("tag") for g in m.get("Genre") or [] if g.get("tag")],
@@ -338,9 +346,7 @@ class PlexSource:
             return None
         return {"X-Plex-Token": self.token, "Accept": "image/*"}
 
-    async def report_progress(
-        self, item: CatalogItem, position_ms: int, duration_ms: int | None, state: str
-    ) -> None:
+    async def report_progress(self, item: CatalogItem, position_ms: int, duration_ms: int | None, state: str) -> None:
         params = {
             "ratingKey": item.ext_id,
             "key": f"/library/metadata/{item.ext_id}",

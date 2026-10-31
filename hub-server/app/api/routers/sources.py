@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Response
 
 from app.api import schemas as S
-from app.api.deps import C, Admin, P
+from app.api.deps import Admin, C, P
 from app.domain.entities import SourceStatus
 from app.services.errors import PreconditionRequired, ServiceError
 
@@ -67,7 +67,11 @@ async def create_source(body: S.SourceCreate, c: C, p: Admin) -> dict[str, Any]:
     if body.type == "jellyfin" and not cfg.get("username") and not cfg.get("access_token"):
         cfg.setdefault("quick_connect", True)
     row = await c.sources.create(
-        profile_id=p.profile_id, type_=body.type, name=body.name, config=cfg, region=body.region,
+        profile_id=p.profile_id,
+        type_=body.type,
+        name=body.name,
+        config=cfg,
+        region=body.region,
         service_key=body.service_key,
     )
     if row.type != "streaming_service":

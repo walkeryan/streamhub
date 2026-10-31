@@ -44,8 +44,14 @@ def _backoff(attempt: int) -> float:
 class SharedUpstream:
     """One upstream HTTP connection broadcast to many subscribers."""
 
-    def __init__(self, key: str, url: str, headers: dict[str, str], client_factory: Callable[..., Any],
-                 on_close: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        key: str,
+        url: str,
+        headers: dict[str, str],
+        client_factory: Callable[..., Any],
+        on_close: Callable[[str], None],
+    ) -> None:
         self.key = key
         self.url = url
         self.headers = headers
@@ -129,8 +135,10 @@ class SharedUpstream:
                             self.failed = f"upstream {exc.response.status_code}"
                             self._ready.set()
                             break
-                        log.info("upstream reconnect", extra={"url": redact_url(self.url),
-                                                              "err": type(exc).__name__, "attempt": attempt})
+                        log.info(
+                            "upstream reconnect",
+                            extra={"url": redact_url(self.url), "err": type(exc).__name__, "attempt": attempt},
+                        )
                     if attempt >= 8:
                         self.failed = "upstream unavailable"
                         self._ready.set()
@@ -151,7 +159,13 @@ class HlsSession:
 
 
 def ffmpeg_args(
-    ffmpeg: str, url: str, headers: dict[str, str], outdir: Path, *, live: bool, transcode: str,
+    ffmpeg: str,
+    url: str,
+    headers: dict[str, str],
+    outdir: Path,
+    *,
+    live: bool,
+    transcode: str,
     vaapi_device: str,
 ) -> list[str]:
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
@@ -183,10 +197,16 @@ def ffmpeg_args(
         args += ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-c:a", "aac", "-b:a", "160k"]
     flags = "delete_segments+independent_segments" if live else "independent_segments"
     args += [
-        "-f", "hls", "-hls_time", "2",
-        "-hls_list_size", "6" if live else "0",
-        "-hls_flags", flags,
-        "-hls_segment_filename", str(outdir / "seg_%05d.ts"),
+        "-f",
+        "hls",
+        "-hls_time",
+        "2",
+        "-hls_list_size",
+        "6" if live else "0",
+        "-hls_flags",
+        flags,
+        "-hls_segment_filename",
+        str(outdir / "seg_%05d.ts"),
         str(outdir / "index.m3u8"),
     ]
     return args
@@ -251,8 +271,9 @@ class StreamProxy:
     def _drop_shared(self, key: str) -> None:
         self._shared.pop(key, None)
 
-    async def live_shared(self, key: str, url: str, headers: dict[str, str], source_id: str
-                          ) -> tuple[str, AsyncIterator[bytes]]:
+    async def live_shared(
+        self, key: str, url: str, headers: dict[str, str], source_id: str
+    ) -> tuple[str, AsyncIterator[bytes]]:
         up = self._shared.get(key)
         if up is None:
             up = SharedUpstream(key, url, headers, self._client_factory, self._drop_shared)
@@ -278,8 +299,13 @@ class StreamProxy:
         return up.content_type, gen()
 
     async def passthrough(
-        self, url: str, headers: dict[str, str], source_id: str, range_header: str | None = None,
-        *, live: bool = False,
+        self,
+        url: str,
+        headers: dict[str, str],
+        source_id: str,
+        range_header: str | None = None,
+        *,
+        live: bool = False,
     ) -> tuple[int, dict[str, str], AsyncIterator[bytes]]:
         """Single-client passthrough (VOD with Range support; live with reconnect)."""
         req_headers = dict(headers)
@@ -372,8 +398,9 @@ class StreamProxy:
             workdir = self.transcode_dir / sid
             shutil.rmtree(workdir, ignore_errors=True)
             workdir.mkdir(parents=True, exist_ok=True)
-            args = ffmpeg_args(self.ffmpeg, url, headers, workdir, live=live, transcode=transcode,
-                               vaapi_device=self.vaapi_device)
+            args = ffmpeg_args(
+                self.ffmpeg, url, headers, workdir, live=live, transcode=transcode, vaapi_device=self.vaapi_device
+            )
             proc = await asyncio.create_subprocess_exec(
                 *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
             )
@@ -390,7 +417,8 @@ class StreamProxy:
                 if proc.stderr is not None:
                     err = await proc.stderr.read()
                 await self._stop_hls(key)
-                raise ConnectionError("ffmpeg exited: " + redact_url(err.decode(errors="ignore")[-300:]) if err else "ffmpeg exited")
+                detail = redact_url(err.decode(errors="ignore")[-300:]) or "" if err else ""
+                raise ConnectionError(f"ffmpeg exited: {detail}".strip(": "))
             await asyncio.sleep(0.25)
         await self._stop_hls(key)
         raise TimeoutError("hls not ready")

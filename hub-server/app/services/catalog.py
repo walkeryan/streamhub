@@ -101,9 +101,7 @@ class CatalogService:
         kinds = ids.MOVIE_KINDS if media_type == "movie" else ids.SHOW_KINDS
         async with self._db.session() as s:
             return list(
-                (
-                    await s.execute(select(Title).where(Title.tmdb_id == tmdb_id, Title.kind.in_(kinds)))
-                ).scalars()
+                (await s.execute(select(Title).where(Title.tmdb_id == tmdb_id, Title.kind.in_(kinds)))).scalars()
             )
 
     async def tiles_for_ids(self, ref_ids: list[str], ctx: TileContext) -> list[dict[str, Any]]:
@@ -163,8 +161,13 @@ class CatalogService:
             meta = await self.meta.details(media_type, tid) if self.meta.enabled else None
             if meta:
                 badges, _ = await self.availability.badges_for(
-                    media_type, tmdb_id=tid, imdb_id=meta.imdb_id, title=meta.title, year=meta.year,
-                    sources=ctx.sources, is_in_app=ctx.is_in_app,
+                    media_type,
+                    tmdb_id=tid,
+                    imdb_id=meta.imdb_id,
+                    title=meta.title,
+                    year=meta.year,
+                    sources=ctx.sources,
+                    is_in_app=ctx.is_in_app,
                 )
                 out[hub] = meta_tile(meta, badges, ctx.favorites, ctx.progress_pct(hub))
         return [out[r] for r in ref_ids if r in out]
@@ -189,23 +192,33 @@ class CatalogService:
                     (
                         await s.execute(
                             select(Title)
-                            .where(Title.source_id == row.source_id, Title.parent_ext_id == row.ext_id,
-                                   Title.kind == "season")
+                            .where(
+                                Title.source_id == row.source_id,
+                                Title.parent_ext_id == row.ext_id,
+                                Title.kind == "season",
+                            )
                             .order_by(Title.season_number)
                         )
                     ).scalars()
                 )
                 season_ids = [x.ext_id for x in seasons]
-                eps = list(
-                    (
-                        await s.execute(
-                            select(Title)
-                            .where(Title.source_id == row.source_id, Title.parent_ext_id.in_(season_ids),
-                                   Title.kind == "episode")
-                            .order_by(Title.season_number, Title.episode_number)
-                        )
-                    ).scalars()
-                ) if season_ids else []
+                eps = (
+                    list(
+                        (
+                            await s.execute(
+                                select(Title)
+                                .where(
+                                    Title.source_id == row.source_id,
+                                    Title.parent_ext_id.in_(season_ids),
+                                    Title.kind == "episode",
+                                )
+                                .order_by(Title.season_number, Title.episode_number)
+                            )
+                        ).scalars()
+                    )
+                    if season_ids
+                    else []
+                )
                 return seasons + eps
             return list(
                 (
@@ -251,8 +264,16 @@ class CatalogService:
             tiles = await self.tiles_for_ids([hub_id], ctx)
             if not tiles:
                 raise NotFound("channel not found")
-            return {**tiles[0], "overview": "", "genres": [], "runtime_min": None, "cast": [],
-                    "seasons": [], "episodes": [], "attribution": ATTRIBUTION}
+            return {
+                **tiles[0],
+                "overview": "",
+                "genres": [],
+                "runtime_min": None,
+                "cast": [],
+                "seasons": [],
+                "episodes": [],
+                "attribution": ATTRIBUTION,
+            }
         if h.scheme == "lib":
             row = await self.title_row(h.a, h.b)
             if row is None or row.source_id not in ctx.sources:
@@ -346,24 +367,29 @@ class CatalogService:
         return detail
 
     # ------------------------------------------------------------------ browse
-    def _browse_query(self, kinds: tuple[str, ...], source_ids: list[str], source_id: str | None,
-                      genre: str | None) -> Select[tuple[Title]]:
+    def _browse_query(
+        self, kinds: tuple[str, ...], source_ids: list[str], source_id: str | None, genre: str | None
+    ) -> Select[Any]:
         q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(source_ids))
         if source_id:
             q = q.where(Title.source_id == source_id)
         if genre:
             q = q.where(
                 or_(
-                    func.lower(cast(Title.genres, String)).like(
-                        f'%"{_escape_like(genre.lower())}"%', escape="\\"
-                    ),
+                    func.lower(cast(Title.genres, String)).like(f'%"{_escape_like(genre.lower())}"%', escape="\\"),
                     Title.group_name == genre,
                 )
             )
         return q
 
     async def browse(
-        self, section: str, profile_id: str, *, source_id: str | None, genre: str | None, sort: str | None,
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        source_id: str | None,
+        genre: str | None,
+        sort: str | None,
         page: int,
     ) -> dict[str, Any]:
         kinds = BROWSE_KINDS.get(section)
@@ -373,16 +399,15 @@ class CatalogService:
         enabled = self._enabled(ctx)
         page = max(1, page)
         q = self._browse_query(kinds, enabled, source_id, genre)
-        order = {
+        orders: dict[str, list[Any]] = {
             "title": [Title.norm_title.asc()],
             "year": [Title.year.desc().nulls_last(), Title.norm_title],
             "rating": [Title.rating.desc().nulls_last(), Title.norm_title],
-        }.get(sort or "added", [Title.added_at.desc().nulls_last(), Title.id.desc()])
+        }
+        order = orders.get(sort or "added", [Title.added_at.desc().nulls_last(), Title.id.desc()])
         async with self._db.session() as s:
             total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
-            rows = list(
-                (await s.execute(q.order_by(*order).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE))).scalars()
-            )
+            rows = list((await s.execute(q.order_by(*order).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE))).scalars())
         tiles = ctx.merge(ctx.title_tile(r) for r in rows)
         return {"tiles": tiles, "page": page, "total": int(total)}
 
@@ -414,10 +439,16 @@ class CatalogService:
                     (
                         await s.execute(
                             select(Title)
-                            .where(Title.source_id.in_(enabled), Title.kind.in_(lib_kinds),
-                                   Title.norm_title.like(like, escape="\\"))
-                            .order_by((Title.norm_title == norm).desc(), Title.norm_title.like(f"{_escape_like(norm)}%", escape="\\").desc(),
-                                      Title.added_at.desc().nulls_last())
+                            .where(
+                                Title.source_id.in_(enabled),
+                                Title.kind.in_(lib_kinds),
+                                Title.norm_title.like(like, escape="\\"),
+                            )
+                            .order_by(
+                                (Title.norm_title == norm).desc(),
+                                Title.norm_title.like(f"{_escape_like(norm)}%", escape="\\").desc(),
+                                Title.added_at.desc().nulls_last(),
+                            )
                             .limit(limit * 3)
                         )
                     ).scalars()
@@ -430,8 +461,13 @@ class CatalogService:
             results = await asyncio.gather(
                 *[
                     self.availability.badges_for(
-                        m.media_type, tmdb_id=m.tmdb_id, imdb_id=m.imdb_id, title=m.title, year=m.year,
-                        sources=ctx.sources, is_in_app=ctx.is_in_app,
+                        m.media_type,
+                        tmdb_id=m.tmdb_id,
+                        imdb_id=m.imdb_id,
+                        title=m.title,
+                        year=m.year,
+                        sources=ctx.sources,
+                        is_in_app=ctx.is_in_app,
                     )
                     for m in metas
                 ]
@@ -459,8 +495,13 @@ class CatalogService:
         }
 
     # ------------------------------------------------------------------ lists used by home
-    async def recently_added(self, ctx: TileContext, limit: int = 30, source_id: str | None = None,
-                             kinds: tuple[str, ...] = ("movie", "show", "vod", "series")) -> list[dict[str, Any]]:
+    async def recently_added(
+        self,
+        ctx: TileContext,
+        limit: int = 30,
+        source_id: str | None = None,
+        kinds: tuple[str, ...] = ("movie", "show", "vod", "series"),
+    ) -> list[dict[str, Any]]:
         enabled = self._enabled(ctx)
         q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(enabled), Title.added_at.is_not(None))
         if source_id:

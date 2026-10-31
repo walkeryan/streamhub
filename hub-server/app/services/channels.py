@@ -55,8 +55,11 @@ async def now_next(db: Database, chans: Sequence[Channel]) -> dict[str, tuple[Pr
             rows = (
                 await s.execute(
                     select(Programme)
-                    .where(Programme.epg_channel.in_(chunk), Programme.stop > now,
-                           Programme.start < now + timedelta(hours=12))
+                    .where(
+                        Programme.epg_channel.in_(chunk),
+                        Programme.stop > now,
+                        Programme.start < now + timedelta(hours=12),
+                    )
                     .order_by(Programme.epg_channel, Programme.start)
                 )
             ).scalars()
@@ -85,8 +88,12 @@ class ChannelService:
         list_id = hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:16]
         async with self._db.session() as s:
             row = await s.get(Setting, LIST_PREFIX + list_id)
-            value = {"profile_id": profile_id, "params": params, "ids": channel_ids,
-                     "at": datetime.now(UTC).isoformat()}
+            value = {
+                "profile_id": profile_id,
+                "params": params,
+                "ids": channel_ids,
+                "at": datetime.now(UTC).isoformat(),
+            }
             if row is None:
                 s.add(Setting(key=LIST_PREFIX + list_id, value=value))
             else:
@@ -140,15 +147,16 @@ class ChannelService:
             if source_id:
                 query = query.where(Channel.source_id == source_id)
             if group:
-                query = query.where(or_(ChannelGroup.id == group, ChannelGroup.name == group,
-                                        Channel.group_override == group))
+                query = query.where(
+                    or_(ChannelGroup.id == group, ChannelGroup.name == group, Channel.group_override == group)
+                )
             else:
                 query = query.where(ChannelGroup.hidden.is_(False))
             if norm_langs:
                 query = query.where(Channel.language.in_(norm_langs))
             if q:
                 like = "%" + ids.normalise_title(q).replace("%", "").replace("_", "") + "%"
-                conds = [Channel.norm_name.like(like)]
+                conds: list[Any] = [Channel.norm_name.like(like)]
                 if q.strip().isdigit():
                     conds.append(Channel.number == int(q.strip()))
                 query = query.where(or_(*conds))
@@ -156,8 +164,7 @@ class ChannelService:
                 fav_ids = list(
                     (
                         await s.execute(
-                            select(Favorite.ref_id).where(Favorite.profile_id == profile_id,
-                                                          Favorite.kind == "channel")
+                            select(Favorite.ref_id).where(Favorite.profile_id == profile_id, Favorite.kind == "channel")
                         )
                     ).scalars()
                 )
@@ -170,8 +177,13 @@ class ChannelService:
             if limit:
                 query = query.limit(limit)
             chans = list((await s.execute(query)).scalars())
-        params = {"source_id": source_id, "group": group, "language": sorted(norm_langs), "favorites": favorites,
-                  "q": q or None}
+        params = {
+            "source_id": source_id,
+            "group": group,
+            "language": sorted(norm_langs),
+            "favorites": favorites,
+            "q": q or None,
+        }
         lid = await self._store_list(profile_id, params, [c.id for c in chans])
         return {"list_id": lid, "channels": await self.to_api(chans, profile_id)}
 
@@ -251,7 +263,7 @@ class ChannelService:
             if "group" in patch:
                 g = patch["group"]
                 row.group_override = str(g) if g else None
-            if "name" in patch and patch["name"]:
+            if patch.get("name"):
                 data = dict(row.data or {})
                 data["name_override"] = str(patch["name"])
                 row.data = data
@@ -364,8 +376,8 @@ class ChannelService:
             async with self._db.session() as s:
                 order = await self.load_list(res["list_id"], profile_id)
                 if order:
-                    rows = {r.id: r for r in (await s.execute(select(Channel).where(Channel.id.in_(order)))).scalars()}
-                    chans = [rows[i] for i in order if i in rows]
+                    by_id = {r.id: r for r in (await s.execute(select(Channel).where(Channel.id.in_(order)))).scalars()}
+                    chans = [by_id[i] for i in order if i in by_id]
         by_epg: dict[str, list[Channel]] = {}
         for c in chans:
             if c.epg_id:
@@ -379,8 +391,9 @@ class ChannelService:
                 rows = (
                     await s.execute(
                         select(Programme)
-                        .where(Programme.epg_channel.in_(keys[i : i + 500]), Programme.stop > start,
-                               Programme.start < stop)
+                        .where(
+                            Programme.epg_channel.in_(keys[i : i + 500]), Programme.stop > start, Programme.start < stop
+                        )
                         .order_by(Programme.start)
                     )
                 ).scalars()
@@ -410,7 +423,11 @@ class ChannelService:
             order = await self.load_list(res["list_id"], profile_id)
         order = order[:limit]
         async with self._db.session() as s:
-            rows = {r.id: r for r in (await s.execute(select(Channel).where(Channel.id.in_(order)))).scalars()} if order else {}
+            rows = (
+                {r.id: r for r in (await s.execute(select(Channel).where(Channel.id.in_(order)))).scalars()}
+                if order
+                else {}
+            )
         chans = [rows[i] for i in order if i in rows]
         nn = await now_next(self._db, chans)
         return [(c, nn.get(c.epg_id or "", (None, None))[0]) for c in chans]

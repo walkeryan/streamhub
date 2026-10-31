@@ -156,7 +156,7 @@ def map_live(row: dict[str, Any], cats: dict[str, str], output: str, client: Xtr
         name=name,
         stream_url=None,  # rebuilt at playback time; never persist credentials in catalog rows
         logo=F.as_str(F.first(row, "stream_icon", "icon", "logo", "cover")),
-        group=cats.get(cat_id or "", None) or F.as_str(row.get("category_name")) or "Uncategorized",
+        group=cats.get(cat_id or "") or F.as_str(row.get("category_name")) or "Uncategorized",
         tvg_id=F.as_str(F.first(row, "epg_channel_id", "epg_id", "tvg_id")),
         tvg_name=name,
         number=F.as_int(F.first(row, "num", "number")),
@@ -243,7 +243,8 @@ def map_episodes(series_id: str, info: dict[str, Any], client: XtreamClient) -> 
             if not eid:
                 continue
             ext = F.as_str(F.first(ep, "container_extension", "extension")) or "mp4"
-            einfo = ep.get("info") if isinstance(ep.get("info"), dict) else {}
+            raw_info = ep.get("info")
+            einfo: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
             dur_s = F.as_int(F.first(einfo, "duration_secs", "durationSecs"))
             out.append(
                 CatalogItem(
@@ -362,7 +363,8 @@ class XtreamSource:
         if item.kind == MediaKind.VOD:
             info = await self.client.api("get_vod_info", vod_id=item.ext_id)
             if isinstance(info, dict):
-                i = info.get("info") if isinstance(info.get("info"), dict) else {}
+                raw = info.get("info")
+                i: dict[str, Any] = raw if isinstance(raw, dict) else {}
                 item.overview = F.as_str(F.first(i, "plot", "description")) or item.overview
                 item.tmdb_id = item.tmdb_id or F.tmdb_from(i)
                 item.imdb_id = item.imdb_id or F.imdb_from(i)
@@ -421,9 +423,7 @@ class XtreamSource:
         url = self.client.stream_url("live", channel.ext_id, ext)
         return StreamTarget(url=url, mime=_MIME.get(ext, "video/mp2t"), headers=dict(channel.headers), live=True)
 
-    async def catchup_for_channel(
-        self, channel: ChannelInfo, programme: ProgrammeInfo
-    ) -> StreamTarget | None:
+    async def catchup_for_channel(self, channel: ChannelInfo, programme: ProgrammeInfo) -> StreamTarget | None:
         if channel.catchup_days <= 0:
             return None
         now = datetime.now(UTC)

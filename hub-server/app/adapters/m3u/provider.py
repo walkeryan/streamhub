@@ -229,9 +229,7 @@ class M3USource:
         url = channel.stream_url or ""
         return StreamTarget(url=url, mime=guess_mime(url), headers=dict(channel.headers), live=True)
 
-    async def catchup_for_channel(
-        self, channel: ChannelInfo, programme: ProgrammeInfo
-    ) -> StreamTarget | None:
+    async def catchup_for_channel(self, channel: ChannelInfo, programme: ProgrammeInfo) -> StreamTarget | None:
         url = build_catchup_url(channel, programme)
         if not url:
             return None

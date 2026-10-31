@@ -66,7 +66,7 @@ class HomeService:
                 if row is None:
                     from app.services.sources import LAZY_GEN, item_row, upsert_titles
 
-                    await upsert_titles(self._sources._db, [item_row(src.id, it, LAZY_GEN)])  # noqa: SLF001
+                    await upsert_titles(self._sources._db, [item_row(src.id, it, LAZY_GEN)])
                     row = await self._catalog.title_row(src.id, it.ext_id)
                 if row is None:
                     continue
@@ -93,8 +93,13 @@ class HomeService:
         out = []
         for m in metas:
             badges, _ = await self._availability.badges_for(
-                m.media_type, tmdb_id=m.tmdb_id, imdb_id=None, title=m.title, year=m.year,
-                sources=ctx.sources, is_in_app=ctx.is_in_app,
+                m.media_type,
+                tmdb_id=m.tmdb_id,
+                imdb_id=None,
+                title=m.title,
+                year=m.year,
+                sources=ctx.sources,
+                is_in_app=ctx.is_in_app,
             )
             hub = ids.tmdb_id(m.media_type, m.tmdb_id)
             out.append(meta_tile(m, badges, ctx.favorites, ctx.progress_pct(hub)))
@@ -105,8 +110,9 @@ class HomeService:
         source_rows = [
             (f"source:{s.id}", s)
             for s in sorted(ctx.sources.values(), key=lambda x: x.priority)
-            if s.enabled and s.type != SourceType.STREAMING_SERVICE.value and (s.counts or {}).get("channels", 0)
-            != sum((s.counts or {}).values())
+            if s.enabled
+            and s.type != SourceType.STREAMING_SERVICE.value
+            and (s.counts or {}).get("channels", 0) != sum((s.counts or {}).values())
         ]
         layout = await self._layout.get(profile_id, [rid for rid, _ in source_rows])
         visible = [r["id"] for r in layout if not r["hidden"]]
@@ -115,9 +121,7 @@ class HomeService:
         cw = await self.continue_watching(profile_id, ctx)
         recent = await self._catalog.recently_added(ctx, 30)
         trending: list[dict[str, Any]] = []
-        has_library = any(
-            s.enabled and s.type != SourceType.STREAMING_SERVICE.value for s in ctx.sources.values()
-        )
+        has_library = any(s.enabled and s.type != SourceType.STREAMING_SERVICE.value for s in ctx.sources.values())
         if "trending" in visible or not (cw or recent):
             trending = await self.trending(ctx)
 
@@ -133,8 +137,9 @@ class HomeService:
             elif rid == "watchlist":
                 tiles = await self._catalog.tiles_for_ids(await self._catalog.watchlist_ids(profile_id), ctx)
             elif rid == "favorites":
-                fav = await self._catalog.favorite_ids(profile_id, kinds={"movie", "show", "vod", "series",
-                                                                           "episode", "season"})
+                fav = await self._catalog.favorite_ids(
+                    profile_id, kinds={"movie", "show", "vod", "series", "episode", "season"}
+                )
                 tiles = await self._catalog.tiles_for_ids(fav, ctx)
             elif rid == "trending":
                 tiles = trending if not has_library or not (cw or recent) else trending[:20]

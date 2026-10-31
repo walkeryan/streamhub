@@ -1,0 +1,14 @@
+#EXTM3U url-tvg="demo-epg.xml"
+#EXTINF:-1 tvg-id="demo.news.us" tvg-name="Demo News" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/320px-Big_buck_bunny_poster_big.jpg" tvg-country="US" group-title="EN | News",Demo News HD
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+#EXTINF:-1 tvg-id="demo.sport.uk" tvg-logo="" group-title="UK: Sport",Demo Sport
+#EXTVLCOPT:http-user-agent=StreamHubDemo/1.0
+https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+#EXTINF:-1 tvg-id="demo.cinema.fr" tvg-language="French" group-title="FR - Cinéma",Démo Cinéma
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+#EXTINF:-1 tvg-id="demo.kids.de" group-title="DE: Kinder",Demo Kinder
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+#EXTINF:-1 tvg-id="demo.arabic" group-title="|AR| General",Demo Arabia
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+#EXTINF:-1 tvg-id="demo.music" group-title="Music 🇪🇸",Demo Música
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8

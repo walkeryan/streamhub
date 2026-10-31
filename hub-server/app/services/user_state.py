@@ -55,16 +55,22 @@ class FavoritesService:
             raise ServiceError("invalid id") from exc
         async with self._db.session() as s:
             row = (
-                await s.execute(
-                    select(Favorite).where(Favorite.profile_id == profile_id, Favorite.ref_id == ref_id)
-                )
+                await s.execute(select(Favorite).where(Favorite.profile_id == profile_id, Favorite.ref_id == ref_id))
             ).scalar_one_or_none()
             if row is None:
                 if sort is None:
-                    sort = int(
-                        (await s.execute(select(func.coalesce(func.max(Favorite.sort), 0))
-                                         .where(Favorite.profile_id == profile_id))).scalar_one()
-                    ) + 1
+                    sort = (
+                        int(
+                            (
+                                await s.execute(
+                                    select(func.coalesce(func.max(Favorite.sort), 0)).where(
+                                        Favorite.profile_id == profile_id
+                                    )
+                                )
+                            ).scalar_one()
+                        )
+                        + 1
+                    )
                 s.add(Favorite(profile_id=profile_id, kind=kind, ref_id=ref_id, sort=sort))
             else:
                 row.kind = kind
@@ -103,7 +109,8 @@ class WatchlistService:
             return list(
                 (
                     await s.execute(
-                        select(Watchlist.ref_id).where(Watchlist.profile_id == profile_id)
+                        select(Watchlist.ref_id)
+                        .where(Watchlist.profile_id == profile_id)
                         .order_by(Watchlist.added_at.desc())
                     )
                 ).scalars()
@@ -196,7 +203,7 @@ class ProgressService:
 
     async def _forward(self, source_id: str, item: Any, position_ms: int, duration_ms: int | None, state: str) -> None:
         try:
-            src, prov = await self._sources.provider_for(source_id)
+            _src, prov = await self._sources.provider_for(source_id)
             if isinstance(prov, ProgressReporter):
                 await prov.report_progress(row_to_item(item), position_ms, duration_ms, state)
         except Exception as exc:  # never fail the client's report
@@ -207,8 +214,10 @@ class ProgressService:
             return list(
                 (
                     await s.execute(
-                        select(Progress).where(Progress.profile_id == profile_id)
-                        .order_by(Progress.updated_at.desc()).limit(limit)
+                        select(Progress)
+                        .where(Progress.profile_id == profile_id)
+                        .order_by(Progress.updated_at.desc())
+                        .limit(limit)
                     )
                 ).scalars()
             )
@@ -219,9 +228,14 @@ class ProgressService:
                 (
                     await s.execute(
                         select(Progress)
-                        .where(Progress.profile_id == profile_id, Progress.completed.is_(False),
-                               Progress.position_ms > 30_000, Progress.kind.is_distinct_from("channel"))
-                        .order_by(Progress.updated_at.desc()).limit(limit)
+                        .where(
+                            Progress.profile_id == profile_id,
+                            Progress.completed.is_(False),
+                            Progress.position_ms > 30_000,
+                            Progress.kind.is_distinct_from("channel"),
+                        )
+                        .order_by(Progress.updated_at.desc())
+                        .limit(limit)
                     )
                 ).scalars()
             )
@@ -254,8 +268,13 @@ class HomeLayoutService:
             rid = str(r.get("id") or "").strip()
             if not rid:
                 continue
-            clean.append({"id": rid[:64], "hidden": bool(r.get("hidden", False)),
-                          "sort": int(r["sort"]) if r.get("sort") is not None else (i + 1) * 10})
+            clean.append(
+                {
+                    "id": rid[:64],
+                    "hidden": bool(r.get("hidden", False)),
+                    "sort": int(r["sort"]) if r.get("sort") is not None else (i + 1) * 10,
+                }
+            )
         async with self._db.session() as s:
             prof = await s.get(Profile, profile_id)
             if prof is None:

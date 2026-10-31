@@ -15,7 +15,15 @@ from sqlalchemy import delete, func, select
 from app.infra.crypto import Crypto, hash_secret, verify_secret
 from app.infra.db import Database
 from app.infra.models import DeviceCode, DisclaimerAcceptance, Profile, utcnow
-from app.services.errors import Conflict, Forbidden, Gone, NotFound, PreconditionRequired, ServiceError, Unauthorized
+from app.services.errors import (
+    Conflict,
+    Forbidden,
+    Gone,
+    NotFound,
+    PreconditionRequired,
+    ServiceError,
+    Unauthorized,
+)
 
 log = logging.getLogger(__name__)
 

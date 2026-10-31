@@ -73,9 +73,7 @@ class PlaybackProvider(Protocol):
 class LiveProvider(Protocol):
     async def stream_for_channel(self, channel: ChannelInfo) -> StreamTarget: ...
 
-    async def catchup_for_channel(
-        self, channel: ChannelInfo, programme: ProgrammeInfo
-    ) -> StreamTarget | None: ...
+    async def catchup_for_channel(self, channel: ChannelInfo, programme: ProgrammeInfo) -> StreamTarget | None: ...
 
 
 @runtime_checkable

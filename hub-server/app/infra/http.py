@@ -41,7 +41,7 @@ async def request_with_retry(
     while True:
         try:
             resp = await client.request(method, url, **kw)
-        except (httpx.TransportError,) as exc:
+        except httpx.TransportError as exc:
             if attempt >= retries:
                 raise
             delay = backoff * (2**attempt)
@@ -56,8 +56,6 @@ async def request_with_retry(
                     delay = max(delay, min(float(ra), 30.0))
                 except ValueError:
                     pass
-            log.info(
-                "http retryable status", extra={"url": redact_url(url), "status": resp.status_code}
-            )
+            log.info("http retryable status", extra={"url": redact_url(url), "status": resp.status_code})
         attempt += 1
         await asyncio.sleep(delay)

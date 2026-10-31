@@ -50,7 +50,7 @@ def _open_maybe_gzip(path: Path) -> IO[bytes]:
     with path.open("rb") as fh:
         magic = fh.read(2)
     if magic == b"\x1f\x8b":
-        return gzip.open(path, "rb")
+        return gzip.open(path, "rb")  # type: ignore[return-value]
     return path.open("rb")
 
 
@@ -68,8 +68,13 @@ def iter_file(
     """Yield ProgrammeInfo items and (channel_id, display_names, icon) tuples."""
     with _open_maybe_gzip(path) as fh:
         ctx = etree.iterparse(
-            fh, events=("end",), tag=("programme", "channel"), recover=True, huge_tree=True,
-            resolve_entities=False, no_network=True,
+            fh,
+            events=("end",),
+            tag=("programme", "channel"),
+            recover=True,
+            huge_tree=True,
+            resolve_entities=False,
+            no_network=True,
         )
         for _, el in ctx:
             try:
@@ -143,7 +148,7 @@ class XmltvEpgProvider:
         path = await self._download(spec)
         is_temp = not (spec.url.startswith("file://") or spec.url.startswith("/"))
         not_before = datetime.now(UTC) - timedelta(days=2)
-        queue: asyncio.Queue[list[ProgrammeInfo] | None | BaseException] = asyncio.Queue(maxsize=4)
+        queue: asyncio.Queue[list[ProgrammeInfo] | BaseException | None] = asyncio.Queue(maxsize=4)
         loop = asyncio.get_running_loop()
 
         def worker() -> None:

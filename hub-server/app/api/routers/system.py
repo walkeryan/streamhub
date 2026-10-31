@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from app.adapters.tmdb.client import JUSTWATCH_ATTRIBUTION, TMDB_ATTRIBUTION
 from app.api import schemas as S
-from app.api.deps import C, Admin, P
+from app.api.deps import Admin, C, P
 from app.infra.settings import APP_VERSION
 from app.services.errors import ServiceError
 
@@ -58,4 +58,8 @@ async def health(c: C) -> dict[str, Any]:
 
 @router.get("/about", tags=["system"])
 async def about() -> dict[str, Any]:
-    return {"version": APP_VERSION, "tmdb_attribution": TMDB_ATTRIBUTION, "justwatch_attribution": JUSTWATCH_ATTRIBUTION}
+    return {
+        "version": APP_VERSION,
+        "tmdb_attribution": TMDB_ATTRIBUTION,
+        "justwatch_attribution": JUSTWATCH_ATTRIBUTION,
+    }

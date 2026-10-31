@@ -26,9 +26,7 @@ class SqlCache:
     async def set(self, key: str, value: Any, ttl_seconds: int) -> None:
         expires = utcnow() + timedelta(seconds=ttl_seconds)
         stmt = insert(CacheEntry).values(key=key, value=value, expires_at=expires)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[CacheEntry.key], set_={"value": value, "expires_at": expires}
-        )
+        stmt = stmt.on_conflict_do_update(index_elements=[CacheEntry.key], set_={"value": value, "expires_at": expires})
         async with self._db.session() as s:
             await s.execute(stmt)
             await s.commit()

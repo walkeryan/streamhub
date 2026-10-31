@@ -184,7 +184,9 @@ class JellyfinSource:
             tmdb = None
         tags = d.get("ImageTags") or {}
         backdrops = d.get("BackdropImageTags") or []
-        parent = d.get("SeasonId") if kind == MediaKind.EPISODE else d.get("SeriesId") if kind == MediaKind.SEASON else None
+        parent = (
+            d.get("SeasonId") if kind == MediaKind.EPISODE else d.get("SeriesId") if kind == MediaKind.SEASON else None
+        )
         ticks = d.get("RunTimeTicks")
         ud = d.get("UserData") or {}
         container = None
@@ -311,9 +313,7 @@ class JellyfinSource:
             return None
         return {"X-Emby-Token": self.token or "", "Accept": "image/*"}
 
-    async def report_progress(
-        self, item: CatalogItem, position_ms: int, duration_ms: int | None, state: str
-    ) -> None:
+    async def report_progress(self, item: CatalogItem, position_ms: int, duration_ms: int | None, state: str) -> None:
         await self._ensure()
         body = {
             "ItemId": item.ext_id,

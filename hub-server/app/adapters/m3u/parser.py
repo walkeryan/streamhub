@@ -69,9 +69,10 @@ def _int(value: str | None, default: int = 0) -> int:
 
 
 def stable_ext_id(url: str, tvg_id: str | None, name: str) -> str:
-    """Stable id across refreshes: prefer URL (unique per stream)."""
-    h = hashlib.sha1(f"{url}".encode(), usedforsecurity=False).hexdigest()[:16]
-    return h if url else hashlib.sha1(f"{tvg_id}|{name}".encode(), usedforsecurity=False).hexdigest()[:16]
+    """Stable id across refreshes. The same URL can legitimately appear under several
+    names/ids (mirrors, regional aliases), so the identity is url + (tvg-id or name)."""
+    key = f"{url}|{tvg_id or name.strip().lower()}"
+    return hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:16]
 
 
 def _split_pipe_headers(url: str) -> tuple[str, dict[str, str]]:

@@ -117,24 +117,62 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     active = ActiveStreams()
     tokens = StreamTokens(crypto, settings.stream_token_ttl_s)
     playback = PlaybackResolver(
-        sources=sources, catalog=catalog, channels=channels, availability=availability, progress=progress,
-        settings=app_settings, deeplinks=deeplinks, meta=tmdb, tokens=tokens, active=active,
+        sources=sources,
+        catalog=catalog,
+        channels=channels,
+        availability=availability,
+        progress=progress,
+        settings=app_settings,
+        deeplinks=deeplinks,
+        meta=tmdb,
+        tokens=tokens,
+        active=active,
     )
 
     def proxy_client(**kw: Any) -> httpx.AsyncClient:
-        return http_factory(**kw)  # type: ignore[no-any-return]
+        client: httpx.AsyncClient = http_factory(**kw)
+        return client
 
     proxy = StreamProxy(
-        proxy_client, settings.transcode_path, ffmpeg=settings.ffmpeg_path, vaapi_device=settings.vaapi_device,
-        on_start=active.inc, on_stop=active.dec,
+        proxy_client,
+        settings.transcode_path,
+        ffmpeg=settings.ffmpeg_path,
+        vaapi_device=settings.vaapi_device,
+        on_start=active.inc,
+        on_stop=active.dec,
     )
     return Container(
-        settings=settings, db=db, crypto=crypto, cache=cache, adapter_ctx=ctx, registry=registry,
-        app_settings=app_settings, disclaimer=disclaimer, auth=auth, language=language, tmdb=tmdb,
-        sources=sources, availability=availability, catalog=catalog, channels=channels, favorites=favorites,
-        watchlist=watchlist, progress=progress, layout=layout, themes=themes, service_registry=service_registry,
-        deeplinks=deeplinks, plex_link=plex_link, sync=sync, scheduler=scheduler, home=home, active=active,
-        tokens=tokens, playback=playback, proxy=proxy, http_factory=http_factory,
+        settings=settings,
+        db=db,
+        crypto=crypto,
+        cache=cache,
+        adapter_ctx=ctx,
+        registry=registry,
+        app_settings=app_settings,
+        disclaimer=disclaimer,
+        auth=auth,
+        language=language,
+        tmdb=tmdb,
+        sources=sources,
+        availability=availability,
+        catalog=catalog,
+        channels=channels,
+        favorites=favorites,
+        watchlist=watchlist,
+        progress=progress,
+        layout=layout,
+        themes=themes,
+        service_registry=service_registry,
+        deeplinks=deeplinks,
+        plex_link=plex_link,
+        sync=sync,
+        scheduler=scheduler,
+        home=home,
+        active=active,
+        tokens=tokens,
+        playback=playback,
+        proxy=proxy,
+        http_factory=http_factory,
     )
 
 

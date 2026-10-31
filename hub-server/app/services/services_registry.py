@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from typing import Any
 
 from sqlalchemy import select
@@ -45,11 +46,13 @@ class ServiceRegistryService:
             r = await s.get(ServiceRegistry, key)
         return _to_row(r) if r else None
 
-    async def list(self) -> list[ServiceRow]:
+    async def list(self) -> builtins.list[ServiceRow]:
         async with self._db.session() as s:
-            return [_to_row(r) for r in (await s.execute(select(ServiceRegistry).order_by(ServiceRegistry.key))).scalars()]
+            return [
+                _to_row(r) for r in (await s.execute(select(ServiceRegistry).order_by(ServiceRegistry.key))).scalars()
+            ]
 
-    async def api_list(self) -> list[dict[str, Any]]:
+    async def api_list(self) -> builtins.list[dict[str, Any]]:
         out = []
         for r in await self.list():
             web = r.web_search_url or r.web_title_url or ""

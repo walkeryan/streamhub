@@ -21,7 +21,9 @@ class StreamingServiceSource:
         return []
 
     async def test(self) -> TestResult:
-        return TestResult(bool(self.ref.service_key), "Hand-off service" if self.ref.service_key else "missing service_key")
+        return TestResult(
+            bool(self.ref.service_key), "Hand-off service" if self.ref.service_key else "missing service_key"
+        )
 
     async def sync(self, sink: CatalogSink) -> None:
         return None

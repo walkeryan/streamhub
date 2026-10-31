@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Response
 
 from app.api import schemas as S
-from app.api.deps import C, Admin, P
+from app.api.deps import Admin, C, P
 from app.services.errors import ServiceError
 
 router = APIRouter()
@@ -34,8 +34,13 @@ async def title(id: str, c: C, p: P) -> dict[str, Any]:
 
 @router.get("/browse/{section}", response_model=S.BrowsePage, tags=["catalog"])
 async def browse(
-    section: str, c: C, p: P, source_id: str | None = None, genre: str | None = None,
-    sort: str | None = Query(None, pattern="^(added|title|year|rating)$"), page: int = Query(1, ge=1),
+    section: str,
+    c: C,
+    p: P,
+    source_id: str | None = None,
+    genre: str | None = None,
+    sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
+    page: int = Query(1, ge=1),
 ) -> dict[str, Any]:
     return await c.catalog.browse(section, p.profile_id, source_id=source_id, genre=genre, sort=sort, page=page)
 
@@ -43,11 +48,22 @@ async def browse(
 # ---------------------------------------------------------------- channels
 @router.get("/channels", response_model=S.ChannelList, tags=["live"])
 async def channels(
-    c: C, p: P, source_id: str | None = None, group: str | None = None, language: str | None = None,
-    favorites: bool = False, q: str | None = None, list_id: str | None = None,
+    c: C,
+    p: P,
+    source_id: str | None = None,
+    group: str | None = None,
+    language: str | None = None,
+    favorites: bool = False,
+    q: str | None = None,
+    list_id: str | None = None,
 ) -> dict[str, Any]:
     return await c.channels.list_channels(
-        p.profile_id, source_id=source_id, group=group, language=language, favorites=favorites, q=q,
+        p.profile_id,
+        source_id=source_id,
+        group=group,
+        language=language,
+        favorites=favorites,
+        q=q,
         list_id=list_id,
     )
 
@@ -74,8 +90,11 @@ async def patch_channel(id: str, body: S.ChannelPatch, c: C, p: Admin) -> dict[s
 
 @router.get("/epg", response_model=dict[str, list[S.Programme]], tags=["live"])
 async def epg(
-    c: C, p: P, channel_ids: str | None = None,
-    from_: datetime | None = Query(None, alias="from"), to: datetime | None = None,
+    c: C,
+    p: P,
+    channel_ids: str | None = None,
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = None,
 ) -> dict[str, Any]:
     cids = [x.strip() for x in channel_ids.split(",") if x.strip()] if channel_ids else None
     return await c.channels.epg_grid(p.profile_id, cids, from_, to)

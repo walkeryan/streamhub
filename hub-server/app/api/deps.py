@@ -22,9 +22,7 @@ def get_container(request: Request) -> Container:
 C = Annotated[Container, Depends(get_container)]
 
 
-def current_principal(
-    c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
-) -> Principal:
+def current_principal(c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> Principal:
     if creds is None or not creds.credentials:
         raise Unauthorized("missing bearer token")
     return c.auth.principal_from_access(creds.credentials)

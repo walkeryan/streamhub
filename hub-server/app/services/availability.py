@@ -104,9 +104,7 @@ class AvailabilityService:
             await s.commit()
         return new
 
-    async def handoff_badges(
-        self, media_type: str, tmdb_id: int, sources: dict[str, Source]
-    ) -> list[dict[str, Any]]:
+    async def handoff_badges(self, media_type: str, tmdb_id: int, sources: dict[str, Source]) -> list[dict[str, Any]]:
         services = [s for s in sources.values() if s.type == SourceType.STREAMING_SERVICE.value and s.enabled]
         if not services:
             return []
@@ -124,8 +122,14 @@ class AvailabilityService:
             pids = {int(x) for x in row.tmdb_provider_ids or []}
             hits = [o for o in offers_by_region[region] if o.provider_id in pids]
             if hits:
-                best = min(hits, key=lambda o: ["flatrate", "free", "ads", "rent", "buy"].index(o.kind)
-                           if o.kind in ("flatrate", "free", "ads", "rent", "buy") else 9)
+                best = min(
+                    hits,
+                    key=lambda o: (
+                        ["flatrate", "free", "ads", "rent", "buy"].index(o.kind)
+                        if o.kind in ("flatrate", "free", "ads", "rent", "buy")
+                        else 9
+                    ),
+                )
                 badges.append(badge_for_source(svc, in_app=False, kind=best.kind))
         return badges
 
@@ -141,9 +145,7 @@ class AvailabilityService:
         is_in_app: Any,
         include_handoff: bool = True,
     ) -> tuple[list[dict[str, Any]], list[Title]]:
-        matches = await self.library_matches(
-            media_type, tmdb_id=tmdb_id, imdb_id=imdb_id, title=title, year=year
-        )
+        matches = await self.library_matches(media_type, tmdb_id=tmdb_id, imdb_id=imdb_id, title=title, year=year)
         badges = [
             badge_for_source(sources[m.source_id], in_app=is_in_app(sources[m.source_id].type))
             for m in matches

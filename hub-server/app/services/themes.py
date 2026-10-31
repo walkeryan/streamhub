@@ -46,9 +46,7 @@ class ThemeService:
     async def list(self) -> list[dict[str, Any]]:
         async with self._db.session() as s:
             custom = list((await s.execute(select(Theme).order_by(Theme.created_at))).scalars())
-        return builtin_themes() + [
-            {"id": t.id, "name": t.name, "builtin": False, "tokens": t.tokens} for t in custom
-        ]
+        return builtin_themes() + [{"id": t.id, "name": t.name, "builtin": False, "tokens": t.tokens} for t in custom]
 
     async def exists(self, theme_id: str) -> bool:
         return any(t["id"] == theme_id for t in await self.list())
