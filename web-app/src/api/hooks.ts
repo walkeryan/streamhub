@@ -47,7 +47,7 @@ export const useTitle = (id: string | undefined) =>
     queryFn: () => unwrap<TitleDetail>(api.GET('/titles/{id}', { params: { path: { id: id! } } })),
   })
 
-export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
+export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
 export const useBrowse = (section: string, f: BrowseFilters, page = 1) =>
   useQuery({
     queryKey: ['browse', useProfileId(), section, f, page],
@@ -60,19 +60,20 @@ export const useBrowseCategories = (section: string, f: BrowseFilters) =>
 export const useBrowseLanguages = (section: string, source_id?: string) =>
   useQuery({ queryKey: ['browse-languages', useProfileId(), section, source_id], queryFn: () => unwrap<LanguageCount[]>(api.GET('/browse/{section}/languages', { params: { path: { section }, query: { source_id } } })) })
 
-export interface ChannelFilters { group?: string; language?: string; favorites?: boolean; q?: string; source_id?: string; limit?: number; offset?: number; has_epg?: boolean; include_hidden?: boolean }
-export const useChannels = (f: ChannelFilters) => {
+export interface ChannelFilters { country?: string; group?: string; language?: string; favorites?: boolean; q?: string; source_id?: string; limit?: number; offset?: number; has_epg?: boolean; include_hidden?: boolean }
+export const useChannels = (f: ChannelFilters, enabled = true) => {
   const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
   return useQuery({
     queryKey: ['channels', useProfileId(), f, preferred],
+    enabled,
     placeholderData: useProfilePlaceholder<ChannelsResult & { total?: number; offset?: number; limit?: number }>(),
     queryFn: () => unwrap<ChannelsResult & { total?: number; offset?: number; limit?: number }>(api.GET('/channels', { params: { query: f } })),
   })
 }
 
-export const useChannelGroups = (filters: ChannelFilters = {}) => {
+export const useChannelGroups = (filters: ChannelFilters = {}, enabled = true) => {
   const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
-  return useQuery({ queryKey: ['channel-groups', useProfileId(), filters, preferred], queryFn: () => unwrap<ChannelGroup[]>(api.GET('/channels/groups', { params: { query: filters } })) })
+  return useQuery({ enabled, queryKey: ['channel-groups', useProfileId(), filters, preferred], queryFn: () => unwrap<ChannelGroup[]>(api.GET('/channels/groups', { params: { query: filters } })) })
 }
 
 export const useLanguages = () =>

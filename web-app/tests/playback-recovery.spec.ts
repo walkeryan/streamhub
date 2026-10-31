@@ -85,3 +85,62 @@ test('a stream that never produces media leaves starting state after the startup
   await page.clock.fastForward(25010)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'reconnecting')
 })
+
+async function controlledPlaying(page: Page) {
+  await openChannel(page)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  // Keep the real native decoder smoke above; isolate media-event timing here.
+  await page.getByTestId('video').evaluate((video: HTMLVideoElement) => video.pause())
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'paused')
+  await page.getByTestId('video').evaluate((video: HTMLVideoElement) => {
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => false })
+    video.dispatchEvent(new Event('playing'))
+  })
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await page.clock.install()
+}
+
+test('brief waiting does not flash an overlay over started playback', async ({ page }) => {
+  await controlledPlaying(page)
+  const video = page.getByTestId('video'), player = page.getByTestId('player')
+  await video.dispatchEvent('waiting')
+  await page.clock.fastForward(300)
+  await expect(player).toHaveAttribute('data-state', 'playing')
+  await expect(player.getByText('Starting stream…', { exact: true })).toHaveCount(0)
+  await expect(player.getByText('Buffering…', { exact: true })).toHaveCount(0)
+  await video.dispatchEvent('playing')
+  await page.clock.fastForward(600)
+  await expect(player).toHaveAttribute('data-state', 'playing')
+})
+
+test('sustained waiting is buffering, recovers on playing, and has a watchdog', async ({ page }) => {
+  await controlledPlaying(page)
+  const video = page.getByTestId('video'), player = page.getByTestId('player')
+  await video.dispatchEvent('waiting')
+  await page.clock.fastForward(510)
+  await expect(player).toHaveAttribute('data-state', 'buffering')
+  await expect(player.getByText('Buffering…', { exact: true })).toBeVisible()
+  await expect(player.getByText('Starting stream…', { exact: true })).toHaveCount(0)
+  await video.dispatchEvent('playing')
+  await expect(player).toHaveAttribute('data-state', 'playing')
+  await video.dispatchEvent('waiting')
+  await page.clock.fastForward(510)
+  await expect(player).toHaveAttribute('data-state', 'buffering')
+  await page.clock.fastForward(25010)
+  await expect(player).toHaveAttribute('data-state', 'reconnecting')
+})
+
+test('pause and error cancel pending buffering transitions', async ({ page }) => {
+  await controlledPlaying(page)
+  const video = page.getByTestId('video'), player = page.getByTestId('player')
+  await video.dispatchEvent('waiting')
+  await video.dispatchEvent('pause')
+  await page.clock.fastForward(600)
+  await expect(player).toHaveAttribute('data-state', 'paused')
+  await video.dispatchEvent('playing')
+  await video.dispatchEvent('waiting')
+  await video.dispatchEvent('error')
+  await expect(player).toHaveAttribute('data-state', 'reconnecting')
+  await page.clock.fastForward(400)
+  await expect(player).toHaveAttribute('data-state', 'reconnecting')
+})

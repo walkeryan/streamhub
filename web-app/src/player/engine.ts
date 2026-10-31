@@ -90,7 +90,8 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     if (!mpegts.isSupported()) throw new Error('This browser cannot play MPEG-TS streams')
     const p = mpegts.createPlayer(
       { type: 'mpegts', isLive: live, url },
-      { enableStashBuffer: false, liveBufferLatencyChasing: live, isLive: live, lazyLoad: false },
+      // Keep the library defaults for packet buffering and live-latency chasing.
+      { enableStashBuffer: true, liveBufferLatencyChasing: false, isLive: live, lazyLoad: false },
     )
     p.on(mpegts.Events.ERROR, (type: string, detail: string) => opt.onFatal(`${type}: ${detail}`))
     p.attachMediaElement(video)

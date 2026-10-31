@@ -9,9 +9,9 @@ export function Preview({ channelId }: { channelId: string | null }) {
   return (
     <div style={{ position: 'relative', aspectRatio: '16/9', background: '#000', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }} data-testid="live-preview" data-state={state}>
       <video ref={ref} muted playsInline loop aria-label="Channel preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-      {(state === 'resolving' || state === 'loading' || state === 'reconnecting') && channelId && (
+      {(state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && channelId && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.45)', color: '#fff' }} role="status">
-          {state === 'reconnecting' ? 'Reconnecting…' : 'Tuning…'}
+          {state === 'reconnecting' ? 'Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Tuning…'}
         </div>
       )}
       {state === 'error' && <div className="grid place-items-center p-4 text-center" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.7)', color: '#fff' }} role="alert">{error}</div>}

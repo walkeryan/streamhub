@@ -1132,6 +1132,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/browse/{section}/genres": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Actual metadata genres with scoped distinct title counts */
+        get: {
+            parameters: {
+                query?: {
+                    source_id?: string;
+                    language?: string;
+                    category?: string;
+                    q?: string;
+                };
+                header?: never;
+                path: {
+                    section: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            count: number;
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/browse/{section}/languages": {
         parameters: {
             query?: never;
@@ -1185,6 +1231,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    country?: string;
                     source_id?: string;
                     group?: string;
                     language?: string;
@@ -1236,6 +1283,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    country?: string;
                     source_id?: string;
                     language?: string;
                     q?: string;
@@ -1390,6 +1438,47 @@ export interface paths {
         };
         trace?: never;
     };
+    "/sports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    language?: string;
+                    sport?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Current sports programme listings; coverage reflects selected languages and visible enabled channels. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/epg": {
         parameters: {
             query?: never;
@@ -1401,6 +1490,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    country?: string;
                     channel_ids?: string;
                     from?: string;
                     to?: string;
@@ -2200,6 +2290,11 @@ export interface components {
             /** @enum {string} */
             language_source?: "tag" | "db" | "country" | "group" | "flag" | "name" | "user";
             country?: string | null;
+            /**
+             * @description Explicit country tag or conservative provider group/flag hint; missing remains unknown.
+             * @enum {string|null}
+             */
+            country_source?: "tag" | "group" | "flag" | null;
             epg_id?: string | null;
             /** @default 0 */
             catchup_days: number;
@@ -2343,6 +2438,37 @@ export interface components {
         Disclaimer: {
             version: string;
             text: string;
+        };
+        SportsListing: {
+            id: string;
+            sport: string;
+            programme_id: string;
+            title: string;
+            category?: string | null;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            stop: string;
+            channel_id: string;
+            channel_name: string;
+            channel_number: number;
+            source_name: string;
+        };
+        SportsPage: {
+            /** Format: date-time */
+            as_of: string;
+            items: components["schemas"]["SportsListing"][];
+            total: number;
+            limit: number;
+            offset: number;
+            sports: {
+                name: string;
+                count: number;
+            }[];
+            coverage: {
+                eligible_channels: number;
+                channels_with_current_schedule: number;
+            };
         };
     };
     responses: never;

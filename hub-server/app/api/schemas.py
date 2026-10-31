@@ -230,6 +230,7 @@ class Channel(_M):
     language: str
     language_source: Literal["tag", "db", "country", "group", "flag", "name", "user"] | None = None
     country: str | None = None
+    country_source: Literal["tag", "group", "flag"] | None = None
     epg_id: str | None = None
     catchup_days: int = 0
     is_favorite: bool
@@ -382,3 +383,37 @@ class Health(_M):
     status: str
     version: str
     db: bool
+
+
+class SportsListing(_M):
+    id: str
+    sport: str
+    programme_id: str
+    title: str
+    category: str | None = None
+    start: datetime
+    stop: datetime
+    channel_id: str
+    channel_name: str
+    channel_number: int
+    source_name: str
+
+
+class SportCount(_M):
+    name: str
+    count: int
+
+
+class SportsCoverage(_M):
+    eligible_channels: int
+    channels_with_current_schedule: int
+
+
+class SportsPage(_M):
+    as_of: datetime
+    items: list[SportsListing]
+    total: int
+    limit: int
+    offset: int
+    sports: list[SportCount]
+    coverage: SportsCoverage

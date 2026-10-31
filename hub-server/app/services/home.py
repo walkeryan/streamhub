@@ -104,6 +104,8 @@ class HomeService:
                 tiles = cw
             elif rid == "on_now":
                 tiles, title = await self.on_now(profile_id, ctx)
+            elif rid == "seasonal_halloween":
+                tiles = await self._catalog.seasonal_movies(profile_id, ctx)
             elif rid == "recently_added":
                 tiles = recent
             elif rid == "watchlist":

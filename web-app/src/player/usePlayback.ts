@@ -3,7 +3,7 @@ import { api, reportProgress, unwrap } from '../api/client'
 import type { PlaybackDescriptor } from '../api/types'
 import { attachSource, type PlayerHandle } from './engine'
 
-export type PlayState = 'resolving' | 'loading' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
+export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
 
 export interface PlaybackReq { id: string; sourceId?: string | null; catchupProgrammeId?: string | null }
 
@@ -31,6 +31,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const descRef = useRef<PlaybackDescriptor | null>(null)
   const retry = useRef(0)
   const retryTimer = useRef<number | null>(null)
+  const waitingTimer = useRef<number | null>(null)
+  const hasPlayed = useRef(false)
+  const clearWaiting = useCallback(() => {
+    if (waitingTimer.current !== null) window.clearTimeout(waitingTimer.current)
+    waitingTimer.current = null
+  }, [])
   const clearRetry = useCallback(() => {
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
     retryTimer.current = null
@@ -38,6 +44,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const key = req ? `${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}` : ''
 
   const reconnect = useCallback((_reason: string) => {
+    clearWaiting()
     if (retryTimer.current !== null) return
     if (retry.current >= MAX_RETRIES) {
       setState('error')
@@ -47,13 +54,15 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     const wait = Math.min(15_000, 500 * 2 ** retry.current++)
     setState('reconnecting')
     retryTimer.current = window.setTimeout(() => { retryTimer.current = null; setAttempt((a) => a + 1) }, wait)
-  }, [])
+  }, [clearWaiting])
 
   // resolve + attach
   useEffect(() => {
     if (!req) return
     let cancelled = false
     const controller = new AbortController()
+    hasPlayed.current = false
+    clearWaiting()
     let owned: PlayerHandle | null = null
     const video = videoRef.current
     setState((s) => (s === 'reconnecting' ? s : 'resolving'))
@@ -77,7 +86,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         handle.current = owned
         video.muted = !!opts.muted
         try { await video.play() } catch (e) {
-          if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') setState('paused')
+          if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') { clearWaiting(); setState('paused') }
         }
       } catch (e) {
         if (!cancelled) reconnect(e instanceof Error ? e.message : 'unknown error')
@@ -87,6 +96,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       cancelled = true
       controller.abort()
       clearRetry()
+      clearWaiting()
       owned?.destroy()
       if (handle.current === owned) handle.current = null
     }
@@ -104,9 +114,16 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       const d = descRef.current
       if (d && !d.live && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
     }
-    const onPlaying = () => { clearRetry(); setState('playing') }
-    const onPause = () => { if (!v.ended) setState((s) => (s === 'playing' ? 'paused' : s)) }
-    const onWaiting = () => setState((s) => (s === 'playing' ? 'loading' : s))
+    const onPlaying = () => { hasPlayed.current = true; clearWaiting(); clearRetry(); setState('playing') }
+    const onPause = () => { clearWaiting(); if (!v.ended) setState((s) => (s === 'playing' || s === 'buffering' ? 'paused' : s)) }
+    const onWaiting = () => {
+      if (!hasPlayed.current || v.paused || waitingTimer.current !== null) return
+      // Short packet gaps are normal; avoid flashing a startup banner over decoded video.
+      waitingTimer.current = window.setTimeout(() => {
+        waitingTimer.current = null
+        setState((s) => s === 'playing' ? 'buffering' : s)
+      }, 500)
+    }
     const onError = () => reconnect(v.error?.message || 'media error')
     v.addEventListener('loadedmetadata', onMeta)
     v.addEventListener('playing', onPlaying)
@@ -114,10 +131,11 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     v.addEventListener('waiting', onWaiting)
     v.addEventListener('error', onError)
     return () => {
+      clearWaiting()
       v.removeEventListener('loadedmetadata', onMeta); v.removeEventListener('playing', onPlaying); v.removeEventListener('pause', onPause)
       v.removeEventListener('waiting', onWaiting); v.removeEventListener('error', onError)
     }
-  }, [videoRef, reconnect, clearRetry, key])
+  }, [videoRef, reconnect, clearRetry, clearWaiting, key])
 
   // A server can connect without delivering decodable frames. Do not leave the
   // viewer on an endless spinner, or reset the retry budget on a single frame.
@@ -127,7 +145,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       const timer = window.setTimeout(() => { retry.current = 0 }, 30_000)
       return () => window.clearTimeout(timer)
     }
-    if (state !== 'loading' && state !== 'resolving') return
+    if (state !== 'loading' && state !== 'resolving' && state !== 'buffering') return
     const timer = window.setTimeout(() => reconnect('stream timed out'), 25_000)
     return () => window.clearTimeout(timer)
   }, [state, key, attempt, reconnect])
@@ -170,6 +188,6 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     desc, state, error, tracks,
     setAudio: (i: number) => { handle.current?.setAudio(i); setTracksVersion((v) => v + 1) },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
-    retryNow: () => { clearRetry(); retry.current = 0; setAttempt((a) => a + 1) },
+    retryNow: () => { clearWaiting(); clearRetry(); retry.current = 0; setAttempt((a) => a + 1) },
   }
 }

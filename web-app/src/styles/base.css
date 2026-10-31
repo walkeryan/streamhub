@@ -83,6 +83,7 @@ h1, h2, h3, p { margin: 0; }
   display: flex; align-items: center; min-height: 2.75rem; padding: 0 0.875rem; border-radius: var(--radius-md);
   background: var(--t-surface-alt); cursor: text;
 }
+.field.fx[data-focused='true'] { transform: none; }
 .field input { background: transparent; border: 0; outline: 0; width: 100%; min-width: 0; padding: 0.5rem 0; }
 .field input::placeholder { color: var(--t-text-muted); opacity: 0.8; }
 

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './api/client'
 import type { Profile } from './api/types'
 import { useDisclaimer } from './api/hooks'
+import { useCatalogFreshness } from './api/catalogFreshness'
 import { Rail } from './components/Rail'
 import { ErrorState, Skeleton, Toasts } from './components/ui'
 import { FocusGroup } from './nav/Focusable'
@@ -22,7 +23,7 @@ import { Sources } from './screens/Sources'
 import { Pair } from './screens/Pair'
 
 const Player = lazy(() => import('./screens/Player').then((m) => ({ default: m.Player })))
-const Guide = lazy(() => import('./screens/Guide').then((m) => ({ default: m.Guide })))
+const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })))
 
 bootTheme()
@@ -43,6 +44,7 @@ function Shell() {
 export function App() {
   const profile = useSession((s) => s.profile)
   const setProfile = useSession((s) => s.setProfile)
+  useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')
   const current = useQuery({
@@ -80,7 +82,8 @@ export function App() {
             <Route path="title/:id" element={<TitleScreen />} />
             <Route path="browse/:section" element={<Browse />} />
             <Route path="live" element={<LiveTV />} />
-            <Route path="guide" element={<Guide />} />
+            <Route path="guide" element={<Navigate to="/live?view=guide" replace />} />
+            <Route path="sports" element={<Sports />} />
             <Route path="favorites" element={<Favorites />} />
             <Route path="sources" element={<Sources />} />
             <Route path="settings" element={<Settings />} />

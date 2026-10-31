@@ -2,6 +2,7 @@ package com.streamhub.tv.feature.guide
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,6 +46,8 @@ import com.streamhub.tv.core.ui.components.CenterMessage
 import com.streamhub.tv.core.ui.components.LoadingView
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.ShButton
+import com.streamhub.tv.core.ui.components.ShTextField
+import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
@@ -90,14 +93,26 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel()) {
         }
     }
 
-    when {
-        s.loading -> { LoadingView(); return }
-        s.error != null -> { CenterMessage("Couldn't load the guide", s.error) { ShButton("Retry", vm::load, style = ButtonStyle.Primary) }; return }
-        s.channels.isEmpty() -> { CenterMessage("No channels", "Add an IPTV or M3U source with an EPG to see the guide."); return }
-    }
-
     val totalWidth = Duration.between(s.windowStart, s.windowEnd).toDp()
     Column(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
+        Column(Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                ShChip("With schedules", s.scheduledOnly, { vm.schedulesOnly(true) }, Modifier.leftOpensRail(LocalRailController.current))
+                ShChip("All channels", !s.scheduledOnly, { vm.schedulesOnly(false) })
+                ShButton("Previous", { vm.page(-1) }, enabled = s.page > 0 && !s.loading)
+                ShButton("Next", { vm.page(1) }, enabled = !s.loading && (s.total?.let { (s.page + 1) * GuideViewModel.PAGE_SIZE < it } ?: (s.channels.size == GuideViewModel.PAGE_SIZE)))
+                Text(s.total?.let { "${s.page * GuideViewModel.PAGE_SIZE + if (s.channels.isEmpty()) 0 else 1}–${s.page * GuideViewModel.PAGE_SIZE + s.channels.size} of $it" } ?: "Page ${s.page + 1}", color = t.textMuted)
+            }
+            ShTextField(s.query, vm::search, "Search guide channels", Modifier.fillMaxWidth(), placeholder = "Channel name or number")
+        }
+        when {
+            s.loading -> { LoadingView(); return@Column }
+            s.error != null -> { CenterMessage("Couldn't load the guide", s.error) { ShButton("Retry", { vm.load() }, style = ButtonStyle.Primary) }; return@Column }
+            s.channels.isEmpty() -> {
+                CenterMessage("No matching channels", if (s.scheduledOnly) "No schedules match this search and your profile languages. Try All channels." else "Try a different channel name or number.")
+                return@Column
+            }
+        }
         // Details header for the focused programme
         Column(Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX).height(96.dp)) {
             val sel = s.selected
@@ -135,7 +150,7 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel()) {
                             Box(Modifier.width(totalWidth).fillMaxHeight()) {
                                 val progs = s.programmes[ch.id].orEmpty()
                                 if (progs.isEmpty()) {
-                                    ProgrammeCell("No information", 0.dp, totalWidth, live = true, past = false, catchup = false,
+                                    ProgrammeCell("No schedule supplied", 0.dp, totalWidth, live = true, past = false, catchup = false,
                                         modifier = Modifier.leftOpensRail(LocalRailController.current),
                                         onFocus = { vm.select(ch, null) }, onClick = { launcher.play(ch.id) })
                                 }

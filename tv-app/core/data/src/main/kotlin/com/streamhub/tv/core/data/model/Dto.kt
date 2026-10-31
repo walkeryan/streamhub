@@ -284,6 +284,9 @@ data class Channel(
 data class ChannelList(
     @SerialName("list_id") val listId: String = "",
     val channels: List<Channel> = emptyList(),
+    val total: Int? = null,
+    val offset: Int = 0,
+    val limit: Int? = null,
 )
 
 @Serializable

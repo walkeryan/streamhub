@@ -25,9 +25,19 @@ const tileById = (id: string): Tile | undefined => {
   return c ? channelTile(withNowNext(c)) : undefined
 }
 
+const countryMatches = (value: string | null | undefined, country: string | null) =>
+  !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
+
 export const handlers = [
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),
   http.get(`${B}/health`, () => HttpResponse.json({ ok: true })),
+  http.get(`${B}/profiles/:id/prefs`, ({ params }) => HttpResponse.json(JSON.parse(sessionStorage.getItem(`mock.prefs.${params.id}`) ?? '{}'))),
+  http.put(`${B}/profiles/:id/prefs`, async ({ params, request }) => {
+    const document = await request.json()
+    sessionStorage.setItem(`mock.prefs.${params.id}`, JSON.stringify(document))
+    return HttpResponse.json(document)
+  }),
+  http.get(`${B}/browse/:section/genres`, () => HttpResponse.json([{ name: 'drama', count: 8 }, { name: 'comedy', count: 5 }])),
   http.get(`${B}/profiles`, () => HttpResponse.json(profiles.map((p) => withProfile(p.id)))),
   http.post(`${B}/auth/login`, async ({ request }) => {
     const b = (await request.json()) as { profile_id: string; pin?: string | null; password?: string | null }
@@ -152,6 +162,7 @@ export const handlers = [
   http.get(`${B}/channels`, async ({ request }) => {
     const u = new URL(request.url)
     const group = u.searchParams.get('group')
+    const country = u.searchParams.get('country')
     const lang = u.searchParams.get('language')
     const favs = u.searchParams.get('favorites') === 'true'
     const q = u.searchParams.get('q')?.toLowerCase()
@@ -160,18 +171,18 @@ export const handlers = [
     const groupNames = [...new Set(channels.map((c) => c.group))]
     const selectedGroup = group?.startsWith('g') && /^g\d+$/.test(group) ? groupNames[Number(group.slice(1))] : group
     const list = channels
-      .filter((c) => !hiddenGroups.has(c.group) && (!selectedGroup || c.group === selectedGroup) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
+      .filter((c) => countryMatches(c.country, country) && !hiddenGroups.has(c.group) && (!selectedGroup || c.group === selectedGroup) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
 
     const offset = Number(u.searchParams.get('offset') ?? 0), limit = Number(u.searchParams.get('limit') ?? list.length)
     return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list.slice(offset, offset + limit).map(withNowNext), total: list.length, limit, offset })
   }),
   http.get(`${B}/channels/groups`, ({ request }) => {
-    const u = new URL(request.url), lang = u.searchParams.get('language')
+    const u = new URL(request.url), lang = u.searchParams.get('language'), country = u.searchParams.get('country')
     const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === currentProfileId(request))?.languages ?? []
     const q = u.searchParams.get('q')?.toLowerCase()
     const all = [...new Set(channels.map((c) => c.group))]
     return HttpResponse.json(all.map((g, i) => ({ id: `g${i}`, source_id: 's_xt', name: g,
-      channel_count: channels.filter((c) => c.group === g && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)).length,
+      channel_count: channels.filter((c) => countryMatches(c.country, country) && c.group === g && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)).length,
       hidden: hiddenGroups.has(g), language_override: null })).filter((g) => g.channel_count > 0))
   }),
   http.patch(`${B}/channels/groups/:id`, async ({ params, request }) => {

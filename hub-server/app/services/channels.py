@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import func, or_, select
 
+from app.adapters.language.country import channel_country, group_country
 from app.infra.db import Database
 from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Progress, Setting, Source
 from app.services import ids
@@ -117,6 +118,7 @@ class ChannelService:
         source_id: str | None = None,
         group: str | None = None,
         language: str | None = None,
+        country: str | None = None,
         favorites: bool = False,
         q: str | None = None,
         all_languages: bool = False,
@@ -138,6 +140,7 @@ class ChannelService:
             source_id=source_id,
             group=group,
             language=language,
+            country=country,
             favorites=favorites,
             q=q,
             all_languages=all_languages,
@@ -161,6 +164,8 @@ class ChannelService:
             "limit": limit,
             "has_epg": has_epg,
         }
+        if country is not None:
+            params["country"] = country.upper()
         lid = await self._store_list(profile_id, params, [c.id for c in chans])
         return {
             "list_id": lid,
@@ -177,6 +182,7 @@ class ChannelService:
         source_id: str | None = None,
         group: str | None = None,
         language: str | None = None,
+        country: str | None = None,
         favorites: bool = False,
         q: str | None = None,
         all_languages: bool = False,
@@ -202,6 +208,21 @@ class ChannelService:
         )
         if not group and not include_hidden:
             query = query.where(ChannelGroup.hidden.is_(False))
+        if country and country.lower() != "all":
+            codes = [code.strip().upper() for code in country.split(",") if code.strip()]
+            known = [code for code in codes if code not in ("UND", "UNKNOWN")]
+            missing = or_(Channel.country.is_(None), func.trim(Channel.country) == "")
+            async with self._db.session() as session:
+                groups = list((await session.execute(select(Channel.group_name).distinct())).scalars())
+            inferred = {label: group_country(label)[0] for label in groups}
+            matched = [label for label, code in inferred.items() if code in known]
+            country_terms: list[Any] = [func.upper(func.trim(Channel.country)).in_(known)]
+            if matched:
+                country_terms.append(missing & Channel.group_name.in_(matched))
+            if any(code in ("UND", "UNKNOWN") for code in codes):
+                unknown = [label for label, code in inferred.items() if code is None]
+                country_terms.append(missing & Channel.group_name.in_(unknown))
+            query = query.where(or_(*country_terms))
         if source_id:
             query = query.where(Channel.source_id == source_id)
         if group:
@@ -284,6 +305,7 @@ class ChannelService:
         for c in chans:
             cid = ids.channel_id(c.source_id, c.ext_id)
             cur, nxt = nn.get((c.source_id, c.epg_id or ""), (None, None))
+            country, country_source = channel_country(c.country, c.group_name)
             out.append(
                 {
                     "id": cid,
@@ -295,7 +317,8 @@ class ChannelService:
                     "group": c.group_override or c.group_name,
                     "language": c.language or "und",
                     "language_source": c.language_source,
-                    "country": c.country,
+                    "country": country,
+                    "country_source": country_source,
                     "epg_id": c.epg_id,
                     "catchup_days": c.catchup_days,
                     "is_favorite": cid in favs,
@@ -361,13 +384,20 @@ class ChannelService:
         profile_id: str | None = None,
         *,
         language: str | None = None,
+        country: str | None = None,
         source_id: str | None = None,
         q: str | None = None,
         favorites: bool = False,
         include_hidden: bool = False,
     ) -> list[dict[str, Any]]:
         query, _ = await self._channel_query(
-            profile_id, language=language, source_id=source_id, q=q, favorites=favorites, include_hidden=include_hidden
+            profile_id,
+            language=language,
+            country=country,
+            source_id=source_id,
+            q=q,
+            favorites=favorites,
+            include_hidden=include_hidden,
         )
         matched = query.with_only_columns(Channel.id, Channel.group_id).subquery()
         async with self._db.session() as s:
@@ -452,7 +482,12 @@ class ChannelService:
 
     # ------------------------------------------------------------------ EPG
     async def epg_grid(
-        self, profile_id: str, channel_ids: list[str] | None, start: datetime | None, stop: datetime | None
+        self,
+        profile_id: str,
+        channel_ids: list[str] | None,
+        start: datetime | None,
+        stop: datetime | None,
+        country: str | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         now = datetime.now(UTC)
         start = (start or now - timedelta(minutes=30)).astimezone(UTC)
@@ -469,13 +504,24 @@ class ChannelService:
                 except NotFound:
                     continue
         else:
-            res = await self.list_channels(profile_id, limit=300)
+            res = await self.list_channels(profile_id, limit=300, country=country)
             chans = []
             async with self._db.session() as s:
                 order = await self.load_list(res["list_id"], profile_id)
                 if order:
                     by_id = {r.id: r for r in (await s.execute(select(Channel).where(Channel.id.in_(order)))).scalars()}
                     chans = [by_id[i] for i in order if i in by_id]
+        if country and country.lower() != "all" and channel_ids:
+            eligible, _ = await self._channel_query(profile_id, country=country, all_languages=True)
+            async with self._db.session() as session:
+                allowed = set(
+                    (
+                        await session.execute(
+                            eligible.with_only_columns(Channel.id).where(Channel.id.in_([ch.id for ch in chans]))
+                        )
+                    ).scalars()
+                )
+            chans = [ch for ch in chans if ch.id in allowed]
         by_epg: dict[tuple[str, str], list[Channel]] = {}
         for c in chans:
             if c.epg_id:

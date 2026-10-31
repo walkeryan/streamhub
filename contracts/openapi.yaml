@@ -144,6 +144,7 @@ components:
         language: {type: string, description: "ISO 639-3 or 'und'"}
         language_source: {type: string, enum: [tag, db, country, group, flag, name, user]}
         country: {type: string, nullable: true}
+        country_source: {type: string, enum: [tag, group, flag], nullable: true, description: "Explicit country tag or conservative provider group/flag hint; missing remains unknown."}
         epg_id: {type: string, nullable: true}
         catchup_days: {type: integer, default: 0}
         is_favorite: {type: boolean}
@@ -270,6 +271,45 @@ components:
       required: [version, text]
       properties: { version: {type: string}, text: {type: string} }
 
+    SportsListing:
+      type: object
+      required: [id, sport, programme_id, title, start, stop, channel_id, channel_name, channel_number, source_name]
+      properties:
+        id: {type: string}
+        sport: {type: string}
+        programme_id: {type: string}
+        title: {type: string}
+        category: {type: string, nullable: true}
+        start: {type: string, format: date-time}
+        stop: {type: string, format: date-time}
+        channel_id: {type: string}
+        channel_name: {type: string}
+        channel_number: {type: integer}
+        source_name: {type: string}
+    SportsPage:
+      type: object
+      required: [as_of, items, total, limit, offset, sports, coverage]
+      properties:
+        as_of: {type: string, format: date-time}
+        items: {type: array, items: {$ref: '#/components/schemas/SportsListing'}}
+        total: {type: integer}
+        limit: {type: integer}
+        offset: {type: integer}
+        sports:
+          type: array
+          items:
+            type: object
+            required: [name, count]
+            properties:
+              name: {type: string}
+              count: {type: integer}
+        coverage:
+          type: object
+          required: [eligible_channels, channels_with_current_schedule]
+          properties:
+            eligible_channels: {type: integer}
+            channels_with_current_schedule: {type: integer}
+
 paths:
   /auth/login:
     post:
@@ -350,10 +390,10 @@ paths:
       parameters:
         - { name: section, in: path, required: true, schema: {type: string} }
         - { name: source_id, in: query, schema: {type: string} }
-        - { name: genre, in: query, schema: {type: string} }
+        - { name: genre, in: query, schema: {type: string, description: "Actual genre metadata; combines with category."} }
         - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
         - { name: page, in: query, schema: {type: integer, default: 1} }
-        - { name: category, in: query, schema: {type: string} }
+        - { name: category, in: query, schema: {type: string, description: "Exact provider category; combines with genre."} }
         - { name: language, in: query, schema: {type: string, description: "Category language hint. Omitted = profile languages; all = all; und = unknown."} }
         - { name: q, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }, page: {type: integer}, total: {type: integer}, has_more: {type: boolean}, page_size: {type: integer} } } } } } }
@@ -366,6 +406,16 @@ paths:
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [name, count], properties: {name: {type: string}, count: {type: integer}}} } } } } }
+  /browse/{section}/genres:
+    get:
+      summary: Actual metadata genres with scoped distinct title counts
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string} }
+        - { name: category, in: query, schema: {type: string} }
+        - { name: q, in: query, schema: {type: string} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [name, count], properties: {name: {type: string}, count: {type: integer}}} } } } } }
   /browse/{section}/languages:
     get:
       parameters:
@@ -375,6 +425,7 @@ paths:
   /channels:
     get:
       parameters:
+        - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: group, in: query, schema: {type: string} }
         - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3. Omitted = the profile's languages. Present but empty (`language=`) or `all` = all languages (the TV's All chip)."} }
@@ -388,6 +439,7 @@ paths:
   /channels/groups:
     get:
       parameters:
+        - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
@@ -400,10 +452,26 @@ paths:
     get: { summary: Languages present with counts, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { type: object, properties: { code: {type: string}, name: {type: string}, count: {type: integer} } } } } } } } }
   /channels/{id}:
     patch: { summary: User override (number, language, group, epg_id), parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Channel' } } } }, responses: { '200': { description: ok } } }
+  /sports:
+    get:
+      tags: [live]
+      parameters:
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: Current sports programme listings; coverage reflects selected languages and visible enabled channels.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsPage'}
   /epg:
     get:
       summary: Guide grid
       parameters:
+        - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: channel_ids, in: query, schema: {type: string, description: csv} }
         - { name: from, in: query, schema: {type: string, format: date-time} }
         - { name: to, in: query, schema: {type: string, format: date-time} }
