@@ -1,5 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router'
+import { z } from 'zod'
+import { useProfilePreference } from '../api/profilePreferences'
 import { useChannelGroups, useChannels, useSources, useToggleFavorite } from '../api/hooks'
 import type { Channel } from '../api/types'
 import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
@@ -18,14 +20,25 @@ import { fmtTime, useDebounced } from '../lib/util'
 const PAGE = 80
 const Guide = lazy(() => import('./Guide').then((m) => ({ default: m.Guide })))
 
+const liveFilterSchema = z.object({
+  language: z.string().max(256), country: z.enum(['US', 'all', 'und']),
+  group: z.string().max(512), source: z.string().max(256), favorites: z.boolean(),
+})
+type SavedLiveFilters = z.infer<typeof liveFilterSchema>
+const validateLiveFilters = (raw: unknown) => { const parsed = liveFilterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
+
 export function LiveTV() {
   const location = useLocation()
   const [view, setView] = useHistoryState<'channels' | 'guide'>('live:view', new URLSearchParams(location.search).get('view') === 'guide' ? 'guide' : 'channels')
   const profile = useSession((s) => s.profile)
-  const [lang, setLang] = useHistoryState('live:lang', profile?.languages.length ? 'mine' : 'all')
-  const [group, setGroup] = useHistoryState('live:group', '')
-  const [source, setSource] = useHistoryState('live:source', '')
-  const [favOnly, setFavOnly] = useHistoryState('live:favOnly', false)
+  const defaults: SavedLiveFilters = { language: profile?.languages.length ? 'mine' : 'all', country: 'US', group: '', source: '', favorites: false }
+  const saved = useProfilePreference('liveFilters.v1', defaults, validateLiveFilters)
+  const { language: lang, country, group, source, favorites: favOnly } = saved.value
+  const setLang = (language: string) => saved.update((v) => ({ ...v, language, group: '' }))
+  const setCountry = (country: SavedLiveFilters['country']) => saved.update((v) => ({ ...v, country, group: '' }))
+  const setGroup = (group: string) => saved.update((v) => ({ ...v, group }))
+  const setSource = (source: string) => saved.update((v) => ({ ...v, source, group: '' }))
+  const setFavOnly = (favorites: boolean) => saved.update((v) => ({ ...v, favorites }))
   const [search, setSearch] = useHistoryState('live:search', '')
   const term = useDebounced(search, 300)
   const [page, setPage] = useHistoryState('live:page', 0)
@@ -33,17 +46,17 @@ export function LiveTV() {
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const language = lang === 'mine' ? profile?.languages.join(',') || 'all' : lang
-  const filterKey = `${language}|${group}|${source}|${favOnly}|${term}`
+  const filterKey = `${language}|${country}|${group}|${source}|${favOnly}|${term}`
   const [pageKey, setPageKey] = useState(filterKey)
   // Reset paging synchronously with filters so no request briefly targets an old offset.
   if (pageKey !== filterKey) { setPageKey(filterKey); setPage(0) }
-  const filters = { language, source_id: source || undefined, favorites: favOnly || undefined, q: term || undefined }
-  const q = useChannels({ ...filters, group: group || undefined, limit: PAGE, offset: page * PAGE }, view === 'channels')
-  const groups = useChannelGroups(filters)
+  const filters = { language, country, source_id: source || undefined, favorites: favOnly || undefined, q: term || undefined }
+  const q = useChannels({ ...filters, group: group || undefined, limit: PAGE, offset: page * PAGE }, saved.ready && view === 'channels')
+  const groups = useChannelGroups(filters, saved.ready)
   const sources = useSources()
   const channels = useMemo(() => q.data?.channels ?? [], [q.data])
   const total = q.data?.total ?? channels.length
-  const ready = view === 'channels' && !!q.data && !q.isPlaceholderData
+  const ready = saved.ready && view === 'channels' && !!q.data && !q.isPlaceholderData
   const focused = channels.find((c) => c.id === focusedId) ?? null
   const setChannelList = useUi((s) => s.setChannelList)
   const toggleFav = useToggleFavorite()
@@ -74,11 +87,12 @@ export function LiveTV() {
     setChannelList(q.data?.list_id ?? null, channels)
     go(`/play/${encodeURIComponent(c.id)}${q.data?.list_id ? `?list=${encodeURIComponent(q.data.list_id)}` : ''}`)
   }
-  const reset = () => { setGroup(''); setSource(''); setFavOnly(false); setSearch(''); setPage(0) }
+  const reset = () => { saved.update((v) => ({ ...v, group: '', source: '', favorites: false })); setSearch(''); setPage(0) }
   const changePage = (p: number) => { setPage(p); setPreviewId(null); setFocusedId(null); void setFocus('live:search') }
   const groupOptions = [{ id: '', label: 'All categories' }, ...(groups.data ?? []).filter((g) => !g.hidden).map((g) => ({ id: g.id, label: g.name, count: g.channel_count }))]
   const sourceOptions = [{ id: '', label: 'All sources' }, ...(sources.data ?? []).filter((s) => s.type === 'm3u' || s.type === 'xtream').map((s) => ({ id: s.id, label: s.name }))]
 
+  if (!saved.ready) return <div className="page-pad" data-testid="live"><h1 className="display">Live TV</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="live:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
   return <div className="page-pad" data-testid="live" style={{ paddingBottom: '2rem' }}>
     <div className="flex items-baseline gap-4 mb-3"><h1 className="display" style={{ fontSize: 'var(--text-title)' }}>Live TV</h1>{view === 'channels' && <p className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} channels`}</p>}</div>
     <FocusGroup focusKey="live:views" className="flex gap-2 mb-3" role="group" label="Live TV view">
@@ -86,14 +100,21 @@ export function LiveTV() {
       <Chip focusKey="live:view:channels" pressed={view === 'channels'} onEnter={() => setView('channels')}>Channels</Chip>
     </FocusGroup>
     <FocusGroup focusKey="live:filters" className="flex flex-col gap-3 mb-4">
-      <LanguageFilter scope="live" value={lang} onChange={(v) => { setLang(v); setGroup('') }} />
+      <LanguageFilter scope="live" value={lang} onChange={setLang} />
+      <div className="flex gap-2 flex-wrap" role="group" aria-label="Region">
+        <Chip focusKey="live:country:US" pressed={country === 'US'} onEnter={() => setCountry('US')}>United States</Chip>
+        <Chip focusKey="live:country:all" pressed={country === 'all'} onEnter={() => setCountry('all')}>All regions</Chip>
+        <Chip focusKey="live:country:und" pressed={country === 'und'} onEnter={() => setCountry('und')}>Unknown region</Chip>
+      </div>
+      <p className="label">Region uses provider country metadata. English channels may come from any region.</p>
       <div className="flex gap-2 flex-wrap items-center">
         <div style={{ width: 'min(24rem, 100%)' }}><FocusableInput focusKey="live:search" label="Search channels or number" placeholder="Channel name or number" value={search} onChange={setSearch} inputMode="search" /></div>
         <CatalogPicker scope="live:category" label="Category" value={group} options={groupOptions} onChange={setGroup} />
-        {sourceOptions.length > 2 && <CatalogPicker scope="live:source" label="Source" value={source} options={sourceOptions} onChange={(v) => { setSource(v); setGroup('') }} />}
-        <Chip focusKey="live:fav" pressed={favOnly} onEnter={() => setFavOnly((v) => !v)} testId="live-fav-filter">Favorites only</Chip>
+        {sourceOptions.length > 2 && <CatalogPicker scope="live:source" label="Source" value={source} options={sourceOptions} onChange={setSource} />}
+        <Chip focusKey="live:fav" pressed={favOnly} onEnter={() => setFavOnly(!favOnly)} testId="live-fav-filter">Favorites only</Chip>
         {(group || source || favOnly || search) && <Button focusKey="live:reset" ghost onEnter={reset}>Clear filters</Button>}
       </div>
+      <p className="label" role="status">{saved.error ?? (saved.saving ? 'Saving filters…' : 'Filter changes sync with this profile.')}</p>
       {groups.error && <p role="status" className="muted">Categories could not load. You can still search channels.</p>}
     </FocusGroup>
     {view === 'guide' ? <Suspense fallback={<Skeleton style={{ height: '24rem' }} />}><Guide filters={{ ...filters, group: group || undefined }} selectedChannelId={focusedId} onSelectChannel={setFocusedId} /></Suspense> : <div className="live-catalog-layout grid gap-6" data-testid="live-channels">
