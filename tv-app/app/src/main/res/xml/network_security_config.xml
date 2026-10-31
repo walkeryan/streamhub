@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  StreamHub runs on the user's LAN (http://<unraid-ip>:8787) and IPTV providers commonly serve
+  plain-HTTP streams, so cleartext must be allowed. Credentials never travel to the TV; the server
+  issues short-lived, profile-bound stream tokens.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

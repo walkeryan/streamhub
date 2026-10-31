@@ -11,6 +11,7 @@ dependencies {
     api(project(":core:data"))
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+    ksp(libs.kotlin.metadata.jvm)
     api(platform(libs.compose.bom))
     api(libs.tv.material)
     api(libs.tv.foundation)

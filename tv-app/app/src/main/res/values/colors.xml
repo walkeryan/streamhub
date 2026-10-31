@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Midnight bg/accent from design/tokens.json (window background before Compose draws). -->
+    <color name="bg">#0B0F17</color>
+    <color name="accent">#E8A33D</color>
+    <color name="text">#F2F5F9</color>
+</resources>

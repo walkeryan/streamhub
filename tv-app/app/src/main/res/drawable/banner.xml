@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 320x180 dp launcher banner (Android TV home row). Vector so it is crisp on every density. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:fillColor="#0B0F17" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#141A25" android:pathData="M0,120h320v60h-320z" />
+    <!-- Hub mark: rounded square with play triangle -->
+    <path android:fillColor="#E8A33D"
+        android:pathData="M44,58h52a12,12 0,0 1,12 12v40a12,12 0,0 1,-12 12h-52a12,12 0,0 1,-12 -12v-40a12,12 0,0 1,12 -12z" />
+    <path android:fillColor="#0B0F17" android:pathData="M62,74 L86,90 L62,106 Z" />
+    <!-- "StreamHub" wordmark as simple geometric strokes is impractical; use bars suggesting rows -->
+    <path android:fillColor="#F2F5F9" android:pathData="M124,66h150a6,6 0,0 1,0 12h-150a6,6 0,0 1,0 -12z" />
+    <path android:fillColor="#9AA6B8" android:pathData="M124,88h110a5,5 0,0 1,0 10h-110a5,5 0,0 1,0 -10z" />
+    <path android:fillColor="#9AA6B8" android:pathData="M124,106h80a5,5 0,0 1,0 10h-80a5,5 0,0 1,0 -10z" />
+</vector>

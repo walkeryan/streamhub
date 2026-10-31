@@ -27,7 +27,8 @@ desugar = "2.1.5"
 ktor = "3.6.1"
 serialization = "1.11.0"
 coroutines = "1.11.0"
-coil = "3.6.3"
+# Coil 3.6+ pulls Compose 1.12 / compileSdk 37 (AGP 9.1); 3.5.0 is the newest that fits AGP 8.x.
+coil = "3.5.0"
 zxing = "3.5.4"
 junit = "4.13.2"
 
@@ -54,6 +55,8 @@ tv-foundation = { module = "androidx.tv:tv-foundation", version.ref = "tvFoundat
 
 hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
 hilt-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
+# Dagger 2.58 bundles kotlin-metadata-jvm 2.2; some deps (coroutines/serialization 1.11) carry Kotlin 2.4 metadata.
+kotlin-metadata-jvm = { module = "org.jetbrains.kotlin:kotlin-metadata-jvm", version = "2.4.21" }
 hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
 
 media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }

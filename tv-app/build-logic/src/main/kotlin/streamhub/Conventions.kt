@@ -87,6 +87,7 @@ class AndroidFeatureConventionPlugin : Plugin<Project> {
             add("implementation", project(":core:data"))
             add("implementation", libs.lib("hilt-android"))
             add("ksp", libs.lib("hilt-compiler"))
+            add("ksp", libs.lib("kotlin-metadata-jvm"))
             add("implementation", libs.lib("hilt-navigation-compose"))
             add("implementation", libs.lib("androidx-lifecycle-runtime-compose"))
             add("implementation", libs.lib("androidx-lifecycle-viewmodel-compose"))
