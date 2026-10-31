@@ -131,7 +131,8 @@ class ChannelService:
 
         prof = await self._profile(profile_id)
         langs: list[str] = []
-        if language:
+        if language is not None:
+            # explicit parameter wins; empty string / "all" mean every language
             langs = [x.strip() for x in language.split(",") if x.strip() and x.strip().lower() != "all"]
         elif prof and prof.languages and not all_languages:
             langs = list(prof.languages)

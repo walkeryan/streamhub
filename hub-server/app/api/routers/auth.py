@@ -126,6 +126,18 @@ async def put_home_layout(id: str, body: S.HomeLayout, c: C, p: P) -> dict[str, 
     return {"rows": await c.layout.get(id, sources)}
 
 
+@router.get("/profiles/{id}/prefs", tags=["profiles"])
+async def get_prefs(id: str, c: C, p: P) -> dict[str, Any]:
+    _own(p, id)
+    return await c.client_prefs.get(id)
+
+
+@router.put("/profiles/{id}/prefs", tags=["profiles"])
+async def put_prefs(id: str, body: dict[str, Any], c: C, p: P) -> dict[str, Any]:
+    _own(p, id)
+    return await c.client_prefs.put(id, body)
+
+
 # ---------------------------------------------------------------- disclaimer
 @router.get("/disclaimer", response_model=S.Disclaimer, tags=["legal"])
 async def get_disclaimer(c: C) -> dict[str, str]:

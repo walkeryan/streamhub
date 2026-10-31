@@ -127,6 +127,15 @@ def load_seed() -> list[ServiceRow]:
     return parse_deeplinks_md(path.read_text(encoding="utf-8"))
 
 
+def full_component_name(package: str | None, component: str | None) -> str | None:
+    """``com.hulu.livingroomplus`` + ``.WKFactivity`` → ``com.hulu.livingroomplus/.WKFactivity``."""
+    if not component:
+        return None
+    if "/" in component or not package:
+        return component
+    return f"{package}/{component}"
+
+
 def _placeholders(tpl: str | None) -> set[str]:
     return set(re.findall(r"\{([a-z_]+)\}", tpl or ""))
 
@@ -223,4 +232,5 @@ class DeeplinkRegistry:
             web_url=web_url,
             supports_title_link=has_title_link and row.supports_title_link in ("true", "partial"),
             android_extras=extras,
+            android_component=full_component_name(row.android_package, row.android_component),
         )

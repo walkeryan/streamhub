@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.adapters.deeplink.registry import ServiceRow, load_seed
+from app.adapters.deeplink.registry import ServiceRow, full_component_name, load_seed
 from app.infra.db import Database
 from app.infra.models import ServiceRegistry
 
@@ -65,6 +65,8 @@ class ServiceRegistryService:
                     "service_key": r.key,
                     "name": r.name,
                     "android_package": r.android_package,
+                    "android_component": full_component_name(r.android_package, r.android_component),
+                    "android_title_uri_template": r.android_title_uri,
                     "web_url": web,
                     "supports_title_link": r.supports_title_link in ("true", "partial"),
                     "tmdb_provider_ids": r.tmdb_provider_ids,

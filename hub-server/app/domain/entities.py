@@ -203,6 +203,7 @@ class ServiceLink:
     web_url: str
     supports_title_link: bool
     android_extras: dict[str, str] = field(default_factory=dict)
+    android_component: str | None = None
 
 
 @dataclass(slots=True)

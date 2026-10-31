@@ -139,6 +139,8 @@ class ServiceInfo(_M):
     service_key: str
     name: str
     android_package: str | None = None
+    android_component: str | None = None
+    android_title_uri_template: str | None = None
     web_url: str
     supports_title_link: bool
     tmdb_provider_ids: list[int]
@@ -291,6 +293,7 @@ class Handoff(_M):
     service_key: str
     android_package: str
     android_uri: str | None = None
+    android_component: str | None = None
     android_extras: dict[str, str] = Field(default_factory=dict)
     web_url: str
     supports_title_link: bool

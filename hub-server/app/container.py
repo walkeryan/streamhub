@@ -38,7 +38,13 @@ from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
 from app.services.sync import SyncScheduler, SyncService
 from app.services.themes import ThemeService
-from app.services.user_state import FavoritesService, HomeLayoutService, ProgressService, WatchlistService
+from app.services.user_state import (
+    ClientPrefsService,
+    FavoritesService,
+    HomeLayoutService,
+    ProgressService,
+    WatchlistService,
+)
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +70,7 @@ class Container:
     watchlist: WatchlistService
     progress: ProgressService
     layout: HomeLayoutService
+    client_prefs: ClientPrefsService
     themes: ThemeService
     service_registry: ServiceRegistryService
     deeplinks: DeeplinkRegistry
@@ -107,6 +114,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     watchlist = WatchlistService(db)
     progress = ProgressService(db, sources)
     layout = HomeLayoutService(db)
+    client_prefs = ClientPrefsService(db)
     themes = ThemeService(db)
     service_registry = ServiceRegistryService(db)
     deeplinks = DeeplinkRegistry(ctx, service_registry.get)
@@ -161,6 +169,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         watchlist=watchlist,
         progress=progress,
         layout=layout,
+        client_prefs=client_prefs,
         themes=themes,
         service_registry=service_registry,
         deeplinks=deeplinks,

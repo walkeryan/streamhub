@@ -463,3 +463,14 @@ async def test_unknown_ids(api: Api, client: str) -> None:
     assert (await api.post("/playback/resolve", json={"id": "nope", "client": client})).status_code == 404
     assert (await api.post("/playback/resolve", json={"id": "ch:x:y", "client": client})).status_code == 404
     assert (await api.get("/titles/lib:x:y")).status_code == 404
+
+
+async def test_channels_language_param_semantics(api: Api) -> None:
+    await add_m3u(api, FIXTURES / "sample.m3u")
+    r = await api.patch(f"/profiles/{api.profile_id}", json={"languages": ["eng"]})
+    assert r.status_code == 200, r.text
+    default = (await api.get("/channels")).json()["channels"]  # omitted → profile languages
+    assert default and {c["language"] for c in default} == {"eng"}
+    empty = (await api.get("/channels", params={"language": ""})).json()["channels"]  # empty → all
+    assert {c["language"] for c in empty} > {"eng", "fra"}
+    assert len(empty) == len((await api.get("/channels", params={"language": "all"})).json()["channels"])

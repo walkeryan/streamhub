@@ -282,7 +282,50 @@ async def test_services_registry_endpoint(api: Api) -> None:
         "service_key": "netflix",
         "name": "Netflix",
         "android_package": "com.netflix.ninja",
+        "android_component": None,
+        "android_title_uri_template": "https://www.netflix.com/title/{netflix_id}?source=30",
         "web_url": "https://www.netflix.com",
         "supports_title_link": True,
         "tmdb_provider_ids": [8],
     }
+
+
+async def test_trailer_handoff_search_fallback(api: Api) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        mock_tmdb(router)
+        router.get(f"{TMDB}/movie/603/videos").mock(return_value=httpx.Response(200, json={"results": []}))
+        await api.put("/settings/tmdb_key", json={"api_key": "k" * 32})
+        r = await api.post("/playback/resolve", json={"id": "trailer:tmdb:movie:603", "client": "android_tv"})
+    assert r.status_code == 200
+    p = r.json()
+    assert p["mode"] == "handoff" and p["id"] == "trailer:tmdb:movie:603" and p["url"] is None
+    h = p["handoff"]
+    assert h["service_key"] == "youtube" and h["android_package"] == "com.google.android.youtube.tv"
+    assert h["android_uri"] == "https://www.youtube.com/results?search_query=The+Matrix+1999+trailer"
+    assert h["web_url"] == h["android_uri"] and h["supports_title_link"] is False
+
+
+async def test_trailer_handoff_uses_tmdb_video(api: Api) -> None:
+    vids = {
+        "results": [
+            {"key": "bad", "site": "Vimeo", "type": "Trailer"},
+            {"key": "tease", "site": "YouTube", "type": "Teaser"},
+            {"key": "abc123", "site": "YouTube", "type": "Trailer", "official": True, "iso_639_1": "en"},
+        ]
+    }
+    with respx.mock(assert_all_called=False) as router:
+        mock_tmdb(router)
+        router.get(f"{TMDB}/movie/603/videos").mock(return_value=httpx.Response(200, json=vids))
+        await api.put("/settings/tmdb_key", json={"api_key": "k" * 32})
+        p = (await api.post("/playback/resolve", json={"id": "trailer:tmdb:movie:603"})).json()
+    h = p["handoff"]
+    assert h["android_uri"] == "https://www.youtube.com/watch?v=abc123" == h["web_url"]
+    assert h["supports_title_link"] is True
+    assert (await api.post("/playback/resolve", json={"id": "trailer:bogus"})).status_code == 404
+
+
+async def test_service_registry_exposes_component_and_template(api: Api) -> None:
+    rows = {r["service_key"]: r for r in (await api.get("/services/registry")).json()}
+    assert rows["hulu"]["android_component"] == "com.hulu.livingroomplus/.WKFactivity"
+    assert rows["netflix"]["android_component"] is None
+    assert "{netflix_id}" in (rows["netflix"]["android_title_uri_template"] or "")

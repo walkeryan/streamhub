@@ -182,6 +182,10 @@ class MetadataProvider(Protocol):
 
     async def find_by_imdb(self, imdb_id: str) -> MetaTitle | None: ...
 
+    async def trailer_key(self, media_type: str, tmdb_id: int) -> str | None:
+        """YouTube video key of the best official trailer, if TMDB has one."""
+        ...
+
     def image_url(self, path: str | None, size: str = "w500") -> str | None: ...
 
 

@@ -20,6 +20,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote, quote_plus
 
 from app.domain.entities import (
     LIBRARY_SOURCE_TYPES,
@@ -191,6 +192,8 @@ class PlaybackResolver:
         https_site: bool = False,
     ) -> dict[str, Any]:
         client = client if client in ("web", "android_tv") else "web"
+        if hub_id.startswith("trailer:"):
+            return await self._resolve_trailer(profile_id, hub_id)
         if hub_id.startswith("prog:") and not catchup_programme_id:
             catchup_programme_id = hub_id
             prog = await self._channels.programme(hub_id)
@@ -214,6 +217,69 @@ class PlaybackResolver:
         if h.scheme == "tmdb" and h.b.isdigit():
             return await self._resolve_tmdb(profile_id, h.a, int(h.b), hub_id, source_id, client, https_site)
         raise NotFound("unknown id")
+
+    async def _resolve_trailer(self, profile_id: str, hub_id: str) -> dict[str, Any]:
+        """``trailer:<title id>`` → hand-off to the YouTube app (specific video if TMDB knows one)."""
+        title_id = hub_id.split(":", 1)[1]
+        try:
+            h = ids.parse(title_id)
+        except ValueError as exc:
+            raise NotFound("unknown id") from exc
+        title: str | None = None
+        year: int | None = None
+        poster: str | None = None
+        media_type: str | None = None
+        tmdb_id: int | None = None
+        if h.scheme == "tmdb" and h.b.isdigit():
+            media_type, tmdb_id = h.a, int(h.b)
+            meta = await self._meta.details(media_type, tmdb_id) if self._meta.enabled else None
+            if meta:
+                title, year, poster = meta.title, meta.year, meta.poster
+        elif h.scheme == "lib":
+            row = await self._catalog.title_row(h.a, h.b)
+            if row is None:
+                raise NotFound("title not found")
+            title, year = row.title, row.year
+            if row.tmdb_id:
+                media_type, tmdb_id = ids.tmdb_type_for_kind(row.kind), row.tmdb_id
+        else:
+            raise NotFound("unknown id")
+        if not title:
+            raise NotFound("title not found")
+        key = None
+        if media_type and tmdb_id and self._meta.enabled:
+            try:
+                key = await self._meta.trailer_key(media_type, tmdb_id)
+            except Exception:
+                key = None
+        if key:
+            url = f"https://www.youtube.com/watch?v={quote(key, safe='')}"
+        else:
+            query = " ".join(x for x in (title, str(year) if year else "", "trailer") if x)
+            url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+        return {
+            "id": hub_id,
+            "mode": PlaybackMode.HANDOFF.value,
+            "url": None,
+            "mime": None,
+            "headers": {},
+            "live": False,
+            "resume_position_ms": 0,
+            "duration_ms": None,
+            "title": title,
+            "subtitle": "Trailer on YouTube",
+            "poster": poster,
+            "channel_context": None,
+            "handoff": {
+                "service_key": "youtube",
+                "android_package": "com.google.android.youtube.tv",
+                "android_uri": url,
+                "android_component": None,
+                "android_extras": {},
+                "web_url": url,
+                "supports_title_link": key is not None,
+            },
+        }
 
     async def _channels_for_epg(self, epg_channel: str, feed: str) -> list[Channel]:
         from sqlalchemy import select
@@ -391,6 +457,7 @@ class PlaybackResolver:
                 "service_key": link.service_key,
                 "android_package": link.android_package or "",
                 "android_uri": link.android_uri,
+                "android_component": link.android_component,
                 "android_extras": link.android_extras,
                 "web_url": link.web_url,
                 "supports_title_link": link.supports_title_link,

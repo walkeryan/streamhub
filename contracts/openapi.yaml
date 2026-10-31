@@ -171,7 +171,7 @@ components:
       type: object
       required: [id]
       properties:
-        id: {type: string, description: "tile/channel/programme id"}
+        id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false)"}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
         client: {type: string, enum: [android_tv, web], default: web}
         catchup_programme_id: {type: string, nullable: true}
@@ -202,6 +202,7 @@ components:
             service_key: {type: string}
             android_package: {type: string}
             android_uri: {type: string, nullable: true}
+            android_component: {type: string, nullable: true, description: "Explicit activity as package/.Class (e.g. com.hulu.livingroomplus/.WKFactivity); null = use the package's leanback launch/VIEW intent"}
             android_extras: { type: object, additionalProperties: {type: string} }
             web_url: {type: string}
             supports_title_link: {type: boolean}
@@ -226,9 +227,15 @@ components:
         service_key: {type: string}
         name: {type: string}
         android_package: {type: string, nullable: true}
+        android_component: {type: string, nullable: true, description: "package/.Class, e.g. com.hulu.livingroomplus/.WKFactivity"}
+        android_title_uri_template: {type: string, nullable: true, description: "VIEW-intent URI with {placeholders} (e.g. {netflix_id}); null when unknown. Clients normally use handoff from /playback/resolve."}
         web_url: {type: string}
         supports_title_link: {type: boolean}
         tmdb_provider_ids: {type: array, items: {type: integer}}
+    ClientPrefs:
+      type: object
+      additionalProperties: true
+      description: "Opaque client-owned preferences. Max 16 KB when serialized."
     HomeLayout:
       type: object
       required: [rows]
@@ -291,6 +298,10 @@ paths:
     get: { summary: Per-profile Home row order / hidden rows, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
     put: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
 
+  /profiles/{id}/prefs:
+    get: { summary: Free-form client prefs for a profile (recent searches, reduced motion…), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: "JSON object ({} when unset)", content: { application/json: { schema: { $ref: '#/components/schemas/ClientPrefs' } } } } } }
+    put: { summary: Replace the profile's client prefs (JSON object, max 16 KB serialized; 413 payload_too_large otherwise), parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ClientPrefs' } } } }, responses: { '200': { description: stored object, content: { application/json: { schema: { $ref: '#/components/schemas/ClientPrefs' } } } }, '413': { description: too large } } }
+
   /disclaimer:
     get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Disclaimer' } } } } } }
   /disclaimer/accept:
@@ -346,7 +357,7 @@ paths:
       parameters:
         - { name: source_id, in: query, schema: {type: string} }
         - { name: group, in: query, schema: {type: string} }
-        - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3; default = profile languages"} }
+        - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3. Omitted = the profile's languages. Present but empty (`language=`) or `all` = all languages (the TV's All chip)."} }
         - { name: favorites, in: query, schema: {type: boolean} }
         - { name: q, in: query, schema: {type: string} }
         - { name: list_id, in: query, schema: {type: string, description: "Re-fetch the exact ordered list returned earlier (e.g. channel_context.list_id) for Up/Down zapping; other filters are ignored. 404 if unknown."} }

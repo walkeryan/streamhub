@@ -166,6 +166,20 @@ class TmdbClient:
             return None
         return to_meta(data, media_type)
 
+    async def trailer_key(self, media_type: str, tmdb_id: int) -> str | None:
+        if media_type not in ("movie", "tv"):
+            return None
+        data = await self._get(f"/{media_type}/{tmdb_id}/videos", TTL_DETAILS)
+        vids = [
+            v
+            for v in (data or {}).get("results") or []
+            if isinstance(v, dict) and v.get("type") == "Trailer" and v.get("site") == "YouTube" and v.get("key")
+        ]
+        if not vids:
+            return None
+        vids.sort(key=lambda v: (not v.get("official"), (v.get("iso_639_1") or "") != "en"))
+        return str(vids[0]["key"])
+
     async def season(self, tmdb_id: int, season: int) -> dict[str, Any] | None:
         return await self._get(f"/tv/{tmdb_id}/season/{season}", TTL_DETAILS)
 

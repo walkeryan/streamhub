@@ -192,3 +192,17 @@ def test_redaction_filter_keeps_args_for_access_log() -> None:
     assert RedactionFilter().filter(rec)
     assert len(rec.args) == 5  # type: ignore[arg-type]
     assert "hunter2" not in rec.getMessage() and "password=***" in rec.getMessage()
+
+
+async def test_profile_prefs_roundtrip_and_limit(api: Api) -> None:
+    await api.login_admin()
+    me = api.profile_id
+    assert (await api.get(f"/profiles/{me}/prefs")).json() == {}
+    body = {"recent_searches": ["matrix"], "reduced_motion": True}
+    assert (await api.put(f"/profiles/{me}/prefs", json=body)).json() == body
+    assert (await api.get(f"/profiles/{me}/prefs")).json() == body
+    r = await api.put(f"/profiles/{me}/prefs", json={"blob": "x" * 17000})
+    assert r.status_code == 413
+    assert (await api.get(f"/profiles/{me}/prefs")).json() == body
+    # home layout is untouched by prefs
+    assert (await api.get(f"/profiles/{me}/home_layout")).status_code == 200

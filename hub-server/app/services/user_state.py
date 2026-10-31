@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -12,7 +13,7 @@ from app.domain.ports import ProgressReporter
 from app.infra.db import Database
 from app.infra.models import Favorite, Profile, Progress, Watchlist, utcnow
 from app.services import ids
-from app.services.errors import NotFound, ServiceError
+from app.services.errors import NotFound, PayloadTooLarge, ServiceError
 from app.services.sources import SourceService
 from app.services.tiles import row_to_item
 
@@ -239,6 +240,38 @@ class ProgressService:
                     )
                 ).scalars()
             )
+
+
+MAX_PREFS_BYTES = 16 * 1024
+CLIENT_PREFS_KEY = "client_prefs"
+
+
+class ClientPrefsService:
+    """Free-form per-profile client prefs (recent searches, reduced motion…), max 16 KB."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def get(self, profile_id: str) -> dict[str, Any]:
+        async with self._db.session() as s:
+            prof = await s.get(Profile, profile_id)
+        if prof is None:
+            raise NotFound("profile not found")
+        v = (prof.prefs or {}).get(CLIENT_PREFS_KEY)
+        return dict(v) if isinstance(v, dict) else {}
+
+    async def put(self, profile_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode()) > MAX_PREFS_BYTES:
+            raise PayloadTooLarge("prefs are limited to 16 KB")
+        async with self._db.session() as s:
+            prof = await s.get(Profile, profile_id)
+            if prof is None:
+                raise NotFound("profile not found")
+            prefs = dict(prof.prefs or {})
+            prefs[CLIENT_PREFS_KEY] = data
+            prof.prefs = prefs
+            await s.commit()
+        return data
 
 
 class HomeLayoutService:

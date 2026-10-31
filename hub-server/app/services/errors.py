@@ -49,6 +49,11 @@ class Gone(ServiceError):
     code = "expired"
 
 
+class PayloadTooLarge(ServiceError):
+    status = 413
+    code = "payload_too_large"
+
+
 class BadGateway(ServiceError):
     status = 502
     code = "upstream_error"
