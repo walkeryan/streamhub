@@ -154,7 +154,7 @@ def map_live(row: dict[str, Any], cats: dict[str, str], output: str, client: Xtr
     return ChannelInfo(
         ext_id=sid,
         name=name,
-        stream_url=client.stream_url("live", sid, ext),
+        stream_url=None,  # rebuilt at playback time; never persist credentials in catalog rows
         logo=F.as_str(F.first(row, "stream_icon", "icon", "logo", "cover")),
         group=cats.get(cat_id or "", None) or F.as_str(row.get("category_name")) or "Uncategorized",
         tvg_id=F.as_str(F.first(row, "epg_channel_id", "epg_id", "tvg_id")),
@@ -186,7 +186,6 @@ def map_vod(row: dict[str, Any], cats: dict[str, str], client: XtreamClient) -> 
         group=cats.get(cat_id or "") or None,
         genres=F.genres_from(row.get("genre")),
         added_at=F.as_epoch(row.get("added")),
-        stream_url=client.stream_url("movie", sid, ext),
         headers={"User-Agent": client.ua} if client.ua else {},
         extra={"ext": ext, "stream_id": sid},
     )
@@ -259,7 +258,6 @@ def map_episodes(series_id: str, info: dict[str, Any], client: XtreamClient) -> 
                     episode_number=F.as_int(F.first(ep, "episode_num", "episode", "num")),
                     duration_ms=dur_s * 1000 if dur_s else None,
                     added_at=F.as_epoch(ep.get("added")),
-                    stream_url=client.stream_url("series", eid, ext),
                     headers={"User-Agent": client.ua} if client.ua else {},
                     extra={"ext": ext, "series_id": series_id},
                 )
@@ -420,7 +418,7 @@ class XtreamSource:
     # ---- playback
     async def stream_for_channel(self, channel: ChannelInfo) -> StreamTarget:
         ext = str(channel.extra.get("ext") or self.output)
-        url = channel.stream_url or self.client.stream_url("live", channel.ext_id, ext)
+        url = self.client.stream_url("live", channel.ext_id, ext)
         return StreamTarget(url=url, mime=_MIME.get(ext, "video/mp2t"), headers=dict(channel.headers), live=True)
 
     async def catchup_for_channel(
@@ -444,7 +442,7 @@ class XtreamSource:
     async def stream_for_item(self, item: CatalogItem) -> StreamTarget:
         ext = str(item.extra.get("ext") or "mp4")
         kind = "series" if item.kind == MediaKind.EPISODE else "movie"
-        url = item.stream_url or self.client.stream_url(kind, item.ext_id, ext)
+        url = self.client.stream_url(kind, item.ext_id, ext)
         return StreamTarget(
             url=url,
             mime=_MIME.get(ext, "video/mp4"),

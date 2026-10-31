@@ -117,11 +117,18 @@ class LibrarySearchProvider(Protocol):
 
 
 @runtime_checkable
+class ImageAuthProvider(Protocol):
+    """Adapter whose artwork URLs need auth; the API serves them through a signed image proxy."""
+
+    def image_headers(self, url: str) -> dict[str, str] | None: ...
+
+
+@runtime_checkable
 class InteractiveAuthProvider(Protocol):
     """Adapter that needs an interactive step before it can sync (Jellyfin Quick Connect)."""
 
-    async def complete_auth(self) -> dict[str, Any] | None:
-        """Try to finish auth. Returns updated config to persist, or None if still pending."""
+    async def complete_auth(self) -> tuple[bool, dict[str, Any]]:
+        """Advance auth. Returns (authenticated, config updates to persist; None values delete keys)."""
         ...
 
 

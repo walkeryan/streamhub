@@ -150,7 +150,7 @@ def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
     handler.setFormatter(JsonFormatter() if fmt == "json" else TextFormatter())
     root.addHandler(handler)
     root.setLevel(level.upper())
-    for noisy in ("httpx", "httpcore", "apscheduler", "aiosqlite"):
+    for noisy in ("httpx", "httpcore", "apscheduler", "aiosqlite", "alembic"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     # uvicorn access logs include query strings — make sure they are filtered too.
     for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
