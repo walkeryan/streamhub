@@ -3,9 +3,14 @@ import streamhub.TokensCodegen
 plugins {
     id("streamhub.android.compose")
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
 }
 
 dependencies {
+    api(project(":core:data"))
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
     api(platform(libs.compose.bom))
     api(libs.tv.material)
     api(libs.tv.foundation)
