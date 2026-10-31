@@ -1,0 +1,388 @@
+package com.streamhub.tv.core.data.model
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+
+/*
+ * Hand-written DTOs mirroring contracts/openapi.yaml (StreamHub API 1.0.0).
+ * Field names follow the wire format via @SerialName; unknown keys are ignored by the Json config
+ * so the server can add fields without breaking older TV builds.
+ */
+
+@Serializable
+data class ApiError(val code: String, val message: String)
+
+// ---- Auth ------------------------------------------------------------------------------------
+
+@Serializable
+data class AuthTokens(
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("refresh_token") val refreshToken: String,
+    val profile: Profile,
+)
+
+@Serializable
+data class DeviceCode(
+    @SerialName("device_code") val deviceCode: String,
+    @SerialName("user_code") val userCode: String,
+    @SerialName("expires_in") val expiresIn: Int,
+    val interval: Int,
+)
+
+@Serializable
+data class LoginRequest(
+    @SerialName("profile_id") val profileId: String,
+    val pin: String? = null,
+    val password: String? = null,
+)
+
+@Serializable
+data class RefreshRequest(@SerialName("refresh_token") val refreshToken: String)
+
+@Serializable
+data class DevicePollRequest(@SerialName("device_code") val deviceCode: String)
+
+// ---- Profiles ----------------------------------------------------------------------------------
+
+@Serializable
+data class Profile(
+    val id: String,
+    val name: String,
+    val avatar: String? = null,
+    @SerialName("is_admin") val isAdmin: Boolean = false,
+    @SerialName("theme_id") val themeId: String = "midnight",
+    val languages: List<String> = emptyList(),
+    @SerialName("has_pin") val hasPin: Boolean = false,
+    val kids: Boolean = false,
+    @SerialName("disclaimer_accepted_version") val disclaimerAcceptedVersion: String? = null,
+)
+
+@Serializable
+data class PinUpdate(val pin: String?)
+
+// ---- Disclaimer --------------------------------------------------------------------------------
+
+@Serializable
+data class Disclaimer(val version: String, val text: String)
+
+@Serializable
+data class DisclaimerAccept(val version: String)
+
+// ---- Sources -----------------------------------------------------------------------------------
+
+@Serializable
+enum class SourceType {
+    @SerialName("plex") PLEX,
+    @SerialName("jellyfin") JELLYFIN,
+    @SerialName("xtream") XTREAM,
+    @SerialName("m3u") M3U,
+    @SerialName("streaming_service") STREAMING_SERVICE,
+    ;
+
+    val requiresDisclaimer: Boolean get() = this == XTREAM || this == M3U
+}
+
+@Serializable
+data class Source(
+    val id: String,
+    val type: SourceType,
+    val name: String,
+    val enabled: Boolean,
+    val priority: Int,
+    val region: String = "US",
+    val status: String,
+    @SerialName("last_sync") val lastSync: String? = null,
+    val counts: Map<String, Int> = emptyMap(),
+    @SerialName("service_key") val serviceKey: String? = null,
+    @SerialName("config_summary") val configSummary: JsonObject? = null,
+)
+
+@Serializable
+data class SourceCreate(
+    val type: SourceType,
+    val name: String,
+    val region: String? = null,
+    @SerialName("service_key") val serviceKey: String? = null,
+    val config: JsonObject,
+)
+
+@Serializable
+data class SourceTestResult(val ok: Boolean = false, val message: String = "")
+
+@Serializable
+data class PlexPin(
+    @SerialName("pin_id") val pinId: Int,
+    val code: String,
+    @SerialName("link_url") val linkUrl: String,
+)
+
+/** Entry of GET /services/registry. Contract leaves the schema open; we model DEEPLINKS.md columns. */
+@Serializable
+data class ServiceRegistryEntry(
+    val key: String,
+    val name: String,
+    @SerialName("tmdb_provider_ids") val tmdbProviderIds: List<Int> = emptyList(),
+    @SerialName("android_package") val androidPackage: String? = null,
+    @SerialName("android_title_uri") val androidTitleUri: String? = null,
+    @SerialName("android_component") val androidComponent: String? = null,
+    @SerialName("web_title_url") val webTitleUrl: String? = null,
+    @SerialName("supports_title_link") val supportsTitleLink: String? = null,
+    val notes: String? = null,
+)
+
+// ---- Catalog -----------------------------------------------------------------------------------
+
+@Serializable
+enum class MediaKind {
+    @SerialName("movie") MOVIE,
+    @SerialName("show") SHOW,
+    @SerialName("season") SEASON,
+    @SerialName("episode") EPISODE,
+    @SerialName("channel") CHANNEL,
+    @SerialName("vod") VOD,
+    @SerialName("series") SERIES,
+    ;
+
+    val wire: String get() = name.lowercase()
+}
+
+@Serializable
+data class SourceBadge(
+    @SerialName("source_id") val sourceId: String,
+    @SerialName("source_type") val sourceType: SourceType,
+    val name: String,
+    @SerialName("playable_in_app") val playableInApp: Boolean,
+    val kind: String? = null,
+    val quality: String? = null,
+)
+
+@Serializable
+data class Tile(
+    val id: String,
+    val kind: MediaKind,
+    val title: String,
+    val subtitle: String? = null,
+    val year: Int? = null,
+    val poster: String? = null,
+    val backdrop: String? = null,
+    val logo: String? = null,
+    val rating: Double? = null,
+    @SerialName("progress_pct") val progressPct: Double? = null,
+    @SerialName("is_favorite") val isFavorite: Boolean = false,
+    val sources: List<SourceBadge> = emptyList(),
+    @SerialName("now_playing") val nowPlaying: Programme? = null,
+) {
+    val playableInApp: Boolean get() = sources.any { it.playableInApp }
+}
+
+@Serializable
+enum class RowLayout {
+    @SerialName("poster") POSTER,
+    @SerialName("landscape") LANDSCAPE,
+    @SerialName("hero") HERO,
+    @SerialName("channel") CHANNEL,
+}
+
+@Serializable
+data class Row(
+    val id: String,
+    val title: String,
+    val layout: RowLayout = RowLayout.POSTER,
+    val tiles: List<Tile> = emptyList(),
+)
+
+@Serializable
+data class HomeResponse(val hero: List<Tile> = emptyList(), val rows: List<Row> = emptyList())
+
+@Serializable
+data class CastMember(val name: String, val character: String? = null, val photo: String? = null)
+
+/** TitleDetail = Tile + detail fields (allOf in the contract, flattened here). */
+@Serializable
+data class TitleDetail(
+    val id: String,
+    val kind: MediaKind,
+    val title: String,
+    val subtitle: String? = null,
+    val year: Int? = null,
+    val poster: String? = null,
+    val backdrop: String? = null,
+    val logo: String? = null,
+    val rating: Double? = null,
+    @SerialName("progress_pct") val progressPct: Double? = null,
+    @SerialName("is_favorite") val isFavorite: Boolean = false,
+    val sources: List<SourceBadge> = emptyList(),
+    @SerialName("now_playing") val nowPlaying: Programme? = null,
+    val overview: String? = null,
+    val genres: List<String> = emptyList(),
+    @SerialName("runtime_min") val runtimeMin: Int? = null,
+    val cast: List<CastMember> = emptyList(),
+    val seasons: List<Tile> = emptyList(),
+    val episodes: List<Tile> = emptyList(),
+    val attribution: String? = null,
+) {
+    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying)
+}
+
+@Serializable
+data class SearchResponse(
+    @SerialName("play_here") val playHere: List<Tile> = emptyList(),
+    @SerialName("open_in_app") val openInApp: List<Tile> = emptyList(),
+    val channels: List<Channel> = emptyList(),
+    val attribution: String? = null,
+)
+
+@Serializable
+data class BrowsePage(val tiles: List<Tile> = emptyList(), val page: Int = 1, val total: Int = 0)
+
+// ---- Live TV -----------------------------------------------------------------------------------
+
+@Serializable
+data class Programme(
+    val id: String,
+    @SerialName("channel_id") val channelId: String,
+    val start: String,
+    val stop: String,
+    val title: String,
+    val description: String? = null,
+    val category: String? = null,
+    val icon: String? = null,
+    @SerialName("catchup_available") val catchupAvailable: Boolean = false,
+)
+
+@Serializable
+data class Channel(
+    val id: String,
+    @SerialName("source_id") val sourceId: String,
+    @SerialName("ext_id") val extId: String? = null,
+    val number: Int,
+    val name: String,
+    val logo: String? = null,
+    val group: String,
+    val language: String = "und",
+    @SerialName("language_source") val languageSource: String? = null,
+    val country: String? = null,
+    @SerialName("epg_id") val epgId: String? = null,
+    @SerialName("catchup_days") val catchupDays: Int = 0,
+    @SerialName("is_favorite") val isFavorite: Boolean = false,
+    val now: Programme? = null,
+    val next: Programme? = null,
+)
+
+@Serializable
+data class ChannelList(
+    @SerialName("list_id") val listId: String = "",
+    val channels: List<Channel> = emptyList(),
+)
+
+@Serializable
+data class ChannelGroup(
+    val id: String,
+    @SerialName("source_id") val sourceId: String,
+    val name: String,
+    @SerialName("channel_count") val channelCount: Int,
+    val hidden: Boolean,
+    @SerialName("language_override") val languageOverride: String? = null,
+)
+
+@Serializable
+data class ChannelGroupPatch(
+    val hidden: Boolean? = null,
+    @SerialName("language_override") val languageOverride: String? = null,
+    val sort: Int? = null,
+)
+
+@Serializable
+data class LanguageCount(val code: String, val name: String = code, val count: Int = 0)
+
+// ---- Playback ----------------------------------------------------------------------------------
+
+@Serializable
+data class PlaybackRequest(
+    val id: String,
+    @SerialName("source_id") val sourceId: String? = null,
+    val client: String = "android_tv",
+    @SerialName("catchup_programme_id") val catchupProgrammeId: String? = null,
+)
+
+@Serializable
+enum class PlaybackMode {
+    @SerialName("direct") DIRECT,
+    @SerialName("proxy") PROXY,
+    @SerialName("hls") HLS,
+    @SerialName("handoff") HANDOFF,
+}
+
+@Serializable
+data class ChannelContext(
+    @SerialName("list_id") val listId: String,
+    val index: Int,
+    val count: Int,
+)
+
+@Serializable
+data class Handoff(
+    @SerialName("service_key") val serviceKey: String,
+    @SerialName("android_package") val androidPackage: String,
+    @SerialName("android_uri") val androidUri: String? = null,
+    @SerialName("android_extras") val androidExtras: Map<String, String> = emptyMap(),
+    // Not in the contract (yet): explicit activity for services that need one (Hulu .WKFactivity).
+    @SerialName("android_component") val androidComponent: String? = null,
+    @SerialName("web_url") val webUrl: String,
+    @SerialName("supports_title_link") val supportsTitleLink: Boolean = false,
+)
+
+@Serializable
+data class PlaybackDescriptor(
+    val id: String,
+    val mode: PlaybackMode,
+    val url: String? = null,
+    val mime: String? = null,
+    val headers: Map<String, String> = emptyMap(),
+    val live: Boolean = false,
+    @SerialName("resume_position_ms") val resumePositionMs: Long = 0,
+    @SerialName("duration_ms") val durationMs: Long? = null,
+    val title: String = "",
+    val subtitle: String? = null,
+    val poster: String? = null,
+    @SerialName("channel_context") val channelContext: ChannelContext? = null,
+    val handoff: Handoff? = null,
+)
+
+@Serializable
+enum class PlaybackState {
+    @SerialName("playing") PLAYING,
+    @SerialName("paused") PAUSED,
+    @SerialName("stopped") STOPPED,
+}
+
+@Serializable
+data class ProgressReport(
+    val id: String,
+    @SerialName("source_id") val sourceId: String? = null,
+    @SerialName("position_ms") val positionMs: Long,
+    @SerialName("duration_ms") val durationMs: Long? = null,
+    val state: PlaybackState,
+)
+
+// ---- Favorites / watchlist / settings ----------------------------------------------------------
+
+@Serializable
+data class Favorite(val kind: MediaKind, val id: String, val sort: Int? = null)
+
+@Serializable
+data class WatchlistPut(val id: String)
+
+@Serializable
+data class Theme(val id: String, val name: String, val builtin: Boolean = false, val tokens: JsonObject? = null)
+
+@Serializable
+data class Settings(
+    @SerialName("tmdb_api_key_set") val tmdbApiKeySet: Boolean? = null,
+    val region: String? = null,
+    @SerialName("sleep_timer_min") val sleepTimerMin: Int? = null,
+    @SerialName("epg_refresh_hours") val epgRefreshHours: Int? = null,
+    @SerialName("transcode_hw") val transcodeHw: String? = null,
+    @SerialName("proxy_mode") val proxyMode: String? = null,
+)
