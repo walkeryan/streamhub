@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import com.streamhub.tv.core.ui.components.DISCLAIMER_TEXT
 import com.streamhub.tv.core.ui.components.DISCLAIMER_VERSION
+import com.streamhub.tv.core.ui.components.isDisclaimerAccepted
 
 
 enum class OnboardingStep { Server, Disclaimer, Pairing, Done }
@@ -49,19 +50,22 @@ class OnboardingViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val s = session.current()
-            val accepted = prefs.disclaimerAcceptedVersion.first()
+            val accepted = isDisclaimerAccepted(prefs.disclaimerAcceptedVersion.first()) ||
+                isDisclaimerAccepted(s.profile?.disclaimerAcceptedVersion)
             _state.update {
                 it.copy(
                     serverInput = s.serverUrl.orEmpty(),
                     step = when {
-                        s.isPaired && accepted == DISCLAIMER_VERSION -> OnboardingStep.Done
+                        // First run (BRIEF "Sources / onboarding", LEGAL.md): the legal gate comes before
+                        // the server address and pairing. Uses the built-in copy until a server is known.
+                        !accepted -> OnboardingStep.Disclaimer
+                        s.isPaired -> OnboardingStep.Done
                         s.serverUrl.isNullOrBlank() -> OnboardingStep.Server
-                        accepted != DISCLAIMER_VERSION -> OnboardingStep.Disclaimer
                         else -> OnboardingStep.Pairing
                     },
                 )
             }
-            if (_state.value.step == OnboardingStep.Disclaimer) loadDisclaimer()
+            if (_state.value.step == OnboardingStep.Disclaimer && !s.serverUrl.isNullOrBlank()) loadDisclaimer()
             if (_state.value.step == OnboardingStep.Pairing) startPairing()
         }
     }
@@ -83,7 +87,8 @@ class OnboardingViewModel @Inject constructor(
             _state.update { it.copy(checking = false, serverInput = base) }
             val accepted = prefs.disclaimerAcceptedVersion.first()
             loadDisclaimer()
-            if (accepted == _state.value.disclaimerVersion) goPairing() else _state.update { it.copy(step = OnboardingStep.Disclaimer) }
+            // Accepted on first run with the built-in copy; the gate only reappears if the server's text is newer.
+            if (isDisclaimerAccepted(accepted, _state.value.disclaimerVersion)) goPairing() else _state.update { it.copy(step = OnboardingStep.Disclaimer) }
         }
     }
 
@@ -95,9 +100,20 @@ class OnboardingViewModel @Inject constructor(
 
     fun acceptDisclaimer() {
         viewModelScope.launch {
-            prefs.setDisclaimerAccepted(_state.value.disclaimerVersion)
-            // Server-side acceptance needs a profile token; it is posted after pairing (see finishPairing).
-            goPairing()
+            val v = _state.value.disclaimerVersion
+            prefs.setDisclaimerAccepted(v)
+            val s = session.current()
+            when {
+                // Already paired (e.g. upgraded from a build without the first-run gate): record it and go Home.
+                s.isPaired -> {
+                    runCatching { api.acceptDisclaimer(v) }
+                    s.profile?.let { session.updateProfile(it.copy(disclaimerAcceptedVersion = v)) }
+                    _state.update { it.copy(step = OnboardingStep.Done) }
+                }
+                s.serverUrl.isNullOrBlank() -> _state.update { it.copy(step = OnboardingStep.Server) }
+                // Server-side acceptance needs a profile token; it is posted after pairing (see finishPairing).
+                else -> goPairing()
+            }
         }
     }
 

@@ -15,6 +15,7 @@ import com.streamhub.tv.core.data.model.SourceCreate
 import com.streamhub.tv.core.data.model.SourceType
 import com.streamhub.tv.core.data.repo.LocalPrefs
 import com.streamhub.tv.core.ui.components.DISCLAIMER_VERSION
+import com.streamhub.tv.core.ui.components.isDisclaimerAccepted
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -91,7 +92,7 @@ class SourcesViewModel @Inject constructor(
 
     private suspend fun disclaimerAccepted(): Boolean {
         val profileVersion = session.current().profile?.disclaimerAcceptedVersion
-        return profileVersion == DISCLAIMER_VERSION || prefs.disclaimerAcceptedVersion.first() == DISCLAIMER_VERSION
+        return isDisclaimerAccepted(profileVersion) || isDisclaimerAccepted(prefs.disclaimerAcceptedVersion.first())
     }
 
     fun startAdd(type: SourceType) = viewModelScope.launch {

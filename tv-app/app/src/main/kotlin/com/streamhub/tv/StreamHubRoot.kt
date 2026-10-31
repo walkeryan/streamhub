@@ -42,10 +42,12 @@ import androidx.navigation.navArgument
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.handoff.HandoffResult
+import com.streamhub.tv.core.data.repo.LocalPrefs
 import com.streamhub.tv.core.data.repo.PlayEvent
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.data.repo.SessionEvents
 import com.streamhub.tv.core.ui.components.HandoffQrDialog
+import com.streamhub.tv.core.ui.components.isDisclaimerAccepted
 import com.streamhub.tv.core.ui.components.LeftRail
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.PlayLauncher
@@ -105,18 +107,25 @@ private val RAIL = listOf(
 @HiltViewModel
 class RootViewModel @Inject constructor(
     sessionStore: SessionStore,
+    prefs: LocalPrefs,
     val coordinator: PlaybackCoordinator,
     val sessionEvents: SessionEvents,
 ) : ViewModel() {
     /** null until DataStore has loaded (avoids flashing onboarding). */
     val session: StateFlow<Session?> = sessionStore.session.map<Session, Session?> { it }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** null until loaded. A paired TV that never accepted the legal notice still goes through the gate. */
+    val disclaimerAccepted: StateFlow<Boolean?> = prefs.disclaimerAcceptedVersion.map<String?, Boolean?> { isDisclaimerAccepted(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 }
 
 @Composable
 fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     val session by vm.session.collectAsStateWithLifecycle()
+    val accepted by vm.disclaimerAccepted.collectAsStateWithLifecycle()
     val s = session ?: return ScreenBackground {}
+    val localAccepted = accepted ?: return ScreenBackground {}
     val nav = rememberNavController()
     val context = LocalContext.current
     var qr by remember { mutableStateOf<HandoffResult.ShowQr?>(null) }
@@ -145,7 +154,12 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
         }
     }
 
-    val start = if (s.isPaired) Routes.HOME else Routes.ONBOARDING
+    // Decided once: later session/acceptance changes navigate explicitly (onboarding onDone, expiry) rather
+    // than swapping NavHost's start destination under a live back stack.
+    val start = remember {
+        val ok = localAccepted || isDisclaimerAccepted(s.profile?.disclaimerAcceptedVersion)
+        if (s.isPaired && ok) Routes.HOME else Routes.ONBOARDING
+    }
     CompositionLocalProvider(LocalPlayLauncher provides launcher) {
         ScreenBackground {
             AppShell(nav, start, profileName = s.profile?.name)

@@ -43,8 +43,25 @@ This product uses the TMDB API but is not endorsed or certified by TMDB. Availab
 """.trimIndent()
 
 /**
+ * True when [accepted] (a stored acceptance version, e.g. "1.0") covers [required]. Versions compare
+ * numerically per dot-separated part, so accepting the server's newer text (say 1.1) also satisfies
+ * the built-in 1.0 copy instead of re-showing the gate on every launch.
+ */
+fun isDisclaimerAccepted(accepted: String?, required: String = DISCLAIMER_VERSION): Boolean {
+    if (accepted.isNullOrBlank()) return false
+    val a = accepted.split('.').map { it.trim().toIntOrNull() ?: return accepted == required }
+    val r = required.split('.').map { it.trim().toIntOrNull() ?: return accepted == required }
+    for (i in 0 until maxOf(a.size, r.size)) {
+        val x = a.getOrElse(i) { 0 }
+        val y = r.getOrElse(i) { 0 }
+        if (x != y) return x > y
+    }
+    return true
+}
+
+/**
  * docs/LEGAL.md gate: full-screen, "I accept" (default focus) + "Exit"; Accept disabled for 3 s.
- * Reused by Settings → About and the Add Source flow.
+ * Shown on first run before anything else (onboarding), and reused by the Add Source flow.
  */
 @Composable
 fun DisclaimerGate(

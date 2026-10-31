@@ -66,11 +66,13 @@ means bumping these together.
 
 On first launch:
 
-1. **Server address**: enter the StreamHub host, e.g. `192.168.1.10:8787` (the Unraid IP and port).
+1. **Disclaimer** (docs/LEGAL.md v1.0), shown before anything else: *I accept* is focused by default
+   but stays disabled for 3 s. *Exit* closes the app. The built-in copy is used until a server is known;
+   if the server later serves a newer version, the gate is shown again before pairing. A TV that was
+   paired without accepting (older build) gets the gate on next launch and then goes straight to Home.
+2. **Server address**: enter the StreamHub host, e.g. `192.168.1.10:8787` (the Unraid IP and port).
    `http://` and `:8787` are added if you leave them out, and `/api/v1` is appended automatically. The
    app calls `GET /api/v1/health` before it continues.
-2. **Disclaimer** (docs/LEGAL.md v1.0): *I accept* is focused by default but stays disabled for 3 s.
-   *Exit* closes the app.
 3. **Pair**: the TV shows a 6-character code and a QR code (`<server>/pair?code=XXXXXX`). Approve it
    from the web app while signed in. The TV polls `POST /auth/device/poll` and continues automatically.
 
