@@ -67,7 +67,11 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
 
   // resolve + attach
   useEffect(() => {
-    if (!req) return
+    if (!req) {
+      intent.current = { key: '' }
+      terminal.current = false
+      return
+    }
     if (intent.current.key !== key) {
       intent.current = { key }
       terminal.current = false
