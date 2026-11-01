@@ -14,6 +14,8 @@ import com.streamhub.tv.core.data.repo.ChannelListCache
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.data.repo.ProfileSwitchPath
 import com.streamhub.tv.core.data.repo.profileSwitchPath
+import com.streamhub.tv.core.data.repo.AuthorizationCommitGate
+import com.streamhub.tv.core.data.repo.AuthorizationOutcomeUnknown
 import com.streamhub.tv.core.data.repo.awaitOwnerPin
 import com.streamhub.tv.core.data.repo.validOwnerPin
 import com.streamhub.tv.core.data.repo.ownerPinRetryDelay
@@ -74,6 +76,7 @@ data class SettingsState(
     val switching: Boolean = false,
     val ownerPin: OwnerPinChallenge? = null,
     val ownerPinBusy: Boolean = false, val ownerPinError: String? = null,
+    val authorizationFinishing: Boolean = false, val authorizationUncertain: Boolean = false,
     val switchTargetName: String? = null,
 )
 
@@ -95,6 +98,7 @@ class SettingsViewModel @Inject constructor(
     private var loadJob: Job? = null
     private var switchJob: Job? = null
     private var ownerPinInput: Channel<String>? = null
+    private val authorization=AuthorizationCommitGate { finishing -> _state.update{it.copy(authorizationFinishing=finishing)} }
     init { load() }
 
     private fun pid() = _state.value.current?.id ?: "default"
@@ -195,7 +199,7 @@ class SettingsViewModel @Inject constructor(
 
     // ---- Profiles -----------------------------------------------------------------------------
     fun switchProfile(p: Profile, pin: String? = null) {
-        if(_state.value.switching || p.id==_state.value.current?.id) return
+        if(_state.value.switching || _state.value.authorizationUncertain || p.id==_state.value.current?.id) return
         switchJob?.cancel()
         _state.update {it.copy(switching=true,message=null)}
         switchJob=viewModelScope.launch {
@@ -208,13 +212,15 @@ class SettingsViewModel @Inject constructor(
                 when(profileSwitchPath(config,_state.value.current,p)) {
                     ProfileSwitchPath.SameProfile -> Unit
                     ProfileSwitchPath.OwnerPin -> ownerPinSafely(original,p)
-                    ProfileSwitchPath.ExistingPin -> if(pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.switchProfile(LoginRequest(p.id,pin=pin)))
-                    ProfileSwitchPath.Secure -> commitSwitch(original,p,api.switchProfile(LoginRequest(p.id)))
+                    ProfileSwitchPath.Secure -> {
+                        loadJob?.cancel();playback.clearForProfileSwitch()
+                        authorization.finish {commitSwitch(original,p,api.switchProfile(LoginRequest(p.id)))}
+                    }
                     ProfileSwitchPath.Legacy -> if(p.hasPin && pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.login(LoginRequest(p.id,pin=pin)))
-                    ProfileSwitchPath.OwnerReauthRequired -> _state.update{it.copy(message="This target requires owner reauthentication or an existing credential this TV cannot supply. Use the normal Google owner sign-in/pairing flow; no PIN bypass is available.")}
                     ProfileSwitchPath.Unavailable -> _state.update{it.copy(message="Secure profile switching is unavailable. Google sign-in restrictions remain in place.")}
                 }
-            } catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner authorization expired. Start a new request.",ownerPin=null)}}
+            } catch(_:AuthorizationOutcomeUnknown) {markAuthorizationUncertain()}
+            catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner authorization expired. Start a new request.",ownerPin=null)}}
             catch(e:CancellationException){throw e}
             catch(e:ApiException) {
                 if(e.error?.code=="owner_pin_required") ownerPinSafely(original,p)
@@ -226,6 +232,7 @@ class SettingsViewModel @Inject constructor(
 
     private suspend fun ownerPinSafely(original: Session, target: Profile) {
         try { ownerPinFlow(original,target) }
+        catch(_:AuthorizationOutcomeUnknown) {markAuthorizationUncertain()}
         catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner PIN request expired. Start a new request.")}}
         catch(e:CancellationException){throw e}
         catch(e:ApiException) {_state.update{it.copy(message=when {
@@ -253,14 +260,16 @@ class SettingsViewModel @Inject constructor(
             ownerPinInput=input
             _state.update{it.copy(ownerPin=active,ownerPinBusy=false,ownerPinError=null,pinPromptFor=null,switchTargetName=target.name)}
             awaiting=true
-            val tokens=awaitOwnerPin(active,target.id,
+            awaitOwnerPin(active,target.id,
                 nextPin={_state.update{it.copy(ownerPinBusy=false)};input.receive()},
                 stillCurrent={sameSwitchSession(original,session.current())},verify=api::verifyOwnerPin,
                 rejected={seconds->_state.update{it.copy(ownerPinBusy=seconds>0,ownerPinError=if(seconds>0) "Too many attempts. Wait $seconds seconds, then enter the PIN again." else "PIN not accepted. Re-enter the existing owner PIN.")}},
-                cancel=api::cancelOwnerPin)
-            challenge=null // Verification consumed the challenge and revoked the initiating session.
-            _state.update{it.copy(ownerPin=null)}
-            commitSwitch(original,target,tokens)
+                cancel=api::cancelOwnerPin,
+                authorize={block->authorization.finish(block)},
+                complete={verified ->
+                    challenge=null // Consumed: commit before leaving the protected response phase.
+                    commitSwitch(original,target,verified)
+                })
         } finally {
             ownerPinInput=null;input.close()
             if(!awaiting) challenge?.let { active -> withContext(NonCancellable) {withTimeoutOrNull(5000) {runCatching {if(sameSwitchSession(original,session.current()))api.cancelOwnerPin(OwnerPinCancel(active.challengeId,active.pollToken))}}} }
@@ -288,9 +297,18 @@ class SettingsViewModel @Inject constructor(
         load()
     }
 
+    private fun markAuthorizationUncertain() {
+        _state.update{it.copy(authorizationUncertain=true,ownerPin=null,message="Authorization may have completed. The old session cannot be assumed valid. Sign in again; the PIN will not be retried.")}
+    }
+    fun recoverAuthorization() {
+        if(!_state.value.authorizationUncertain || authorization.finishing) return
+        viewModelScope.launch {session.clearTokens()}
+    }
     fun cancelPin() {
-        switchJob?.cancel()
-        _state.update{it.copy(pinPromptFor=null,ownerPin=null,switchTargetName=null)}
+        authorization.cancelIfIdle {
+            switchJob?.cancel()
+            _state.update{it.copy(pinPromptFor=null,ownerPin=null,switchTargetName=null)}
+        }
     }
 
     fun patchServer(s: Settings) = viewModelScope.launch {

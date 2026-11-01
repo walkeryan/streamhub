@@ -109,7 +109,22 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
         }
     }
     s.ownerPin?.let { challenge ->
-        OwnerPinDialog(challenge.challengeId,s.switchTargetName ?: "selected profile",s.ownerPinBusy,s.ownerPinError,vm::submitOwnerPin,cancelSwitch)
+        OwnerPinDialog(challenge.challengeId,s.switchTargetName ?: "selected profile",s.ownerPinBusy,s.authorizationFinishing,s.ownerPinError,vm::submitOwnerPin,cancelSwitch)
+    }
+    if(s.authorizationFinishing && s.ownerPin==null) Dialog(onDismissRequest={}) {
+        Column(Modifier.background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp).width(480.dp)) {
+            Text("Finishing authorization…",color=t.text,style=MaterialTheme.typography.titleLarge)
+            Text("Please wait. Back is unavailable while the server completes this one-use request (up to 20 seconds).",color=t.textMuted)
+        }
+    }
+    if(s.authorizationUncertain) Dialog(onDismissRequest={}) {
+        val recovery=remember {FocusRequester()}
+        Column(Modifier.background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp).width(520.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text("Authorization outcome uncertain",color=t.text,style=MaterialTheme.typography.titleLarge)
+            Text("The request may have completed and replaced the old session. Sign in again to recover. Your PIN will not be retried automatically.",color=t.textMuted)
+            ShButton("Sign in again",vm::recoverAuthorization,Modifier.focusRequester(recovery))
+        }
+        LaunchedEffect(Unit){withFrameNanos{};runCatching{recovery.requestFocus()}}
     }
     s.pinPromptFor?.let { p -> PinDialog("Enter PIN for ${p.name}", onSubmit = { vm.switchProfile(p, it) }, onDismiss = cancelSwitch) }
 }
@@ -135,7 +150,7 @@ private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel, onOpen: (Focus
             { onOpen(opener); vm.switchProfile(p) },
             modifier=Modifier.focusRequester(opener),
             style = if (current) ButtonStyle.Primary else ButtonStyle.Secondary,
-            enabled = !s.switching && s.authConfig != null,
+            enabled = !s.switching && !s.authorizationUncertain && s.authConfig != null,
         )
     }
     item { Text(if(s.current?.contentRestricted==true) "Leaving this restricted profile requires the existing owner PIN. A target profile PIN or Google sign-in alone cannot approve it." else if(s.switching) "Checking profile authorization…" else "Profile changes keep each user's saved history and preferences separate.", color=LocalThemeTokensText()) }
@@ -291,28 +306,29 @@ private fun PinDialog(title: String, onSubmit: (String) -> Unit, onDismiss: () -
 
 /** On-screen keypad works with D-pad/Select only; plaintext is never rendered or saved. */
 @Composable
-private fun OwnerPinDialog(challengeId:String,target:String,busy:Boolean,error:String?,onSubmit:(String)->Unit,onCancel:()->Unit) {
+private fun OwnerPinDialog(challengeId:String,target:String,busy:Boolean,finishing:Boolean,error:String?,onSubmit:(String)->Unit,onCancel:()->Unit) {
     val t=LocalThemeTokens.current
     var pin by remember(challengeId) {mutableStateOf("")}
     val first=remember {FocusRequester()}
-    val cancel:()->Unit={pin="";onCancel()}
+    val cancel:()->Unit={if(!finishing){pin="";onCancel()}}
     DisposableEffect(challengeId){onDispose{pin=""}}
     Dialog(onDismissRequest=cancel) {
         Column(Modifier.width(520.dp).background(t.surface,RoundedCornerShape(Tokens.Radius.Lg)).padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Text("Owner PIN · $target",style=MaterialTheme.typography.titleLarge,color=t.text)
             Text("Enter the existing 6–12 digit owner PIN. Playback is stopped; Cancel keeps this profile and you can choose Play again. Setup/reset requires your phone and local VM approval.",color=t.textMuted)
             Text(if(pin.isEmpty()) "PIN not entered" else "•".repeat(pin.length),color=t.text,style=MaterialTheme.typography.titleLarge)
+            if(finishing) Text("Finishing authorization… Please wait up to 20 seconds. Back is temporarily unavailable.",color=t.accent)
             error?.let {Text(it,color=t.danger)}
             listOf(listOf("1","2","3"),listOf("4","5","6"),listOf("7","8","9"),listOf("Clear","0","Delete")).forEach {row ->
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     row.forEach {key -> ShButton(key,{
-                        if(!busy) pin=when(key){"Clear"->"";"Delete"->pin.dropLast(1);else->(pin+key).take(12)}
-                    },modifier=Modifier.weight(1f).then(if(key=="1")Modifier.focusRequester(first) else Modifier),enabled=!busy)}
+                        if(!busy && !finishing) pin=when(key){"Clear"->"";"Delete"->pin.dropLast(1);else->(pin+key).take(12)}
+                    },modifier=Modifier.weight(1f).then(if(key=="1")Modifier.focusRequester(first) else Modifier),enabled=!busy && !finishing)}
                 }
             }
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                ShButton(if(busy) "Checking / waiting…" else "Unlock profile",{val entered=pin;pin="";onSubmit(entered)},enabled=!busy && com.streamhub.tv.core.data.repo.validOwnerPin(pin))
-                ShButton("Cancel",cancel)
+                ShButton(if(busy) "Checking / waiting…" else "Unlock profile",{val entered=pin;pin="";onSubmit(entered)},enabled=!busy && !finishing && com.streamhub.tv.core.data.repo.validOwnerPin(pin))
+                ShButton("Cancel",cancel,enabled=!finishing)
             }
         }
     }

@@ -27,9 +27,10 @@ class SecureProfileSwitchTest {
     }
     @Test fun unprotectedTargetsHaveNoCredentialEscape() {
         val user=Profile("user","User")
-        assertEquals(ProfileSwitchPath.OwnerReauthRequired,profileSwitchPath(enabled,user,Profile("other","Other")))
-        assertEquals(ProfileSwitchPath.ExistingPin,profileSwitchPath(enabled,user,admin))
-        assertEquals(ProfileSwitchPath.Secure,profileSwitchPath(enabled,admin,user))
+        assertEquals(ProfileSwitchPath.OwnerPin,profileSwitchPath(enabled,user,Profile("other","Other")))
+        assertEquals(ProfileSwitchPath.OwnerPin,profileSwitchPath(enabled,user,admin))
+        assertEquals(ProfileSwitchPath.OwnerPin,profileSwitchPath(enabled,admin,user))
+        assertEquals(ProfileSwitchPath.Secure,profileSwitchPath(enabled,admin,child))
     }
     @Test fun exactChallengeTargetAndDigitsRequired()=runTest {
         var calls=0
