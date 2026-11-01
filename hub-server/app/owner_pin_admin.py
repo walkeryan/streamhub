@@ -1,4 +1,4 @@
-"""Explicit local enrollment approval; never serves HTTP or accepts/prints a PIN."""
+"""Explicit local enrollment or recovery approval; never serves HTTP or accepts/prints a PIN."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from app.services.content_policy import ContentPolicy
 from app.services.owner_pin import OwnerPinService
 
 
-async def approve(request_id: str) -> None:
+async def approve(request_id: str, *, recovery: bool = False) -> None:
     settings = AppSettings()
     key_path = settings.config_dir / "secret.key"
     if not settings.secret_key and not key_path.is_file():
@@ -30,6 +30,10 @@ async def approve(request_id: str) -> None:
         auth = AuthService(db, crypto)
         auth.content_policy = ContentPolicy(db, settings)
         service = OwnerPinService(auth, db, crypto)
+        if recovery:
+            await service.approve_recovery_request(request_id)
+            print("Approved this browser's recovery request. Enter the replacement PIN privately within five minutes.")
+            return
         await service.approve_setup_request(request_id)
         print(
             "Approved this browser's enrollment request. Enter the PIN privately in that browser within five minutes."
@@ -40,9 +44,11 @@ async def approve(request_id: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--approve-setup", required=True, metavar="REQUEST_ID")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--approve-setup", metavar="REQUEST_ID")
+    action.add_argument("--approve-recovery", metavar="REQUEST_ID")
     args = parser.parse_args()
-    asyncio.run(approve(args.approve_setup))
+    asyncio.run(approve(args.approve_recovery or args.approve_setup, recovery=bool(args.approve_recovery)))
 
 
 if __name__ == "__main__":

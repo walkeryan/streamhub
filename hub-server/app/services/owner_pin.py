@@ -66,10 +66,14 @@ class OwnerPinService:
         row = await self._credential()
         return row.credential_version if row.password_hash else 0
 
-    async def _new(self, p: Principal, target: str, action: str, subject: str | None = None) -> dict[str, Any]:
+    async def _new(
+        self, p: Principal, target: str, action: str, subject: str | None = None, expected_version: int | None = None
+    ) -> dict[str, Any]:
         await self.auth.session_valid(p.profile_id, p.token_version, p.session_id)
         destination = await self.auth.get_profile(target)
         credential = await self._credential()
+        if expected_version is not None and credential.credential_version != expected_version:
+            raise Forbidden("Owner credential changed", code="challenge_invalid")
         if action not in {"setup", "setup_request"} and not credential.password_hash:
             raise Forbidden("Owner PIN has not been configured", code="owner_pin_not_configured")
         cid, secret = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
@@ -89,7 +93,7 @@ class OwnerPinService:
                 OwnerPinChallenge(
                     id=cid,
                     secret_hash=hashlib.sha256(secret.encode()).hexdigest(),
-                    grant_ciphertext=self.crypto.encrypt(secret.encode()) if action == "setup" else None,
+                    grant_ciphertext=self.crypto.encrypt(secret.encode()) if action in {"setup", "recovery"} else None,
                     source_profile_id=p.profile_id,
                     source_version=p.token_version,
                     source_session_id=p.session_id,
@@ -98,7 +102,7 @@ class OwnerPinService:
                     action=action,
                     credential_version=credential.credential_version,
                     google_subject=subject,
-                    expires_at=now + timedelta(minutes=10 if action == "setup_request" else 5),
+                    expires_at=now + timedelta(minutes=10 if action in {"setup_request", "recovery_request"} else 5),
                     consumed=False,
                 )
             )
@@ -228,6 +232,123 @@ class OwnerPinService:
         grant = await self.authorize_setup(owner, request.google_subject)
         # Only the bound authenticated browser receives the decrypted secret through status().
         return {"request_id": request_id, "grant_id": grant["challenge_id"], "expires_in": 300}
+
+    async def _recovery_owner(self, p: Principal) -> OwnerCredential:
+        profile = await self.auth.session_valid(p.profile_id, p.token_version, p.session_id)
+        credential = await self._credential()
+        if (
+            not credential.password_hash
+            or not self.auth.effective_admin(profile)
+            or credential.owner_profile_id != p.profile_id
+            or not credential.google_subject
+            or credential.google_subject != getattr(p, "google_subject", "")
+        ):
+            raise Forbidden("Recovery requires the configured Google owner", code="owner_pin_invalid")
+        return credential
+
+    async def recovery_status(self, p: Principal) -> dict[str, Any]:
+        """Explicit recovery request, separate from ordinary configured status()."""
+        credential = await self._recovery_owner(p)
+        result: dict[str, Any] = {"configured": True, "recovery_authorized": False, "local_approval_required": True}
+        async with self.db.session() as s:
+            rows = list(
+                (
+                    await s.execute(
+                        select(OwnerPinChallenge).where(
+                            OwnerPinChallenge.action.in_(["recovery", "recovery_request"]),
+                            OwnerPinChallenge.source_profile_id == p.profile_id,
+                            OwnerPinChallenge.source_version == p.token_version,
+                            OwnerPinChallenge.source_session_id == p.session_id,
+                            OwnerPinChallenge.google_subject == credential.google_subject,
+                            OwnerPinChallenge.credential_version == credential.credential_version,
+                            OwnerPinChallenge.consumed.is_(False),
+                            OwnerPinChallenge.expires_at > utcnow(),
+                        )
+                    )
+                ).scalars()
+            )
+        grant = next((r for r in rows if r.action == "recovery"), None)
+        if grant is not None and grant.grant_ciphertext:
+            result.update(
+                recovery_authorized=True,
+                local_approval_required=False,
+                grant_id=grant.id,
+                grant_secret=self.crypto.decrypt(grant.grant_ciphertext, ttl=300).decode(),
+                expires_in=300,
+            )
+            return result
+        request = next((r for r in rows if r.action == "recovery_request"), None)
+        if request is None:
+            created = await self._new(
+                p, p.profile_id, "recovery_request", credential.google_subject, credential.credential_version
+            )
+            result["recovery_request_id"] = created["challenge_id"]
+        else:
+            result["recovery_request_id"] = request.id
+        return result
+
+    async def approve_recovery_request(self, request_id: str) -> dict[str, Any]:
+        """LOCAL OPERATOR ONLY. Never wire to HTTP or automatically approve a request."""
+        async with self.db.session() as s:
+            request = await s.get(OwnerPinChallenge, request_id)
+        if (
+            request is None
+            or request.action != "recovery_request"
+            or request.consumed
+            or request.expires_at <= utcnow()
+            or not request.google_subject
+        ):
+            raise Gone("Local recovery request expired or consumed", code="owner_pin_expired")
+        owner = cast(
+            Principal,
+            SimpleNamespace(
+                profile_id=request.source_profile_id,
+                token_version=request.source_version,
+                session_id=request.source_session_id,
+                google_subject=request.google_subject,
+            ),
+        )
+        credential = await self._recovery_owner(owner)
+        if credential.credential_version != request.credential_version:
+            raise Forbidden("Owner credential changed", code="challenge_invalid")
+        async with self.db.session() as s:
+            consumed = await s.execute(
+                update(OwnerPinChallenge)
+                .where(
+                    OwnerPinChallenge.id == request_id,
+                    OwnerPinChallenge.consumed.is_(False),
+                    OwnerPinChallenge.expires_at > utcnow(),
+                )
+                .values(consumed=True)
+                .returning(OwnerPinChallenge.id)
+            )
+            if consumed.scalar_one_or_none() is None:
+                raise Gone("Local recovery request already consumed", code="owner_pin_expired")
+            await s.commit()
+        grant = await self._new(
+            owner, owner.profile_id, "recovery", credential.google_subject, request.credential_version
+        )
+        return {"request_id": request_id, "grant_id": grant["challenge_id"], "expires_in": 300}
+
+    async def recover(self, p: Principal, cid: str, secret: str, new_pin: str, google_subject: str) -> OwnerPinProof:
+        row = await self._bound(p, cid, secret)
+        credential = await self._recovery_owner(p)
+        if (
+            row.action != "recovery"
+            or not google_subject
+            or row.google_subject != google_subject
+            or credential.google_subject != google_subject
+            or row.target_profile_id != p.profile_id
+        ):
+            raise Forbidden("A matching local recovery grant is required", code="challenge_invalid")
+        lease = await self._reserve(row.credential_version)
+        try:
+            if not self._pin_valid(new_pin):
+                raise ServiceError("Owner PIN must contain 6 to 12 ASCII digits", code="owner_pin_invalid")
+            derived = await self._derive(new_pin, None)
+            return await self._consume(row, lease, derived)
+        finally:
+            await self._release(lease)
 
     async def _bound(self, p: Principal, cid: str, secret: str) -> OwnerPinChallenge:
         if len(secret) > 128:
@@ -361,6 +482,18 @@ class OwnerPinService:
                 )
                 .exists()
             )
+            if row.action == "recovery":
+                credential = (
+                    select(OwnerCredential.id)
+                    .where(
+                        credential,
+                        OwnerCredential.id == 1,
+                        OwnerCredential.owner_profile_id == row.source_profile_id,
+                        OwnerCredential.google_subject == row.google_subject,
+                        OwnerCredential.password_hash.is_not(None),
+                    )
+                    .exists()
+                )
             result = await s.execute(
                 update(OwnerPinChallenge)
                 .where(
@@ -383,6 +516,7 @@ class OwnerPinService:
                 version += 1
                 target_version += 1
                 await s.execute(update(Profile).values(token_version=Profile.token_version + 1))
+                await s.execute(update(OwnerPinChallenge).values(consumed=True))
                 await s.execute(
                     update(OwnerCredential)
                     .where(OwnerCredential.id == 1)
@@ -401,7 +535,7 @@ class OwnerPinService:
             row.source_session_id,
             row.target_profile_id,
             target_version,
-            "login" if row.action == "setup" else row.action,
+            "login" if row.action in {"setup", "recovery"} else row.action,
             version,
         )
 
