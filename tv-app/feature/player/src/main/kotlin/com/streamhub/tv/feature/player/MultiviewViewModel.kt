@@ -149,7 +149,7 @@ class MultiviewViewModel @Inject constructor(
             catch(e:Exception) {
                 players.forEach{it.stop()};lease.close();abandonFocus()
                 if(epoch==generation)mutable.update{it.copy(active=false,message=when((e as? ApiException)?.error?.code){
-                    "source_busy","source_limit_reached","multiview_capacity_unknown"->"The server could not reserve two source connections. Neither pane started; capacity settings are unchanged."
+                    "source_busy","source_limit_reached","multiview_capacity"->"The server could not reserve two source connections. Neither pane started; capacity settings are unchanged."
                     else->"Pair could not start. No single-pane fallback. The source may permit only one connection; wait before a manual retry."
                 })}
             }finally{if(epoch==generation)mutable.update{it.copy(busy=false,choice=null)}}

@@ -210,7 +210,7 @@ class StreamHubPlayer(
         current = d
         progressOwner=owner
         mediaEpoch++;trackRevision++;audioApproval.clear()
-        wantsPlayback=true;waitingForAudio=d.audioLanguageRequired
+        wantsPlayback=true;waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
         exoPlayer.playWhenReady=false
         exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
@@ -234,11 +234,10 @@ class StreamHubPlayer(
         if(updatingMedia) return false
         val d=current ?: return false
         val audio=options(exoPlayer.currentTracks,C.TRACK_TYPE_AUDIO)
-        val explicit=exoPlayer.currentTracks.groups.any {group ->
-            group.type==C.TRACK_TYPE_AUDIO && (0 until group.length).any {index->
-                group.isTrackSelected(index) && audioApproval.accepts(mediaEpoch,group.mediaTrackGroup,index)
-            }
+        val selectedTracks=exoPlayer.currentTracks.groups.filter {it.type==C.TRACK_TYPE_AUDIO}.flatMap {group ->
+            (0 until group.length).filter {group.isTrackSelected(it)}.map {group.mediaTrackGroup to it}
         }
+        val explicit=selectedTracks.isNotEmpty() && selectedTracks.all {(group,index)->audioApproval.accepts(mediaEpoch,group,index)}
         val decision=runtimeAudioDecision(d.audioLanguageRequired,d.preferredAudioLanguages,audio.size,audio.filter{it.selected}.map{it.language},explicit)
         if(decision==RuntimeAudioDecision.Blocked || (decision==RuntimeAudioDecision.Unobservable && exoPlayer.playbackState!=Player.STATE_READY)) {
             exoPlayer.playWhenReady=false;waitingForAudio=true
@@ -252,7 +251,7 @@ class StreamHubPlayer(
     }
 
     fun audioTrackNeedsConfirmation(option:TrackOption):Boolean = current?.let {
-        it.audioLanguageRequired && !preferredAudioSelected(it.preferredAudioLanguages,listOf(option.language))
+        needsRuntimeAudioCheck(it.audioLanguageRequired,it.preferredAudioLanguages) && !preferredAudioSelected(it.preferredAudioLanguages,listOf(option.language))
     } ?: true
 
     private fun scheduleReconnect(reason: String) {
@@ -265,7 +264,7 @@ class StreamHubPlayer(
             delay(backoff)
             if (current === d) {
                 updatingMedia=true
-                mediaEpoch++;trackRevision++;audioApproval.clear();waitingForAudio=d.audioLanguageRequired
+                mediaEpoch++;trackRevision++;audioApproval.clear();waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
                 exoPlayer.playWhenReady=false
                 exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
                 exoPlayer.setMediaItem(MediaItemMapper.toMediaItem(d))

@@ -18,10 +18,13 @@ internal fun preferredAudioSelected(preferred:List<String>,selected:List<String?
     val wanted=preferred.mapNotNull(::normalizedAudioLanguage).toSet()
     return wanted.isNotEmpty() && selected.isNotEmpty() && selected.all {normalizedAudioLanguage(it) in wanted}
 }
+/** A source-level exception permits resolving that source, not future unidentified audio tracks. */
+internal fun needsRuntimeAudioCheck(required:Boolean,preferred:List<String>):Boolean = required || preferred.isNotEmpty()
 internal enum class RuntimeAudioDecision { Allowed, Unobservable, Blocked }
 internal fun runtimeAudioDecision(required:Boolean,preferred:List<String>,exposedTracks:Int,selected:List<String?>,explicitSelected:Boolean):RuntimeAudioDecision = when {
-    explicitSelected || !required -> RuntimeAudioDecision.Allowed
+    !needsRuntimeAudioCheck(required,preferred) -> RuntimeAudioDecision.Allowed // Explicit All languages.
     exposedTracks==0 -> RuntimeAudioDecision.Unobservable // Preserve successful source preflight, without claiming track verification.
+    explicitSelected -> RuntimeAudioDecision.Allowed
     preferredAudioSelected(preferred,selected) -> RuntimeAudioDecision.Allowed
     else -> RuntimeAudioDecision.Blocked
 }

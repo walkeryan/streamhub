@@ -24,10 +24,29 @@ class AudioLanguagePolicyTest {
         assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(true,listOf("eng"),1,listOf("fra"),false))
         assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(true,listOf("eng"),1,listOf("en"),false))
     }
-    @Test fun exactPreflightConsentAndExplicitAllDoNotCauseDuplicateRuntimePrompt() {
-        assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,listOf("eng"),1,listOf("fra"),false))
+    @Test fun sourceConsentDoesNotReplaceActualTrackConsentWhileAllLanguagesRemainsExplicit() {
+        assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(false,listOf("eng"),1,listOf("fra"),false))
         assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,emptyList(),1,listOf(null),false))
         assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(true,listOf("eng"),1,listOf(null),true))
+    }
+    @Test fun consentedSourceWaitsForRuntimeTracksAndUnavailableTagsStayUnverified() {
+        assertTrue(needsRuntimeAudioCheck(false,listOf("eng")))
+        assertFalse(needsRuntimeAudioCheck(false,emptyList()))
+        assertEquals(RuntimeAudioDecision.Unobservable,runtimeAudioDecision(false,listOf("eng"),0,emptyList(),false))
+        assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(false,listOf("eng"),1,listOf(null),false))
+        assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,listOf("eng"),1,listOf("en"),false))
+        assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,emptyList(),0,emptyList(),false))
+    }
+    @Test fun approvedForeignTrackFromConsentedSourceCannotAuthorizeChangedManifestOrMediaEpoch() {
+        val original=Any();val replacement=Any();val approval=RuntimeAudioApproval<Any>()
+        approval.approve(1,original,0)
+        fun decision(epoch:Long,group:Any,language:String?)=runtimeAudioDecision(false,listOf("eng"),1,listOf(language),approval.accepts(epoch,group,0))
+        assertEquals(RuntimeAudioDecision.Allowed,decision(1,original,"fra"))
+        assertEquals(RuntimeAudioDecision.Blocked,decision(1,replacement,"fra"))
+        assertEquals(RuntimeAudioDecision.Blocked,decision(1,replacement,null))
+        assertEquals(RuntimeAudioDecision.Blocked,decision(2,original,"fra"))
+        approval.clear();assertEquals(RuntimeAudioDecision.Blocked,decision(1,original,"fra"))
+        assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,emptyList(),1,listOf("fra"),false))
     }
     @Test fun runtimeConsentCannotLeakAcrossReconnectTrackGroupIndexOrEpoch() {
         data class Group(val name:String)
