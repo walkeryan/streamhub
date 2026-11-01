@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import secrets
 import shutil
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -25,6 +26,7 @@ from urllib.parse import urljoin
 import httpx
 
 from app.infra.logging import redact_url
+from app.services.errors import Forbidden
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ class SharedUpstream:
         self.content_type = "video/mp2t"
         self._ready = asyncio.Event()
         self.failed: str | None = None
+        self.closed = False
 
     @property
     def subscribers(self) -> int:
@@ -91,7 +94,7 @@ class SharedUpstream:
 
     def unsubscribe(self, q: asyncio.Queue[bytes | None]) -> None:
         self._subs.discard(q)
-        if not self._subs and self._linger is None:
+        if not self.closed and not self._subs and self._linger is None:
             loop = asyncio.get_running_loop()
             self._linger = loop.call_later(LINGER_S, self._close_if_idle)
 
@@ -168,6 +171,16 @@ class HlsSession:
     source_id: str | None = None
     stderr_bytes: int = 0
     stderr_task: asyncio.Task[None] | None = None
+
+
+@dataclass(eq=False)
+class HttpSession:
+    client: Any
+    task: asyncio.Task[Any] | None
+    response: Any = None
+    source_id: str | None = None
+    counted: bool = False
+    close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def ffmpeg_args(
@@ -251,6 +264,104 @@ class StreamProxy:
         self._on_start = on_start or (lambda _s: None)
         self._on_stop = on_stop or (lambda _s: None)
         self._reaper: asyncio.Task[None] | None = None
+        self.paused = False
+        self.generation = 0
+        self.recovery_epoch = secrets.token_hex(16)
+        self.recovery_lock = asyncio.Lock()
+        self._http: set[HttpSession] = set()
+        self._viewers: dict[asyncio.Queue[bytes | None], tuple[SharedUpstream, str]] = {}
+        self._cleanup_pending: set[Path] = set()
+
+    def ensure_running(self, generation: int | None = None) -> None:
+        if self.paused or (generation is not None and generation != self.generation):
+            raise Forbidden(
+                "Playback was stopped by an administrator. Wait for playback to be resumed.", code="playback_paused"
+            )
+
+    def recovery_status(self) -> dict[str, Any]:
+        return {
+            "paused": self.paused,
+            "active_sessions": len(self._shared) + len(self._hls) + len(self._http),
+            "shared_upstreams": len(self._shared),
+            "hls_sessions": len(self._hls),
+            "http_sessions": len(self._http),
+            "external_sessions_tracked": False,
+        }
+
+    def pause(self) -> None:
+        self.paused = True
+        self.generation += 1
+        self.recovery_epoch = secrets.token_hex(16)
+
+    def _finish_viewer(self, q: asyncio.Queue[bytes | None]) -> None:
+        viewer = self._viewers.pop(q, None)
+        if viewer is not None:
+            self._on_stop(viewer[1])
+
+    async def _close_http(self, sess: HttpSession) -> None:
+        async with sess.close_lock:
+            try:
+                if sess.response is not None:
+                    await sess.response.aclose()
+            finally:
+                await sess.client.aclose()
+            self._http.discard(sess)
+            if sess.counted and sess.source_id is not None:
+                sess.counted = False
+                self._on_stop(sess.source_id)
+
+    async def stop_owned(self) -> dict[str, Any]:
+        """Caller serializes recovery and pauses first. Never inspect unrelated processes."""
+        before = self.recovery_status()["active_sessions"]
+        for key, up in list(self._shared.items()):
+            up.closed = True
+            if up._linger is not None:
+                up._linger.cancel()
+                up._linger = None
+            if up._task is not None:
+                up._task.cancel()
+                try:
+                    await asyncio.wait_for(asyncio.shield(up._task), 1)
+                except asyncio.CancelledError:
+                    pass
+                except (Exception, TimeoutError):
+                    continue
+            up._broadcast(None)
+            for q, (owner, _) in list(self._viewers.items()):
+                if owner is up:
+                    self._finish_viewer(q)
+            up._subs.clear()
+            if self._shared.get(key) is up:
+                self._shared.pop(key, None)
+        for sess in list(self._http):
+            if sess.task is not None and sess.task is not asyncio.current_task():
+                sess.task.cancel()
+            try:
+                await asyncio.wait_for(self._close_http(sess), 1)
+            except Exception:
+                pass  # Retain ownership for a later stop attempt; never claim success.
+        async with self._hls_lock:
+            for key, hls in list(self._hls.items()):
+                try:
+                    await self._stop_hls(key, expected=hls)
+                except Exception:
+                    continue
+        for path in list(self._cleanup_pending):
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                self._cleanup_pending.discard(path)
+            except OSError:
+                continue
+            else:
+                self._cleanup_pending.discard(path)
+        status = self.recovery_status()
+        return {
+            **status,
+            "stopped": max(0, before - status["active_sessions"]),
+            "failed": status["active_sessions"],
+            "cleanup_failed": len(self._cleanup_pending),
+        }
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -292,20 +403,25 @@ class StreamProxy:
         self._shared.pop(key, None)
 
     async def live_shared(
-        self, key: str, url: str, headers: dict[str, str], source_id: str
+        self, key: str, url: str, headers: dict[str, str], source_id: str, *, generation: int | None = None
     ) -> tuple[str, AsyncIterator[bytes]]:
+        self.ensure_running(generation)
+        generation = self.generation
         up = self._shared.get(key)
         if up is None:
             up = SharedUpstream(key, url, headers, self._client_factory, self._drop_shared)
             self._shared[key] = up
         q = up.subscribe()
         await up.wait_ready()
+        self.ensure_running(generation)
         if up.failed:
             up.unsubscribe(q)
             raise ConnectionError(up.failed)
 
         async def gen() -> AsyncIterator[bytes]:
+            self.ensure_running(generation)
             self._on_start(source_id)
+            self._viewers[q] = (up, source_id)
             try:
                 while True:
                     item = await q.get()
@@ -314,7 +430,7 @@ class StreamProxy:
                     yield item
             finally:
                 up.unsubscribe(q)
-                self._on_stop(source_id)
+                self._finish_viewer(q)
 
         return up.content_type, gen()
 
@@ -326,31 +442,41 @@ class StreamProxy:
         range_header: str | None = None,
         *,
         live: bool = False,
+        generation: int | None = None,
     ) -> tuple[int, dict[str, str], AsyncIterator[bytes]]:
         """Single-client passthrough (VOD with Range support; live with reconnect)."""
+        self.ensure_running(generation)
+        generation = self.generation
         req_headers = dict(headers)
         if range_header:
             req_headers["Range"] = range_header
         client = self._client_factory(timeout=httpx.Timeout(30.0, connect=10.0, read=None), headers=req_headers)
+        sess = HttpSession(client, asyncio.current_task(), source_id=source_id)
+        self._http.add(sess)
         try:
             req = client.build_request("GET", url)
             resp = await client.send(req, stream=True)
-        except Exception:
-            await client.aclose()
+            sess.response = resp
+            self.ensure_running(generation)
+        except BaseException:
+            await self._close_http(sess)
             raise
         if resp.status_code >= 400:
-            await resp.aclose()
-            await client.aclose()
+            await self._close_http(sess)
             raise ConnectionError(f"upstream {resp.status_code}")
         out_headers = {k: v for k, v in resp.headers.items() if k.lower() in HOP_HEADERS}
         status = resp.status_code
 
         async def gen() -> AsyncIterator[bytes]:
+            self.ensure_running(generation)
+            sess.task = asyncio.current_task()
             self._on_start(source_id)
+            sess.counted = True
             nonlocal resp
             attempt = 0
             try:
                 while True:
+                    self.ensure_running(generation)
                     try:
                         async for chunk in resp.aiter_bytes(CHUNK):
                             attempt = 0
@@ -367,21 +493,29 @@ class StreamProxy:
                     attempt += 1
                     try:
                         resp = await client.send(client.build_request("GET", url), stream=True)
+                        sess.response = resp
                     except httpx.HTTPError:
                         continue
             finally:
-                await resp.aclose()
-                await client.aclose()
-                self._on_stop(source_id)
+                await self._close_http(sess)
 
         return status, out_headers, gen()
 
-    async def fetch_text(self, url: str, headers: dict[str, str]) -> tuple[str, str]:
-        async with self._client_factory(timeout=20.0, headers=headers) as client:
+    async def fetch_text(self, url: str, headers: dict[str, str], *, generation: int | None = None) -> tuple[str, str]:
+        self.ensure_running(generation)
+        generation = self.generation
+        client = self._client_factory(timeout=20.0, headers=headers)
+        sess = HttpSession(client, asyncio.current_task())
+        self._http.add(sess)
+        try:
             resp = await client.get(url)
+            sess.response = resp
+            self.ensure_running(generation)
             if resp.status_code >= 400:
                 raise ConnectionError(f"upstream {resp.status_code}")
             return str(resp.url), resp.text
+        finally:
+            await self._close_http(sess)
 
     @staticmethod
     def rewrite_playlist(text: str, base_url: str, make_url: Callable[[str], str]) -> str:
@@ -420,11 +554,15 @@ class StreamProxy:
         transcode: str,
         source_id: str | None = None,
         max_connections: int | None = None,
+        generation: int | None = None,
     ) -> HlsSession:
+        self.ensure_running(generation)
+        generation = self.generation
         capacity = max_connections or 0
         admission_deadline = self._clock() + HLS_ADMISSION_WAIT_S
         while True:
             async with self._hls_lock:
+                self.ensure_running(generation)
                 now = self._clock()
                 sess = self._hls.get(key)
                 if sess is not None and sess.proc.returncode is None:
@@ -486,6 +624,7 @@ class StreamProxy:
         deadline = self._clock() + HLS_READY_TIMEOUT
         playlist = sess.workdir / "index.m3u8"
         while self._clock() < deadline:
+            self.ensure_running(generation)
             if self._hls.get(key) is not sess:
                 raise ConnectionError("HLS session stopped")
             sess.last_access = self._clock()  # An outstanding startup request is active.
@@ -528,4 +667,9 @@ class StreamProxy:
             sess.stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sess.stderr_task
-        shutil.rmtree(sess.workdir, ignore_errors=True)
+        try:
+            shutil.rmtree(sess.workdir)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            self._cleanup_pending.add(sess.workdir)

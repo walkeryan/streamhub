@@ -89,3 +89,6 @@ class SettingsService:
         await self._put(TMDB_KEY, self._crypto.encrypt_json(key) if key else None)
         self._tmdb_key = key or self._env_tmdb
         secret_registry.add(key)
+
+    async def set_recovery_paused(self, paused: bool) -> None:
+        await self._put("playback_recovery_paused", paused)

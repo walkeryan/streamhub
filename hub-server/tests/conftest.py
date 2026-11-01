@@ -74,6 +74,10 @@ class Api:
 
     async def req(self, method: str, url: str, **kw: Any) -> httpx.Response:
         headers = {**self.headers, **kw.pop("headers", {})}
+        if url == "/playback/resolve" and isinstance(kw.get("json"), dict):
+            # Normal updated web clients obtain an epoch for each deliberate play.
+            # Protocol rejection tests use the raw client to omit/stale this field.
+            kw["json"] = {"recovery_generation": self.c.proxy.recovery_epoch, **kw["json"]}
         return await self.client.request(method, "/api/v1" + url, headers=headers, **kw)
 
     async def get(self, url: str, **kw: Any) -> httpx.Response:

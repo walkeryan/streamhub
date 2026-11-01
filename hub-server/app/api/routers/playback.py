@@ -10,12 +10,12 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api import schemas as S
-from app.api.deps import C, P
+from app.api.deps import Admin, C, P
 from app.domain.ports import ImageAuthProvider
 from app.proxy.stream_proxy import HlsSourceBusy
 from app.services import ids
 from app.services.context import is_https
-from app.services.errors import BadGateway, Conflict, NotFound, Unauthorized
+from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError, Unauthorized
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,7 +23,16 @@ router = APIRouter()
 
 @router.post("/playback/resolve", response_model=S.PlaybackDescriptor, tags=["playback"])
 async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
-    return await c.playback.resolve(
+    c.proxy.ensure_running()
+    if body.client == "web":
+        if body.recovery_generation is None:
+            raise Forbidden("Reload Streamhub to update playback recovery support.", code="playback_reload_required")
+        if body.recovery_generation != c.proxy.recovery_epoch:
+            raise Forbidden(
+                "This playback attempt was stopped. Start playback again manually.", code="playback_stopped"
+            )
+    generation = c.proxy.generation
+    result = await c.playback.resolve(
         p.profile_id,
         body.id,
         source_id=body.source_id,
@@ -31,6 +40,41 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         catchup_programme_id=body.catchup_programme_id,
         https_site=is_https.get(),
     )
+    c.proxy.ensure_running(generation)
+    return result
+
+
+@router.get("/playback/generation", tags=["playback"])
+async def playback_generation(c: C, p: P) -> dict[str, str]:
+    c.proxy.ensure_running()
+    return {"generation": c.proxy.recovery_epoch}
+
+
+@router.get("/playback/recovery", tags=["playback"])
+async def recovery_status(c: C, p: Admin) -> dict[str, Any]:
+    return c.proxy.recovery_status()
+
+
+@router.post("/playback/recovery/stop", tags=["playback"])
+async def recovery_stop(body: S.StreamRecoveryConfirm, c: C, p: Admin) -> dict[str, Any]:
+    async with c.proxy.recovery_lock:
+        c.proxy.pause()
+        c.tokens.revoke_all()
+        # Persist before stopping: a restart must not silently resume playback.
+        await c.app_settings.set_recovery_paused(True)
+        return await c.proxy.stop_owned()
+
+
+@router.post("/playback/recovery/resume", tags=["playback"])
+async def recovery_resume(body: S.StreamRecoveryConfirm, c: C, p: Admin) -> dict[str, Any]:
+    async with c.proxy.recovery_lock:
+        if c.proxy.paused and c.proxy.recovery_status()["active_sessions"]:
+            raise Conflict(
+                "Some Streamhub sessions could not stop. Retry Stop all streams first.", code="recovery_incomplete"
+            )
+        await c.app_settings.set_recovery_paused(False)
+        c.proxy.paused = False
+        return c.proxy.recovery_status()
 
 
 @router.post("/playback/progress", status_code=204, tags=["playback"])
@@ -75,9 +119,11 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
 
 # ---------------------------------------------------------------- streaming
 def _grant(c: C, token: str) -> Any:
+    c.proxy.ensure_running()
     g = c.tokens.verify(token)
     if g is None:
         raise Unauthorized("invalid or expired stream token")
+    g.recovery_generation = c.proxy.generation
     return g
 
 
@@ -94,17 +140,21 @@ async def stream(token: str, request: Request, c: C) -> Response:
     is_hls_upstream = ".m3u8" in g.url.split("?", 1)[0].lower()
     try:
         if is_hls_upstream:
-            final, text = await c.proxy.fetch_text(g.url, g.headers)
+            final, text = await c.proxy.fetch_text(g.url, g.headers, generation=g.recovery_generation)
             body = c.proxy.rewrite_playlist(text, final, lambda u: _proxy_url(token, u, c))
             return Response(body, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"})
         if g.live and g.channel_key:
-            ctype, gen = await c.proxy.live_shared(g.channel_key, g.url, g.headers, g.source_id)
+            ctype, gen = await c.proxy.live_shared(
+                g.channel_key, g.url, g.headers, g.source_id, generation=g.recovery_generation
+            )
             return StreamingResponse(gen, media_type=ctype, headers={"Cache-Control": "no-cache"})
         status, headers, gen = await c.proxy.passthrough(
-            g.url, g.headers, g.source_id, request.headers.get("range"), live=g.live
+            g.url, g.headers, g.source_id, request.headers.get("range"), live=g.live, generation=g.recovery_generation
         )
     except (ConnectionError, OSError) as exc:
         raise BadGateway("upstream unavailable") from exc
+    except ServiceError:
+        raise
     except Exception as exc:
         log.warning("stream proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
@@ -122,12 +172,16 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
     url = str(d["u"])
     try:
         if ".m3u8" in url.split("?", 1)[0].lower():
-            final, text = await c.proxy.fetch_text(url, g.headers)
+            final, text = await c.proxy.fetch_text(url, g.headers, generation=g.recovery_generation)
             body = c.proxy.rewrite_playlist(text, final, lambda u: _proxy_url(token, u, c))
             return Response(body, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"})
-        status, headers, gen = await c.proxy.passthrough(url, g.headers, g.source_id, request.headers.get("range"))
+        status, headers, gen = await c.proxy.passthrough(
+            url, g.headers, g.source_id, request.headers.get("range"), generation=g.recovery_generation
+        )
     except (ConnectionError, OSError) as exc:
         raise BadGateway("upstream unavailable") from exc
+    except ServiceError:
+        raise
     except Exception as exc:
         log.warning("stream segment proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
@@ -153,11 +207,14 @@ async def stream_hls(token: str, c: C) -> Response:
             transcode=transcode,
             source_id=g.source_id,
             max_connections=c.sources.max_connections(source),
+            generation=g.recovery_generation,
         )
     except HlsSourceBusy as exc:
         raise Conflict("Another channel is using this source. Stop it and retry.", code="source_busy") from exc
     except (ConnectionError, TimeoutError, OSError) as exc:
         raise BadGateway("could not start HLS session") from exc
+    except ServiceError:
+        raise
     except Exception as exc:
         log.warning("hls session failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("could not start HLS session") from exc

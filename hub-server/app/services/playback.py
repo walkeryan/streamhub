@@ -10,6 +10,7 @@ Mode decision for in-app sources (``decide_mode``):
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -51,12 +52,17 @@ class StreamGrant:
     live: bool
     channel_key: str | None
     transcode: bool
+    recovery_generation: int | None = None
 
 
 class StreamTokens:
     def __init__(self, crypto: Crypto, ttl_s: int) -> None:
         self._crypto = crypto
         self.ttl_s = ttl_s
+        self._generation = secrets.token_hex(16)
+
+    def revoke_all(self) -> None:
+        self._generation = secrets.token_hex(16)
 
     def issue(self, grant: StreamGrant) -> str:
         return self._crypto.encrypt_json(
@@ -70,12 +76,13 @@ class StreamTokens:
                 "c": grant.channel_key,
                 "t": grant.transcode,
                 "iat": int(time.time()),
+                "generation": self._generation,
             }
         )
 
     def verify(self, token: str) -> StreamGrant | None:
         d = self._crypto.try_decrypt_json(token, ttl=self.ttl_s)
-        if not isinstance(d, dict):
+        if not isinstance(d, dict) or d.get("generation") != self._generation:
             return None
         return StreamGrant(
             profile_id=str(d["p"]),
