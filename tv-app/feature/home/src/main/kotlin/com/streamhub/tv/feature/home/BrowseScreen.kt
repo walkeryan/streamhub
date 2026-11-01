@@ -21,6 +21,8 @@ import com.streamhub.tv.core.data.api.StreamHubJson
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.*
 import com.streamhub.tv.core.data.repo.ProfileFilterStore
+import com.streamhub.tv.core.data.repo.CatalogScope
+import com.streamhub.tv.core.data.repo.catalogScope
 import com.streamhub.tv.core.ui.components.*
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -45,24 +47,30 @@ data class BrowseState(
 
 @HiltViewModel
 class BrowseViewModel @Inject constructor(
-    private val api: StreamHubApi, session: SessionStore, private val prefs: ProfileFilterStore, saved: SavedStateHandle,
+    private val api: StreamHubApi, private val session: SessionStore, private val prefs: ProfileFilterStore, saved: SavedStateHandle,
 ) : ViewModel() {
     private val section: String = checkNotNull(saved["section"])
     private val _state = MutableStateFlow(BrowseState(section))
     val state: StateFlow<BrowseState> = _state.asStateFlow()
-    private var profile: String? = null
+    private var scope: CatalogScope? = null
+    private suspend fun ensureScope(expected: CatalogScope) {
+        if (scope != expected || session.current().catalogScope() != expected) throw CancellationException("Catalog scope changed")
+    }
     private var load: Job? = null
     private val prefKey = "native_browse_$section"
     init {
         viewModelScope.launch {
-            session.session.map { it.profile?.id }.distinctUntilChanged().collectLatest { id ->
-                load?.cancel(); profile = id; _state.value = BrowseState(section)
+            session.session.map { it.catalogScope() }.distinctUntilChanged().collectLatest { owner ->
+                val id = owner.profileId
+                load?.cancel(); scope = owner; _state.value = BrowseState(section)
                 if (id != null) {
                     try {
                         val savedFilters = prefs.read(id, prefKey)?.let { StreamHubJson.decodeFromJsonElement<NativeBrowseFilters>(it) } ?: NativeBrowseFilters()
+                        ensureScope(owner)
                         _state.update { it.copy(filters = savedFilters) }
                     } catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { _state.update { it.copy(notice = "Saved filters unavailable. Using defaults.") } }
+                    catch (_: Exception) { ensureScope(owner); _state.update { it.copy(notice = "Saved filters unavailable. Using defaults.") } }
+                    ensureScope(owner)
                     _state.update { it.copy(ready = true) }; refresh(1)
                 }
             }
@@ -71,34 +79,38 @@ class BrowseViewModel @Inject constructor(
     fun filters(value: NativeBrowseFilters) {
         if (!_state.value.ready) return
         _state.update { it.copy(filters = value) }
-        val id = profile ?: return
+        val owner = scope ?: return
+        val id = owner.profileId ?: return
         viewModelScope.launch {
-            try { prefs.write(id, prefKey, StreamHubJson.encodeToJsonElement(value)) }
+            try { ensureScope(owner); prefs.write(id, prefKey, StreamHubJson.encodeToJsonElement(value)) }
             catch (e: CancellationException) { throw e }
-            catch (_: Exception) { if (profile == id) _state.update { it.copy(notice = "Filters apply now, but could not be saved. Try again.") } }
+            catch (_: Exception) { if (scope == owner) _state.update { it.copy(notice = "Filters apply now, but could not be saved. Try again.") } }
         }
         refresh(1)
     }
     fun refresh(page: Int = _state.value.page) {
-        val id = profile ?: return
+        if (!_state.value.ready) return
+        val owner = scope ?: return
+        if (owner.profileId == null) return
         val filters = _state.value.filters
         load?.cancel()
         load = viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null, tiles = emptyList(), page = page) }
             try {
                 val result = api.browse(section, filters.source, filters.genre, filters.sort, page, filters.language)
-                if (profile != id) return@launch
+                ensureScope(owner)
                 _state.update { it.copy(tiles = result.tiles, page = result.page, total = result.total, loading = false) }
                 // Metadata errors do not discard a successful page.
                 try {
                     val sources = api.sources().filter { it.enabled && it.type != SourceType.STREAMING_SERVICE }
                     val genres = api.browseGenres(section, filters.source, filters.language)
                     val languages = api.browseLanguages(section, filters.source)
+                    ensureScope(owner)
                     _state.update { it.copy(sources = sources, genres = genres, languages = languages) }
                 } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { _state.update { it.copy(notice = "Some filter choices could not refresh. Retry to update them.") } }
+                catch (_: Exception) { ensureScope(owner); _state.update { it.copy(notice = "Some filter choices could not refresh. Retry to update them.") } }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { _state.update { it.copy(loading = false, error = e.message ?: "Could not load library") } }
+            catch (e: Exception) { ensureScope(owner); _state.update { it.copy(loading = false, error = e.message ?: "Could not load library") } }
         }
     }
 }
@@ -114,8 +126,10 @@ fun BrowseScreen(title: String, vm: BrowseViewModel = hiltViewModel()) {
     val firstControl = remember { FocusRequester() }
     var needsInitialFocus by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(s.ready) {
-        if (s.ready && needsInitialFocus) {
-            runCatching { firstControl.requestFocus() }.onSuccess { needsInitialFocus = false }
+        if (!s.ready) { needsInitialFocus = true; picker = null }
+        else if (needsInitialFocus) {
+            withFrameNanos { }
+            if (runCatching { firstControl.requestFocus() }.getOrDefault(false)) needsInitialFocus = false
         }
     }
     LaunchedEffect(s.page, s.filters) { grid.scrollToItem(0) }
@@ -130,11 +144,11 @@ fun BrowseScreen(title: String, vm: BrowseViewModel = hiltViewModel()) {
             ShButton("Sort", { picker = "sort" }, enabled = s.ready)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ShButton("Previous", { vm.refresh(s.page - 1) }, Modifier.leftOpensRail(rail), enabled = !s.loading && s.page > 1)
-            Text("Page ${s.page}", color = t.text)
-            ShButton("Next", { vm.refresh(s.page + 1) }, enabled = !s.loading && s.page * 60 < s.total)
+            ShButton(if (s.page > 1) "Previous" else "Previous · Start", { if (!s.loading && s.page > 1) vm.refresh(s.page - 1) }, Modifier.leftOpensRail(rail), enabled = s.ready)
+            Text("Page ${s.page}${if (s.loading) " · Loading…" else ""}", color = t.text)
+            ShButton(if (s.page * 60 < s.total) "Next" else "Next · End", { if (!s.loading && s.page * 60 < s.total) vm.refresh(s.page + 1) }, enabled = s.ready)
             ShButton("Reset filters", { vm.filters(NativeBrowseFilters()) }, enabled = s.ready)
-            ShButton("Refresh", { vm.refresh() }, enabled = s.ready && !s.loading)
+            ShButton(if (s.loading) "Refreshing…" else "Refresh", { if (s.ready && !s.loading) vm.refresh() }, enabled = s.ready)
         }
         s.notice?.let { Text(it, color = t.textMuted) }
         when {

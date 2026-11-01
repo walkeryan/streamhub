@@ -19,6 +19,8 @@ import com.streamhub.tv.core.data.api.StreamHubJson
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.*
 import com.streamhub.tv.core.data.repo.ProfileFilterStore
+import com.streamhub.tv.core.data.repo.CatalogScope
+import com.streamhub.tv.core.data.repo.catalogScope
 import com.streamhub.tv.core.ui.components.*
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -41,21 +43,27 @@ data class SportsState(
 )
 
 @HiltViewModel
-class SportsViewModel @Inject constructor(private val api: StreamHubApi, session: SessionStore, private val prefs: ProfileFilterStore) : ViewModel() {
+class SportsViewModel @Inject constructor(private val api: StreamHubApi, private val session: SessionStore, private val prefs: ProfileFilterStore) : ViewModel() {
     private val _state = MutableStateFlow(SportsState())
     val state: StateFlow<SportsState> = _state.asStateFlow()
-    private var profile: String? = null
+    private var scope: CatalogScope? = null
+    private suspend fun ensureScope(expected: CatalogScope) {
+        if (scope != expected || session.current().catalogScope() != expected) throw CancellationException("Catalog scope changed")
+    }
     private var request: Job? = null
     init {
         viewModelScope.launch {
-            session.session.map { it.profile?.id }.distinctUntilChanged().collectLatest { id ->
-                request?.cancel(); profile = id; _state.value = SportsState()
+            session.session.map { it.catalogScope() }.distinctUntilChanged().collectLatest { owner ->
+                val id = owner.profileId
+                request?.cancel(); scope = owner; _state.value = SportsState()
                 if (id != null) {
                     try {
                         val saved = prefs.read(id, "native_sports")?.let { StreamHubJson.decodeFromJsonElement<NativeSportsFilters>(it) } ?: NativeSportsFilters()
+                        ensureScope(owner)
                         _state.update { it.copy(filters = saved) }
                     } catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { _state.update { it.copy(notice = "Saved filters unavailable. Using defaults.") } }
+                    catch (_: Exception) { ensureScope(owner); _state.update { it.copy(notice = "Saved filters unavailable. Using defaults.") } }
+                    ensureScope(owner)
                     _state.update { it.copy(ready = true) }; refresh(0)
                 }
             }
@@ -64,28 +72,31 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, session
     fun filters(value: NativeSportsFilters) {
         if (!_state.value.ready) return
         _state.update { it.copy(filters = value, result = SportsPage()) }
-        val id = profile ?: return
+        val owner = scope ?: return
+        val id = owner.profileId ?: return
         viewModelScope.launch {
-            try { prefs.write(id, "native_sports", StreamHubJson.encodeToJsonElement(value)) }
+            try { ensureScope(owner); prefs.write(id, "native_sports", StreamHubJson.encodeToJsonElement(value)) }
             catch (e: CancellationException) { throw e }
-            catch (_: Exception) { if (profile == id) _state.update { it.copy(notice = "Filters apply now, but could not be saved.") } }
+            catch (_: Exception) { if (scope == owner) _state.update { it.copy(notice = "Filters apply now, but could not be saved.") } }
         }
         refresh(0)
     }
     fun refresh(page: Int = _state.value.page) {
         if (!_state.value.ready) return
+        val owner = scope ?: return
         val f = _state.value.filters
         request?.cancel()
         request = viewModelScope.launch {
             _state.update { it.copy(loading = true, page = page, error = null, result = if (it.page == page) it.result else SportsPage()) }
             try {
                 val result = api.sports(f.language, f.sport, page * 40, 40)
+                ensureScope(owner)
                 _state.update { it.copy(result = result, loading = false) }
-                try { val languages = api.channelLanguages(); _state.update { it.copy(languages = languages) } }
+                try { val languages = api.channelLanguages(); ensureScope(owner); _state.update { it.copy(languages = languages) } }
                 catch (e: CancellationException) { throw e }
-                catch (_: Exception) { _state.update { it.copy(notice = "Language choices could not refresh.") } }
+                catch (_: Exception) { ensureScope(owner); _state.update { it.copy(notice = "Language choices could not refresh.") } }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { _state.update { it.copy(loading = false, error = e.message ?: "Could not load sports") } }
+            catch (e: Exception) { ensureScope(owner); _state.update { it.copy(loading = false, error = e.message ?: "Could not load sports") } }
         }
     }
 }
@@ -101,8 +112,10 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
     val firstControl = remember { FocusRequester() }
     var needsInitialFocus by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(s.ready) {
-        if (s.ready && needsInitialFocus) {
-            runCatching { firstControl.requestFocus() }.onSuccess { needsInitialFocus = false }
+        if (!s.ready) { needsInitialFocus = true; picker = null }
+        else if (needsInitialFocus) {
+            withFrameNanos { }
+            if (runCatching { firstControl.requestFocus() }.getOrDefault(false)) needsInitialFocus = false
         }
     }
     LaunchedEffect(s.page, s.filters) { list.scrollToItem(0) }
@@ -114,13 +127,13 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ShButton(s.filters.sport ?: "All sports", { picker = "sport" }, Modifier.focusRequester(firstControl).leftOpensRail(rail), enabled = s.ready)
             ShButton(s.languages.find { it.code == s.filters.language }?.name ?: when(s.filters.language) { null -> "My languages"; "all" -> "All languages"; "und" -> "Unknown"; else -> s.filters.language!! }, { picker = "language" }, enabled = s.ready)
-            ShButton("Refresh", { vm.refresh() }, enabled = s.ready && !s.loading)
+            ShButton(if (s.loading) "Refreshing…" else "Refresh", { if (s.ready && !s.loading) vm.refresh() }, enabled = s.ready)
             ShButton("Reset filters", { vm.filters(NativeSportsFilters()) }, enabled = s.ready)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ShButton("Previous", { vm.refresh(s.page - 1) }, Modifier.leftOpensRail(rail), enabled = !s.loading && s.page > 0)
-            Text("Page ${s.page + 1} · ${s.result.total} listings", color = t.text)
-            ShButton("Next", { vm.refresh(s.page + 1) }, enabled = !s.loading && (s.page + 1) * 40 < s.result.total)
+            ShButton(if (s.page > 0) "Previous" else "Previous · Start", { if (!s.loading && s.page > 0) vm.refresh(s.page - 1) }, Modifier.leftOpensRail(rail), enabled = s.ready)
+            Text("Page ${s.page + 1} · ${s.result.total} listings${if (s.loading) " · Loading…" else ""}", color = t.text)
+            ShButton(if ((s.page + 1) * 40 < s.result.total) "Next" else "Next · End", { if (!s.loading && (s.page + 1) * 40 < s.result.total) vm.refresh(s.page + 1) }, enabled = s.ready)
         }
         Text("Guide coverage: ${s.result.coverage.scheduledChannels} of ${s.result.coverage.eligibleChannels} eligible channels", color = t.textMuted)
         s.notice?.let { Text(it, color = t.textMuted) }
