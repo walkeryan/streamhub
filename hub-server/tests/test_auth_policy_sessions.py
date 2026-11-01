@@ -57,7 +57,9 @@ async def test_owner_proof_survives_refresh_and_stale_pairing_is_denied(api: Api
 async def test_restricted_legacy_admin_has_no_admin_privilege(api: Api) -> None:
     enable(api)
     async with api.c.db.session() as s:
-        await s.execute(update(Profile).where(Profile.id == api.profile_id).values(kids=True))
+        await s.execute(
+            update(Profile).where(Profile.id == api.profile_id).values(kids=True, content_policy={"restricted": True})
+        )
         await s.commit()
     profile = await api.c.auth.get_profile(api.profile_id)
     token = api.c.auth.issue(profile)["access_token"]

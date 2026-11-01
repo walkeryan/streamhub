@@ -241,3 +241,13 @@ async def test_segment_timestamp_gate_and_unknown_expiry(api, tmp_path):
     manifest.write_text("#EXTM3U\n#EXTINF:5,\nseg.ts\n")
     with pytest.raises(Forbidden):
         await p.require_segment(grant, api.c.auth, path, manifest)
+
+
+@pytest.mark.asyncio
+async def test_owner_legacy_kids_label_does_not_lock_out_owner(api):
+    api.c.settings.content_policy_enabled = True
+    async with api.c.db.session() as session:
+        owner = await session.get(Profile, api.profile_id)
+        owner.kids = True
+        await session.commit()
+    assert not api.c.content_policy.is_restricted(await api.c.auth.get_profile(api.profile_id))
