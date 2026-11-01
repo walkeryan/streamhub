@@ -50,6 +50,9 @@ class OwnerPinService:
 
     async def _credential(self) -> OwnerCredential:
         async with self.db.session() as s:
+            existing = await s.get(OwnerCredential, 1)
+            if existing is not None:
+                return existing
             await s.execute(insert(OwnerCredential).values(id=1, credential_version=0).on_conflict_do_nothing())
             await s.commit()
             row = await s.get(OwnerCredential, 1)
@@ -105,8 +108,12 @@ class OwnerPinService:
     async def start(self, p: Principal, target: str, action: str) -> dict[str, Any]:
         if action not in ACTIONS:
             raise ServiceError("Invalid owner PIN action")
-        if action in {"login", "admin"} and target != p.profile_id:
+        if action == "login" and target != p.profile_id:
             raise Forbidden("Owner PIN action must target the initiating profile")
+        if action == "admin":
+            current = await self.auth.get_profile(p.profile_id)
+            if not self.auth.effective_admin(current):
+                raise Forbidden("Only the owner can approve administrative changes", code="owner_pin_invalid")
         return await self._new(p, target, action)
 
     async def authorize_setup(self, owner: Principal, google_subject: str) -> dict[str, Any]:

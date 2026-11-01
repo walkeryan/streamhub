@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api.routers import auth, catalog, owner_reauth, playback, sources, system
+from app.api.routers import auth, catalog, owner_pin, playback, sources, system
 from app.container import Container, build_container, shutdown, startup
 from app.infra.logging import configure_logging
 from app.infra.settings import APP_VERSION, AppSettings
@@ -84,6 +84,8 @@ def create_app(
     @app.exception_handler(ServiceError)
     async def service_error(_req: Request, exc: ServiceError) -> JSONResponse:
         headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
+        if exc.status == 429 and hasattr(exc, "retry_after"):
+            headers = {"Retry-After": str(exc.retry_after)}
         return _err(exc.status, exc.code, exc.message, headers)
 
     @app.exception_handler(RequestValidationError)
@@ -101,7 +103,7 @@ def create_app(
         log.exception("unhandled error")
         return _err(500, "internal_error", "internal server error")
 
-    for r in (auth.router, owner_reauth.router, sources.router, catalog.router, playback.router, system.router):
+    for r in (auth.router, owner_pin.router, sources.router, catalog.router, playback.router, system.router):
         app.include_router(r, prefix=API_PREFIX)
 
     _mount_web(app, settings.web_dist)

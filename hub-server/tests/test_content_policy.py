@@ -10,6 +10,14 @@ from app.services.content_policy import active_policy
 from app.services.errors import Forbidden, ServiceError
 
 
+async def activate(api):
+    from tests.test_auth_policy_sessions import enroll
+
+    version = await enroll(api)
+    owner = await api.c.auth.get_profile(api.profile_id)
+    api.headers = {"Authorization": "Bearer " + api.c.auth.issue(owner, owner_pin_version=version)["access_token"]}
+
+
 def evidence(key, code="PG", scope="movie"):
     value = summarize("tmdb", scope, [classification_record("US", "US-MPA", code)])
     return {**value, "subject_key": key}
@@ -60,7 +68,7 @@ async def test_disabled_preserves_content_and_admin_restriction_rejected(api):
         "tmdb:movie:2",
         "lib:fixture:episode",
     }
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     with pytest.raises(ServiceError):
         await p.update(api.profile_id, {"restricted": True})
     with pytest.raises(ServiceError):
@@ -70,7 +78,7 @@ async def test_disabled_preserves_content_and_admin_restriction_rejected(api):
 @pytest.mark.asyncio
 async def test_typed_batched_evidence_unknown_stale_and_episode_denied(api):
     p = await seed(api)
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     refs = (
         [f"tmdb:movie:{n}" for n in range(1, 6)]
         + [f"lib:fixture:{n}" for n in range(1, 5)]
@@ -84,7 +92,7 @@ async def test_typed_batched_evidence_unknown_stale_and_episode_denied(api):
 @pytest.mark.asyncio
 async def test_sql_scope_counts_pagination_and_context_reset(api):
     p = await seed(api)
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     reset = active_policy.set((p, await p.profile("child")))
     try:
         async with api.c.db.session() as s:
@@ -101,7 +109,7 @@ async def test_sql_scope_counts_pagination_and_context_reset(api):
 @pytest.mark.asyncio
 async def test_channel_interval_overlap_unknown_gap_and_wrong_feed(api):
     p = await seed(api)
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     now = datetime.now(UTC)
     ev = summarize("xmltv", "programme", [classification_record("US", "US-TVPG", "TV-G")])
     async with api.c.db.session() as s:
@@ -140,7 +148,7 @@ async def test_channel_interval_overlap_unknown_gap_and_wrong_feed(api):
 @pytest.mark.asyncio
 async def test_final_external_metadata_and_nested_feeds_filtered(api):
     p = await seed(api)
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     payload = {
         "results": [{"id": "tmdb:movie:1", "sources": []}, {"id": "tmdb:movie:2", "sources": []}],
         "events": [{"id": "event", "feeds": [{"channel_id": "ch:fixture:live"}]}],
@@ -153,14 +161,14 @@ async def test_final_external_metadata_and_nested_feeds_filtered(api):
 @pytest.mark.asyncio
 async def test_grant_checks_session_source_and_current_policy(api):
     p = await seed(api)
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     profile = await p.profile("child")
     token = api.c.auth.issue(profile)
     principal = await api.c.auth.resolve_principal(token["access_token"])
     grant = SimpleNamespace(
         content_ref="lib:fixture:1",
         profile_id="child",
-        profile_version=0,
+        profile_version=principal.token_version,
         session_id=principal.session_id,
         source_id="fixture",
         policy_at=None,
@@ -175,7 +183,7 @@ async def test_grant_checks_session_source_and_current_policy(api):
 @pytest.mark.asyncio
 async def test_http_listing_search_direct_ids_and_policy_admin_guard(api):
     p = await seed(api)
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     tokens = api.c.auth.issue(await p.profile("child"))
     headers = {"Authorization": "Bearer " + tokens["access_token"]}
     response = await api.client.get("/api/v1/browse/movies?all_languages=true", headers=headers)
@@ -195,7 +203,7 @@ async def test_http_listing_search_direct_ids_and_policy_admin_guard(api):
     response = await api.client.post(
         "/api/v1/auth/profile-switch", headers=headers, json={"profile_id": api.profile_id, "password": "test-admin-pw"}
     )
-    assert response.status_code == 403 and response.json()["code"] == "owner_reauth_required"
+    assert response.status_code == 403 and response.json()["code"] == "owner_pin_required"
     response = await api.client.get("/api/v1/browse/movies?all_languages=true", headers=api.headers)
     assert response.status_code == 200 and response.json()["total"] == 4
 
@@ -203,7 +211,7 @@ async def test_http_listing_search_direct_ids_and_policy_admin_guard(api):
 @pytest.mark.asyncio
 async def test_segment_timestamp_gate_and_unknown_expiry(api, tmp_path):
     p = await seed(api)
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     now = datetime.now(UTC)
     ev = summarize("xmltv", "programme", [classification_record("US", "US-TVPG", "TV-G")])
     async with api.c.db.session() as s:
@@ -223,7 +231,7 @@ async def test_segment_timestamp_gate_and_unknown_expiry(api, tmp_path):
     grant = SimpleNamespace(
         content_ref="ch:fixture:live",
         profile_id="child",
-        profile_version=0,
+        profile_version=principal.token_version,
         session_id=principal.session_id,
         source_id="fixture",
         policy_at=None,
@@ -245,7 +253,7 @@ async def test_segment_timestamp_gate_and_unknown_expiry(api, tmp_path):
 
 @pytest.mark.asyncio
 async def test_owner_legacy_kids_label_does_not_lock_out_owner(api):
-    api.c.settings.content_policy_enabled = True
+    await activate(api)
     async with api.c.db.session() as session:
         owner = await session.get(Profile, api.profile_id)
         owner.kids = True

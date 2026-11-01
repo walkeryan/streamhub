@@ -1,7 +1,6 @@
-"""Local concurrent session consumption and signed owner-proof fixtures."""
+"""Local concurrent session consumption and owner PIN proof fixtures."""
 
 import asyncio
-import time
 
 import pytest
 from sqlalchemy import update
@@ -10,16 +9,27 @@ from app.infra.models import Profile
 from app.services.errors import Forbidden, Unauthorized
 from tests.conftest import Api
 
+FIXTURE_PIN = "629417"
 
-def enable(api: Api) -> None:
+
+async def enroll(api: Api) -> int:
+    """Exercise the local-only enrollment authority against disposable fixture data."""
     api.c.settings.content_policy_enabled = True
+    auth = api.c.auth
+    profile = await auth.get_profile(api.profile_id)
+    pending = auth.principal_from_access(auth.issue(profile, google_subject="fixture-owner-subject")["access_token"])
+    grant = await api.c.owner_pin.authorize_setup(pending, "fixture-owner-subject")
+    proof = await api.c.owner_pin.setup(
+        pending, grant["challenge_id"], grant["poll_token"], FIXTURE_PIN, "fixture-owner-subject"
+    )
+    return proof.credential_version
 
 
 async def test_atomic_transition_has_one_winner_and_revokes_refresh(api: Api) -> None:
-    enable(api)
+    version = await enroll(api)
     auth = api.c.auth
     profile = await auth.get_profile(api.profile_id)
-    tokens = auth.issue(profile)
+    tokens = auth.issue(profile, owner_pin_version=version)
     p = await auth.resolve_principal(tokens["access_token"])
     results = await asyncio.gather(
         auth.consume_session(p.profile_id, p.token_version, p.session_id),
@@ -34,28 +44,29 @@ async def test_atomic_transition_has_one_winner_and_revokes_refresh(api: Api) ->
         await auth.consume_session(p.profile_id, p.token_version + 1, "wrong-version")
 
 
-async def test_owner_proof_survives_refresh_and_stale_pairing_is_denied(api: Api) -> None:
-    enable(api)
+async def test_pin_proof_survives_refresh_and_unverified_pairing_is_denied(api: Api) -> None:
+    version = await enroll(api)
     auth = api.c.auth
     profile = await auth.get_profile(api.profile_id)
     device = await auth.start_device()
-    stale = auth.issue(profile, owner_auth_time=time.time() - 3600)
-    p = await auth.resolve_principal(stale["access_token"])
+    stale = auth.issue(profile, owner_pin_version=version - 1)
     with pytest.raises(Forbidden):
-        await auth.approve_device(p, device["user_code"], profile.id)
-    timestamp = time.time()
-    profile.__dict__["_owner_auth_time"] = timestamp
-    tokens = auth.issue(profile)
+        await auth.resolve_principal(stale["access_token"])
+    with pytest.raises(Forbidden):
+        await auth.approve_device(auth.principal_from_access(stale["access_token"]), device["user_code"], profile.id)
+    tokens = auth.issue(profile, owner_pin_version=version, google_subject="fixture-owner-subject")
     _, refreshed = await auth.refresh(tokens["refresh_token"])
     p = await auth.resolve_principal(refreshed["access_token"])
-    assert p.owner_auth_time == timestamp
+    assert p.owner_pin_version == version and p.google_subject == "fixture-owner-subject"
     await auth.approve_device(p, device["user_code"], profile.id)
     _, paired = await auth.poll_device(device["device_code"])
-    assert (await auth.resolve_principal(paired["access_token"])).owner_auth_time == timestamp
+    paired_principal = await auth.resolve_principal(paired["access_token"])
+    assert paired_principal.owner_pin_version == version
+    assert paired_principal.google_subject == "fixture-owner-subject"
 
 
 async def test_restricted_legacy_admin_has_no_admin_privilege(api: Api) -> None:
-    enable(api)
+    await enroll(api)
     async with api.c.db.session() as s:
         await s.execute(
             update(Profile).where(Profile.id == api.profile_id).values(kids=True, content_policy={"restricted": True})
@@ -69,46 +80,40 @@ async def test_restricted_legacy_admin_has_no_admin_privilege(api: Api) -> None:
 
 
 async def test_revoked_approver_cannot_finish_device_pairing(api: Api) -> None:
-    enable(api)
+    version = await enroll(api)
     auth = api.c.auth
     profile = await auth.get_profile(api.profile_id)
     device = await auth.start_device()
-    p = await auth.resolve_principal(auth.issue(profile, owner_auth_time=time.time())["access_token"])
+    p = await auth.resolve_principal(auth.issue(profile, owner_pin_version=version)["access_token"])
     await auth.approve_device(p, device["user_code"], profile.id)
     await auth.consume_session(p.profile_id, p.token_version, p.session_id)
     with pytest.raises(Unauthorized):
         await auth.poll_device(device["device_code"])
 
 
-async def test_approved_challenge_cannot_resurrect_consumed_source(api: Api) -> None:
-    from app.services.owner_reauth import OwnerReauthService
-    from tests.test_google_auth import configure
-
-    configure(api)
-    enable(api)
+async def test_pin_challenge_cannot_resurrect_consumed_source(api: Api) -> None:
+    version = await enroll(api)
     auth = api.c.auth
     profile = await auth.get_profile(api.profile_id)
-    p = await auth.resolve_principal(auth.issue(profile)["access_token"])
-    service = OwnerReauthService(auth, api.c.google_auth)
-    challenge = await service.start(p, profile.id)
-    service.challenges[challenge["challenge_id"]].status = "approved"
+    p = await auth.resolve_principal(auth.issue(profile, owner_pin_version=version)["access_token"])
+    challenge = await api.c.owner_pin.start(p, profile.id, "login")
     await auth.consume_session(p.profile_id, p.token_version, p.session_id)
     with pytest.raises(Unauthorized):
-        await service.poll(p, challenge["challenge_id"], challenge["poll_token"])
+        await api.c.owner_pin.verify(p, challenge["challenge_id"], challenge["poll_token"], FIXTURE_PIN)
 
 
 async def test_kids_mutation_revokes_sessions_and_cannot_restrict_admin(api: Api) -> None:
     from app.services.errors import ServiceError
 
-    enable(api)
+    version = await enroll(api)
     auth = api.c.auth
     owner = await auth.get_profile(api.profile_id)
-    p = await auth.resolve_principal(auth.issue(owner)["access_token"])
+    p = await auth.resolve_principal(auth.issue(owner, owner_pin_version=version)["access_token"])
     with pytest.raises(ServiceError, match="owner profile cannot be restricted"):
         await auth.update_profile(p, owner.id, {"kids": True})
     child = await auth.create_profile(p, {"name": "Child", "is_admin": True, "kids": False})
     assert not child.is_admin
-    tokens = auth.issue(child)
+    tokens = auth.issue(child, owner_pin_version=version)
     old_version = child.token_version
     changed = await auth.update_profile(p, child.id, {"kids": True})
     assert changed.token_version == old_version + 1

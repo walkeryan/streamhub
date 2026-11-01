@@ -75,24 +75,24 @@ async def test_binding_cancel_expiry_and_single_use(api: Api) -> None:
 
 @pytest.mark.parametrize("auth_time", [None, 0, True, float("inf"), time.time() + 600])
 @respx.mock
-async def test_normal_owner_login_policy_requires_fresh_proof(api: Api, auth_time: Any) -> None:
+async def test_normal_google_identity_never_claims_fresh_owner_proof(api: Api, auth_time: Any) -> None:
     configure(api)
     object.__setattr__(api.c.settings, "content_policy_enabled", True)
-    # An unauthenticated browser after app storage clearing must still provide fresh Google proof.
+    # Google identity survives stale/absent auth_time, but owner entry separately requires PIN.
     api.client.cookies.clear()
     g = api.c.google_auth
     url, browser = g.start("/")
     query = parse_qs(urlsplit(url).query)
-    assert len(query["claims"]) == 1 and "auth_time" in query["claims"][0]
-    assert query["max_age"] == ["0"]
+    assert "max_age" not in query and "claims" not in query
     mock_google(query["nonce"][0], auth_time=auth_time)
-    with pytest.raises(Forbidden):
-        await g.finish(query["state"][0], browser, "code")
-    assert not g.handoffs
+    handoff, _ = await g.finish(query["state"][0], browser, "code")
+    profile = await g.consume(handoff, g.origin)
+    assert getattr(profile, "_owner_auth_time", None) is None
+    assert getattr(profile, "_google_subject", None) == "subject-123"
 
 
 @respx.mock
-async def test_normal_owner_proof_survives_handoff(api: Api) -> None:
+async def test_verified_google_subject_survives_handoff_without_elevation(api: Api) -> None:
     configure(api)
     object.__setattr__(api.c.settings, "content_policy_enabled", True)
     g = api.c.google_auth
@@ -103,7 +103,8 @@ async def test_normal_owner_proof_survives_handoff(api: Api) -> None:
     handoff, destination = await g.finish(query["state"][0], browser, "code")
     assert destination == "/"
     profile = await g.consume(handoff, g.origin)
-    assert getattr(profile, "_owner_auth_time", None) == authenticated
+    assert getattr(profile, "_owner_auth_time", None) is None
+    assert getattr(profile, "_google_subject", None) == "subject-123"
     assert getattr(await api.c.auth.get_profile(profile.id), "_owner_auth_time", None) is None
     with pytest.raises(Unauthorized):
         await g.consume(handoff, g.origin)

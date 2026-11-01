@@ -10,10 +10,20 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import String, and_, case, cast, exists, func, literal, not_, or_, select
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import with_loader_criteria
 
 from app.infra.db import Database
-from app.infra.models import AgeClassification, Channel, Profile, Programme, Source, Title
+from app.infra.models import (
+    AgeClassification,
+    Channel,
+    OwnerCredential,
+    Profile,
+    Programme,
+    RevokedSession,
+    Source,
+    Title,
+)
 from app.services.classification import MOVIE_CODES, TV_CODES
 from app.services.errors import Conflict, Forbidden, NotFound, ServiceError
 
@@ -25,6 +35,7 @@ active_policy: ContextVar[tuple[ContentPolicy, Profile] | None] = ContextVar("co
 class ContentPolicy:
     def __init__(self, db: Database, settings: Any) -> None:
         self.db, self.settings = db, settings
+        self.owner_pin: Any = None
 
     @property
     def enabled(self) -> bool:
@@ -250,9 +261,13 @@ class ContentPolicy:
 
         return clean(payload)
 
-    async def update(self, profile_id: str, data: dict[str, Any]) -> Profile:
+    async def update(
+        self, profile_id: str, data: dict[str, Any], *, authorization: dict[str, Any] | None = None
+    ) -> Profile:
         if not self.enabled:
             raise Conflict("Content policy is disabled", code="content_policy_disabled")
+        if self.owner_pin is None or not await self.owner_pin.configured():
+            raise Conflict("Set up the owner PIN before changing parental policy", code="owner_pin_setup_required")
         if (
             data.get("allow_unknown")
             or set(data.get("allowed_movie_codes", [])) - MOVIE_CODES
@@ -263,6 +278,43 @@ class ContentPolicy:
                 code="invalid_content_policy",
             )
         async with self.db.session() as session:
+            if authorization is not None:
+                a = authorization
+                marker = "action:" + str(a["jti"])
+                live = select(literal(marker), literal(datetime.now(UTC) + timedelta(days=1))).where(
+                    select(Profile.id)
+                    .where(
+                        Profile.id == a["sub"],
+                        Profile.token_version == a["ver"],
+                        Profile.is_admin.is_(True),
+                        func.coalesce(func.json_extract(Profile.content_policy, "$.restricted"), False).is_(False),
+                    )
+                    .exists(),
+                    ~select(RevokedSession.session_id)
+                    .where(RevokedSession.session_id.in_([str(a["sid"]), marker]))
+                    .exists(),
+                    select(Profile.id)
+                    .where(Profile.id == profile_id, Profile.token_version == a["target_ver"])
+                    .exists(),
+                    select(OwnerCredential.id)
+                    .where(
+                        OwnerCredential.id == 1,
+                        OwnerCredential.credential_version == a["opv"],
+                        OwnerCredential.password_hash.is_not(None),
+                    )
+                    .exists(),
+                    literal(a["target"]) == profile_id,
+                    literal(a["action"]) == "content_policy",
+                    literal(a["exp"]) > datetime.now(UTC).timestamp(),
+                )
+                claimed = await session.execute(
+                    insert(RevokedSession)
+                    .from_select(["session_id", "expires_at"], live)
+                    .on_conflict_do_nothing()
+                    .returning(RevokedSession.session_id)
+                )
+                if claimed.scalar_one_or_none() is None:
+                    raise Forbidden("Owner policy approval expired or already used", code="owner_pin_invalid")
             profile = await session.get(Profile, profile_id)
             if profile is None:
                 raise NotFound("profile not found")

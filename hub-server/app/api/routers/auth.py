@@ -161,8 +161,9 @@ async def get_content_policy(id: str, c: C, p: Admin) -> dict[str, Any]:
 
 
 @router.put("/profiles/{id}/content-policy", tags=["profiles"])
-async def put_content_policy(id: str, body: S.ContentPolicyWrite, c: C, p: Admin) -> dict[str, Any]:
-    profile = await c.content_policy.update(id, body.model_dump())
+async def put_content_policy(id: str, body: S.ContentPolicyWrite, request: Request, c: C, p: Admin) -> dict[str, Any]:
+    authorization = await c.auth.validate_owner_action(request.headers.get("X-Owner-Action", ""), p, id)
+    profile = await c.content_policy.update(id, body.model_dump(), authorization=authorization)
     return {"profile_id": id, "feature_enabled": c.content_policy.enabled, **c.content_policy.values(profile)}
 
 
@@ -185,6 +186,8 @@ async def auth_config(c: C) -> dict[str, bool]:
         "google_enabled": c.google_auth.enabled,
         "google_required": c.settings.google_auth_required,
         "content_policy_enabled": c.content_policy.enabled,
+        "owner_pin_configured": await c.owner_pin.configured(),
+        "owner_pin_setup_required": not await c.owner_pin.configured(),
     }
 
 
@@ -229,11 +232,18 @@ async def google_callback(request: Request, c: C, state: str = "", code: str = "
     return response
 
 
-@router.post("/auth/google/complete", response_model=S.AuthTokens, tags=["auth"])
+@router.post("/auth/google/complete", tags=["auth"])
 async def google_complete(request: Request, response: Response, c: C) -> dict[str, Any]:
     prof = await c.google_auth.consume(
         request.cookies.get("__Host-sh-google-handoff", ""), request.headers.get("origin", "")
     )
     response.delete_cookie("__Host-sh-google-handoff", secure=True, httponly=True, samesite="strict", path="/")
     response.headers["Cache-Control"] = "no-store"
+    if c.content_policy.enabled:
+        return {
+            "owner_pin_required": True,
+            "pending_token": c.auth.owner_pending(prof),
+            "profile": await profile_out(c, prof),
+            "setup_required": not await c.owner_pin.configured(),
+        }
     return await tokens_out(c, prof, c.auth.issue(prof))

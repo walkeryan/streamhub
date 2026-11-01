@@ -35,6 +35,7 @@ from app.services.content_policy import ContentPolicy
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
+from app.services.owner_pin import OwnerPinService
 from app.services.owner_reauth import OwnerReauthService
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.registry import SourceRegistry
@@ -71,6 +72,7 @@ class Container:
     sources: SourceService
     availability: AvailabilityService
     owner_reauth: OwnerReauthService
+    owner_pin: OwnerPinService
     content_policy: ContentPolicy
     catalog: CatalogService
     channels: ChannelService
@@ -114,6 +116,9 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     auth = AuthService(db, crypto, settings.access_token_ttl_s, settings.refresh_token_ttl_s)
     content_policy = ContentPolicy(db, settings)
     auth.content_policy = content_policy
+    owner_pin = OwnerPinService(auth, db, crypto)
+    auth.owner_pin = owner_pin
+    content_policy.owner_pin = owner_pin
     language = LanguageChain(ctx, settings.iptv_org_channels_url)
     tmdb = TmdbClient(ctx, app_settings.tmdb_key, ClassificationStore(db).record)
     sources = SourceService(db, crypto, registry, disclaimer, language)
@@ -183,6 +188,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         catalog=catalog,
         content_policy=content_policy,
         owner_reauth=OwnerReauthService(auth, google_auth),
+        owner_pin=owner_pin,
         channels=channels,
         favorites=favorites,
         watchlist=watchlist,

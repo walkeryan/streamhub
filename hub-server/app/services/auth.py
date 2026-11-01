@@ -44,6 +44,8 @@ class Principal:
     token_version: int = 0
     session_id: str = ""
     owner_auth_time: float | None = None
+    owner_pin_version: int = 0
+    google_subject: str = ""
 
 
 class AuthService:
@@ -54,6 +56,7 @@ class AuthService:
         self.refresh_ttl = refresh_ttl
         self._fail: dict[str, list[float]] = {}
         self.content_policy: Any = None
+        self.owner_pin: Any = None
 
     # ------------------------------------------------------------------ bootstrap
     async def ensure_admin(self, password: str | None) -> str | None:
@@ -82,7 +85,14 @@ class AuthService:
 
     # ------------------------------------------------------------------ tokens
     def _encode(
-        self, profile: Profile, typ: str, ttl: int, session_id: str = "", owner_auth_time: float | None = None
+        self,
+        profile: Profile,
+        typ: str,
+        ttl: int,
+        session_id: str = "",
+        owner_auth_time: float | None = None,
+        owner_pin_version: int = 0,
+        google_subject: str = "",
     ) -> str:
         now = int(time.time())
         payload = {
@@ -95,6 +105,8 @@ class AuthService:
             "exp": now + ttl,
             "jti": secrets.token_hex(8),
             "sid": session_id or secrets.token_hex(16),
+            "opv": owner_pin_version,
+            "gs": google_subject,
         }
         if owner_auth_time is not None:
             payload["oat"] = owner_auth_time
@@ -111,14 +123,26 @@ class AuthService:
             return None
         return float(value)
 
-    def issue(self, profile: Profile, session_id: str = "", owner_auth_time: float | None = None) -> dict[str, str]:
+    def issue(
+        self,
+        profile: Profile,
+        session_id: str = "",
+        owner_auth_time: float | None = None,
+        owner_pin_version: int = 0,
+        google_subject: str = "",
+    ) -> dict[str, str]:
         owner_auth_time = self.owner_time(
             owner_auth_time if owner_auth_time is not None else getattr(profile, "_owner_auth_time", None)
         )
         session_id = session_id or secrets.token_hex(16)
+        google_subject = google_subject or getattr(profile, "_google_subject", "")
         return {
-            "access_token": self._encode(profile, "access", self.access_ttl, session_id, owner_auth_time),
-            "refresh_token": self._encode(profile, "refresh", self.refresh_ttl, session_id, owner_auth_time),
+            "access_token": self._encode(
+                profile, "access", self.access_ttl, session_id, owner_auth_time, owner_pin_version, google_subject
+            ),
+            "refresh_token": self._encode(
+                profile, "refresh", self.refresh_ttl, session_id, owner_auth_time, owner_pin_version, google_subject
+            ),
         }
 
     def _decode(self, token: str, typ: str) -> dict[str, Any]:
@@ -141,6 +165,8 @@ class AuthService:
             token_version=int(p.get("ver", -1)),
             session_id=str(p.get("sid") or ""),
             owner_auth_time=self.owner_time(p.get("oat")),
+            owner_pin_version=int(p.get("opv", 0)),
+            google_subject=str(p.get("gs") or ""),
         )
 
     async def session_valid(self, profile_id: str, version: int, session_id: str) -> Profile:
@@ -156,6 +182,7 @@ class AuthService:
         if self.content_policy is None or not self.content_policy.enabled:
             return p
         profile = await self.session_valid(p.profile_id, p.token_version, p.session_id)
+        await self.check_owner_entry(profile, p.owner_pin_version)
         return Principal(
             profile.id,
             self.effective_admin(profile),
@@ -163,7 +190,74 @@ class AuthService:
             profile.token_version,
             p.session_id,
             p.owner_auth_time,
+            p.owner_pin_version,
+            p.google_subject,
         )
+
+    async def ensure_pin_ready(self) -> None:
+        if self.owner_pin is None or not await self.owner_pin.configured():
+            raise Conflict("Set up the owner PIN with local owner approval first", code="owner_pin_setup_required")
+
+    async def check_owner_entry(self, profile: Profile, version: int) -> None:
+        if self.content_policy is None or not self.content_policy.enabled:
+            return
+        await self.ensure_pin_ready()
+        if not self.content_policy.is_restricted(profile):
+            current = await self.owner_pin.credential_version()
+            if not version or version != current:
+                raise Forbidden("Owner PIN verification required", code="owner_pin_required")
+
+    def owner_pending(self, profile: Profile) -> str:
+        return self._encode(profile, "owner_pending", 600, google_subject=getattr(profile, "_google_subject", ""))
+
+    async def validate_owner_pending(self, token: str) -> Principal:
+        value = self._decode(token, "owner_pending")
+        profile = await self.session_valid(str(value["sub"]), int(value["ver"]), str(value["sid"]))
+        subject = str(value.get("gs") or "")
+        if not profile.is_admin or not subject:
+            raise Unauthorized("Verified Google owner identity required")
+        return Principal(
+            profile.id, True, profile.kids, profile.token_version, str(value["sid"]), google_subject=subject
+        )
+
+    def issue_owner_action(self, p: Principal, target: Profile, credential_version: int) -> str:
+        now = int(time.time())
+        return jwt.encode(
+            {
+                "typ": "owner_action",
+                "sub": p.profile_id,
+                "sid": p.session_id,
+                "ver": p.token_version,
+                "target": target.id,
+                "target_ver": target.token_version,
+                "action": "content_policy",
+                "opv": credential_version,
+                "jti": secrets.token_hex(16),
+                "iat": now,
+                "exp": now + 120,
+            },
+            self._key,
+            algorithm=ALG,
+        )
+
+    async def validate_owner_action(self, token: str, p: Principal, target_id: str) -> dict[str, Any]:
+        if not token:
+            raise Forbidden("Verify owner PIN for this policy change", code="owner_pin_required")
+        claims = self._decode(token, "owner_action")
+        if (claims.get("sub"), claims.get("sid"), claims.get("ver"), claims.get("target"), claims.get("action")) != (
+            p.profile_id,
+            p.session_id,
+            p.token_version,
+            target_id,
+            "content_policy",
+        ):
+            raise Forbidden("Owner approval belongs to another action", code="owner_pin_invalid")
+        profile = await self.session_valid(p.profile_id, p.token_version, p.session_id)
+        await self.check_owner_entry(profile, int(claims.get("opv", 0)))
+        target = await self.get_profile(target_id)
+        if target.token_version != claims.get("target_ver") or not self.effective_admin(profile):
+            raise Forbidden("Owner approval expired after profile changes", code="owner_pin_invalid")
+        return claims
 
     async def revoke_session(self, session_id: str) -> None:
         if not session_id:
@@ -199,11 +293,12 @@ class AuthService:
             raise Conflict("Content policy is disabled", code="content_policy_disabled")
         current = await self.session_valid(principal.profile_id, principal.token_version, principal.session_id)
         target = await self.get_profile(target_id)
+        await self.ensure_pin_ready()
         if target_id != current.id:
             if self.content_policy.is_restricted(current):
-                raise Forbidden(
-                    "Owner Google reauthentication is required to leave this profile", code="owner_reauth_required"
-                )
+                raise Forbidden("Owner PIN is required to leave this profile", code="owner_pin_required")
+            if not self.content_policy.is_restricted(target):
+                raise Forbidden("Owner PIN is required for this profile", code="owner_pin_required")
             if not self.effective_admin(current):
                 if not target.pin_hash and not target.password_hash:
                     raise Forbidden("Owner approval is required for this profile", code="profile_switch_locked")
@@ -213,7 +308,11 @@ class AuthService:
                     )
                 target, _ = await self.login(target_id, pin, password)
         await self.consume_session(principal.profile_id, principal.token_version, principal.session_id)
-        return target, self.issue(target)
+        return target, self.issue(
+            target,
+            owner_pin_version=principal.owner_pin_version if not self.content_policy.is_restricted(target) else 0,
+            google_subject=principal.google_subject,
+        )
 
     async def refresh(self, refresh_token: str) -> tuple[Profile, dict[str, str]]:
         p = self._decode(refresh_token, "refresh")
@@ -223,7 +322,10 @@ class AuthService:
             raise Unauthorized("refresh token revoked")
         if self.content_policy is not None and self.content_policy.enabled:
             await self.session_valid(prof.id, int(p.get("ver", -1)), str(p.get("sid") or ""))
-        return prof, self.issue(prof, str(p.get("sid") or ""), self.owner_time(p.get("oat")))
+        await self.check_owner_entry(prof, int(p.get("opv", 0)))
+        return prof, self.issue(
+            prof, str(p.get("sid") or ""), self.owner_time(p.get("oat")), int(p.get("opv", 0)), str(p.get("gs") or "")
+        )
 
     # ------------------------------------------------------------------ login
     def _throttle(self, profile_id: str) -> None:
@@ -234,6 +336,8 @@ class AuthService:
             raise ServiceError("too many attempts, try again later", code="rate_limited")
 
     async def login(self, profile_id: str, pin: str | None, password: str | None) -> tuple[Profile, dict[str, str]]:
+        if self.content_policy is not None and self.content_policy.enabled:
+            raise Forbidden("Use Google sign-in and owner PIN", code="owner_pin_required")
         self._throttle(profile_id)
         async with self._db.session() as s:
             prof = await s.get(Profile, profile_id)
@@ -293,15 +397,18 @@ class AuthService:
             if prof is None:
                 raise NotFound("profile removed")
             proof = None
+            pin_version = 0
+            google_subject = ""
             if self.content_policy is not None and self.content_policy.enabled:
                 approver = await self.session_valid(
                     row.approved_by_profile_id or "", row.approved_by_version or 0, row.approved_by_session_id or ""
                 )
                 if approver.id != prof.id and not self.effective_admin(approver):
                     raise Forbidden("Pairing approval is no longer authorized")
-                if prof.is_admin or not self.content_policy.is_restricted(prof):
-                    proof = self.owner_time(row.owner_auth_time)
-                    self._require_pairing_proof(proof, row.expires_at.timestamp() - DEVICE_CODE_TTL)
+                await self.ensure_pin_ready()
+                pin_version = row.owner_pin_version or 0
+                google_subject = row.approved_google_subject or ""
+                await self.check_owner_entry(prof, pin_version)
             guards = [
                 DeviceCode.device_code == device_code,
                 DeviceCode.consumed.is_(False),
@@ -328,7 +435,9 @@ class AuthService:
             if result.scalar_one_or_none() is None:
                 raise NotFound("device code already consumed")
             await s.commit()
-        return prof, self.issue(prof, owner_auth_time=proof)
+        return prof, self.issue(
+            prof, owner_auth_time=proof, owner_pin_version=pin_version, google_subject=google_subject
+        )
 
     @staticmethod
     def _require_pairing_proof(proof: float | None, created: float) -> None:
@@ -355,8 +464,10 @@ class AuthService:
                 approver = await self.session_valid(principal.profile_id, principal.token_version, principal.session_id)
                 if target != approver.id and not self.effective_admin(approver):
                     raise Forbidden("Only an unrestricted owner can approve another profile")
-                if destination.is_admin or not self.content_policy.is_restricted(destination):
-                    self._require_pairing_proof(principal.owner_auth_time, row.expires_at.timestamp() - DEVICE_CODE_TTL)
+                await self.ensure_pin_ready()
+                await self.check_owner_entry(destination, principal.owner_pin_version)
+                row.owner_pin_version = principal.owner_pin_version
+                row.approved_google_subject = principal.google_subject
                 row.owner_auth_time = principal.owner_auth_time
                 row.approved_by_profile_id = principal.profile_id
                 row.approved_by_version = principal.token_version

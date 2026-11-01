@@ -32,7 +32,7 @@ class GoogleAuthService:
         self.auth = auth
         self.transactions: dict[str, tuple[float, str, str, str, str, float, bool]] = {}
         self.owner_transactions: dict[str, tuple[float, str, str, str, str, float]] = {}
-        self.handoffs: dict[str, tuple[float, str, str, float | None]] = {}
+        self.handoffs: dict[str, tuple[float, str, str, float | None, str]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -75,7 +75,7 @@ class GoogleAuthService:
         # Only the fixed pairing screen can be selected; no external/open redirects.
         destination = return_to if re.fullmatch(r"/pair(?:\?code=[A-Z0-9]{6})?", return_to) else "/"
         created = time.time()
-        fresh_required = bool(getattr(self.settings, "content_policy_enabled", False))
+        fresh_required = False  # Google does not support forced reauthentication; owner PIN is separate.
         self.transactions[state] = (created + 600, browser, nonce, verifier, destination, created, fresh_required)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         query = urlencode(
@@ -202,10 +202,10 @@ class GoogleAuthService:
             raise Unauthorized("Sign-in expired or invalid; please start again")
         claims = await self._claims(code, tx[3], tx[2])
         owner = await self._owner(claims)
-        fresh_required = tx[6] or bool(getattr(self.settings, "content_policy_enabled", False))
+        fresh_required = False
         auth_time = self._fresh_auth_time(claims, tx[5]) if fresh_required else None
         handoff = secrets.token_urlsafe(32)
-        self.handoffs[handoff] = (time.time() + 60, owner.id, tx[4], auth_time)
+        self.handoffs[handoff] = (time.time() + 60, owner.id, tx[4], auth_time, str(claims["sub"]))
         return handoff, tx[4]
 
     async def consume(self, handoff: str, origin: str) -> Profile:
@@ -217,8 +217,7 @@ class GoogleAuthService:
         profile = await self.auth.get_profile(item[1])
         if not profile.is_admin:
             raise Forbidden("Owner profile is no longer authorized")
-        if bool(getattr(self.settings, "content_policy_enabled", False)) and item[3] is None:
-            raise Forbidden("Fresh owner authentication required")
+        profile.__dict__["_google_subject"] = item[4]
         # Transient ORM instance metadata only; never saved to the profile row.
         if item[3] is not None:
             profile.__dict__["_owner_auth_time"] = item[3]
