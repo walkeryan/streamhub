@@ -32,6 +32,7 @@ import javax.inject.Inject
 data class LiveTvState(
     val loading: Boolean = true,
     val ready: Boolean = false,
+    val profileScope: String = "",
     val notice: String? = null,
     val error: String? = null,
     val languages: List<LanguageCount> = emptyList(),
@@ -77,7 +78,7 @@ class LiveTvViewModel @Inject constructor(
                         prefs.read(profile.id, "native_live")?.let { Json.decodeFromJsonElement<LiveFilters>(it) } ?: defaults
                     } catch (e: CancellationException) { throw e }
                     catch (_: Exception) { _state.update { it.copy(notice = "Saved filters unavailable. Using defaults.") }; defaults }
-                    _state.update { it.copy(ready = true, profileLanguages = langs, selectedLanguages = filters.languages,
+                    _state.update { it.copy(ready = true, profileScope = profile.id, profileLanguages = langs, selectedLanguages = filters.languages,
                         selectedGroup = filters.group, country = filters.country, favoritesOnly = filters.favorites) }
                     refreshGroups(); load()
                     try { val languages = api.channelLanguages(); _state.update { it.copy(languages = languages.sortedByDescending { l -> l.count }) } }

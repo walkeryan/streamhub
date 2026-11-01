@@ -62,13 +62,15 @@ class GuideViewModel @Inject constructor(
     /** Entry refreshes the current page; changed shared filters start a fresh page. */
     fun applyFilters(filters: LiveGuideFilters) {
         if (!initialized || _state.value.filters != filters) {
+            val scopeChanged = _state.value.filters.profileScope != filters.profileScope
             initialized = true
+            if (scopeChanged) _state.value = GuideState(filters = filters)
             _state.update { it.copy(filters = filters, page = 0, channels = emptyList(), programmes = emptyMap(), selected = null, selectedChannel = null) }
         }
         load()
     }
 
-    fun stopLoading() { loadJob?.cancel() }
+    fun stopLoading() { loadJob?.cancel(); _state.update { it.copy(loading = true, channels = emptyList(), programmes = emptyMap(), selected = null, selectedChannel = null) } }
 
 
     fun search(value: String) {

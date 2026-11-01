@@ -82,6 +82,7 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
     LaunchedEffect(filters) { vm.applyFilters(filters) }
     DisposableEffect(vm) { onDispose { vm.stopLoading() } }
     val s by vm.state.collectAsStateWithLifecycle()
+    if (s.filters != filters) { LoadingView(); return }
     val t = LocalThemeTokens.current
     val launcher = LocalPlayLauncher.current
     val hScroll = rememberScrollState()

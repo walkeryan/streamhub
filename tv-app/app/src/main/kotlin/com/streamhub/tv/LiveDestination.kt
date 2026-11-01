@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.streamhub.tv.core.data.model.LiveGuideFilters
+import com.streamhub.tv.core.ui.components.LoadingView
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -49,6 +50,7 @@ fun LiveDestination(startInGuide: Boolean = false, vm: LiveTvViewModel = hiltVie
     }
     val filters = LiveGuideFilters(
         country = state.country,
+        profileScope = state.profileScope,
         languages = state.selectedLanguages?.sorted().orEmpty(),
         group = state.selectedGroup,
         favorites = state.favoritesOnly,
@@ -70,7 +72,9 @@ fun LiveDestination(startInGuide: Boolean = false, vm: LiveTvViewModel = hiltVie
             ShChip("All regions", state.country == "all", { vm.selectCountry("all") })
             ShChip("Unknown region", state.country == "und", { vm.selectCountry("und") })
         }
-        if (guide) {
+        if (!state.ready) {
+            LoadingView()
+        } else if (guide) {
             LiveTvScreen(vm = vm, filtersOnly = true)
             Box(Modifier.weight(1f)) { GuideScreen(filters = filters, compact = true) }
         } else {
