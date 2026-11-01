@@ -241,6 +241,7 @@ components:
         shared_upstreams: {type: integer, minimum: 0}
         hls_sessions: {type: integer, minimum: 0}
         http_sessions: {type: integer, minimum: 0}
+        pair_reservations: {type: integer, minimum: 0, description: Active or pending atomic multiview leases; each reserves two producers.}
         external_sessions_tracked: {type: boolean, const: false}
     PlaybackRecoveryResult:
       allOf:
@@ -289,11 +290,31 @@ components:
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
         variant_id: {type: string, nullable: true}
         allow_unverified_audio: {type: boolean, default: false}
+        multiview: {type: boolean, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
+        companion_id: {type: string, nullable: true, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
+    MultiviewRequest:
+      type: object
+      required: [panes, recovery_generation]
+      properties:
+        panes: {type: array, minItems: 2, maxItems: 2, items: {$ref: '#/components/schemas/PlaybackRequest'}}
+        recovery_generation: {type: string, maxLength: 64, description: Generation captured once for this deliberate two-pane intent.}
+    MultiviewRelease:
+      type: object
+      required: [lease_id]
+      properties:
+        lease_id: {type: string, minLength: 1, maxLength: 64}
+    MultiviewDescriptor:
+      type: object
+      required: [lease_id, panes]
+      properties:
+        lease_id: {type: string}
+        expires_in_seconds: {type: integer, default: 60, description: Inactivity expiry; valid pane requests renew the lease.}
+        panes: {type: array, items: {$ref: '#/components/schemas/PlaybackDescriptor'}}
     BufferWindow:
       type: object
       required: [mode, buffered_seconds, target_seconds, recording_enabled]
@@ -351,6 +372,12 @@ components:
       type: object
       required: [mode, id]
       properties:
+        preferred_audio_languages: {type: array, items: {type: string}, description: Profile preferences retained even after exact-variant consent.}
+        audio_language_required: {type: boolean, description: False only for All Languages or current server-validated exact-variant consent; exposed contradictory runtime tracks still require a current track choice.}
+        audio_languages: {type: array, items: {type: string}, description: Verified selected-variant track languages; provider title prefixes are never evidence.}
+        audio_verified: {type: boolean}
+        audio_evidence: {type: string, enum: [unknown, audio_track_metadata, media_probe]}
+        default_audio_language: {type: string, nullable: true}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
@@ -389,6 +416,7 @@ components:
         position >= 95% of duration also counts as watched.
       required: [id, position_ms, state]
       properties:
+        expected_profile_id: {type: string, nullable: true, maxLength: 128, description: Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes.}
         id: {type: string}
         source_id: {type: string, nullable: true}
         position_ms: {type: integer}
@@ -869,10 +897,28 @@ paths:
         '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryStatus'}}}}
         '403': {description: Admin required}
         '409': {description: Owned stop failures remain}
+  /playback/multiview:
+    post:
+      summary: Atomically reserve two distinct new live codec-copy HLS producers before either pane starts
+      description: Known provider capacity is required. Capacity one on a shared source rejects both panes. Direct/external, archive, transcoded and DVR playback are unsupported. Grants bind profile, session, source, policy, audio preferences and recovery generation.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultiviewRequest'}}}}
+      responses:
+        '200': {description: Both slots reserved; clients may now start the returned panes, content: {application/json: {schema: {$ref: '#/components/schemas/MultiviewDescriptor'}}}}
+        '401': {description: Authentication required}
+        '403': {description: Authorization or recovery generation changed}
+        '409': {description: Capacity unavailable, unsupported mode, or audio selection required}
+  /playback/multiview/release:
+    post:
+      summary: Idempotently release both panes owned by the authenticated profile and session
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultiviewRelease'}}}}
+      responses:
+        '204': {description: Both producer slots released after confirmed stop}
+        '401': {description: Authentication required}
+        '403': {description: Lease belongs to another profile or session}
   /playback/resolve:
     post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } } } }
   /playback/progress:
-    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok } } }
+    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok }, '403': {description: Captured profile mismatch or content access denied} } }
   /stream/{token}:
     get: { security: [], summary: Proxied/remuxed stream (token is short-lived and profile-bound), parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: stream } } }
   /stream/{token}/index.m3u8:

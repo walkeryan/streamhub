@@ -2515,6 +2515,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playback/multiview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Atomically reserve two distinct new live codec-copy HLS producers before either pane starts
+         * @description Known provider capacity is required. Capacity one on a shared source rejects both panes. Direct/external, archive, transcoded and DVR playback are unsupported. Grants bind profile, session, source, policy, audio preferences and recovery generation.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MultiviewRequest"];
+                };
+            };
+            responses: {
+                /** @description Both slots reserved; clients may now start the returned panes */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MultiviewDescriptor"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Authorization or recovery generation changed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Capacity unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/multiview/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Idempotently release both panes owned by the authenticated profile and session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MultiviewRelease"];
+                };
+            };
+            responses: {
+                /** @description Both producer slots released after confirmed stop */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Lease belongs to another profile or session */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/resolve": {
         parameters: {
             query?: never;
@@ -2578,6 +2694,13 @@ export interface paths {
             responses: {
                 /** @description ok */
                 204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Captured profile mismatch or content access denied */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -3386,6 +3509,8 @@ export interface components {
             shared_upstreams: number;
             hls_sessions: number;
             http_sessions: number;
+            /** @description Active or pending atomic multiview leases; each reserves two producers. */
+            pair_reservations?: number;
             /** @constant */
             external_sessions_tracked: false;
         };
@@ -3429,6 +3554,16 @@ export interface components {
             /** @default false */
             allow_unverified_audio: boolean;
             /**
+             * @deprecated
+             * @description Legacy sequential admission is rejected; use /playback/multiview.
+             */
+            multiview?: boolean;
+            /**
+             * @deprecated
+             * @description Legacy sequential admission is rejected; use /playback/multiview.
+             */
+            companion_id?: string | null;
+            /**
              * @default web
              * @enum {string}
              */
@@ -3446,6 +3581,23 @@ export interface components {
             rewind_at?: string | null;
             /** @description Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients. */
             recovery_generation?: string | null;
+        };
+        MultiviewRequest: {
+            panes: components["schemas"]["PlaybackRequest"][];
+            /** @description Generation captured once for this deliberate two-pane intent. */
+            recovery_generation: string;
+        };
+        MultiviewRelease: {
+            lease_id: string;
+        };
+        MultiviewDescriptor: {
+            lease_id: string;
+            /**
+             * @description Inactivity expiry; valid pane requests renew the lease.
+             * @default 60
+             */
+            expires_in_seconds: number;
+            panes: components["schemas"]["PlaybackDescriptor"][];
         };
         BufferWindow: {
             /** @enum {string} */
@@ -3492,6 +3644,16 @@ export interface components {
             reason: string;
         };
         PlaybackDescriptor: {
+            /** @description Profile preferences retained even after exact-variant consent. */
+            preferred_audio_languages?: string[];
+            /** @description False only for All Languages or current server-validated exact-variant consent; exposed contradictory runtime tracks still require a current track choice. */
+            audio_language_required?: boolean;
+            /** @description Verified selected-variant track languages; provider title prefixes are never evidence. */
+            audio_languages?: string[];
+            audio_verified?: boolean;
+            /** @enum {string} */
+            audio_evidence?: "unknown" | "audio_track_metadata" | "media_probe";
+            default_audio_language?: string | null;
             id: string;
             /** @enum {string} */
             mode: "direct" | "proxy" | "hls" | "handoff";
@@ -3536,6 +3698,8 @@ export interface components {
         };
         /** @description Sent every 10 s while playing and on pause/stop (ordinary bearer-auth POST). state=stopped with position_ms >= duration_ms marks the item watched (resume resets to 0); position >= 95% of duration also counts as watched. */
         ProgressReport: {
+            /** @description Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes. */
+            expected_profile_id?: string | null;
             id: string;
             source_id?: string | null;
             position_ms: number;
