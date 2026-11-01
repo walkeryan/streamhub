@@ -1,5 +1,7 @@
 package com.streamhub.tv.feature.home
 
+import com.streamhub.tv.core.data.model.SportsFeed
+import com.streamhub.tv.core.data.model.PlaybackRequest
 import com.streamhub.tv.core.data.model.SportsEvent
 import com.streamhub.tv.core.data.model.SportsEventsPage
 import kotlinx.serialization.json.Json
@@ -35,4 +37,16 @@ class SportsEventTest {
         assertNull(page.events.single().feeds.single().language)
         assertFalse(page.events.single().liveEvidence)
     }
+    @Test fun sportsFeedChoiceDoesNotGrantAudioConsentOrAllowForeignFeed() {
+        val feed=SportsFeed("prog:4","ch:s:7","Channel","s","IPTV",language="eng",languageVerified=false)
+        val airing=event.copy(feeds=listOf(feed))
+        val id=sportsFeedPlaybackId(airing,feed,now)!!
+        val request=PlaybackRequest(id)
+        assertEquals("ch:s:7",request.id)
+        assertFalse(request.allowUnverifiedAudio)
+        assertNull(request.variantId)
+        assertNull(sportsFeedPlaybackId(airing,feed.copy(channelId="ch:other:7"),now))
+        assertNull(sportsFeedPlaybackId(airing.copy(status="upcoming"),feed,now))
+    }
+
 }

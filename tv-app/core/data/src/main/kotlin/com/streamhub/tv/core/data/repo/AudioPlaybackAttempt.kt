@@ -15,9 +15,10 @@ suspend fun audioPlaybackAttempt(
     preflight: Boolean,
     options: suspend (String, String?) -> PlaybackOptions,
     resolve: suspend (PlaybackRequest) -> PlaybackDescriptor,
+    beforeResolve: suspend () -> Unit = {},
 ): AudioPlaybackAttempt {
     var selected = request
-    if (preflight && (request.id.startsWith("tmdb:") || request.id.startsWith("lib:"))) {
+    if (preflight && (request.id.startsWith("tmdb:") || request.id.startsWith("lib:") || request.id.startsWith("ch:") || request.id.startsWith("prog:"))) {
         val choices = options(request.id, request.sourceId)
         currentCoroutineContext().ensureActive()
         if (choices.options.isNotEmpty()) {
@@ -27,6 +28,9 @@ suspend fun audioPlaybackAttempt(
             selected = request.copy(variantId = automatic.variantId, allowUnverifiedAudio = false)
         }
     }
+    currentCoroutineContext().ensureActive()
+    beforeResolve()
+    currentCoroutineContext().ensureActive()
     val descriptor = resolve(selected)
     currentCoroutineContext().ensureActive()
     return AudioPlaybackAttempt.Ready(descriptor)

@@ -57,6 +57,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.Channel
+import com.streamhub.tv.core.ui.components.AudioSourceDialog
 import com.streamhub.tv.core.player.PlayerUiState
 import com.streamhub.tv.core.player.VideoSurface
 import com.streamhub.tv.core.ui.components.ProgressLine
@@ -195,7 +196,8 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             .focusable(),
     ) {
         VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect)
-        if(s.overlay == Overlay.Rewind) ProviderRewindDialog(vm, s)
+        if(s.overlay == Overlay.Rewind && s.audioChoice == null) ProviderRewindDialog(vm, s)
+        s.audioChoice?.let { choice -> AudioSourceDialog(choice.options, vm::cancelAudioChoice, vm::confirmAudioChoice) }
 
         if (ps.buffering || ps.error != null || s.message != null) {
             StatusBadge(ps.error ?: s.message ?: "Buffering…", Modifier.align(Alignment.Center))

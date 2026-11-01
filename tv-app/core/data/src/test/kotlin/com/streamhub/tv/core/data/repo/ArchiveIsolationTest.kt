@@ -37,4 +37,19 @@ class ArchiveIsolationTest {
         val result=resolveArchiveSelection("ch:s:7",null,"p",{"p"},{error("unnecessarymetadata")},{sent=it;PlaybackDescriptor(it.id,PlaybackMode.PROXY,live=true)})
         assertTrue(result.live);assertNull(sent!!.rewindAt)
     }
+    @Test fun archiveConsentSurvivesFreshWindowCheckAndStopsOnlyBeforeResolve()=runTest {
+        val order=mutableListOf<String>()
+        val accepted=PlaybackRequest("ch:s:7",variantId="ch:s:7",allowUnverifiedAudio=true,rewindAt=at.toString())
+        resolveArchiveSelection("ch:s:7",at,"p",{"p"},{order+="capability";cap},{assertEquals(accepted,it);order+="resolve";PlaybackDescriptor(it.id,PlaybackMode.PROXY,archiveStart=cap.advertisedStart,archiveEnd=cap.advertisedEnd)},request=accepted,beforeResolve={order+="stop-old"})
+        assertEquals(listOf("capability","stop-old","resolve"),order)
+    }
+    @Test fun expiredSelectionDoesNotStopCurrentStream()=runTest {
+        var stopped=false
+        try {
+            resolveArchiveSelection("ch:s:7",Instant.parse("2026-11-01T17:00:00Z"),"p",{"p"},{cap},{error("mustnotresolve")},beforeResolve={stopped=true})
+            fail("Expected expired selection")
+        } catch (_:ExpiredArchiveSelection) { }
+        assertFalse(stopped)
+    }
+
 }

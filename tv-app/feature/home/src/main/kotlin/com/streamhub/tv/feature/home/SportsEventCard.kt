@@ -45,6 +45,10 @@ internal fun sportsEventTime(event: SportsEvent): String = runCatching {
     "${fmt.format(Instant.parse(event.start))}–${fmt.format(Instant.parse(event.stop))}"
 }.getOrDefault("Schedule time unavailable")
 
+/** Feed choice is not audio consent; the global playback coordinator performs that check. */
+internal fun sportsFeedPlaybackId(event: SportsEvent, feed: SportsFeed, now: Instant): String? =
+    feed.channelId.takeIf { sportsCanWatch(event,now) && event.feeds.any { it.channelId == feed.channelId && it.programmeId == feed.programmeId } }
+
 @Composable
 internal fun SportsEventCard(event: SportsEvent, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val t = LocalThemeTokens.current
@@ -63,31 +67,23 @@ internal fun SportsEventCard(event: SportsEvent, modifier: Modifier = Modifier, 
 internal fun SportsFeedDialog(event: SportsEvent, onDismiss: () -> Unit, onWatch: (SportsFeed) -> Unit) {
     val t = LocalThemeTokens.current
     val closeFocus = remember { FocusRequester() }
-    var pending by remember(event.id) { mutableStateOf<SportsFeed?>(null) }
-    Dialog(onDismissRequest = { if (pending != null) pending = null else onDismiss() }) {
+    Dialog(onDismissRequest = onDismiss) {
         Column(Modifier.width(640.dp).heightIn(max = 540.dp).background(t.surface, RoundedCornerShape(20.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(event.title, color = t.text, style = MaterialTheme.typography.titleLarge, maxLines = 2)
             Text("${sportsEventBadge(event)} · ${sportsEventTime(event)}", color = t.textMuted)
-            ShButton(if(pending == null) "Close" else "Back to feeds", { if(pending != null) pending = null else onDismiss() }, Modifier.focusRequester(closeFocus))
-            val selected = pending
-            if (selected != null) {
-                Text("Audio language is not verified. The provider language label is only a hint. Play this current broadcast?", color = t.text)
-                Text("${selected.sourceName} · ${selected.channelName} · ${selected.language ?: "Unknown language"}", color = t.textMuted)
-                ShButton("Watch this feed once", { if(sportsCanWatch(event, Instant.now())) onWatch(selected) })
-            } else {
-                if (!sportsCanWatch(event, Instant.now())) Text("Not airing now. These feed listings do not provide catch-up playback.", color = t.textMuted)
-                Text("Guide-matched feeds; no inferred scores, team logos or availability outside your connected sources.", color = t.textMuted)
-                LazyColumn(Modifier.weight(1f, fill=false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(event.feeds, key = { "${it.channelId}:${it.programmeId}" }) { feed ->
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("${feed.sourceName} · ${feed.channelName}", color = t.text)
-                            Text("${if(feed.languageVerified) "Audio" else "Provider language hint"}: ${feed.language ?: "Unknown"}", color = t.textMuted)
-                            if(sportsCanWatch(event, Instant.now())) ShButton("Watch feed", { pending = feed })
-                        }
+            ShButton("Close", onDismiss, Modifier.focusRequester(closeFocus))
+            if (!sportsCanWatch(event, Instant.now())) Text("Not airing now. These feed listings do not provide catch-up playback.", color = t.textMuted)
+            Text("Guide-matched feeds. Playback checks audio and asks once if it is unverified.", color = t.textMuted)
+            LazyColumn(Modifier.weight(1f, fill=false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(event.feeds, key = { "${it.channelId}:${it.programmeId}" }) { feed ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("${feed.sourceName} · ${feed.channelName}", color = t.text)
+                        Text("${if(feed.languageVerified) "Audio" else "Provider language hint"}: ${feed.language ?: "Unknown"}", color = t.textMuted)
+                        if(sportsCanWatch(event, Instant.now())) ShButton("Choose feed", { if(sportsFeedPlaybackId(event,feed,Instant.now()) != null) onWatch(feed) })
                     }
                 }
             }
         }
     }
-    LaunchedEffect(pending) { runCatching { closeFocus.requestFocus() } }
+    LaunchedEffect(Unit) { runCatching { closeFocus.requestFocus() } }
 }

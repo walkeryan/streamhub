@@ -44,12 +44,24 @@ class AudioPlaybackAttemptTest {
         assertNull(fresh.request.variantId)
         assertFalse(fresh.request.allowUnverifiedAudio)
     }
-    @Test fun liveChannelsKeepDirectPath() = runTest {
-        var resolves = 0
-        try {
-            audioPlaybackAttempt(PlaybackRequest("ch:s:7"), true, { _, _ -> error("live must not load VOD options") }, { resolves++; error("fixture ends") })
-        } catch (_: IllegalStateException) { }
-        assertEquals(1, resolves)
+    @Test fun liveUnknownAudioDoesNotStopOrResolveUntilConfirmed() = runTest {
+        val order=mutableListOf<String>()
+        val live=choice.copy(id="ch:s:7", options=choice.options.map { it.copy(variantId="ch:s:7") }, preferredLanguages=listOf("eng"))
+        val result=audioPlaybackAttempt(PlaybackRequest(live.id), true, { _, _ -> order+="options";live }, { order+="resolve";PlaybackDescriptor(it.id, PlaybackMode.PROXY, live=true) }, {order+="stop-old"})
+        assertTrue(result is AudioPlaybackAttempt.Choice)
+        assertEquals(listOf("options"),order)
+        val accepted=PlaybackRequest(live.id,variantId=live.id,allowUnverifiedAudio=true)
+        audioPlaybackAttempt(accepted,false,{_,_->error("no reselection")},{assertEquals(accepted,it);order+="resolve";PlaybackDescriptor(it.id,PlaybackMode.PROXY,live=true)},{order+="stop-old"})
+        assertEquals(listOf("options","stop-old","resolve"),order)
+    }
+
+    @Test fun guideAndArchiveConsentPreservesExactRequestParameters() = runTest {
+        for(request in listOf(PlaybackRequest("prog:4",catchupProgrammeId="prog:4"),PlaybackRequest("ch:s:7",rewindAt="2026-11-01T18:30:00Z"))) {
+            val live=choice.copy(id=request.id,options=choice.options.map { it.copy(variantId="ch:s:7") },preferredLanguages=listOf("eng"))
+            val pending=audioPlaybackAttempt(request,true,{_,_->live},{error("must choose")}) as AudioPlaybackAttempt.Choice
+            assertEquals(request,pending.request)
+            assertFalse(pending.request.allowUnverifiedAudio)
+        }
     }
 
     @Test fun verifiedAutomaticVariantResolvesWithoutConsentOrChooser() = runTest {

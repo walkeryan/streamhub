@@ -25,6 +25,8 @@ suspend fun resolveArchiveSelection(
     currentScope: suspend () -> String,
     capability: suspend (String) -> RewindCapability,
     resolve: suspend (com.streamhub.tv.core.data.model.PlaybackRequest) -> com.streamhub.tv.core.data.model.PlaybackDescriptor,
+    request: com.streamhub.tv.core.data.model.PlaybackRequest? = null,
+    beforeResolve: suspend () -> Unit = {},
 ): com.streamhub.tv.core.data.model.PlaybackDescriptor {
     suspend fun checkScope() {
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
@@ -37,7 +39,11 @@ suspend fun resolveArchiveSelection(
         checkScope()
         if (!archiveSelectionValid(fresh, at)) throw ExpiredArchiveSelection()
     }
-    val descriptor = resolve(com.streamhub.tv.core.data.model.PlaybackRequest(channelId, rewindAt=at?.toString()))
+    val selected = request ?: com.streamhub.tv.core.data.model.PlaybackRequest(channelId, rewindAt=at?.toString())
+    require(selected.id == channelId && selected.rewindAt == at?.toString() && selected.catchupProgrammeId == null)
+    beforeResolve()
+    checkScope()
+    val descriptor = resolve(selected)
     checkScope()
     require(descriptor.id == channelId)
     if(at != null) require(!descriptor.live && descriptor.archiveStart != null && descriptor.archiveEnd != null)

@@ -10,6 +10,10 @@ import com.streamhub.tv.core.data.repo.catalogScope
 import com.streamhub.tv.core.data.repo.resolveArchiveSelection
 import com.streamhub.tv.core.data.repo.ExpiredArchiveSelection
 import com.streamhub.tv.core.data.model.RewindCapability
+import com.streamhub.tv.core.data.model.PlaybackRequest
+import com.streamhub.tv.core.data.repo.AudioPlaybackAttempt
+import com.streamhub.tv.core.data.repo.audioPlaybackAttempt
+import com.streamhub.tv.core.data.repo.CatalogScope
 import com.streamhub.tv.core.data.model.Channel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -44,6 +48,7 @@ data class PlayerScreenState(
     val rewind: RewindCapability? = null,
     val rewindLoading: Boolean = false,
     val rewindError: String? = null,
+    val audioChoice: AudioPlaybackAttempt.Choice? = null,
     val live: Boolean = false,
     val overlay: Overlay = Overlay.Osd,
     /** Channel shown in the OSD: the playing one, or the zap target while the user is still pressing Up/Down. */
@@ -86,13 +91,17 @@ class PlayerViewModel @Inject constructor(
     val exit: SharedFlow<Unit> = _exit
 
     private var lastChannelId: String? = null
+    private var currentStopped = false
     private var zapJob: Job? = null
     private var numberJob: Job? = null
     private var osdJob: Job? = null
     private var sleepJob: Job? = null
     private var rewindJob: Job? = null
+    private var audioOwner: CatalogScope? = null
+    private var choiceArchiveAction = false
 
     init {
+        coordinator.registerActivePlayer(key) { player.stop(); currentStopped=true }
         val d = coordinator.take(key)
         if (d == null) {
             _state.update { it.copy(message = "Nothing to play") }
@@ -103,12 +112,13 @@ class PlayerViewModel @Inject constructor(
         showOsd()
         viewModelScope.launch {
             sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
-                rewindJob?.cancel(); player.stop(); _exit.emit(Unit)
+                rewindJob?.cancel(); _state.update { it.copy(audioChoice=null) }; player.stop(); _exit.emit(Unit)
             }
         }
     }
 
     private fun start(d: PlaybackDescriptor) {
+        currentStopped=false
         if (d.mode == PlaybackMode.HANDOFF) {
             d.handoff?.let { launcher.launch(it) }
             _exit.tryEmit(Unit)
@@ -137,7 +147,7 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun hideOverlay() { rewindJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false) } }
+    fun hideOverlay() { rewindJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false, audioChoice=null) } }
     fun openMiniList() { if (_state.value.live && _state.value.channels.isNotEmpty()) _state.update { it.copy(overlay = Overlay.MiniList) } }
     fun openMenu() { _state.update { it.copy(overlay = Overlay.Menu) } }
 
@@ -162,20 +172,57 @@ class PlayerViewModel @Inject constructor(
 
     private fun resolveChannelTime(at: Instant?) {
         val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
+        submitChannel(PlaybackRequest(id, rewindAt=at?.toString()), archiveAction=true)
+    }
+
+    fun cancelAudioChoice() { rewindJob?.cancel(); audioOwner=null; _state.update { it.copy(audioChoice=null, rewindLoading=false, overlay=Overlay.Osd, osdChannel=it.channels.getOrNull(it.index)) }; showOsd() }
+
+    fun confirmAudioChoice(variantId: String, confirmed: Boolean) {
+        val choice = _state.value.audioChoice ?: return
+        val owner = audioOwner ?: return
+        if(choice.options.options.none { it.variantId == variantId }) return
+        _state.update { it.copy(audioChoice=null, overlay=Overlay.Osd) }
+        submitChannel(choice.request.copy(variantId=variantId, allowUnverifiedAudio=confirmed), archiveAction=choiceArchiveAction, preflight=false, expectedOwner=owner)
+    }
+
+    private fun submitChannel(request: PlaybackRequest, archiveAction: Boolean=false, preflight: Boolean=true, expectedOwner: CatalogScope?=null) {
         rewindJob?.cancel()
-        _state.update { it.copy(rewindLoading = true, rewindError = null) }
+        _state.update { it.copy(rewindLoading=true, rewindError=null, audioChoice=null) }
         rewindJob = viewModelScope.launch {
             val owner = sessions.current().catalogScope()
+            if(expectedOwner != null && expectedOwner != owner) { cancelAudioChoice(); return@launch }
+            val previousId = _state.value.descriptor?.id
+            var previousStopped = false
+            suspend fun stopForAcceptedPlayback() {
+                currentCoroutineContext().ensureActive()
+                if(sessions.current().catalogScope() != owner) throw CancellationException("Profile changed")
+                player.stop(); currentStopped=true; previousStopped=true
+            }
             try {
-                val descriptor = resolveArchiveSelection(id, at, owner.toString(), { sessions.current().catalogScope().toString() }, api::rewindCapability, api::resolve)
-                if (_state.value.descriptor?.id != id) return@launch
-                start(descriptor)
-                _state.update { it.copy(overlay = Overlay.Osd, rewindLoading = false) }
-                if (descriptor.live) loadChannelList(descriptor)
-                showOsd()
-            } catch (e: CancellationException) { throw e }
-            catch (_: ExpiredArchiveSelection) { _state.update { it.copy(rewindLoading = false, rewindError = "That selection expired. Refresh the advertised window.") } }
-            catch (_: Exception) { _state.update { it.copy(rewindLoading = false, rewindError = "Provider archive/live request failed. Your previous stream was kept. Retry or choose Go Live.") } }
+                val result = audioPlaybackAttempt(request, preflight, api::playbackOptions, { accepted ->
+                    if(archiveAction) resolveArchiveSelection(accepted.id, accepted.rewindAt?.let(Instant::parse), owner.toString(), { sessions.current().catalogScope().toString() }, api::rewindCapability, api::resolve, accepted, ::stopForAcceptedPlayback)
+                    else { stopForAcceptedPlayback(); api.resolve(accepted) }
+                })
+                currentCoroutineContext().ensureActive()
+                if(sessions.current().catalogScope() != owner) return@launch
+                when(result) {
+                    is AudioPlaybackAttempt.Choice -> {
+                        audioOwner=owner; choiceArchiveAction=archiveAction
+                        _state.update { it.copy(audioChoice=result, rewindLoading=false, overlay=Overlay.None) }
+                    }
+                    is AudioPlaybackAttempt.Ready -> {
+                        val descriptor=result.descriptor
+                        if(previousId != descriptor.id) lastChannelId=previousId
+                        val idx=_state.value.channels.indexOfFirst { it.id == descriptor.id }
+                        _state.update { it.copy(index=idx, osdChannel=it.channels.getOrNull(idx), rewindLoading=false, overlay=Overlay.Osd) }
+                        start(descriptor)
+                        if(descriptor.live) loadChannelList(descriptor)
+                        showOsd()
+                    }
+                }
+            } catch(e: CancellationException) { throw e }
+            catch(_: ExpiredArchiveSelection) { _state.update { it.copy(rewindLoading=false, overlay=Overlay.Rewind, rewindError="That selection expired. Refresh the advertised window.") } }
+            catch(_: Exception) { _state.update { it.copy(rewindLoading=false, rewindError=if(previousStopped) "Stream switch failed after stopping the previous stream. Select a channel or Go Live to retry." else "Could not check this source. The current stream was kept.", message="Could not start selected channel") } }
         }
     }
 
@@ -185,6 +232,8 @@ class PlayerViewModel @Inject constructor(
     fun zap(delta: Int) {
         val s = _state.value
         if (!s.live || s.channels.isEmpty()) return
+        rewindJob?.cancel(); audioOwner=null
+        _state.update { it.copy(audioChoice=null, rewindLoading=false) }
         val from = s.channels.indexOfFirst { it.id == s.osdChannel?.id }.takeIf { it >= 0 } ?: s.index.coerceAtLeast(0)
         val target = Math.floorMod(from + delta, s.channels.size)
         _state.update { it.copy(osdChannel = s.channels[target]) }
@@ -197,21 +246,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun tuneTo(ch: Channel) {
-        rewindJob?.cancel()
-        val s = _state.value
-        val currentId = s.descriptor?.id
-        if (ch.id == currentId) { _state.update { it.copy(osdChannel = ch) }; return }
-        viewModelScope.launch {
-            runCatching { coordinator.resolveDirect(ch.id) }
-                .onSuccess { d ->
-                    lastChannelId = currentId
-                    val idx = _state.value.channels.indexOfFirst { it.id == ch.id }
-                    _state.update { it.copy(index = idx, osdChannel = ch) }
-                    start(d)
-                    showOsd()
-                }
-                .onFailure { e -> _state.update { it.copy(message = "Couldn't tune ${ch.name}: ${e.message}") } }
-        }
+        if(ch.id == _state.value.descriptor?.id && _state.value.live && !currentStopped) { _state.update { it.copy(osdChannel=ch) }; return }
+        submitChannel(PlaybackRequest(ch.id))
     }
 
     fun lastChannel() {
@@ -269,6 +305,7 @@ class PlayerViewModel @Inject constructor(
 
     override fun onCleared() {
         rewindJob?.cancel()
+        coordinator.unregisterActivePlayer(key)
         player.release()
         coordinator.release(key)
     }

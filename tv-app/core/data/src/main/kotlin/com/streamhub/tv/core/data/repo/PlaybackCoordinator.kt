@@ -1,6 +1,9 @@
 package com.streamhub.tv.core.data.repo
 
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.auth.SessionStore
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import com.streamhub.tv.core.data.handoff.DeepLinkLauncher
 import com.streamhub.tv.core.data.handoff.HandoffResult
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
@@ -37,10 +40,17 @@ sealed interface PlayEvent {
 class PlaybackCoordinator @Inject constructor(
     private val api: StreamHubApi,
     private val launcher: DeepLinkLauncher,
+    private val sessions: SessionStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val cache = ConcurrentHashMap<String, PlaybackDescriptor>()
     private var inFlight: Job? = null
+    private var choiceOwner: CatalogScope? = null
+    private var activeOwner: String? = null
+    private var stopActive: (() -> Unit)? = null
+    fun registerActivePlayer(owner: String, stop: () -> Unit) { activeOwner = owner; stopActive = stop }
+    fun unregisterActivePlayer(owner: String) { if(activeOwner == owner) { activeOwner=null; stopActive=null } }
+
 
     private val _events = MutableSharedFlow<PlayEvent>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val events: SharedFlow<PlayEvent> = _events
@@ -50,18 +60,27 @@ class PlaybackCoordinator @Inject constructor(
     }
 
     fun chooseAudio(request: PlaybackRequest, variantId: String, confirmed: Boolean) {
-        submit(request.copy(variantId = variantId, allowUnverifiedAudio = confirmed), preflight = false)
+        submit(request.copy(variantId = variantId, allowUnverifiedAudio = confirmed), preflight = false, expectedOwner=choiceOwner ?: return)
     }
 
-    fun cancelPending() { inFlight?.cancel() }
+    fun cancelPending() { inFlight?.cancel(); choiceOwner=null }
 
-    private fun submit(request: PlaybackRequest, preflight: Boolean = true) {
+    private fun submit(request: PlaybackRequest, preflight: Boolean = true, expectedOwner: CatalogScope? = null) {
         inFlight?.cancel()
         inFlight = scope.launch {
             try {
-                when (val result = audioPlaybackAttempt(request, preflight, api::playbackOptions, api::resolve)) {
-                    is AudioPlaybackAttempt.Choice -> _events.emit(PlayEvent.ChooseAudio(result.request, result.options))
-                    is AudioPlaybackAttempt.Ready -> dispatch(result.descriptor)
+                val owner=sessions.current().catalogScope()
+                if(expectedOwner != null && expectedOwner != owner) return@launch
+                val result=audioPlaybackAttempt(request, preflight, api::playbackOptions, api::resolve, {
+                    currentCoroutineContext().ensureActive()
+                    if(sessions.current().catalogScope()!=owner) throw CancellationException("Profile changed")
+                    stopActive?.invoke()
+                })
+                currentCoroutineContext().ensureActive()
+                if(sessions.current().catalogScope()!=owner) return@launch
+                when (result) {
+                    is AudioPlaybackAttempt.Choice -> { choiceOwner=owner; _events.emit(PlayEvent.ChooseAudio(result.request, result.options)) }
+                    is AudioPlaybackAttempt.Ready -> { choiceOwner=null; dispatch(result.descriptor) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -91,7 +110,5 @@ class PlaybackCoordinator @Inject constructor(
     fun take(key: String): PlaybackDescriptor? = cache[key]
     fun release(key: String) { cache.remove(key) }
 
-    /** Used by the player for channel zapping / last-channel: resolves without emitting navigation. */
-    suspend fun resolveDirect(id: String, sourceId: String? = null, catchupProgrammeId: String? = null): PlaybackDescriptor =
-        api.resolve(PlaybackRequest(id = id, sourceId = sourceId, catchupProgrammeId = catchupProgrammeId))
+    // Channel zapping uses the player's scoped audio preflight; no unguarded direct resolver.
 }
