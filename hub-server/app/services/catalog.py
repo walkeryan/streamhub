@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, func, or_, select, true
+from sqlalchemy import ColumnElement, Select, case, func, literal, or_, select, true
 
 from app.adapters.language.inferrer import lang_from_flag, lang_from_group, normalise_code
 from app.domain.entities import CatalogItem, MediaKind
@@ -21,6 +21,7 @@ from app.services import ids
 from app.services.availability import ATTRIBUTION, AvailabilityService
 from app.services.context import absolute
 from app.services.errors import NotFound
+from app.services.search_match import CANDIDATE_LIMIT, anchors, search_tokens, token_match_rank
 from app.services.sources import LAZY_GEN, SourceService, item_row, upsert_titles
 from app.services.tiles import TileContext, hub_id_for_title, meta_tile, row_to_item
 
@@ -596,6 +597,35 @@ class CatalogService:
                         )
                     ).scalars()
                 )
+        # Keep exact phrase results first. Only inspect a bounded SQL-ranked candidate
+        # set for omitted/reordered terms or one misspelled word, in the same scope.
+        tokens = search_tokens(norm)
+        anchor_words = anchors(tokens)
+        if len(rows) < limit and anchor_words and lib_kinds:
+            terms = [Title.norm_title.like(f"%{_escape_like(word)}%", escape="\\") for word in anchor_words]
+            candidates_query = select(Title).where(
+                Title.source_id.in_(enabled),
+                Title.kind.in_(lib_kinds),
+                or_(*terms),
+            )
+            candidates_query = await self._filter_title_languages(candidates_query, languages)
+            score: ColumnElement[int] = literal(0)
+            for term in terms:
+                score = score + case((term, 1), else_=0)
+            async with self._db.session() as session:
+                candidates = list(
+                    (
+                        await session.execute(candidates_query.order_by(score.desc(), Title.id).limit(CANDIDATE_LIMIT))
+                    ).scalars()
+                )
+            existing = {row.id for row in rows}
+            ranked = [
+                (rank, row)
+                for row in candidates
+                if row.id not in existing
+                if (rank := token_match_rank(tokens, row.norm_title)) is not None
+            ]
+            rows.extend(row for _, row in sorted(ranked, key=lambda pair: (pair[0], pair[1].norm_title, pair[1].id)))
         play_here = ctx.merge(ctx.title_tile(r) for r in rows)
         seen = {t["id"] for t in play_here}
         open_in_app: list[dict[str, Any]] = []
