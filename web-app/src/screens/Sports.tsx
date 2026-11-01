@@ -5,11 +5,12 @@ import { useProfilePreference } from '../api/profilePreferences'
 import { api, unwrap } from '../api/client'
 import type { components } from '../api/schema'
 import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
+import { usePlayAction } from '../components/playAction'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { LanguageFilter } from '../components/LanguageFilter'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
-import { useGo, useRestoreFocus } from '../nav/back'
+import { useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
 import { useSession } from '../store/session'
 import { LANG_NAMES, useDebounced, useNow } from '../lib/util'
@@ -69,7 +70,7 @@ function SportsEvents() {
     } } })),
     staleTime: 15_000, refetchInterval: 30_000,
   })
-  const go = useGo()
+  const play = usePlayAction()
   const data = q.data
   const zone = data?.timezone ?? ZONE
   useEffect(() => {
@@ -144,12 +145,12 @@ function SportsEvents() {
     <Modal open={!!selected} onClose={close} title={selected?.title ?? 'Channel feeds'} firstFocusKey="sports:feeds:cancel" wide>
       {selected && <>
         <p>{stateOf(selected, now)}{selected.replay ? ' · Replay' : ''} · {clock(selected.start, zone)}–{clock(selected.stop, zone)} · {zone}</p>
-        <p className="label">Feeds are matched by guide title and broadcast time. Audio language is unverified unless explicitly marked verified; a channel language hint is not proof of spoken audio.</p>
+        <p className="label">Feeds are matched by guide title and broadcast time. Audio language is unverified unless explicitly marked verified; a channel language hint is not proof of spoken audio. Choosing Watch explicitly accepts that feed’s audio.</p>
         {!airing(selected, now) && <p>{Date.parse(selected.start) > now ? 'Scheduled for later. Playback will be offered while this broadcast is airing.' : 'This broadcast has ended. Replay playback availability is not verified.'}</p>}
         {selected.feeds.map((feed) => <div key={`${feed.channel_id}:${feed.programme_id}`} className="sports-feed-option">
           <p><strong>{feed.channel_name}</strong> · {feed.source_name}</p>
           <p className="label">{feed.language_verified ? `Verified audio: ${LANG_NAMES[feed.language ?? ''] ?? feed.language ?? 'Unknown'}` : `Audio unverified${feed.language ? ` · Channel hint: ${LANG_NAMES[feed.language] ?? feed.language}` : ''}`}</p>
-          {airing(selected, now) && <Button focusKey={`sports:feed:${feed.channel_id}:${feed.programme_id}`} onEnter={() => { if (airing(selected, Date.now())) { setFocus(`sports:event:${selected.id}`); go(`/play/${encodeURIComponent(feed.channel_id)}`) } }}>Watch {feed.channel_name}</Button>}
+          {airing(selected, now) && <Button focusKey={`sports:feed:${feed.channel_id}:${feed.programme_id}`} onEnter={() => { if (airing(selected, Date.now())) { setFocus(`sports:event:${selected.id}`); void play({ id: feed.channel_id, kind: 'channel' }, null, { variantId: feed.channel_id, allowUnverifiedAudio: true }) } }}>Watch {feed.channel_name}</Button>}
         </div>)}
         {!selected.feeds.length && <p>No authorized channel feed is available for this listing.</p>}
       </>}

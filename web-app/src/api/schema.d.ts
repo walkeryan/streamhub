@@ -2809,6 +2809,8 @@ export interface components {
             kind?: string;
             year?: number | null;
             audio_languages: string[];
+            /** @description Verified default audio track language when known; track availability alone is not the default. */
+            default_audio_language?: string | null;
             audio_verified: boolean;
             audio_evidence: string;
             language_hint?: string | null;

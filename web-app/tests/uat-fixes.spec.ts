@@ -23,6 +23,7 @@ test('UAT P1-2: live player control bar is reachable and usable with the D-pad',
   const first = path()
   await page.keyboard.press('ArrowDown')
   await expect.poll(path).not.toBe(first)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await expect(ui).toHaveAttribute('data-show', 'false')
 
   // Right reveals the controls, Down moves focus into the bar (Play/Pause first)
@@ -49,6 +50,7 @@ test('UAT P1-2: live player control bar is reachable and usable with the D-pad',
   await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(false)
   await page.keyboard.press('ArrowUp')
   await expect.poll(path).not.toBe(before)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
 
   // OK with controls visible enters the bar; Back leaves the bar and hides the controls in one press
   await page.keyboard.press('ArrowRight')
@@ -66,6 +68,7 @@ test('UAT P2-8: Back twice returns to the last channel; Back once leaves the pla
   await page.keyboard.press('ArrowUp')
   await expect.poll(path).not.toBe(first)
   const second = path()
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('back-hint')).toBeVisible()
   await page.keyboard.press('Escape')
@@ -182,50 +185,37 @@ test.describe('TV width', () => {
   })
 })
 
-test('Back immediately after a zap uses the new playback intent before React commits the route', async ({ page }) => {
+test('Back during an uncommitted zap cancels pending playback instead of starting another stream', async ({ page }) => {
   await openLiveChannel(page)
-  const first = new URL(page.url()).pathname
-  await page.clock.install()
-  await page.clock.pauseAt(new Date())
-  // Both events in one browser task force the URL/store transition to outrun
-  // the next React commit. A driver round trip would hide this race.
   await page.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   })
-  await expect(page).toHaveURL(/\/play\/ch/)
+  await expect(page).toHaveURL(/\/live/)
+  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+})
+
+test('approved live playback retains the exact750ms double-Back behavior', async ({ page }) => {
+  await openLiveChannel(page)
+  const first = new URL(page.url()).pathname
+  await page.keyboard.press('ArrowUp')
   await expect.poll(() => new URL(page.url()).pathname).not.toBe(first)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await page.clock.install()
+  await page.clock.pauseAt(new Date())
+  await page.keyboard.press('Escape')
   await expect(page.getByTestId('back-hint')).toBeVisible()
   await page.clock.runFor(749)
   await expect(page).toHaveURL(/\/play\/ch/)
   await page.keyboard.press('Escape')
   await expect.poll(() => new URL(page.url()).pathname).toBe(first)
   await expect(page.getByTestId('back-hint')).toBeHidden()
+  await page.clock.runFor(500)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('back-hint')).toBeVisible()
   await page.clock.runFor(749)
   await expect(page).toHaveURL(/\/play\/ch/)
   await page.clock.runFor(1)
   await expect(page).toHaveURL(/\/live/)
-})
-
-test('rapid repeated zaps retain the immediately previous channel for Back', async ({ page }) => {
-  await openLiveChannel(page)
-  const expected = await page.evaluate(async () => {
-    const path = '/src/store/ui.ts'
-    const { useUi } = await import(/* @vite-ignore */ path)
-    const list = useUi.getState().channelList.channels as Array<{ id: string }>
-    const current = decodeURIComponent(location.pathname.split('/').pop()!)
-    const index = list.findIndex((channel) => channel.id === current)
-    return { second: list[(index + 1) % list.length].id, third: list[(index + 2) % list.length].id }
-  })
-  await page.clock.install()
-  await page.clock.pauseAt(new Date())
-  await page.evaluate(() => {
-    for (const key of ['ArrowUp', 'ArrowUp', 'Escape']) window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
-  })
-  await expect(page).toHaveURL(new RegExp(encodeURIComponent(expected.third)))
-  await expect(page.getByTestId('back-hint')).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(page).toHaveURL(new RegExp(encodeURIComponent(expected.second)))
 })

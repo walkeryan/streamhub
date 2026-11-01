@@ -32,8 +32,14 @@ export const handlers = [
   http.get(`${B}/playback/rewind`, () => HttpResponse.json({ mode: 'unavailable', advertised_start: null, advertised_end: null, verified: false, recording_enabled: false, granularity_seconds: 60, reason: 'Fixture has no archive.' })),
   http.get(`${B}/playback/options`, ({ request }) => {
     const id = new URL(request.url).searchParams.get('id') ?? ''
+    // Explicit verified-audio fixtures, never a production inference from a name.
+    if (id.startsWith('ch:') || id.startsWith('prog:')) {
+      const variant = id.startsWith('ch:') ? id : 'ch:fixture:programme'
+      const option = { variant_id: variant, source_id: variant.split(':')[1], source_name: 'Verified fixture', provider_label: id, kind: 'channel', audio_languages: ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }
+      return HttpResponse.json({ id, preferred_languages: ['eng'], options: [option], automatic_variant_id: variant, selection_required: false })
+    }
     const tile = tileById(id)
-    const options = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: ['eng'], audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }))
+    const options = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }))
     return HttpResponse.json({ id, preferred_languages: ['eng'], options, automatic_variant_id: options[0]?.variant_id ?? null, selection_required: false })
   }),
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),

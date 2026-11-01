@@ -13,6 +13,7 @@ import { useRestoreFocus } from '../nav/back'
 import { usePlayAction } from '../components/playAction'
 import { useAdaptiveAccent } from '../lib/theme'
 import { useSession } from '../store/session'
+import { audioDescription } from '../player/channelAudio'
 import { LANG_NAMES } from '../lib/util'
 import { useUi } from '../store/ui'
 
@@ -146,7 +147,7 @@ function TitleDetails({ id }: { id: string }) {
       <Modal open={picker !== null} onClose={() => { setPicker(null); setConfirmation(null) }} title={confirmation ? 'Confirm audio choice' : canPlay ? 'Choose audio and source' : 'Open in'} firstFocusKey="pick:cancel">
         <div className="flex flex-col gap-2">
           {confirmation ? <>
-            <p>{confirmation.audio_verified ? `Verified audio: ${confirmation.audio_languages.map((code) => LANG_NAMES[code] ?? code).join(', ')}` : 'Audio language is unverified.'} This source is not automatically selected for your language preferences.</p>
+            <p>{confirmation.audio_verified ? audioDescription(confirmation) : 'Audio language is unverified.'} This source is not automatically selected for your language preferences.</p>
             <p className="label">{confirmation.provider_label}</p>
             <Button focusKey="audio:cancel" onEnter={() => setConfirmation(null)}>Back to sources</Button>
             <Button focusKey="audio:confirm" onEnter={() => { const selected = confirmation; setConfirmation(null); setPicker(null); void play(t, null, { variantId: selected.variant_id, allowUnverifiedAudio: true }) }}>Play this source anyway</Button>
@@ -155,7 +156,7 @@ function TitleDetails({ id }: { id: string }) {
             {audio.isPending && <p role="status">Checking available sources…</p>}
             {audio.error && <ErrorState error={audio.error} onRetry={() => void audio.refetch()} />}
             {audio.data?.options.map((option, i) => <Button key={option.variant_id} focusKey={`pick:${i}`} onEnter={() => chooseVariant(option)}>
-              <span>{option.source_name} · {option.audio_verified ? `Verified audio: ${option.audio_languages.map((code) => LANG_NAMES[code] ?? code).join(', ')}` : 'Audio unverified'}{option.language_hint ? ` · Provider hint: ${LANG_NAMES[option.language_hint] ?? option.language_hint}` : ''}<br /><span className="label">{option.provider_label}</span></span>
+              <span>{option.source_name} · {audioDescription(option)}{option.language_hint ? ` · Provider hint: ${LANG_NAMES[option.language_hint] ?? option.language_hint}` : ''}<br /><span className="label">{option.provider_label}</span></span>
             </Button>)}
             {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}
           </> : handoff.map((s, i) => <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>{s.name}</Button>)}

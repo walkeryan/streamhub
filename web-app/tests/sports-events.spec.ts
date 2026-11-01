@@ -55,7 +55,7 @@ test('EPG events use honest states and explicit multiple-feed choice with remote
   await expect(page.getByRole('button', { name: 'Watch Channel B' })).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowUp')
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/play\/ch%3Afixture%3AA$/)
+  await expect(page).toHaveURL(/\/play\/ch%3Afixture%3AA(?:\?|$)/)
 })
 
 test('upcoming/ended listings never offer unverified catch-up; date/status controls are explicit', async ({ page }) => {
@@ -164,7 +164,7 @@ test('Back from a chosen feed restores its event rather than the first card', as
   const replay = page.getByRole('button', { name: 'View feeds for Championship Replay', exact: true })
   await replay.click()
   await page.getByRole('button', { name: 'Watch Channel D', exact: true }).click()
-  await expect(page).toHaveURL(/\/play\/ch%3Afixture%3AD$/)
+  await expect(page).toHaveURL(/\/play\/ch%3Afixture%3AD(?:\?|$)/)
   await page.goBack()
   await expect(replay).toHaveAttribute('data-focused', 'true')
 })

@@ -203,6 +203,7 @@ components:
         kind: {type: string}
         year: {type: integer, nullable: true}
         audio_languages: {type: array, items: {type: string}}
+        default_audio_language: {type: string, nullable: true, description: Verified default audio track language when known; track availability alone is not the default.}
         audio_verified: {type: boolean}
         audio_evidence: {type: string}
         language_hint: {type: string, nullable: true}

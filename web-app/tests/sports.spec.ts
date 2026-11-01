@@ -54,6 +54,6 @@ for (const empty of [false, true]) {
     expect(errors).toEqual([])
     await page.getByRole('button', { name: 'View feeds for Fixture programme 4999', exact: true }).click()
     await page.getByRole('button', { name: 'Watch Fixture channel 4999', exact: true }).click()
-    await expect(page).toHaveURL(/\/play\/ch%3Afixture%3A4999$/)
+    await expect(page).toHaveURL(/\/play\/ch%3Afixture%3A4999(?:\?|$)/)
   })
 }

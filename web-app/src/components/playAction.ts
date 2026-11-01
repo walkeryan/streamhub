@@ -38,7 +38,7 @@ export function usePlayAction() {
     }
     const q = new URLSearchParams()
     if (variantId) q.set('variant', variantId)
-    if (opts?.allowUnverifiedAudio && variantId) q.set('audio_choice', grantAudioConsent(t.id, variantId))
+    if (opts?.allowUnverifiedAudio && variantId) q.set('audio_choice', grantAudioConsent(t.id, variantId, { sourceId: source?.source_id, catchupProgrammeId: opts.catchup }))
     if (source) q.set('source', source.source_id)
     if (opts?.catchup) q.set('catchup', opts.catchup)
     const qs = q.toString()

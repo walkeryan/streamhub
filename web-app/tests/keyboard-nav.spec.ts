@@ -65,8 +65,10 @@ test('live TV: zap with digits and Backspace in the player', async ({ page }) =>
   const first = path()
   await page.keyboard.press('ArrowUp')
   await expect.poll(path).not.toBe(first)
-  await page.keyboard.press('Backspace') // last channel
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await page.keyboard.press('Backspace') // last-channel keyboard shortcut
   await expect.poll(path).toBe(first)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('5')
   await expect(page.getByTestId('digits')).toHaveText('5')
   await expect.poll(path, { timeout: 5000 }).toContain('1005')
