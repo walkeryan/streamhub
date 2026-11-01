@@ -19,11 +19,17 @@ test('provider archive is honest, D-pad adjustable and returns to Live', async (
   })
   await signIn(page)
   await page.goto('/play/ch%3Aiptv%3A1?catchup=prog%3A1')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  // Enter the control bar before interacting: visible DOM alone can still be
+  // covered by the video while auto-hidden player chrome is inactive.
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByTestId('player-ui')).toHaveAttribute('data-show', 'true')
   await expect(page.getByTestId('rewind-controls')).toContainText('availability unverified')
   await expect(page.getByRole('button', { name: 'Go Live', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '−10 s', exact: true })).toBeVisible()
   const position = page.getByRole('button', { name: 'Try 1 minutes ago. Left and Right adjust, Select plays.', exact: true })
   await position.click()
+  await expect(position).toHaveAttribute('data-focused', 'true')
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('rewind.request') ?? '{}').rewind_at)).toBe('2026-11-01T06:29:00.000Z')
   await expect(position).toBeVisible()
   await page.keyboard.press('ArrowLeft')

@@ -68,6 +68,7 @@ test('UAT P2-8: Back twice returns to the last channel; Back once leaves the pla
   await page.keyboard.press('ArrowUp')
   await expect.poll(path).not.toBe(first)
   const second = path()
+  await expect(page.getByTestId('player-title')).toHaveText('Metro Sports 1')
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('back-hint')).toBeVisible()
@@ -75,6 +76,9 @@ test('UAT P2-8: Back twice returns to the last channel; Back once leaves the pla
   await expect.poll(path).toBe(first)
   await expect(page.getByTestId('back-hint')).toBeHidden()
   expect(second).not.toBe(first)
+  // Wait for the returned channel, not the previous render's playing state.
+  await expect(page.getByTestId('player-title')).toHaveText('Harbor News 24')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   // single Back: the hint shows, then the player closes and Live TV is back
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(/\/live/, { timeout: 3000 })
