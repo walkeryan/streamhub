@@ -1,4 +1,5 @@
 import { AndroidDownload } from '../components/AndroidDownload'
+import { StreamRecovery } from '../components/StreamRecovery'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -271,6 +272,7 @@ function PlaybackTab() {
   )
   return (
     <div className="flex flex-col gap-5">
+      <StreamRecovery />
       {opt('Stream proxy', 'proxy_mode', ['auto', 'always', 'never'], data.proxy_mode)}
       {opt('Guide refresh', 'epg_refresh_hours', [6, 12, 24, 48], data.epg_refresh_hours, (v) => `Every ${v} h`)}
       {opt('Hardware transcoding', 'transcode_hw', ['none', 'vaapi', 'nvenc', 'qsv'], data.transcode_hw)}

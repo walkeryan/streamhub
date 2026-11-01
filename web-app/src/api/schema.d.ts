@@ -1522,6 +1522,188 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playback/generation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authenticated current playback intent generation */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            generation: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin-only Streamhub-owned playback status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackRecoveryStatus"];
+                    };
+                };
+                /** @description Admin required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/recovery/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin-only stop owned sessions and pause new playback until resumed */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PlaybackRecoveryConfirmation"];
+                };
+            };
+            responses: {
+                /** @description Stop result including partial failures */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackRecoveryResult"];
+                    };
+                };
+                /** @description Admin required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/recovery/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin-only allow new playback; old stream tokens remain revoked */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PlaybackRecoveryConfirmation"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackRecoveryStatus"];
+                    };
+                };
+                /** @description Admin required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Owned stop failures remain */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/resolve": {
         parameters: {
             query?: never;
@@ -2324,6 +2506,25 @@ export interface components {
             /** @default false */
             catchup_available: boolean;
         };
+        PlaybackRecoveryStatus: {
+            paused: boolean;
+            /** @description Owned upstream sessions/requests, not distinct viewers. */
+            active_sessions: number;
+            shared_upstreams: number;
+            hls_sessions: number;
+            http_sessions: number;
+            /** @constant */
+            external_sessions_tracked: false;
+        };
+        PlaybackRecoveryResult: components["schemas"]["PlaybackRecoveryStatus"] & {
+            stopped: number;
+            failed: number;
+            cleanup_failed: number;
+        };
+        PlaybackRecoveryConfirmation: {
+            /** @constant */
+            confirm: true;
+        };
         PlaybackRequest: {
             /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false) */
             id: string;
@@ -2340,6 +2541,8 @@ export interface components {
              */
             prefer_hls: boolean;
             catchup_programme_id?: string | null;
+            /** @description Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients. */
+            recovery_generation?: string | null;
         };
         PlaybackDescriptor: {
             id: string;

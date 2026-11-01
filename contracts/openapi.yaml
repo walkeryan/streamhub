@@ -168,6 +168,30 @@ components:
         icon: {type: string, nullable: true}
         catchup_available: {type: boolean, default: false}
 
+    PlaybackRecoveryStatus:
+      type: object
+      required: [paused, active_sessions, shared_upstreams, hls_sessions, http_sessions, external_sessions_tracked]
+      properties:
+        paused: {type: boolean}
+        active_sessions: {type: integer, minimum: 0, description: "Owned upstream sessions/requests, not distinct viewers."}
+        shared_upstreams: {type: integer, minimum: 0}
+        hls_sessions: {type: integer, minimum: 0}
+        http_sessions: {type: integer, minimum: 0}
+        external_sessions_tracked: {type: boolean, const: false}
+    PlaybackRecoveryResult:
+      allOf:
+        - {$ref: '#/components/schemas/PlaybackRecoveryStatus'}
+        - type: object
+          required: [stopped, failed, cleanup_failed]
+          properties:
+            stopped: {type: integer, minimum: 0}
+            failed: {type: integer, minimum: 0}
+            cleanup_failed: {type: integer, minimum: 0}
+    PlaybackRecoveryConfirmation:
+      type: object
+      required: [confirm]
+      properties:
+        confirm: {type: boolean, const: true}
     PlaybackRequest:
       type: object
       required: [id]
@@ -177,6 +201,7 @@ components:
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         catchup_programme_id: {type: string, nullable: true}
+        recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
     PlaybackDescriptor:
       type: object
       required: [mode, id]
@@ -477,6 +502,32 @@ paths:
         - { name: to, in: query, schema: {type: string, format: date-time} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, additionalProperties: { type: array, items: { $ref: '#/components/schemas/Programme' } } } } } } }
 
+  /playback/generation:
+    get:
+      summary: Authenticated current playback intent generation
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: object, required: [generation], properties: {generation: {type: string}}}}}}
+  /playback/recovery:
+    get:
+      summary: Admin-only Streamhub-owned playback status
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryStatus'}}}}
+        '403': {description: Admin required}
+  /playback/recovery/stop:
+    post:
+      summary: Admin-only stop owned sessions and pause new playback until resumed
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryConfirmation'}}}}
+      responses:
+        '200': {description: Stop result including partial failures, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryResult'}}}}
+        '403': {description: Admin required}
+  /playback/recovery/resume:
+    post:
+      summary: Admin-only allow new playback; old stream tokens remain revoked
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryConfirmation'}}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryStatus'}}}}
+        '403': {description: Admin required}
+        '409': {description: Owned stop failures remain}
   /playback/resolve:
     post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } } } }
   /playback/progress:
