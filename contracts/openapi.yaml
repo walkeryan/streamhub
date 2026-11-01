@@ -192,12 +192,38 @@ components:
       required: [confirm]
       properties:
         confirm: {type: boolean, const: true}
+    PlaybackOption:
+      type: object
+      required: [variant_id, source_id, source_name, provider_label, audio_languages, audio_verified, audio_evidence, preferred_audio_available]
+      properties:
+        variant_id: {type: string}
+        source_id: {type: string}
+        source_name: {type: string}
+        provider_label: {type: string}
+        kind: {type: string}
+        year: {type: integer, nullable: true}
+        audio_languages: {type: array, items: {type: string}}
+        audio_verified: {type: boolean}
+        audio_evidence: {type: string}
+        language_hint: {type: string, nullable: true}
+        preferred_audio_available: {type: boolean}
+    PlaybackOptions:
+      type: object
+      required: [id, preferred_languages, options, selection_required]
+      properties:
+        id: {type: string}
+        preferred_languages: {type: array, items: {type: string}}
+        options: {type: array, items: {$ref: '#/components/schemas/PlaybackOption'}}
+        automatic_variant_id: {type: string, nullable: true}
+        selection_required: {type: boolean}
     PlaybackRequest:
       type: object
       required: [id]
       properties:
         id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false)"}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
+        variant_id: {type: string, nullable: true}
+        allow_unverified_audio: {type: boolean, default: false}
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         catchup_programme_id: {type: string, nullable: true}
@@ -406,7 +432,13 @@ paths:
         - { name: limit, in: query, schema: {type: integer, default: 40} }
         - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
         - { name: source_id, in: query, schema: {type: string} }
-      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { results: {type: array, items: {$ref: '#/components/schemas/Tile'}}, metadata_available: {type: boolean}, discovery_note: {type: string}, play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+  /playback/options:
+    get:
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string}}
+        - {name: source_id, in: query, schema: {type: string}}
+      responses: {'200': {description: Available source variants and audio evidence, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackOptions'}}}}}
   /titles/{id}:
     get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }
   /browse/{section}:

@@ -982,11 +982,52 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            results?: components["schemas"]["Tile"][];
+                            metadata_available?: boolean;
+                            discovery_note?: string;
                             play_here?: components["schemas"]["Tile"][];
                             open_in_app?: components["schemas"]["Tile"][];
                             channels?: components["schemas"]["Channel"][];
                             attribution?: string;
                         };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    id: string;
+                    source_id?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Available source variants and audio evidence */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackOptions"];
                     };
                 };
             };
@@ -2525,11 +2566,34 @@ export interface components {
             /** @constant */
             confirm: true;
         };
+        PlaybackOption: {
+            variant_id: string;
+            source_id: string;
+            source_name: string;
+            provider_label: string;
+            kind?: string;
+            year?: number | null;
+            audio_languages: string[];
+            audio_verified: boolean;
+            audio_evidence: string;
+            language_hint?: string | null;
+            preferred_audio_available: boolean;
+        };
+        PlaybackOptions: {
+            id: string;
+            preferred_languages: string[];
+            options: components["schemas"]["PlaybackOption"][];
+            automatic_variant_id?: string | null;
+            selection_required: boolean;
+        };
         PlaybackRequest: {
             /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false) */
             id: string;
             /** @description pick a specific source when a title has several */
             source_id?: string | null;
+            variant_id?: string | null;
+            /** @default false */
+            allow_unverified_audio: boolean;
             /**
              * @default web
              * @enum {string}

@@ -29,6 +29,12 @@ const countryMatches = (value: string | null | undefined, country: string | null
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
 export const handlers = [
+  http.get(`${B}/playback/options`, ({ request }) => {
+    const id = new URL(request.url).searchParams.get('id') ?? ''
+    const tile = tileById(id)
+    const options = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: ['eng'], audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }))
+    return HttpResponse.json({ id, preferred_languages: ['eng'], options, automatic_variant_id: options[0]?.variant_id ?? null, selection_required: false })
+  }),
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),
   http.get(`${B}/health`, () => HttpResponse.json({ ok: true })),
   http.get(`${B}/profiles/:id/prefs`, ({ params }) => HttpResponse.json(JSON.parse(sessionStorage.getItem(`mock.prefs.${params.id}`) ?? '{}'))),
@@ -131,6 +137,7 @@ export const handlers = [
     }
     const seed = seedFor(id)
     const t = tileById(id)
+    if (t?.kind === 'channel') return HttpResponse.json({ ...t, attribution: 'Provider guide metadata' })
     if (!seed || !t) return HttpResponse.json({ code: 'not_found', message: 'Title not found' }, { status: 404 })
     const show = seed.kind === 'show'
     return HttpResponse.json({

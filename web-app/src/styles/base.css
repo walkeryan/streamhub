@@ -166,8 +166,8 @@ h1, h2, h3, p { margin: 0; }
   background: var(--t-overlay); color: var(--t-text); font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.01em;
 }
 .badge-play { background: var(--t-accent); color: var(--t-accent-text); }
-.tile-badges { position: absolute; right: 0.375rem; bottom: 0.375rem; display: flex; gap: 0.25rem; }
-.tile[data-focused='true'] .tile-badges { bottom: 2.25rem; }
+.tile-badges { position: absolute; right: 0.375rem; top: 0.375rem; max-width: calc(100% - 0.75rem); display: flex; gap: 0.25rem; }
+.tile-badges .badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* hero */
 .hero { position: relative; height: min(62dvh, 40rem); min-height: 22rem; overflow: hidden; }

@@ -119,11 +119,11 @@ test('UAT P1-4: Search keeps the query, results and focused result on Back', asy
   await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
   await expect(page.getByTestId('group-play')).toBeVisible()
   await expect.poll(() => focusedLabel(page)).toBe(label)
-  // opening Search fresh from the rail starts empty
+  // Returning from the rail preserves this profile's latest search.
   await page.goto('/')
   await expect(page.getByTestId('home')).toBeVisible()
   await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter')
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('')
+  await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
 })
 
 test('UAT P1-7: failed artwork never shows a broken-image glyph', async ({ page }) => {

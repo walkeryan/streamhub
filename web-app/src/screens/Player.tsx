@@ -6,7 +6,9 @@ import { ChannelRow } from '../components/ChannelRow'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useBackHandler, useOverlayFocus } from '../nav/back'
 import { setFocus } from '../nav/spatial'
+import { hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
+import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
 
@@ -19,12 +21,16 @@ export function Player() {
   const id = decodeURIComponent(useParams().id ?? '')
   const [sp] = useSearchParams()
   const sourceId = sp.get('source')
+  const variantId = sp.get('variant') ?? undefined
+  const profileId = useSession((s) => s.profile?.id)
+  const audioChoice = sp.get('audio_choice')
+  const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId), [profileId, audioChoice, id, variantId])
   const catchup = sp.get('catchup')
   const navigate = useNavigate()
   const videoRef = useRef<HTMLVideoElement>(null)
   const isChannel = id.startsWith('ch:')
 
-  const req = useMemo(() => ({ id, sourceId, catchupProgrammeId: catchup }), [id, sourceId, catchup])
+  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup }), [id, sourceId, variantId, allowUnverifiedAudio, catchup])
   const pb = usePlayback(videoRef, req)
   const { desc, state } = pb
   const live = !!desc?.live || isChannel
@@ -272,6 +278,7 @@ export function Player() {
             <h1 className="title-xl">Playback stopped</h1>
             <p>{pb.error ?? 'The stream could not be played.'}</p>
             <div className="flex gap-3">
+              {!live && <Button focusKey="perr:source" onEnter={() => navigate(`/title/${encodeURIComponent(id)}?choose=1`)}>Choose audio / source</Button>}
               <Button focusKey="perr:retry" primary icon="refresh" onEnter={pb.retryNow}>Try again</Button>
               <Button focusKey="perr:back" onEnter={exit}>Back</Button>
             </div>

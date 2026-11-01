@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { api, ok, unwrap } from './client'
 import { useSession } from '../store/session'
 import type {
-  BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
+  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
   Settings, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind,
 } from './types'
 
@@ -34,10 +34,10 @@ export const useHome = () => useQuery({ queryKey: [...qk.home, useProfileId()], 
 
 export const useSearch = (q: string, filters: { language?: string; source_id?: string } = {}) =>
   useQuery({
-    queryKey: ['search', useProfileId(), q, filters],
+    queryKey: ['search', useProfileId(), q.trim().toLowerCase().replace(/\s+/g, ' '), filters, useSession((s) => s.profile?.languages.join(','))],
     enabled: q.trim().length > 1,
-    placeholderData: useProfilePlaceholder<SearchResult>(),
-    queryFn: () => unwrap<SearchResult>(api.GET('/search', { params: { query: { q: q.trim(), ...filters } } })),
+    staleTime: 30_000,
+    queryFn: ({ signal }) => unwrap<SearchResult>(api.GET('/search', { signal, params: { query: { q: q.trim(), ...filters } } })),
   })
 
 export const useTitle = (id: string | undefined) =>
@@ -149,7 +149,7 @@ export function useToggleFavorite() {
       else await ok(api.DELETE('/favorites', { params: { query: { kind: v.kind, id: v.id } } }))
     },
     onSuccess: () => {
-      for (const k of [qk.favorites, qk.home, ['channels'], ['title']]) void qc.invalidateQueries({ queryKey: k })
+      for (const k of [qk.favorites, qk.home, ['channels'], ['title'], ['search'], ['browse']]) void qc.invalidateQueries({ queryKey: k })
     },
   })
 }
@@ -192,7 +192,15 @@ export function usePatchProfile() {
     mutationFn: (v: { id: string; patch: Partial<Profile> }) =>
       ok(api.PATCH('/profiles/{id}', { params: { path: { id: v.id } }, body: v.patch as Profile })),
     onSuccess: () => {
-      for (const queryKey of [qk.profiles, ['current-profile'], qk.home, ['channels'], ['channel-groups'], ['search'], ['browse'], ['epg']]) void qc.invalidateQueries({ queryKey })
+      for (const queryKey of [qk.profiles, ['current-profile'], qk.home, ['channels'], ['channel-groups'], ['search'], ['browse'], ['epg'], ['playback-options']]) void qc.invalidateQueries({ queryKey })
     },
   })
 }
+
+export const playbackOptions = (id: string, source_id?: string, signal?: AbortSignal) =>
+  unwrap<PlaybackOptions>(api.GET('/playback/options', { signal, params: { query: { id, source_id } } }))
+export const usePlaybackOptions = (id?: string) => useQuery({
+  queryKey: ['playback-options', useProfileId(), id, useSession((s) => s.profile?.languages.join(','))],
+  enabled: !!id,
+  queryFn: ({ signal }) => playbackOptions(id!, undefined, signal),
+})

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigationType } from 'react-router'
+import { useSearchParams } from 'react-router'
 import { useSearch } from '../api/hooks'
 import { LanguageFilter } from '../components/LanguageFilter'
 import { useSession } from '../store/session'
@@ -13,14 +13,24 @@ import { useDebounced } from '../lib/util'
 import type { Tile } from '../api/types'
 
 export function Search() {
-  // Back (POP) returns to the previous query and its results; opening Search fresh (rail, link) starts empty.
-  const navType = useNavigationType()
-  const [q, setQ] = useState(() => (navType === 'POP' ? useUi.getState().searchQuery : ''))
-  const setSearchQuery = useUi((s) => s.setSearchQuery)
-  useEffect(() => { setSearchQuery(q) }, [q, setSearchQuery])
+  const profileId = useSession((s) => s.profile?.id ?? 'anonymous')
+  return <ProfileSearch key={profileId} profileId={profileId} />
+}
+
+function ProfileSearch({ profileId }: { profileId: string }) {
+  const [params, setParams] = useSearchParams()
+  const storageKey = `sh.search.${profileId}`
+  const [saved] = useState(() => { try { return JSON.parse(sessionStorage.getItem(storageKey) ?? '{}') as { q?: string; language?: string } } catch { return {} } })
+  const [q, setQ] = useState((params.get('profile') === profileId ? params.get('q') : null) ?? saved.q ?? '')
   const dq = useDebounced(q, 400)
   const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
-  const [language, setLanguage] = useState(preferred ? 'mine' : 'all')
+  const [language, setLanguage] = useState((params.get('profile') === profileId ? params.get('language') : null) ?? saved.language ?? (preferred ? 'mine' : 'all'))
+  useEffect(() => {
+    try { sessionStorage.setItem(storageKey, JSON.stringify({ q, language })) } catch { /* Storage may be disabled. URL state still preserves navigation. */ }
+    if (params.get('q') !== q || params.get('language') !== language || params.get('profile') !== profileId) {
+      setParams({ q, language, profile: profileId }, { replace: true })
+    }
+  }, [q, language, profileId, storageKey, params, setParams])
   const { data, error, isFetching, refetch } = useSearch(dq, { language: language === 'mine' ? preferred || 'all' : language })
   const recents = useUi((s) => s.recentSearches)
   const addSearch = useUi((s) => s.addSearch)
@@ -35,7 +45,9 @@ export function Search() {
   const playHere = data?.play_here ?? []
   const openIn = data?.open_in_app ?? []
   const chans = data?.channels ?? []
-  const none = !!data && !playHere.length && !openIn.length && !chans.length
+  const ranked = data?.results
+  const count = ranked ? ranked.length : playHere.length + openIn.length + chans.length
+  const none = !!data && count === 0
   const tiles = (list: Tile[], scope: string) => (
     <FocusGroup focusKey={`search:${scope}`} className="grid-tiles">
       {list.map((t) => <MediaTile key={t.id} tile={t} scope={scope} />)}
@@ -55,9 +67,10 @@ export function Search() {
             <div className="flex gap-2 flex-wrap">{recents.map((r) => <Chip key={r} focusKey={`recent:${r}`} onEnter={() => setQ(r)}>{r}</Chip>)}</div>
           </div>
         )}
-        <p className="label" aria-live="polite">{isFetching ? 'Searching…' : dq.trim().length > 1 && data ? `${playHere.length + openIn.length + chans.length} results` : 'Type at least 2 letters.'}</p>
+        <p className="label" aria-live="polite">{isFetching ? 'Searching…' : dq.trim().length > 1 && data ? `${count} results` : 'Type at least 2 letters.'}</p>
       </FocusGroup>
       <div className="min-w-0" data-testid="search-results" style={{ minHeight: '20rem' }}>
+        {data?.discovery_note && <p className="label mb-4">{data.discovery_note}</p>}
         {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : none ? (
           <Empty title={`No results for “${dq}”`} hint="Try a shorter title or All languages to include other and unknown languages.">
             <Button focusKey="search:all" onEnter={() => setLanguage('all')}>Search all languages</Button>
@@ -65,9 +78,10 @@ export function Search() {
           </Empty>
         ) : (
           <>
-            {playHere.length > 0 && <section data-testid="group-play"><h2 className="heading">Play here</h2>{tiles(playHere, 'play-here')}</section>}
-            {openIn.length > 0 && <section data-testid="group-open"><h2 className="heading">Open in app</h2>{tiles(openIn, 'open-in-app')}</section>}
-            {chans.length > 0 && (
+            {ranked && ranked.length > 0 && <section data-testid="group-relevance"><h2 className="heading">Best matches</h2>{tiles(ranked, 'relevance')}</section>}
+            {!ranked && playHere.length > 0 && <section data-testid="group-play"><h2 className="heading">Play here</h2>{tiles(playHere, 'play-here')}</section>}
+            {!ranked && openIn.length > 0 && <section data-testid="group-open"><h2 className="heading">Open in app</h2>{tiles(openIn, 'open-in-app')}</section>}
+            {!ranked && chans.length > 0 && (
               <section data-testid="group-channels">
                 <h2 className="heading mb-2">Channels</h2>
                 <FocusGroup focusKey="search:channels" className="flex flex-col gap-2" role="listbox">
