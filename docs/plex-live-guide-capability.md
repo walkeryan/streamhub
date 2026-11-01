@@ -1,8 +1,9 @@
 # Plex guide capability and remaining integration gate
 
 Inspected against Streamhub `51b4f8b`, 2026-11-01. No production Plex requests
-were made. Parent's last verified deployment inventory was one Xtream source and
-no linked Plex source; this work did not recheck that inventory or extract tokens.
+were made. A bounded read-only SQLite count during this audit confirmed one enabled Xtream
+source and zero Plex sources. Only source type/enabled/count were selected; no
+credentials, names, URLs or user content were read.
 
 ## Documented read-only capability
 
@@ -35,8 +36,8 @@ instead of returning a misleading empty or partially successful schedule.
 
 ## Exact remaining blockers
 
-1. **Actual capability unverified:** no linked Plex source was available in the
-   last verified deployment inventory. A configured, authorized Plex source must
+1. **Actual capability unverified:** the current read-only deployment inventory contains
+   zero Plex sources. A configured, authorized Plex source must
    exist and advertise a DVR/EPG provider before real guide metadata can be read.
    No linking, new keys, permission changes, or DVR setup was attempted.
 2. **Application ingestion is not wired:** the current sync service consumes
