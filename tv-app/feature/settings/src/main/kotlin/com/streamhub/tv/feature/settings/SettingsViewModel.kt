@@ -6,16 +6,20 @@ import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.sameSwitchSession
-import com.streamhub.tv.core.data.auth.validOwnerVerificationUri
 import com.streamhub.tv.core.data.model.AuthConfig
 import com.streamhub.tv.core.data.model.AuthTokens
-import com.streamhub.tv.core.data.model.OwnerReauthChallenge
-import com.streamhub.tv.core.data.model.OwnerReauthPoll
+import com.streamhub.tv.core.data.model.OwnerPinChallenge
+import com.streamhub.tv.core.data.model.OwnerPinCancel
 import com.streamhub.tv.core.data.repo.ChannelListCache
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.data.repo.ProfileSwitchPath
 import com.streamhub.tv.core.data.repo.profileSwitchPath
-import com.streamhub.tv.core.data.repo.awaitOwnerReauth
+import com.streamhub.tv.core.data.repo.awaitOwnerPin
+import com.streamhub.tv.core.data.repo.validOwnerPin
+import com.streamhub.tv.core.data.repo.ownerPinRetryDelay
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import com.streamhub.tv.core.data.repo.catalogScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -68,7 +72,8 @@ data class SettingsState(
     val pinPromptFor: Profile? = null,
     val authConfig: AuthConfig? = null,
     val switching: Boolean = false,
-    val ownerReauth: OwnerReauthChallenge? = null,
+    val ownerPin: OwnerPinChallenge? = null,
+    val ownerPinBusy: Boolean = false, val ownerPinError: String? = null,
     val switchTargetName: String? = null,
 )
 
@@ -89,6 +94,7 @@ class SettingsViewModel @Inject constructor(
 
     private var loadJob: Job? = null
     private var switchJob: Job? = null
+    private var ownerPinInput: Channel<String>? = null
     init { load() }
 
     private fun pid() = _state.value.current?.id ?: "default"
@@ -201,52 +207,70 @@ class SettingsViewModel @Inject constructor(
                 _state.update{it.copy(authConfig=config)}
                 when(profileSwitchPath(config,_state.value.current,p)) {
                     ProfileSwitchPath.SameProfile -> Unit
-                    ProfileSwitchPath.OwnerGoogle -> ownerReauthSafely(original,p)
+                    ProfileSwitchPath.OwnerPin -> ownerPinSafely(original,p)
                     ProfileSwitchPath.ExistingPin -> if(pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.switchProfile(LoginRequest(p.id,pin=pin)))
                     ProfileSwitchPath.Secure -> commitSwitch(original,p,api.switchProfile(LoginRequest(p.id)))
                     ProfileSwitchPath.Legacy -> if(p.hasPin && pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.login(LoginRequest(p.id,pin=pin)))
                     ProfileSwitchPath.OwnerReauthRequired -> _state.update{it.copy(message="This target requires owner reauthentication or an existing credential this TV cannot supply. Use the normal Google owner sign-in/pairing flow; no PIN bypass is available.")}
                     ProfileSwitchPath.Unavailable -> _state.update{it.copy(message="Secure profile switching is unavailable. Google sign-in restrictions remain in place.")}
                 }
-            } catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner sign-in expired. Start a new request.",ownerReauth=null)}}
+            } catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner authorization expired. Start a new request.",ownerPin=null)}}
             catch(e:CancellationException){throw e}
             catch(e:ApiException) {
-                if(e.error?.code=="owner_reauth_required") ownerReauthSafely(original,p)
-                else _state.update{it.copy(message=when(e.status){401->"Authentication failed. Use the existing credential or sign in again.";403->"Profile switch denied. Owner reauthentication is required; no PIN bypass is available.";410->"Owner sign-in expired. Start again.";else->"Could not switch profiles. Current profile remains selected."},pinPromptFor=null)}
+                if(e.error?.code=="owner_pin_required") ownerPinSafely(original,p)
+                else _state.update{it.copy(message=if(e.error?.code=="owner_pin_setup_required") "Set up the owner PIN in Streamhub on your phone with local VM approval." else when(e.status){401->"Authentication failed. Use the existing credential or sign in again.";403->"Profile switch denied. Use the existing owner PIN or approved owner phone flow.";410->"Owner sign-in expired. Start again.";else->"Could not switch profiles. Current profile remains selected."},pinPromptFor=null)}
             } catch(_:Exception){_state.update{it.copy(message="Could not switch profiles. Current profile remains selected.",pinPromptFor=null)}}
             finally {_state.update{it.copy(switching=false)}}
         }
     }
 
-    private suspend fun ownerReauthSafely(original: Session, target: Profile) {
-        try { ownerReauth(original,target) }
-        catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner sign-in expired. Start a new request.")}}
+    private suspend fun ownerPinSafely(original: Session, target: Profile) {
+        try { ownerPinFlow(original,target) }
+        catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner PIN request expired. Start a new request.")}}
         catch(e:CancellationException){throw e}
-        catch(_:Exception){_state.update{it.copy(message="Owner reauthentication was denied, expired or unavailable. Current profile remains selected.")}}
+        catch(e:ApiException) {_state.update{it.copy(message=when {
+            e.error?.code=="owner_pin_setup_required" -> "Set up the owner PIN in Streamhub on your phone. Setup requires local VM approval; this TV cannot create or reset it."
+            e.status==429 -> "Too many attempts. Wait ${ownerPinRetryDelay(e.retryAfterSeconds)} seconds before trying again."
+            else -> "Owner PIN authorization was denied, expired or unavailable. Current profile remains selected."
+        })}}
+        catch(_:Exception){_state.update{it.copy(message="Owner PIN authorization unavailable. Current profile remains selected.")}}
     }
 
-    private suspend fun ownerReauth(original: Session, target: Profile) {
-        var challenge: OwnerReauthChallenge?=null
-        var pollingStarted=false
+    private suspend fun ownerPinFlow(original: Session,target: Profile) {
+        var challenge: OwnerPinChallenge?=null
+        val input=Channel<String>(Channel.RENDEZVOUS)
+        var awaiting=false
         try {
             currentCoroutineContext().ensureActive()
             if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
-            challenge=api.startOwnerReauth(target.id)
-            require(validOwnerVerificationUri(original.serverUrl,challenge.verificationUri)) { "Owner sign-in requires the canonical HTTPS Streamhub address" }
+            // Verify revokes the initiating SID: release its playback lease while it is still valid.
+            loadJob?.cancel()
+            playback.clearForProfileSwitch()
+            val active=api.startOwnerPin(target.id)
+            challenge=active
             currentCoroutineContext().ensureActive()
             if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
-            _state.update{it.copy(ownerReauth=challenge,pinPromptFor=null,switchTargetName=target.name)}
-            pollingStarted=true
-            val tokens=awaitOwnerReauth(challenge,target.id,{sameSwitchSession(original,session.current())}, poll={ request ->
-                try {api.pollOwnerReauth(request)}catch(e:ApiException){if(e.status==428)null else throw e}
-            }, cancel=api::cancelOwnerReauth)
-            challenge=null // Poll consumed the challenge; never cancel using the target's new session.
-            _state.update{it.copy(ownerReauth=null)}
+            ownerPinInput=input
+            _state.update{it.copy(ownerPin=active,ownerPinBusy=false,ownerPinError=null,pinPromptFor=null,switchTargetName=target.name)}
+            awaiting=true
+            val tokens=awaitOwnerPin(active,target.id,
+                nextPin={_state.update{it.copy(ownerPinBusy=false)};input.receive()},
+                stillCurrent={sameSwitchSession(original,session.current())},verify=api::verifyOwnerPin,
+                rejected={seconds->_state.update{it.copy(ownerPinBusy=seconds>0,ownerPinError=if(seconds>0) "Too many attempts. Wait $seconds seconds, then enter the PIN again." else "PIN not accepted. Re-enter the existing owner PIN.")}},
+                cancel=api::cancelOwnerPin)
+            challenge=null // Verification consumed the challenge and revoked the initiating session.
+            _state.update{it.copy(ownerPin=null)}
             commitSwitch(original,target,tokens)
         } finally {
-            if(!pollingStarted) challenge?.let { active -> withContext(NonCancellable) { withTimeoutOrNull(5000) {runCatching{api.cancelOwnerReauth(OwnerReauthPoll(active.challengeId,active.pollToken))}}} }
-            _state.update{it.copy(ownerReauth=null,switchTargetName=null)}
+            ownerPinInput=null;input.close()
+            if(!awaiting) challenge?.let { active -> withContext(NonCancellable) {withTimeoutOrNull(5000) {runCatching {if(sameSwitchSession(original,session.current()))api.cancelOwnerPin(OwnerPinCancel(active.challengeId,active.pollToken))}}} }
+            _state.update{it.copy(ownerPin=null,ownerPinBusy=false,ownerPinError=null,switchTargetName=null)}
         }
+    }
+
+    fun submitOwnerPin(pin: String) {
+        if(!validOwnerPin(pin) || _state.value.ownerPinBusy || _state.value.ownerPin==null) return
+        if(ownerPinInput?.trySend(pin)?.isSuccess==true) _state.update{it.copy(ownerPinBusy=true,ownerPinError=null)}
     }
 
     private suspend fun commitSwitch(original: Session, target: Profile, tokens: AuthTokens) {
@@ -266,7 +290,7 @@ class SettingsViewModel @Inject constructor(
 
     fun cancelPin() {
         switchJob?.cancel()
-        _state.update{it.copy(pinPromptFor=null,ownerReauth=null,switchTargetName=null)}
+        _state.update{it.copy(pinPromptFor=null,ownerPin=null,switchTargetName=null)}
     }
 
     fun patchServer(s: Settings) = viewModelScope.launch {

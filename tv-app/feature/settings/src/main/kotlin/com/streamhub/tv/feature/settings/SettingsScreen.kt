@@ -43,7 +43,6 @@ import com.streamhub.tv.core.data.model.Settings
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.DISCLAIMER_TEXT
 import com.streamhub.tv.core.ui.components.DISCLAIMER_VERSION
-import com.streamhub.tv.core.ui.components.QrCode
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.ShTextField
@@ -64,6 +63,11 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
     val first = remember { FocusRequester() }
     var switchOpener by remember { mutableStateOf<FocusRequester?>(null) }
     var restoreSwitchFocus by remember { mutableStateOf(false) }
+    var hadOwnerPinPrompt by remember { mutableStateOf(false) }
+    LaunchedEffect(s.ownerPin) {
+        if(hadOwnerPinPrompt && s.ownerPin==null) restoreSwitchFocus=true
+        hadOwnerPinPrompt=s.ownerPin!=null
+    }
     val cancelSwitch: () -> Unit = { restoreSwitchFocus=true; vm.cancelPin() }
     LaunchedEffect(restoreSwitchFocus,s.switching) {
         if(restoreSwitchFocus && !s.switching) {
@@ -104,8 +108,8 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
             }
         }
     }
-    s.ownerReauth?.let { challenge ->
-        OwnerReauthDialog(challenge.verificationUri,s.switchTargetName ?: "selected profile",challenge.expiresIn,cancelSwitch)
+    s.ownerPin?.let { challenge ->
+        OwnerPinDialog(challenge.challengeId,s.switchTargetName ?: "selected profile",s.ownerPinBusy,s.ownerPinError,vm::submitOwnerPin,cancelSwitch)
     }
     s.pinPromptFor?.let { p -> PinDialog("Enter PIN for ${p.name}", onSubmit = { vm.switchProfile(p, it) }, onDismiss = cancelSwitch) }
 }
@@ -134,7 +138,7 @@ private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel, onOpen: (Focus
             enabled = !s.switching && s.authConfig != null,
         )
     }
-    item { Text(if(s.current?.contentRestricted==true) "Leaving this restricted profile requires fresh owner Google sign-in. A PIN cannot bypass it." else if(s.switching) "Checking profile authorization…" else "Profile changes keep each user's saved history and preferences separate.", color=LocalThemeTokensText()) }
+    item { Text(if(s.current?.contentRestricted==true) "Leaving this restricted profile requires the existing owner PIN. A target profile PIN or Google sign-in alone cannot approve it." else if(s.switching) "Checking profile authorization…" else "Profile changes keep each user's saved history and preferences separate.", color=LocalThemeTokensText()) }
     item { Text("Create and edit profiles from the web app (admin).", color = LocalThemeTokensText(), style = MaterialTheme.typography.bodySmall) }
 }
 
@@ -285,18 +289,32 @@ private fun PinDialog(title: String, onSubmit: (String) -> Unit, onDismiss: () -
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 }
 
+/** On-screen keypad works with D-pad/Select only; plaintext is never rendered or saved. */
 @Composable
-private fun OwnerReauthDialog(uri: String, target: String, expires: Int, onCancel: () -> Unit) {
+private fun OwnerPinDialog(challengeId:String,target:String,busy:Boolean,error:String?,onSubmit:(String)->Unit,onCancel:()->Unit) {
     val t=LocalThemeTokens.current
-    val cancel=remember { FocusRequester() }
-    Dialog(onDismissRequest=onCancel) {
-        Column(Modifier.background(t.surface,RoundedCornerShape(Tokens.Radius.Lg)).padding(24.dp).width(540.dp),verticalArrangement=Arrangement.spacedBy(12.dp),horizontalAlignment=Alignment.CenterHorizontally) {
-            Text("Owner Google sign-in required",style=MaterialTheme.typography.titleLarge,color=t.text)
-            Text("Scan with your phone to authorize switching to $target. This request expires in ${expires.coerceAtLeast(0)} seconds. A PIN cannot approve this change.",color=t.textMuted)
-            QrCode(uri)
-            Text("Waiting for fresh owner authentication…",color=t.textMuted)
-            ShButton("Cancel · stay on this profile",onCancel,Modifier.focusRequester(cancel))
+    var pin by remember(challengeId) {mutableStateOf("")}
+    val first=remember {FocusRequester()}
+    val cancel:()->Unit={pin="";onCancel()}
+    DisposableEffect(challengeId){onDispose{pin=""}}
+    Dialog(onDismissRequest=cancel) {
+        Column(Modifier.width(520.dp).background(t.surface,RoundedCornerShape(Tokens.Radius.Lg)).padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Owner PIN · $target",style=MaterialTheme.typography.titleLarge,color=t.text)
+            Text("Enter the existing 6–12 digit owner PIN. Playback is stopped; Cancel keeps this profile and you can choose Play again. Setup/reset requires your phone and local VM approval.",color=t.textMuted)
+            Text(if(pin.isEmpty()) "PIN not entered" else "•".repeat(pin.length),color=t.text,style=MaterialTheme.typography.titleLarge)
+            error?.let {Text(it,color=t.danger)}
+            listOf(listOf("1","2","3"),listOf("4","5","6"),listOf("7","8","9"),listOf("Clear","0","Delete")).forEach {row ->
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    row.forEach {key -> ShButton(key,{
+                        if(!busy) pin=when(key){"Clear"->"";"Delete"->pin.dropLast(1);else->(pin+key).take(12)}
+                    },modifier=Modifier.weight(1f).then(if(key=="1")Modifier.focusRequester(first) else Modifier),enabled=!busy)}
+                }
+            }
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                ShButton(if(busy) "Checking / waiting…" else "Unlock profile",{val entered=pin;pin="";onSubmit(entered)},enabled=!busy && com.streamhub.tv.core.data.repo.validOwnerPin(pin))
+                ShButton("Cancel",cancel)
+            }
         }
     }
-    LaunchedEffect(Unit){runCatching{cancel.requestFocus()}}
+    LaunchedEffect(challengeId,busy){if(!busy){withFrameNanos{};runCatching{first.requestFocus()}}}
 }

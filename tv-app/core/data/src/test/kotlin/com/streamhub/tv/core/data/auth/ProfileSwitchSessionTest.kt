@@ -13,15 +13,6 @@ class ProfileSwitchSessionTest {
         assertFalse(sameSwitchSession(owner,owner.copy(profile=Profile("two","Two"))))
         assertFalse(sameSwitchSession(owner.copy(refreshToken=null),owner.copy(refreshToken=null)))
     }
-    @Test fun verificationQrMustBeCanonicalHttpsOriginNotMaliciousLink() {
-        val path="/api/v1/auth/owner-reauth/verify?challenge_id=public"
-        assertTrue(validOwnerVerificationUri(owner.serverUrl,"https://fixture.invalid$path"))
-        assertFalse(validOwnerVerificationUri(owner.serverUrl,"https://attacker.invalid$path"))
-        assertFalse(validOwnerVerificationUri(owner.serverUrl,"https://user:secret@fixture.invalid$path"))
-        assertFalse(validOwnerVerificationUri(owner.serverUrl,"http://fixture.invalid$path"))
-        assertFalse(validOwnerVerificationUri(owner.serverUrl,"https://fixture.invalid/other"))
-    }
-
     @Test fun guardedRotationPreservesChallengeButNewLoginAndStaleRefreshDoNot() {
         val established=owner.copy(generation="session-one")
         val rotated=established.copy(accessToken="next-access",refreshToken="next-refresh")

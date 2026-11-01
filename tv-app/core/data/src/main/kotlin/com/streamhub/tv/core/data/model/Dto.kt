@@ -465,16 +465,20 @@ data class PlaybackOptions(
     @SerialName("google_enabled") val googleEnabled: Boolean = false,
     @SerialName("google_required") val googleRequired: Boolean = true,
     @SerialName("content_policy_enabled") val contentPolicyEnabled: Boolean = false,
+    @SerialName("owner_pin_configured") val ownerPinConfigured: Boolean = false,
 )
-@Serializable data class OwnerReauthStart(@SerialName("profile_id") val profileId: String)
-@Serializable data class OwnerReauthChallenge(
+@Serializable data class OwnerPinStart(@SerialName("profile_id") val profileId: String, val action: String = "profile_switch")
+@Serializable data class OwnerPinChallenge(
     @SerialName("challenge_id") val challengeId: String,
     @SerialName("poll_token") val pollToken: String,
-    @SerialName("verification_uri") val verificationUri: String,
     @SerialName("expires_in") val expiresIn: Int,
-    val interval: Int,
 )
-@Serializable data class OwnerReauthPoll(
+@Serializable data class OwnerPinCancel(
     @SerialName("challenge_id") val challengeId: String,
     @SerialName("poll_token") val pollToken: String,
+)
+@Serializable data class OwnerPinVerify(
+    @SerialName("challenge_id") val challengeId: String,
+    @SerialName("poll_token") val pollToken: String,
+    val pin: String,
 )

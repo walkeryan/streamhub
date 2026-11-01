@@ -3,12 +3,12 @@ package com.streamhub.tv.core.data.repo
 import com.streamhub.tv.core.data.model.*
 import kotlinx.coroutines.*
 
-/** A PIN can never substitute for fresh owner Google authentication when leaving a restricted profile. */
-enum class ProfileSwitchPath { SameProfile, OwnerGoogle, Secure, ExistingPin, Legacy, Unavailable, OwnerReauthRequired }
+/** Restricted exit uses the dedicated owner PIN, never a target profile PIN or Google-only approval. */
+enum class ProfileSwitchPath { SameProfile, OwnerPin, Secure, ExistingPin, Legacy, Unavailable, OwnerReauthRequired }
 fun profileSwitchPath(config: AuthConfig?, current: Profile?, target: Profile): ProfileSwitchPath = when {
     config==null || current==null -> ProfileSwitchPath.Unavailable
     current.id==target.id -> ProfileSwitchPath.SameProfile
-    config.contentPolicyEnabled && current.contentRestricted -> ProfileSwitchPath.OwnerGoogle
+    config.contentPolicyEnabled && current.contentRestricted -> ProfileSwitchPath.OwnerPin
     config.contentPolicyEnabled && current.isAdmin -> ProfileSwitchPath.Secure
     config.contentPolicyEnabled && target.hasPin -> ProfileSwitchPath.ExistingPin
     config.contentPolicyEnabled -> ProfileSwitchPath.OwnerReauthRequired
@@ -16,35 +16,51 @@ fun profileSwitchPath(config: AuthConfig?, current: Profile?, target: Profile): 
     else -> ProfileSwitchPath.Legacy
 }
 
-/** Bound polling: no token is accepted after cancellation, expiry or original-session change. */
-suspend fun awaitOwnerReauth(
-    challenge: OwnerReauthChallenge,
-    targetId: String,
+/** No result is accepted after Back, session change, or a response for another target. */
+suspend fun verifyOwnerPinBound(
+    challenge: OwnerPinChallenge, targetId: String, pin: String,
     stillCurrent: suspend () -> Boolean,
-    poll: suspend (OwnerReauthPoll) -> AuthTokens?,
-    cancel: suspend (OwnerReauthPoll) -> Unit = {},
+    verify: suspend (OwnerPinVerify) -> AuthTokens,
 ): AuthTokens {
-    val interval=challenge.interval.coerceIn(1,30)*1000L
+    require(validOwnerPin(pin))
+    currentCoroutineContext().ensureActive()
+    if(!stillCurrent()) throw CancellationException("Profile session changed")
+    val tokens=verify(OwnerPinVerify(challenge.challengeId,challenge.pollToken,pin))
+    currentCoroutineContext().ensureActive()
+    if(!stillCurrent()) throw CancellationException("Profile session changed")
+    require(tokens.profile.id==targetId) { "Profile switch target mismatch" }
+    return tokens
+}
+fun validOwnerPin(pin: String): Boolean = pin.length in 6..12 && pin.all { it in '0'..'9' }
+fun ownerPinRetryDelay(seconds: Int?): Int = (seconds ?: 60).coerceIn(1,3600)
+
+/** One submitted PIN per attempt; transient failures never replay the secret automatically. */
+suspend fun awaitOwnerPin(
+    challenge: OwnerPinChallenge, targetId: String,
+    nextPin: suspend () -> String,
+    stillCurrent: suspend () -> Boolean,
+    verify: suspend (OwnerPinVerify) -> AuthTokens,
+    rejected: (Int) -> Unit,
+    cancel: suspend (OwnerPinCancel) -> Unit,
+): AuthTokens {
     var completed=false
     try {
-    val result = withTimeout(challenge.expiresIn.coerceIn(1,600)*1000L) {
-        while(true) {
-            currentCoroutineContext().ensureActive()
-            if(!stillCurrent()) throw CancellationException("Profile session changed")
-            val tokens=poll(OwnerReauthPoll(challenge.challengeId,challenge.pollToken))
-            currentCoroutineContext().ensureActive()
-            if(!stillCurrent()) throw CancellationException("Profile session changed")
-            if(tokens!=null) {
-                require(tokens.profile.id==targetId) { "Profile switch target mismatch" }
-                return@withTimeout tokens
+        val result=withTimeout(challenge.expiresIn.coerceIn(1,300)*1000L) {
+            while(true) {
+                try {return@withTimeout verifyOwnerPinBound(challenge,targetId,nextPin(),stillCurrent,verify)}
+                catch(e:com.streamhub.tv.core.data.api.ApiException) {
+                    when {
+                        e.status==429 -> {val seconds=ownerPinRetryDelay(e.retryAfterSeconds);rejected(seconds);delay(seconds*1000L)}
+                        e.status==403 && e.error?.code=="owner_pin_invalid" -> rejected(0)
+                        else -> throw e
+                    }
+                }
             }
-            delay(interval)
+            @Suppress("UNREACHABLE_CODE") error("unreachable")
         }
-        @Suppress("UNREACHABLE_CODE") error("unreachable")
-    }
-    completed=true
-    return result
+        completed=true
+        return result
     } finally {
-        if(!completed) withContext(NonCancellable) { withTimeoutOrNull(5000) { runCatching { cancel(OwnerReauthPoll(challenge.challengeId,challenge.pollToken)) } } }
+        if(!completed) withContext(NonCancellable) {withTimeoutOrNull(5000) {runCatching {if(stillCurrent())cancel(OwnerPinCancel(challenge.challengeId,challenge.pollToken))}}}
     }
 }

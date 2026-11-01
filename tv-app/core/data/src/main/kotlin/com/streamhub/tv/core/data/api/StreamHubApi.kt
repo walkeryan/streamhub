@@ -21,7 +21,7 @@ import kotlinx.serialization.json.JsonObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
-class ApiException(val status: Int, val error: ApiError?, message: String) : Exception(message)
+class ApiException(val status: Int, val error: ApiError?, message: String, val retryAfterSeconds: Int? = null) : Exception(message)
 
 /** 428 Precondition Required = "pending" for device-code and Plex PIN polling. */
 sealed interface PollResult<out T> {
@@ -57,7 +57,7 @@ class StreamHubApi @Inject constructor(
     private suspend fun HttpResponse.toError(): ApiException {
         val text = runCatching { bodyAsText() }.getOrNull()
         val err = text?.let { runCatching { StreamHubJson.decodeFromString(ApiError.serializer(), it) }.getOrNull() }
-        return ApiException(status.value, err, err?.message ?: "HTTP ${status.value}")
+        return ApiException(status.value, err, err?.message ?: "HTTP ${status.value}", headers["Retry-After"]?.toIntOrNull())
     }
 
     private suspend inline fun <reified T> get(path: String, noinline block: HttpRequestBuilder.() -> Unit = {}): T =
@@ -235,9 +235,10 @@ class StreamHubApi @Inject constructor(
 
     suspend fun authConfig(): AuthConfig = get("/auth/config")
     suspend fun switchProfile(request: LoginRequest): AuthTokens = client.post(url("/auth/profile-switch")) { setBody(request) }.ok()
-    suspend fun startOwnerReauth(profileId: String): OwnerReauthChallenge = client.post(url("/auth/owner-reauth/start")) { setBody(OwnerReauthStart(profileId)) }.ok()
-    suspend fun pollOwnerReauth(request: OwnerReauthPoll): AuthTokens = client.post(url("/auth/owner-reauth/poll")) { setBody(request) }.ok()
-    suspend fun cancelOwnerReauth(request: OwnerReauthPoll) { client.post(url("/auth/owner-reauth/cancel")) { setBody(request) }.ok<Unit>() }
+    suspend fun startOwnerPin(profileId: String): OwnerPinChallenge = client.post(url("/auth/owner-pin/start")) { setBody(OwnerPinStart(profileId)) }.ok()
+    suspend fun verifyOwnerPin(request: OwnerPinVerify): AuthTokens = client.post(url("/auth/owner-pin/verify")) { setBody(request) }.ok()
+    suspend fun cancelOwnerPin(request: OwnerPinCancel) { client.post(url("/auth/owner-pin/cancel")) { setBody(request) }.unit() }
+
 
     suspend fun rewindCapability(id: String): RewindCapability = get("/playback/rewind") { parameter("id", id) }
 

@@ -100,7 +100,7 @@ private fun PairingStep(s: OnboardingState, onRetry: () -> Unit, onChangeServer:
         Column(Modifier.weight(1f)) {
             Text("Pair this TV", style = MaterialTheme.typography.displaySmall, color = t.text)
             Text(
-                "On your phone or computer, sign in to StreamHub and enter this code — or scan the QR code.",
+                "On your phone or computer, sign in with the authorized Google account and enter this code — or scan the QR code. If owner protection is enabled, approve with the existing owner PIN on your phone.",
                 style = MaterialTheme.typography.bodyLarge, color = t.textMuted, modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
             )
             val code = s.deviceCode?.userCode
@@ -110,7 +110,7 @@ private fun PairingStep(s: OnboardingState, onRetry: () -> Unit, onChangeServer:
                 color = t.accent,
             )
             s.pairUrl?.let { Text(it.substringBefore("?"), style = MaterialTheme.typography.bodyMedium, color = t.textMuted, modifier = Modifier.padding(top = 12.dp)) }
-            Text("Waiting for approval…", style = MaterialTheme.typography.bodyMedium, color = t.textMuted, modifier = Modifier.padding(top = 4.dp))
+            Text("Waiting for owner approval…", style = MaterialTheme.typography.bodyMedium, color = t.textMuted, modifier = Modifier.padding(top = 4.dp))
             s.error?.let { Text(it, color = t.danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp)) }
             Row(Modifier.padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 ShButton("New code", onRetry, Modifier.focusRequester(focus))
