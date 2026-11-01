@@ -118,3 +118,55 @@ async def test_work_budget_aliases_transposition_and_episode_identity(api):
     assert best[0]["id"] == "tmdb:movie:140607" and best[0]["title"] == "Star Wars The Force Awakens"
     episodes = await search("Fixture Show", "episode")
     assert {row["id"] for row in episodes} == {"lib:catalog:episode-0", "lib:catalog:episode-1"}
+
+
+def test_fts_upgrade_from_pin_schema_preserves_existing_data(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from app.infra.db import HUB_ROOT
+    from app.infra.models import OwnerCredential, Profile, Source
+
+    url = f"sqlite:///{tmp_path / 'migration.sqlite'}"
+    cfg = Config(str(HUB_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(HUB_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "0005")
+    engine = create_engine(url)
+    with Session(engine) as session:
+        session.add(Profile(id="fixture-owner", name="Fixture", is_admin=True, prefs={"language": "en"}))
+        session.add(Source(id="fixture-source", type="plex", name="Fixture", config_enc="synthetic-retained-data"))
+        session.add(OwnerCredential(id=1, credential_version=7, password_hash="synthetic-hash"))
+        session.flush()
+        session.add(
+            Title(
+                source_id="fixture-source",
+                ext_id="42",
+                kind="movie",
+                title="Before migration",
+                norm_title="before migration",
+            )
+        )
+        session.commit()
+
+    def preserved():
+        with Session(engine) as session:
+            assert session.get(Profile, "fixture-owner").prefs == {"language": "en"}
+            assert session.get(Source, "fixture-source").config_enc == "synthetic-retained-data"
+            assert session.get(OwnerCredential, 1).credential_version == 7
+            assert session.get(OwnerCredential, 1).password_hash == "synthetic-hash"
+            assert session.query(Title).one().ext_id == "42"
+
+    command.upgrade(cfg, "0006")
+    preserved()
+    with engine.connect() as connection:
+        assert (
+            connection.execute(text("SELECT count(*) FROM title_search WHERE title_search MATCH 'migration'")).scalar()
+            == 1
+        )
+    command.downgrade(cfg, "0005")
+    preserved()
+    engine.dispose()
