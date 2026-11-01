@@ -132,8 +132,9 @@ class StreamHubApi @Inject constructor(
 
     suspend fun home(): HomeResponse = get("/home")
 
-    suspend fun search(q: String, kinds: List<MediaKind>? = null, limit: Int = 40): SearchResponse = get("/search") {
+    suspend fun search(q: String, kinds: List<MediaKind>? = null, limit: Int = 40, languages: List<String>? = null, sourceId: String? = null): SearchResponse = get("/search") {
         parameter("q", q)
+        applySearchFilters(languages, sourceId)
         kinds?.let { k -> parameter("kinds", k.joinToString(",") { it.wire }) }
         parameter("limit", limit)
     }
