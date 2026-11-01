@@ -52,8 +52,11 @@ test('legacy Guide links open the combined Live TV guide and Back restores its v
   await expect(page.getByRole('button', { name: 'Guide', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('video')).toHaveCount(0)
   await page.getByTestId('guide').getByRole('button', { name: '1 Harbor News 24', exact: true }).click()
-  await expect(page.getByTestId('player')).toBeVisible()
+  // During audio preflight, Back intentionally cancels to Live TV. This case
+  // tests return from accepted playback, not cancellation of a pending request.
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('Escape')
+  await expect(page).toHaveURL(/\/live\?view=guide$/)
   await expect(page.getByTestId('guide')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Guide', exact: true })).toHaveAttribute('aria-pressed', 'true')
 })
