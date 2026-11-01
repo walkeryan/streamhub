@@ -83,5 +83,30 @@ async def test_real_ffmpeg_archive_window_and_seek(api, tmp_path, monkeypatch, p
         segment_url = next(line for line in playlist.text.splitlines() if line and not line.startswith("#"))
         segment = await api.client.get(segment_url)
         assert segment.status_code == 200 and segment.content[:1] == b"\x47"
+        # Decode the actual served segment and inspect multiple advancing frames.
+        served = tmp_path / "served.ts"
+        served.write_bytes(segment.content)
+        probe = await real_spawn(
+            FFMPEG,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(served),
+            "-map",
+            "0:v:0",
+            "-f",
+            "framemd5",
+            "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        frames, errors = await probe.communicate()
+        assert probe.returncode == 0, errors.decode(errors="replace")
+        rows = [line.split(",") for line in frames.decode().splitlines() if line and not line.startswith("#")]
+        assert len(rows) >= 2
+        timestamps = [int(row[2]) for row in rows]
+        assert all(a < b for a, b in zip(timestamps, timestamps[1:]))
+        assert len({row[-1].strip() for row in rows}) >= 2
     assert (await api.post("/playback/buffer/release", json=body)).status_code == 204
     assert not api.c.proxy._hls and not list(root.iterdir())
