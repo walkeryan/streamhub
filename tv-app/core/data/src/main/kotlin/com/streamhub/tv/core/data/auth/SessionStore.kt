@@ -23,6 +23,7 @@ data class Session(
     val accessToken: String?,
     val refreshToken: String?,
     val profile: Profile?,
+    val generation: String? = null,
 ) {
     val isPaired: Boolean get() = !serverUrl.isNullOrBlank() && !refreshToken.isNullOrBlank()
 
@@ -54,6 +55,7 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
     private val json = Json { ignoreUnknownKeys = true }
 
     private object K {
+        val generation = stringPreferencesKey("session_generation")
         val server = stringPreferencesKey("server_url")
         val access = stringPreferencesKey("access_token")
         val refresh = stringPreferencesKey("refresh_token")
@@ -62,6 +64,7 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
 
     val session: Flow<Session> = context.sessionStore.data.map { p ->
         Session(
+            generation = p[K.generation],
             serverUrl = p[K.server],
             accessToken = p[K.access],
             refreshToken = p[K.refresh],
@@ -72,11 +75,16 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
     suspend fun current(): Session = session.first()
 
     suspend fun setServerUrl(url: String) {
-        context.sessionStore.edit { it[K.server] = normalizeServerUrl(url) }
+        context.sessionStore.edit {
+            val normalized=normalizeServerUrl(url)
+            if(it[K.server]!=normalized) it[K.generation]=java.util.UUID.randomUUID().toString()
+            it[K.server]=normalized
+        }
     }
 
     suspend fun saveTokens(tokens: AuthTokens) {
         context.sessionStore.edit {
+            it[K.generation]=java.util.UUID.randomUUID().toString()
             it[K.access] = tokens.accessToken
             it[K.refresh] = tokens.refreshToken
             it[K.profile] = json.encodeToString(Profile.serializer(), tokens.profile)
@@ -87,12 +95,38 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
     suspend fun saveSwitchedTokens(expected: Session, targetId: String, tokens: AuthTokens) {
         require(tokens.profile.id==targetId) { "Profile switch target mismatch" }
         context.sessionStore.edit { values ->
-            val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) })
+            val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) },values[K.generation])
             if(!sameSwitchSession(expected,current)) throw kotlinx.coroutines.CancellationException("Profile session changed")
+            values[K.generation]=java.util.UUID.randomUUID().toString()
             values[K.access]=tokens.accessToken
             values[K.refresh]=tokens.refreshToken
             values[K.profile]=json.encodeToString(Profile.serializer(),tokens.profile)
         }
+    }
+
+    /** Refresh alone preserves identity; stale responses must not replace a new login. */
+    suspend fun saveRefreshedTokens(expected: Session, tokens: AuthTokens): Boolean {
+        var saved=false
+        context.sessionStore.edit { values ->
+            val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) },values[K.generation])
+            if(canApplyRefresh(expected,current,tokens.profile.id)) {
+                values[K.generation]=switchSessionGeneration(expected)!!
+                values[K.access]=tokens.accessToken;values[K.refresh]=tokens.refreshToken
+                values[K.profile]=json.encodeToString(Profile.serializer(),tokens.profile);saved=true
+            }
+        }
+        return saved
+    }
+    suspend fun clearExpiredSession(expected: Session): Boolean {
+        var cleared=false
+        context.sessionStore.edit { values ->
+            val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) },values[K.generation])
+            if(canApplyRefresh(expected,current,expected.profile?.id)) {
+                values.remove(K.access);values.remove(K.refresh);values.remove(K.profile)
+                values[K.generation]=java.util.UUID.randomUUID().toString();cleared=true
+            }
+        }
+        return cleared
     }
 
     suspend fun updateProfile(profile: Profile) {
@@ -101,6 +135,7 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
 
     suspend fun clearTokens() {
         context.sessionStore.edit {
+            it[K.generation]=java.util.UUID.randomUUID().toString()
             it.remove(K.access)
             it.remove(K.refresh)
             it.remove(K.profile)

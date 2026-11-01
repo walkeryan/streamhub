@@ -22,4 +22,17 @@ class ProfileSwitchSessionTest {
         assertFalse(validOwnerVerificationUri(owner.serverUrl,"https://fixture.invalid/other"))
     }
 
+    @Test fun guardedRotationPreservesChallengeButNewLoginAndStaleRefreshDoNot() {
+        val established=owner.copy(generation="session-one")
+        val rotated=established.copy(accessToken="next-access",refreshToken="next-refresh")
+        assertTrue(sameSwitchSession(established,rotated))
+        assertFalse(sameSwitchSession(established,rotated.copy(generation="new-login")))
+        assertTrue(canApplyRefresh(established,established,established.profile!!.id))
+        assertFalse(canApplyRefresh(established,rotated,established.profile!!.id))
+        assertFalse(canApplyRefresh(established,established,"wrong-target"))
+        assertFalse(canApplyRefresh(established,established.copy(generation="new-login"),established.profile!!.id))
+        val migrated=owner.copy(generation=switchSessionGeneration(owner),refreshToken="rotated-legacy")
+        assertTrue(sameSwitchSession(owner,migrated))
+    }
+
 }
