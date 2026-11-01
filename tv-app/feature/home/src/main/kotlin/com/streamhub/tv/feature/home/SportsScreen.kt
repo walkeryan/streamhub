@@ -40,6 +40,8 @@ import javax.inject.Inject
 
 data class SportsState(
     val filters: NativeSportsFilters = NativeSportsFilters(), val result: SportsEventsPage = SportsEventsPage(),
+    val library: Boolean = false, val recordings: SportsRecordingsPage = SportsRecordingsPage(),
+    val recordingsLoading: Boolean = false, val recordingsError: String? = null,
     val languages: List<LanguageCount> = emptyList(), val page: Int = 0,
     val loading: Boolean = true, val ready: Boolean = false, val error: String? = null, val notice: String? = null,
 )
@@ -54,11 +56,12 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
         if (scope != expected || session.current().catalogScope() != expected) throw CancellationException("Catalog scope changed")
     }
     private var request: Job? = null
+    private var recordingRequest: Job? = null
     init {
         viewModelScope.launch {
             session.session.map { it.catalogScope() }.distinctUntilChanged().collectLatest { owner ->
                 val id = owner.profileId
-                request?.cancel(); scope = owner; _state.value = SportsState()
+                request?.cancel(); recordingRequest?.cancel(); scope = owner; _state.value = SportsState()
                 if (id != null) {
                     try {
                         val saved = prefs.read(id, "native_sports")?.let { StreamHubJson.decodeFromJsonElement<NativeSportsFilters>(it) } ?: NativeSportsFilters()
@@ -74,7 +77,8 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
     }
     fun filters(value: NativeSportsFilters) {
         if (!_state.value.ready) return
-        _state.update { it.copy(filters = value, result = SportsEventsPage()) }
+        recordingRequest?.cancel()
+        _state.update { it.copy(recordingsLoading=false, recordingsError=null, filters = value, result = SportsEventsPage(), recordings = SportsRecordingsPage()) }
         val owner = scope ?: return
         val id = owner.profileId ?: return
         viewModelScope.launch {
@@ -83,6 +87,7 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
             catch (_: Exception) { if (scope == owner) _state.update { it.copy(notice = "Filters apply now, but could not be saved.") } }
         }
         refresh(0)
+        if(_state.value.library) refreshRecordings(0)
     }
     fun refresh(page: Int = _state.value.page) {
         if (!_state.value.ready) return
@@ -102,6 +107,26 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
             catch (e: Exception) { ensureScope(owner); _state.update { it.copy(loading = false, error = e.message ?: "Could not load sports") } }
         }
     }
+    fun library(on: Boolean) {
+        _state.update {it.copy(library=on)}
+        if(on && _state.value.recordings.items.isEmpty()) refreshRecordings(0)
+    }
+    fun refreshRecordings(offset: Int = _state.value.recordings.offset) {
+        if(!_state.value.ready) return
+        val owner=scope ?: return
+        val filters=_state.value.filters
+        recordingRequest?.cancel()
+        recordingRequest=viewModelScope.launch {
+            _state.update {it.copy(recordingsLoading=true,recordingsError=null)}
+            try {
+                val page=api.sportsRecordings(filters,offset,40)
+                ensureScope(owner)
+                _state.update {it.copy(recordings=page,recordingsLoading=false)}
+            } catch(e:CancellationException) {throw e}
+            catch(_:Exception) {ensureScope(owner);_state.update {it.copy(recordingsLoading=false,recordingsError="Library recordings could not load. Retry; profile restrictions remain enforced.")}}
+        }
+    }
+
 }
 
 private val knownSports = listOf("American football", "Basketball", "Baseball", "Hockey", "Soccer", "Football", "Tennis", "Golf", "Motorsport", "Cricket", "Rugby", "Combat sports", "Sports")
@@ -119,7 +144,7 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
     val restoreFocus: (FocusRequester) -> Unit = { target -> uiScope.launch { withFrameNanos { }; runCatching { target.requestFocus() } } }
     var picker by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<EventChoice?>(null) }
-    val controls = remember { listOf("sport", "date", "status", "language").associateWith { FocusRequester() } }
+    val controls = remember { listOf("sport", "date", "status", "language", "search").associateWith { FocusRequester() } }
     val firstControl = controls.getValue("sport")
     var needsInitialFocus by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(s.ready) {
@@ -129,7 +154,7 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
             if (runCatching { firstControl.requestFocus() }.getOrDefault(false)) needsInitialFocus = false
         }
     }
-    LaunchedEffect(s.page, s.filters) { selected = null; list.scrollToItem(0) }
+    LaunchedEffect(s.page, s.filters, s.library, s.recordings.offset) { selected = null; list.scrollToItem(0) }
     LaunchedEffect(s.result.events) {
         selected?.takeIf { choice -> s.result.events.none { it.id == choice.event.id } }?.let { _ ->
             selected = null; restoreFocus(firstControl)
@@ -138,24 +163,33 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
     LaunchedEffect(vm) { while (true) { delay(60_000); vm.refresh() } }
     val today = java.time.LocalDate.now(java.time.ZoneId.of("America/New_York"))
     Column(Modifier.fillMaxSize().padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Sports", style = MaterialTheme.typography.headlineMedium, color = t.text)
-        Text("Events from your guide · Times in America/New_York · Feed languages are provider hints", color = t.textMuted)
+        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Sports", style = MaterialTheme.typography.headlineMedium, color = t.text, modifier=Modifier.weight(1f))
+            ShButton(if(!s.library) "✓ Guide events" else "Guide events", {vm.library(false)}, Modifier.leftOpensRail(rail))
+            ShButton(if(s.library) "✓ Library recordings" else "Library recordings", {vm.library(true)})
+            ShButton(if(s.filters.query.isBlank()) "Search sports" else "Search: ${s.filters.query.take(24)}", {picker="search"}, Modifier.focusRequester(controls.getValue("search")),enabled=s.ready)
+        }
+        Text(if(s.library) "Library videos · Guide date/status do not apply · No implied live-event match" else "Events from your guide · Times in America/New_York · Feed languages are provider hints", color = t.textMuted)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ShButton(s.filters.sport ?: "All sports", { picker = "sport" }, Modifier.focusRequester(firstControl).leftOpensRail(rail), enabled = s.ready)
-            ShButton(s.filters.date ?: "Today", { picker = "date" }, Modifier.focusRequester(controls.getValue("date")), enabled = s.ready)
-            ShButton(sportsStatusFilterLabel(s.filters.status), { picker = "status" }, Modifier.focusRequester(controls.getValue("status")), enabled = s.ready)
+            ShButton(s.filters.date ?: "Today", { picker = "date" }, Modifier.focusRequester(controls.getValue("date")), enabled = s.ready && !s.library)
+            ShButton(sportsStatusFilterLabel(s.filters.status), { picker = "status" }, Modifier.focusRequester(controls.getValue("status")), enabled = s.ready && !s.library)
             ShButton(s.languages.find { it.code == s.filters.language }?.name ?: when(s.filters.language) { null -> "My languages"; "all" -> "All languages"; "und" -> "Unknown"; else -> s.filters.language!! }, { picker = "language" }, Modifier.focusRequester(controls.getValue("language")), enabled = s.ready)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if(!s.library) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ShButton("Reset", { vm.filters(NativeSportsFilters()) }, Modifier.leftOpensRail(rail), enabled = s.ready)
             ShButton(if (s.loading) "Refreshing…" else "Refresh", { if (!s.loading) vm.refresh() }, enabled = s.ready)
             ShButton("Previous", { if (!s.loading && s.page > 0) vm.refresh(s.page - 1) }, enabled = s.ready)
             Text("Page ${s.page + 1} · ${if(s.result.truncated) "at least " else ""}${s.result.total} events", color = t.text)
             ShButton("Next", { if (!s.loading && (s.page + 1) * 40 < s.result.total) vm.refresh(s.page + 1) }, enabled = s.ready)
         }
-        Text("Sports guide coverage: ${s.result.coverage.scheduledChannels} / ${s.result.coverage.eligibleChannels} channels${if(s.result.truncated) " · Results capped; narrow filters" else ""}", color = t.textMuted)
+        if(!s.library) Text("Sports guide coverage: ${s.result.coverage.scheduledChannels} / ${s.result.coverage.eligibleChannels} channels${if(s.result.truncated) " · Results capped; narrow filters" else ""}", color = t.textMuted)
         s.notice?.let { Text(it, color = t.textMuted) }
-        when {
+        if(s.library) SportsRecordingsSection(s.recordings,s.recordingsLoading,s.recordingsError,
+            onPage=vm::refreshRecordings, onPlay={ recording ->
+                if(s.recordings.items.any { it.titleId==recording.titleId && it.sourceId==recording.sourceId })
+                    sportsRecordingPlayback(recording)?.let { (id,source) -> launcher.play(id,source) }
+            }) else when {
             s.loading && s.result.events.isEmpty() -> LoadingView()
             s.error != null -> CenterMessage("Couldn't load sports", s.error) { ShButton("Retry", { vm.refresh() }) }
             s.result.events.isEmpty() -> CenterMessage("No matching guide events", "Try another date, sport or language. Missing metadata does not prove no games are scheduled.")
@@ -172,7 +206,8 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
             }
         }
     }
-    picker?.let { field ->
+    if(picker=="search") SportsSearchDialog(s.filters.query, onApply={vm.filters(s.filters.copy(query=it))}, onDismiss={picker=null;restoreFocus(controls.getValue("search"))})
+    picker?.takeIf { it!="search" }?.let { field ->
         val options = when(field) {
             "sport" -> listOf(FilterOption(null, "All sports")) + (knownSports + s.result.sports.map { it.name }).distinct().map { name ->
                 val count = s.result.sports.firstOrNull { it.name == name }?.count
