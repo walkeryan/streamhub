@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select, tuple_
 
 from app.adapters.language.country import channel_country, group_country
 from app.infra.db import Database
@@ -47,30 +47,51 @@ def programme_dict(p: Programme, ch: Channel | None = None, now: datetime | None
 async def now_next(
     db: Database, chans: Sequence[Channel]
 ) -> dict[tuple[str, str], tuple[Programme | None, Programme | None]]:
-    epg_ids = list({c.epg_id for c in chans if c.epg_id})
+    pairs = list({(c.source_id, c.epg_id) for c in chans if c.epg_id})
     out: dict[tuple[str, str], tuple[Programme | None, Programme | None]] = {}
-    if not epg_ids:
+    if not pairs:
         return out
     now = datetime.now(UTC)
     async with db.session() as s:
-        for i in range(0, len(epg_ids), 500):
-            chunk = epg_ids[i : i + 500]
+        for i in range(0, len(pairs), 250):
+            chunk = pairs[i : i + 250]
+            # Select one current and one future programme per exact source/EPG
+            # pair in SQL. Policy channel checks still inspect every overlapping
+            # programme independently; this is presentation, never authorization.
+            ranked = (
+                select(
+                    Programme.id,
+                    func.row_number()
+                    .over(
+                        partition_by=(
+                            Programme.feed,
+                            Programme.epg_channel,
+                            case((Programme.start <= now, 0), else_=1),
+                        ),
+                        order_by=(Programme.start, Programme.id),
+                    )
+                    .label("position"),
+                )
+                .where(
+                    Programme.epg_channel.in_({epg for _, epg in chunk}),
+                    tuple_(Programme.feed, Programme.epg_channel).in_(chunk),
+                    Programme.stop > now,
+                    Programme.start < now + timedelta(hours=12),
+                )
+                .subquery()
+            )
             rows = (
                 await s.execute(
                     select(Programme)
-                    .where(
-                        Programme.epg_channel.in_(chunk),
-                        Programme.stop > now,
-                        Programme.start < now + timedelta(hours=12),
-                    )
-                    .order_by(Programme.epg_channel, Programme.start)
+                    .where(Programme.id.in_(select(ranked.c.id).where(ranked.c.position == 1)))
+                    .order_by(Programme.epg_channel, Programme.start, Programme.id)
                 )
             ).scalars()
             for p in rows:
                 cur, nxt = out.get((p.feed, p.epg_channel), (None, None))
-                if p.start <= now < p.stop and cur is None:
+                if p.start <= now < p.stop:
                     cur = p
-                elif p.start >= now and nxt is None:
+                else:
                     nxt = p
                 out[(p.feed, p.epg_channel)] = (cur, nxt)
     return out
@@ -497,12 +518,28 @@ class ChannelService:
         if stop - start > timedelta(hours=MAX_GRID_HOURS):
             stop = start + timedelta(hours=MAX_GRID_HOURS)
         if channel_ids:
-            chans = []
+            requested = []
             for cid in channel_ids[:500]:
                 try:
-                    chans.append(await self.channel_by_hub_id(cid))
-                except NotFound:
+                    ref = ids.parse(cid)
+                except ValueError:
                     continue
+                if ref.scheme == "ch":
+                    requested.append((ref.a, ref.b))
+            by_key: dict[tuple[str, str], Channel] = {}
+            async with self._db.session() as s:
+                unique = list(dict.fromkeys(requested))
+                for index in range(0, len(unique), 250):
+                    # ORM SELECT retains the active profile's loader criteria.
+                    channel_rows = (
+                        await s.execute(
+                            select(Channel).where(
+                                tuple_(Channel.source_id, Channel.ext_id).in_(unique[index : index + 250])
+                            )
+                        )
+                    ).scalars()
+                    by_key.update(((ch.source_id, ch.ext_id), ch) for ch in channel_rows)
+            chans = [by_key[key] for key in dict.fromkeys(requested) if key in by_key]
         else:
             res = await self.list_channels(profile_id, limit=300, country=country)
             chans = []

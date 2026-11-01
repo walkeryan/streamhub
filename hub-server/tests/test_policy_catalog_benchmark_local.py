@@ -154,7 +154,14 @@ async def test_restricted_catalog_guide_session_cache_scale(api):
         channels, channel_counts = await request("channels-page", "/channels", first_auth, language="all", limit=20)
         assert channels["total"] == 100 and len(channels["channels"]) == 20
         assert channel_counts.get("Channel", 0) <= 40
-        guide, _ = await request(
+        _, one_guide_count = await request(
+            "guide-one-channel",
+            "/epg",
+            first_auth,
+            channel_ids="ch:scale:0",
+            **{"from": now.isoformat(), "to": (now + timedelta(hours=1)).isoformat()},
+        )
+        guide, ten_guide_count = await request(
             "guide-ten-channels",
             "/epg",
             first_auth,
@@ -162,6 +169,9 @@ async def test_restricted_catalog_guide_session_cache_scale(api):
             **{"from": now.isoformat(), "to": (now + timedelta(hours=1)).isoformat()},
         )
         assert all(not rows for key, rows in guide.items() if key in {f"ch:scale:{n}" for n in range(100, 105)})
+        print({"guide_selects_one_vs_ten": [one_guide_count["selects"], ten_guide_count["selects"]]}, flush=True)
+        assert ten_guide_count["selects"] <= one_guide_count["selects"] + 1
+        assert channel_counts.get("Programme", 0) <= 40
         assert all(guide.get(f"ch:scale:{n}") for n in range(5))
         assert sum(len(rows) for rows in guide.values()) == 15
         owner, _ = await request(
@@ -183,7 +193,7 @@ async def test_restricted_catalog_guide_session_cache_scale(api):
                     text(
                         "EXPLAIN QUERY PLAN SELECT id FROM programme WHERE epg_channel = 'epg-1' AND start <= :at AND stop > :at AND feed = 'scale'"
                     ),
-                    {"at": now.replace(tzinfo=None)},
+                    {"at": now.strftime("%Y-%m-%d %H:%M:%S.%f")},
                 )
             ).all()
         assert any("ix_prog_channel_start" in row[-1] for row in plans)
