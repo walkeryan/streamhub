@@ -225,7 +225,7 @@ export const handlers = [
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
-    const base = { id: b.id, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
+    const base = { id: b.id, buffer_available: false, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
     if (handoffOnly || b.source_id === 's_nf') {
       const d: PlaybackDescriptor = {
         ...base, mode: 'handoff', url: null, live: false, resume_position_ms: 0,
