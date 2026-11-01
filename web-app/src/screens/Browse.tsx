@@ -5,6 +5,7 @@ import { useBrowseGenres } from '../api/browseGenres'
 import { useParams } from 'react-router'
 import { useBrowse, useBrowseCategories, useBrowseLanguages, useSources, type BrowseFilters } from '../api/hooks'
 import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
+import { CatalogMode } from '../components/CatalogMode'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { LanguageFilter } from '../components/LanguageFilter'
 import { MediaTile } from '../components/Tile'
@@ -61,7 +62,7 @@ export function Browse() {
   const reset = () => { saved.update(defaults); setSearch(''); setPage(1) }
   if (!saved.ready) return <div className="page-pad" data-testid="browse"><h1 className="display">{TITLES[section] ?? section}</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="browse:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
   return <div className="page-pad" data-testid="browse">
-    <div className="flex gap-3 items-baseline flex-wrap mb-3"><h1 className="display">{TITLES[section] ?? section}</h1><span className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} titles`}</span></div>
+    <div className="flex gap-3 items-baseline flex-wrap mb-3"><h1 className="display">{TITLES[section] ?? section}</h1><CatalogMode section={section} mode="library" /><span className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} titles`}</span></div>
     <FocusGroup focusKey="browse:filters" className="flex flex-col gap-3 mb-4">
       <LanguageFilter scope="browse" value={lang} onChange={setLang} languages={languages.data} />
       <div className="flex gap-2 flex-wrap items-center">

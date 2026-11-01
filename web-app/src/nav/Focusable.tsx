@@ -27,7 +27,8 @@ export interface FocusableProps {
 
 export interface FocusableHandle { focus: () => void; el: HTMLElement | null }
 
-/** A single focusable control. Click, Enter and D-pad OK all route to onEnter. Mouse hover moves focus too. */
+/** Click, Enter and D-pad OK route to onEnter. Actual mouse movement changes focus;
+ * overlay removal beneath a stationary cursor must not steal restored D-pad focus. */
 export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Focusable(p, outer) {
   const onEnterRef = useRef(p.onEnter)
   onEnterRef.current = p.onEnter
@@ -68,7 +69,7 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       className={cn('fx', p.className)}
       style={p.style}
       onClick={() => !p.disabled && onEnterRef.current?.()}
-      onPointerEnter={(e) => e.pointerType === 'mouse' && !p.disabled && focusSelf()}
+      onPointerMove={(e) => e.pointerType === 'mouse' && (e.movementX !== 0 || e.movementY !== 0) && !p.disabled && focusSelf()}
     >
       {typeof p.children === 'function' ? p.children({ focused }) : p.children}
     </div>
