@@ -5,7 +5,7 @@ import { useSession } from '../store/session'
 
 export type ContentPolicy = components['schemas']['ContentPolicy']
 export type ContentPolicyInput = components['schemas']['ContentPolicyInput']
-export interface AuthCapabilities { google_enabled: boolean; google_required: boolean; content_policy_enabled?: boolean }
+export interface AuthCapabilities { google_enabled: boolean; google_required: boolean; content_policy_enabled?: boolean; owner_pin_configured?: boolean; owner_pin_setup_required?: boolean }
 export function useAuthCapabilities() {
   return useQuery({ queryKey: ['auth-config'], queryFn: async ({ signal }) => {
     const r = await fetch('/api/v1/auth/config', { signal })

@@ -20,6 +20,39 @@ components:
         access_token: {type: string}
         refresh_token: {type: string}
         profile: { $ref: '#/components/schemas/Profile' }
+    PendingOwnerLogin:
+      type: object
+      required: [owner_pin_required, pending_token, profile]
+      properties:
+        owner_pin_required: {type: boolean, enum: [true]}
+        pending_token: {type: string, description: Memory-only pending Google capability; not an owner JWT}
+        profile: {$ref: '#/components/schemas/Profile'}
+        setup_required: {type: boolean}
+    OwnerPinChallenge:
+      type: object
+      required: [challenge_id, poll_token, expires_in]
+      properties:
+        challenge_id: {type: string}
+        poll_token: {type: string, description: Keep only in memory}
+        expires_in: {type: integer}
+    OwnerActionProof:
+      type: object
+      required: [owner_action_token, profile_id, action, expires_in]
+      properties:
+        owner_action_token: {type: string, description: One-use proof; send only as X-Owner-Action for the bound target}
+        profile_id: {type: string}
+        action: {type: string, enum: [content_policy]}
+        expires_in: {type: integer}
+    OwnerPinSetupStatus:
+      type: object
+      required: [configured, local_approval_required, setup_authorized]
+      properties:
+        configured: {type: boolean}
+        local_approval_required: {type: boolean}
+        setup_authorized: {type: boolean}
+        setup_request_id: {type: string, description: Nonsecret local approval request identifier}
+        grant_id: {type: string}
+        grant_secret: {type: string, description: Keep only in memory; never display or persist}
     ContentPolicy:
       type: object
       required: [profile_id, feature_enabled, restricted, allowed_movie_codes, allowed_tv_codes, allow_unknown]
@@ -517,18 +550,36 @@ components:
             channels_with_sports_schedule: {type: integer}
 
 paths:
-  /auth/owner-reauth/start:
+  /auth/google/complete:
     post:
-      requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string} } } } } }
-      responses: { '200': { description: Bound owner sign-in challenge, content: { application/json: { schema: { type: object, required: [challenge_id, poll_token, verification_uri, expires_in, interval], properties: { challenge_id: {type: string}, poll_token: {type: string}, verification_uri: {type: string}, expires_in: {type: integer}, interval: {type: integer} } } } } } }
-  /auth/owner-reauth/poll:
+      security: []
+      responses: { '200': { description: Google identity handoff; owner PIN required before owner tokens when enabled, content: { application/json: { schema: { oneOf: [{$ref: '#/components/schemas/AuthTokens'}, {$ref: '#/components/schemas/PendingOwnerLogin'}] } } } } }
+  /auth/owner-pin/start:
     post:
-      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token], properties: { challenge_id: {type: string}, poll_token: {type: string} } } } } }
-      responses: { '200': { description: Approved target profile session, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }, '428': { description: Pending }, '410': { description: Expired }, '403': { description: Denied } }
-  /auth/owner-reauth/cancel:
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile_id, action], properties: { profile_id: {type: string}, action: {type: string, enum: [login, profile_switch, admin]} } } } } }
+      responses: { '200': { description: Session and target bound one-use challenge, content: { application/json: { schema: {$ref: '#/components/schemas/OwnerPinChallenge'} } } } }
+  /auth/owner-pin/verify:
     post:
-      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token], properties: { challenge_id: {type: string}, poll_token: {type: string} } } } } }
-      responses: { '204': { description: Canceled } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token, pin], properties: { challenge_id: {type: string}, poll_token: {type: string, writeOnly: true}, pin: {type: string, writeOnly: true, minLength: 6, maxLength: 12} } } } } }
+      responses: { '200': { description: Authorized login/switch or one-use target policy action, content: { application/json: { schema: {oneOf: [{$ref: '#/components/schemas/AuthTokens'}, {$ref: '#/components/schemas/OwnerActionProof'}]} } } }, '429': {description: Attempt limit; respect Retry-After} }
+  /auth/owner-pin/cancel:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token], properties: { challenge_id: {type: string}, poll_token: {type: string, writeOnly: true} } } } } }
+      responses: { '204': {description: Challenge canceled} }
+  /auth/owner-pin/setup-status:
+    get:
+      responses: { '200': { description: Setup grant available only after exact local VM approval, content: { application/json: { schema: {$ref: '#/components/schemas/OwnerPinSetupStatus'} } } } }
+  /auth/owner-pin/setup:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [grant_id, grant_secret, pin], properties: { grant_id: {type: string}, grant_secret: {type: string, writeOnly: true}, pin: {type: string, writeOnly: true, minLength: 6, maxLength: 12} } } } } }
+      responses: { '200': { description: Consumes local approval, replaces PIN and invalidates older sessions, content: { application/json: { schema: {$ref: '#/components/schemas/AuthTokens'} } } } }
+  /auth/owner-pin/recovery-status:
+    get:
+      responses: { '200': {description: Local VM approval required for replacement; old PIN remains valid, content: {application/json: {schema: {type: object, required: [configured, recovery_authorized, local_approval_required], properties: {configured: {type: boolean}, recovery_authorized: {type: boolean}, local_approval_required: {type: boolean}, recovery_request_id: {type: string}, grant_id: {type: string}, grant_secret: {type: string, description: Memory-only secret}, expires_in: {type: integer}}}}} } }
+  /auth/owner-pin/recover:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [grant_id, grant_secret, pin], properties: { grant_id: {type: string}, grant_secret: {type: string, writeOnly: true}, pin: {type: string, writeOnly: true, minLength: 6, maxLength: 12} } } } } }
+      responses: { '200': { description: Consumes local recovery approval and revokes older sessions, content: { application/json: { schema: {$ref: '#/components/schemas/AuthTokens'} } } } }
   /auth/profile-switch:
     post:
       summary: Authenticated profile switch using existing credentials and server policy
@@ -539,7 +590,7 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       responses: { '200': { description: Admin-only content policy, content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
     put:
-      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: X-Owner-Action, in: header, required: true, schema: {type: string}, description: One-use proof bound to current owner session and this target profile}]
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicyInput' } } } }
       responses: { '200': { description: Saved policy; target sessions invalidated, content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
   /auth/login:

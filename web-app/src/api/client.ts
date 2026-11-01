@@ -54,7 +54,7 @@ function withAuth(req: Request): Request {
 }
 
 /** fetch wrapper: bearer auth + single refresh-and-retry on 401. */
-const authedFetch = async (input: Request): Promise<Response> => {
+export const authenticatedFetch = async (input: Request): Promise<Response> => {
   const initialProfile = useSession.getState().profile?.id
   const initialRefresh = useSession.getState().refresh
   const retry = input.clone()
@@ -65,7 +65,7 @@ const authedFetch = async (input: Request): Promise<Response> => {
   return res
 }
 
-export const api = createClient<paths>({ baseUrl: API_BASE, fetch: authedFetch })
+export const api = createClient<paths>({ baseUrl: API_BASE, fetch: authenticatedFetch })
 
 /** Unwraps an openapi-fetch result, throwing ApiError on failure. */
 export async function unwrap<T>(p: Promise<{ data?: unknown; error?: unknown; response: Response }>): Promise<T> {

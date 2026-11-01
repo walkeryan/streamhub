@@ -1,3 +1,5 @@
+import { useAuthCapabilities } from '../api/contentPolicy'
+import { OwnerPinSettings } from '../components/OwnerPinSettings'
 import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
@@ -63,6 +65,7 @@ function useSaveProfile() {
 
 /* ------------------------------ profiles ------------------------------ */
 function ProfilesTab() {
+  const capabilities=useAuthCapabilities()
   const { data, error, refetch } = useProfiles()
   const me = useCurrent()
   const qc = useQueryClient()
@@ -76,7 +79,7 @@ function ProfilesTab() {
   const addProfile = async () => {
     if (!name.trim()) return
     try {
-      await ok(api.POST('/profiles', { body: { id: '', name: name.trim(), is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids } }))
+      await ok(api.POST('/profiles', { body: { id: '', name: name.trim(), is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: capabilities.data?.content_policy_enabled ? false : kids } }))
       setName(''); setKids(false); refresh(); toast('Profile added.', 'success')
     } catch (e) { toast(e instanceof Error ? e.message : 'Could not add the profile.', 'error') }
   }
@@ -111,12 +114,13 @@ function ProfilesTab() {
           <h2 className="heading">Add a profile</h2>
           <div className="flex gap-3 flex-wrap items-center">
             <div style={{ width: '16rem' }}><FocusableInput focusKey="prof:name" label="Profile name" placeholder="Name" value={name} onChange={setName} onSubmit={() => void addProfile()} /></div>
-            <Chip focusKey="prof:kids" pressed={kids} onEnter={() => setKids((k) => !k)}>Kids profile</Chip>
+            {capabilities.data&&!capabilities.data.content_policy_enabled&&<Chip focusKey="prof:kids" pressed={kids} onEnter={() => setKids((k) => !k)}>Kids profile</Chip>}
             <Button focusKey="prof:add" primary icon="plus" disabled={!name.trim()} onEnter={() => void addProfile()}>Add profile</Button>
           </div>
         </section>
       )}
-      {!me.content_restricted && <section className="flex flex-col gap-3">
+      <OwnerPinSettings />
+      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || me.is_admin) && <section className="flex flex-col gap-3">
         <h2 className="heading">PIN for {me.name}</h2>
         <p className="muted">{me.has_pin ? 'A PIN is required to open this profile.' : 'Anyone can open this profile. Add a PIN to lock it.'}</p>
         <div className="flex gap-3 flex-wrap items-center">
@@ -225,6 +229,7 @@ function RowsTab() {
 
 /* ------------------------------ parental ------------------------------ */
 function ParentalTab() {
+  const capabilities=useAuthCapabilities()
   const me = useCurrent()
   const save = useSaveProfile()
   const groups = useChannelGroups({ language: 'all', include_hidden: true })
@@ -238,9 +243,10 @@ function ParentalTab() {
     <div className="flex flex-col gap-5">
       <section className="flex flex-col gap-2">
         <ContentPolicySettings />
+        {capabilities.data&&!capabilities.data.content_policy_enabled&&<>
         <h2 className="heading">Kids profile label</h2>
         <p className="muted">This label alone does not block content. Server-enforced restrictions, when enabled, are managed separately by the owner.</p>
-        <div><Chip focusKey="par:kids" pressed={me.kids} onEnter={() => save({ kids: !me.kids }, me.kids ? 'Kids label off.' : 'Kids label on.')}>{me.kids ? 'Kids label on' : 'Kids label off'}</Chip></div>
+        <div><Chip focusKey="par:kids" pressed={me.kids} onEnter={() => save({ kids: !me.kids }, me.kids ? 'Kids label off.' : 'Kids label on.')}>{me.kids ? 'Kids label on' : 'Kids label off'}</Chip></div></>}
       </section>
       <section className="flex flex-col gap-2">
         <h2 className="heading">Hide channel groups</h2>

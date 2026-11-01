@@ -4,7 +4,42 @@
  */
 
 export interface paths {
-    "/auth/owner-reauth/start": {
+    "/auth/google/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Google identity handoff; owner PIN required before owner tokens when enabled */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"] | components["schemas"]["PendingOwnerLogin"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/start": {
         parameters: {
             query?: never;
             header?: never;
@@ -24,23 +59,19 @@ export interface paths {
                 content: {
                     "application/json": {
                         profile_id: string;
+                        /** @enum {string} */
+                        action: "login" | "profile_switch" | "admin";
                     };
                 };
             };
             responses: {
-                /** @description Bound owner sign-in challenge */
+                /** @description Session and target bound one-use challenge */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            challenge_id: string;
-                            poll_token: string;
-                            verification_uri: string;
-                            expires_in: number;
-                            interval: number;
-                        };
+                        "application/json": components["schemas"]["OwnerPinChallenge"];
                     };
                 };
             };
@@ -51,7 +82,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth/owner-reauth/poll": {
+    "/auth/owner-pin/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        challenge_id: string;
+                        poll_token: string;
+                        pin: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Authorized login/switch or one-use target policy action */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"] | components["schemas"]["OwnerActionProof"];
+                    };
+                };
+                /** @description Attempt limit; respect Retry-After */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -76,7 +157,83 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Approved target profile session */
+                /** @description Challenge canceled */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/setup-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Setup grant available only after exact local VM approval */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OwnerPinSetupStatus"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        grant_id: string;
+                        grant_secret: string;
+                        pin: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Consumes local approval */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -85,27 +242,6 @@ export interface paths {
                         "application/json": components["schemas"]["AuthTokens"];
                     };
                 };
-                /** @description Denied */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                /** @description Expired */
-                410: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                /** @description Pending */
-                428: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
             };
         };
         delete?: never;
@@ -114,7 +250,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth/owner-reauth/cancel": {
+    "/auth/owner-pin/recovery-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Local VM approval required for replacement; old PIN remains valid */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            configured: boolean;
+                            recovery_authorized: boolean;
+                            local_approval_required: boolean;
+                            recovery_request_id?: string;
+                            grant_id?: string;
+                            /** @description Memory-only secret */
+                            grant_secret?: string;
+                            expires_in?: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/recover": {
         parameters: {
             query?: never;
             header?: never;
@@ -133,18 +313,21 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
-                        challenge_id: string;
-                        poll_token: string;
+                        grant_id: string;
+                        grant_secret: string;
+                        pin: string;
                     };
                 };
             };
             responses: {
-                /** @description Canceled */
-                204: {
+                /** @description Consumes local recovery approval and revokes older sessions */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
                 };
             };
         };
@@ -230,7 +413,10 @@ export interface paths {
         put: {
             parameters: {
                 query?: never;
-                header?: never;
+                header: {
+                    /** @description One-use proof bound to current owner session and this target profile */
+                    "X-Owner-Action": string;
+                };
                 path: {
                     id: string;
                 };
@@ -2919,6 +3105,38 @@ export interface components {
             access_token: string;
             refresh_token: string;
             profile: components["schemas"]["Profile"];
+        };
+        PendingOwnerLogin: {
+            /** @enum {boolean} */
+            owner_pin_required: true;
+            /** @description Memory-only pending Google capability; not an owner JWT */
+            pending_token: string;
+            profile: components["schemas"]["Profile"];
+            setup_required?: boolean;
+        };
+        OwnerPinChallenge: {
+            challenge_id: string;
+            /** @description Keep only in memory */
+            poll_token: string;
+            expires_in: number;
+        };
+        OwnerActionProof: {
+            /** @description One-use proof; send only as X-Owner-Action for the bound target */
+            owner_action_token: string;
+            profile_id: string;
+            /** @enum {string} */
+            action: "content_policy";
+            expires_in: number;
+        };
+        OwnerPinSetupStatus: {
+            configured: boolean;
+            local_approval_required: boolean;
+            setup_authorized: boolean;
+            /** @description Nonsecret local approval request identifier */
+            setup_request_id?: string;
+            grant_id?: string;
+            /** @description Keep only in memory; never display or persist */
+            grant_secret?: string;
         };
         ContentPolicy: {
             profile_id: string;

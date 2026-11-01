@@ -133,6 +133,8 @@ export function FocusableInput(p: {
   inputMode?: 'text' | 'numeric' | 'search' | 'url'
   maxLength?: number
   autoCapitalize?: string
+  autoComplete?: string
+  readOnly?: boolean
   inputRef?: React.RefObject<HTMLInputElement | null>
   onFocused?: () => void
 }) {
@@ -168,7 +170,8 @@ export function FocusableInput(p: {
         inputMode={p.inputMode}
         maxLength={p.maxLength}
         autoCapitalize={p.autoCapitalize}
-        autoComplete="off"
+        autoComplete={p.autoComplete ?? "off"}
+        readOnly={p.readOnly}
         spellCheck={false}
         placeholder={p.placeholder}
         value={p.value}
