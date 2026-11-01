@@ -427,3 +427,44 @@ class SportsPage(_M):
     offset: int
     sports: list[SportCount]
     coverage: SportsCoverage
+
+
+class SportsFeed(_M):
+    programme_id: str
+    channel_id: str
+    channel_name: str
+    source_id: str
+    source_name: str
+    language: str | None = None
+    language_verified: bool = False
+
+
+class SportsEvent(_M):
+    id: str
+    title: str
+    sport: str
+    start: datetime
+    stop: datetime
+    status: Literal["current", "upcoming", "ended"]
+    replay: bool
+    live_evidence: bool
+    grouping_evidence: Literal["matching_title_and_time", "same_source_programme"]
+    feeds: list[SportsFeed]
+
+
+class SportsEventsCoverage(_M):
+    eligible_channels: int
+    channels_with_sports_schedule: int
+
+
+class SportsEventsPage(_M):
+    as_of: datetime
+    date: str
+    timezone: str
+    events: list[SportsEvent]
+    total: int
+    limit: int
+    offset: int
+    sports: list[SportCount]
+    coverage: SportsEventsCoverage
+    truncated: bool

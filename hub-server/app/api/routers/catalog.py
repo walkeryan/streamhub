@@ -11,7 +11,7 @@ from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.services.errors import ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
-from app.services.sports import sports_on_now
+from app.services.sports import sports_events, sports_on_now
 
 router = APIRouter()
 
@@ -33,6 +33,33 @@ async def sports(
 ) -> dict[str, Any]:
     return await sports_on_now(
         c.channels, p.profile_id, language=language, sport=sport, q=q, limit=limit, offset=offset
+    )
+
+
+@router.get("/sports/events", response_model=S.SportsEventsPage, tags=["live"])
+async def sports_event_list(
+    c: C,
+    p: P,
+    date: str | None = Query(None, max_length=10),
+    timezone: str = Query("America/New_York", max_length=64),
+    language: str | None = None,
+    sport: str | None = None,
+    status: str = Query("all", pattern="^(all|current|upcoming|replay)$"),
+    q: str | None = Query(None, max_length=200),
+    limit: int = Query(40, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    return await sports_events(
+        c.channels,
+        p.profile_id,
+        date=date,
+        timezone=timezone,
+        language=language,
+        sport=sport,
+        status=status,
+        q=q,
+        limit=limit,
+        offset=offset,
     )
 
 
