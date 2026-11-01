@@ -21,3 +21,5 @@ import kotlinx.serialization.Serializable
     val items: List<SportsListing> = emptyList(), val total: Int = 0,
     val sports: List<CatalogFacet> = emptyList(), val coverage: SportsCoverage = SportsCoverage(),
 )
+
+@Serializable data class LiveFilters(val languages: Set<String>? = null, val group: String? = null, val country: String = "US", val favorites: Boolean = false)

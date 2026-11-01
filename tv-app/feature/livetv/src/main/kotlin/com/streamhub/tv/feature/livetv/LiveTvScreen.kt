@@ -38,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.graphicsLayer
@@ -155,6 +154,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
             }, color = t.textMuted, style = MaterialTheme.typography.labelMedium)
         }
 
+        s.notice?.let { Text(it, color = t.textMuted, modifier = Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX)) }
         if (!filtersOnly) Row(Modifier.weight(1f).fillMaxWidth().padding(top = 16.dp)) {
             // Channel list (left)
             Box(Modifier.width(440.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX)) {

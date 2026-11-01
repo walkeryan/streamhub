@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import kotlinx.serialization.Serializable
+import com.streamhub.tv.core.data.model.LiveFilters
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -27,9 +27,6 @@ import com.streamhub.tv.core.data.repo.ProfileFilterStore
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-
-@Serializable
-private data class LiveFilters(val languages: Set<String>? = null, val group: String? = null, val country: String = "US", val favorites: Boolean = false)
 
 /** null language set = "All" (explicitly no filter). */
 data class LiveTvState(
