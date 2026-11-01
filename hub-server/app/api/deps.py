@@ -32,6 +32,8 @@ async def current_principal(
     request.state.principal = principal
     from app.services.content_policy import active_policy, active_principal
 
+    if c.content_policy is None:
+        raise Forbidden("Content policy service is unavailable.", code="content_policy_unavailable")
     profile = await c.content_policy.profile(principal.profile_id) if c.content_policy.enabled else None
     principal_token = active_principal.set(principal)
     token = active_policy.set((c.content_policy, profile) if profile is not None else None)

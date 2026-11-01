@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from sqlalchemy import insert
@@ -91,9 +90,11 @@ async def test_policy_batch_gate_precedes_counts_and_pagination(api):
 
 async def test_endpoint_fail_closed_without_policy_and_authenticated(api, monkeypatch):
     await seed(api)
+    policy = api.c.content_policy
     monkeypatch.setattr(api.c, "content_policy", None, raising=False)
     assert (await api.get("/sports/recordings")).status_code == 403
-    monkeypatch.setattr(api.c, "content_policy", SimpleNamespace(allowed_refs=AsyncMock(side_effect=permit)))
+    monkeypatch.setattr(api.c, "content_policy", policy)
+    monkeypatch.setattr(policy, "allowed_refs", AsyncMock(side_effect=permit))
     response = await api.get("/sports/recordings")
     assert response.status_code == 200 and response.json()["total"] == 2
     assert response.headers["cache-control"] == "private, no-store"
