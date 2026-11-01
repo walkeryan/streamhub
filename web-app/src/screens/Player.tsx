@@ -123,7 +123,7 @@ export function Player() {
   }, [])
 
   const exit = useCallback(() => navigate(-1), [navigate])
-  const togglePlay = useCallback(() => { const v = videoRef.current; if (!v) return; if (v.paused) void v.play(); else v.pause() }, [])
+  const togglePlay = () => { const v = videoRef.current; if (!v) return; if (v.paused) pb.resume(); else pb.pause() }
   const seekBy = useCallback((s: number) => {
     const v = videoRef.current
     if (!v || !v.seekable.length) return
@@ -255,6 +255,8 @@ export function Player() {
   })
   // menu and list remember and restore the focused control; the bar moves focus itself (setOverlay)
   useOverlayFocus(overlay === 'menu' || overlay === 'list', overlay === 'list' ? 'pl:current' : 'pm:first')
+
+  useEffect(() => { if (pb.audioBlocked) setOverlay('menu') }, [pb.audioBlocked, setOverlay])
 
   // ---- sleep timer ----
   const [sleepAt, setSleepAt] = useState<number | null>(null)
@@ -390,8 +392,10 @@ export function Player() {
           <FocusGroup focusKey="pm" boundary className="dialog" role="dialog" label="Playback options" data-testid="player-menu" style={{ borderRadius: 0, width: 'min(26rem, 100%)', maxHeight: '100dvh', background: 'var(--t-surface)', color: 'var(--t-text)' }}>
             <div className="flex items-center justify-between"><h2 className="title-xl">Playback</h2><Button focusKey="pm:close" ghost iconOnly icon="x" label="Close" onEnter={closeOverlay} /></div>
             <MenuSection title="Audio">
-              {tr.audio.length === 0 ? <span className="muted label" style={{ flexBasis: '100%' }}>Only one audio track.</span> : tr.audio.map((t, i) => (
-                <Chip key={t.id} focusKey={i === 0 ? 'pm:first' : `pm:a${t.id}`} pressed={t.active} onEnter={() => pb.setAudio(t.id)}>{t.label}</Chip>
+              {pb.audioBlocked && <p role="alert" data-testid="runtime-audio-blocked">Playback paused: the selected audio language is unknown or does not match your preferences. Choose an audio track, or explicitly continue with the current audio.</p>}
+              {pb.audioBlocked && <Button focusKey="pm:consent" onEnter={pb.consentToCurrentAudio}>Continue with current audio</Button>}
+              {tr.audio.length === 0 ? <span className="muted label" style={{ flexBasis: '100%' }}>Audio track language is not exposed by this player.</span> : tr.audio.map((t, i) => (
+                <Chip key={t.id} focusKey={i === 0 ? 'pm:first' : `pm:a${t.id}`} pressed={t.active} onEnter={() => pb.setAudio(t.id)}>{t.label}{!t.language || t.language === 'und' ? ' · language unknown' : ` · ${t.language}`}</Chip>
               ))}
             </MenuSection>
             <MenuSection title="Subtitles">

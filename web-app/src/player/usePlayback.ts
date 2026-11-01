@@ -4,6 +4,7 @@ import type { PlaybackDescriptor } from '../api/types'
 import { useSession } from '../store/session'
 import { BufferSession, bufferError, type BufferWindow } from './bufferSession'
 import { attachSource, type PlayerHandle } from './engine'
+import { audioAllowed, audioSelection, preferredAudioTrack } from './audioPolicy'
 
 export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
 
@@ -30,7 +31,15 @@ const MAX_RETRIES = 6
  * (fresh proxy token). Reports progress every 10 s, on pause/ended and on page unload.
  */
 export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: { muted?: boolean; report?: boolean; buffer?: boolean } = {}) {
-  const profileId = useSession((s) => s.profile?.id)
+  const profile = useSession((s) => s.profile)
+  const profileId = profile?.id
+  const preferences = JSON.stringify(profile?.languages ?? ['en'])
+  const [audioBlocked, setAudioBlocked] = useState(false)
+  const checkAudio = useRef<() => boolean>(() => false)
+  const consent = useRef<string | null>(null)
+  const selectedAudio = useRef<number | null>(null)
+  const wantedAudio = useRef<number | null>(null)
+  const wantsPlayback = useRef(true)
   const [bufferWindow, setBufferWindow] = useState<BufferWindow | null>(null)
   const [bufferIssue, setBufferIssue] = useState<string | null>(null)
   const buffer = useRef<BufferSession | null>(null)
@@ -57,7 +66,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
     retryTimer.current = null
   }, [])
-  const key = req ? `${profileId}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
+  const key = req ? `${profileId}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
 
   const reconnect = useCallback((_reason: string) => {
     if (terminal.current) return
@@ -94,6 +103,11 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       intent.current = { key }
       terminal.current = false
     }
+    consent.current = null
+    selectedAudio.current = null
+    wantedAudio.current = null
+    wantsPlayback.current = true
+    setAudioBlocked(false)
     let cancelled = false
     const controller = new AbortController()
     hasPlayed.current = false
@@ -130,19 +144,55 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           attachController.abort()
           attachController = new AbortController()
           setState('loading')
+          video.muted = true
+          video.pause()
           handle.current?.destroy()
+          owned = null
+          consent.current = null
+          selectedAudio.current = null
+          wantedAudio.current = null
+          let initialConsent = !!req.allowUnverifiedAudio
+          // New descriptors carry the exact server policy; older compatible
+          // servers still use this profile's preferences. Consent is never a
+          // blanket exemption for later track changes.
+          const preferred = (descriptor as PlaybackDescriptor & { preferred_audio_languages?: string[] }).preferred_audio_languages ?? JSON.parse(preferences) as string[]
+          checkAudio.current = () => {
+            if (cancelled || sequence !== attachSequence || !owned || terminal.current) return false
+            if (owned.audioReady?.() === false) { video.muted = true; video.pause(); return false }
+            const tracks = owned.audioTracks()
+            const selection = audioSelection(tracks)
+            if (initialConsent && selection !== null && owned.audioReady?.() !== false) { consent.current = selection; initialConsent = false }
+            if (selectedAudio.current !== null && tracks.some(t => t.id === selectedAudio.current && t.active)) {
+              consent.current = selection; selectedAudio.current = null
+            }
+            // A successful strict server preflight remains authoritative when the
+            // browser exposes no tracks; this does not verify their language.
+            const allowed = !!opts.muted || (tracks.length === 0 && owned.audioReady?.() !== false) || audioAllowed(preferred, tracks, consent.current)
+            if (!allowed) {
+              video.muted = true; video.pause(); clearWaiting(); setAudioBlocked(true); setState('paused')
+              if (selectedAudio.current === null) {
+                const match = preferredAudioTrack(preferred, tracks)
+                if (match !== null && wantedAudio.current !== match) { wantedAudio.current = match; owned.setAudio(match) }
+              }
+              return false
+            }
+            setAudioBlocked(false)
+            video.muted = !!opts.muted
+            if (wantsPlayback.current && video.paused) void video.play().catch(() => { if (!cancelled) setState('paused') })
+            return true
+          }
           const next = await attachSource(video, descriptor, {
             signal: attachController.signal,
             onFatal: (r) => !cancelled && sequence === attachSequence && reconnect(r),
-            onTracks: () => { if (!cancelled && sequence === attachSequence) setTracksVersion((v) => v + 1) },
+            onTracks: (reset) => { if (!cancelled && sequence === attachSequence) {
+              if (reset) { consent.current = null; selectedAudio.current = null; wantedAudio.current = null }
+              setTracksVersion((v) => v + 1); checkAudio.current()
+            } },
           })
           if (cancelled || sequence !== attachSequence) { next.destroy(); return }
           owned = next
           handle.current = next
-          video.muted = !!opts.muted
-          try { await video.play() } catch (e) {
-            if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') { clearWaiting(); setState('paused') }
-          }
+          checkAudio.current()
         }
         if (opts.buffer === true && d.buffer_available && d.live && d.mode === 'hls') {
           try {
@@ -201,6 +251,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     })()
     return () => {
       cancelled = true
+      checkAudio.current = () => false
+      if (video) { video.muted = true; video.pause() }
       controller.abort()
       window.removeEventListener('pagehide', releaseOnHide)
       attachController.abort()
@@ -227,7 +279,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       const d = descRef.current
       if (d && !d.live && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
     }
-    const onPlaying = () => { if (terminal.current) return; hasPlayed.current = true; clearWaiting(); clearRetry(); setState('playing') }
+    const onPlaying = () => { if (terminal.current || !checkAudio.current()) { v.muted = true; v.pause(); return }; hasPlayed.current = true; clearWaiting(); clearRetry(); setState('playing') }
     const onPause = () => { clearWaiting(); if (!v.ended) setState((s) => (s === 'playing' || s === 'buffering' ? 'paused' : s)) }
     const onWaiting = () => {
       if (!hasPlayed.current || v.paused || waitingTimer.current !== null) return
@@ -298,8 +350,18 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   }, [tracksVersion])
 
   return {
-    desc, state, error, tracks, bufferWindow, bufferIssue, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
-    setAudio: (i: number) => { handle.current?.setAudio(i); setTracksVersion((v) => v + 1) },
+    desc, state, error, tracks, audioBlocked,
+    pause: () => { wantsPlayback.current = false; videoRef.current?.pause() },
+    resume: () => { wantsPlayback.current = true; checkAudio.current() },
+    consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; checkAudio.current() },
+    bufferWindow, bufferIssue, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
+    setAudio: (i: number) => {
+      if (!handle.current?.audioTracks().some(t => t.id === i)) return
+      const video = videoRef.current
+      if (video) { video.muted = true; video.pause() }
+      consent.current = null; selectedAudio.current = i; wantsPlayback.current = true
+      handle.current.setAudio(i); setTracksVersion((v) => v + 1); checkAudio.current()
+    },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
     retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
   }

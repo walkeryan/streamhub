@@ -3,12 +3,14 @@ import type shakaNs from 'shaka-player'
 
 export type EngineKind = 'hls' | 'mpegts' | 'dash' | 'native'
 
-export interface TrackInfo { id: number; label: string; active: boolean }
+export interface TrackInfo { id: number; label: string; active: boolean; language?: string }
 
 export interface PlayerHandle {
   kind: EngineKind
   destroy: () => void
   audioTracks: () => TrackInfo[]
+  /** False while an engine is still discovering its initial track list. */
+  audioReady?: () => boolean
   setAudio: (id: number) => void
   subtitleTracks: () => TrackInfo[]
   /** -1 turns subtitles off */
@@ -18,7 +20,7 @@ export interface PlayerHandle {
 export interface AttachOptions {
   signal?: AbortSignal
   onFatal: (reason: string) => void
-  onTracks?: () => void
+  onTracks?: (resetAudio?: boolean) => void
 }
 
 /** Pick an engine from descriptor.mime (falls back to the URL extension). */
@@ -63,21 +65,26 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     }
     const hls = new Hls({ lowLatencyMode: live, enableWorker: true, backBufferLength: live ? 30 : 90 })
     let netRetries = 0
+    let confirmedAudio = -1
+    let audioReady = false
     hls.on(Hls.Events.ERROR, (_e, data) => {
       if (!data.fatal) return
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries++ < 2) hls.startLoad()
       else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && netRetries++ < 3) hls.recoverMediaError()
       else opt.onFatal(`${data.type}: ${data.details}`)
     })
-    hls.on(Hls.Events.MANIFEST_PARSED, () => opt.onTracks?.())
-    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => opt.onTracks?.())
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { audioReady = true; opt.onTracks?.() })
+    hls.on(Hls.Events.AUDIO_TRACK_SWITCHING, () => { confirmedAudio = -1; opt.onTracks?.() })
+    hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_event, data) => { confirmedAudio = data.id; opt.onTracks?.() })
+    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => { confirmedAudio = -1; opt.onTracks?.(true) })
     hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => opt.onTracks?.())
     hls.loadSource(url)
     hls.attachMedia(video)
     return {
       kind: 'hls',
+      audioReady: () => audioReady,
       destroy: () => hls.destroy(),
-      audioTracks: () => hls.audioTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Audio ${i + 1}`, active: hls.audioTrack === i })),
+      audioTracks: () => hls.audioTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Audio ${i + 1}`, language: t.lang, active: confirmedAudio === i })),
       setAudio: (id) => { hls.audioTrack = id },
       subtitleTracks: () => hls.subtitleTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Subtitles ${i + 1}`, active: hls.subtitleTrack === i })),
       setSubtitle: (id) => { hls.subtitleTrack = id; hls.subtitleDisplay = id >= 0 },
@@ -108,7 +115,8 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     const player = new shaka.Player()
     await player.attach(video)
     player.addEventListener('error', (e: Event) => opt.onFatal(`dash: ${String((e as unknown as { detail?: { code?: number } }).detail?.code ?? 'error')}`))
-    player.addEventListener('trackschanged', () => opt.onTracks?.())
+    player.addEventListener('trackschanged', () => opt.onTracks?.(true))
+    player.addEventListener('variantchanged', () => opt.onTracks?.())
     try {
       opt.signal?.throwIfAborted()
       await player.load(url)
@@ -117,7 +125,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     return {
       kind: 'dash',
       destroy: () => { void player.destroy() },
-      audioTracks: () => player.getAudioTracks().map((t, i) => ({ id: i, label: t.label || t.language || `Audio ${i + 1}`, active: t.active })),
+      audioTracks: () => player.getAudioTracks().map((t, i) => ({ id: i, label: t.label || t.language || `Audio ${i + 1}`, language: t.language, active: t.active })),
       setAudio: (id) => { const t = player.getAudioTracks()[id]; if (t) player.selectAudioTrack(t) },
       subtitleTracks: () => player.getTextTracks().map((t, i) => ({ id: i, label: t.label || t.language || `Subtitles ${i + 1}`, active: t.active })),
       setSubtitle: (id) => { player.selectTextTrack(player.getTextTracks()[id] ?? null) },
