@@ -416,6 +416,7 @@ class MultiviewDescriptor(_M):
 
 
 class ProgressReport(_M):
+    expected_profile_id: str | None = Field(default=None, max_length=128)
     id: str
     source_id: str | None = None
     position_ms: int

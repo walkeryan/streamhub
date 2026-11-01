@@ -235,6 +235,8 @@ async def recovery_resume(body: S.StreamRecoveryConfirm, c: C, p: Admin) -> dict
 
 @router.post("/playback/progress", status_code=204, tags=["playback"])
 async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
+    if body.expected_profile_id is not None and body.expected_profile_id != p.profile_id:
+        raise Forbidden("Playback belongs to another profile.", code="profile_changed")
     await c.content_policy.require(p.profile_id, body.id)
     ref_id = body.id
     source_id = body.source_id
