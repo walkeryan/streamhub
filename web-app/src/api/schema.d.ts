@@ -1002,6 +1002,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playback/rewind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Advertised provider archive window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RewindCapability"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/options": {
         parameters: {
             query?: never;
@@ -2649,8 +2686,25 @@ export interface components {
              */
             prefer_hls: boolean;
             catchup_programme_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id.
+             */
+            rewind_at?: string | null;
             /** @description Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients. */
             recovery_generation?: string | null;
+        };
+        RewindCapability: {
+            /** @enum {string} */
+            mode: "provider_archive" | "unavailable";
+            /** Format: date-time */
+            advertised_start?: string | null;
+            /** Format: date-time */
+            advertised_end?: string | null;
+            verified: boolean;
+            recording_enabled: boolean;
+            granularity_seconds: number;
+            reason: string;
         };
         PlaybackDescriptor: {
             id: string;
@@ -2664,6 +2718,10 @@ export interface components {
             };
             /** @default false */
             live: boolean;
+            /** Format: date-time */
+            archive_start?: string | null;
+            /** Format: date-time */
+            archive_end?: string | null;
             /** @default 0 */
             resume_position_ms: number;
             duration_ms?: number | null;

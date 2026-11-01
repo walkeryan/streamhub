@@ -29,6 +29,7 @@ const countryMatches = (value: string | null | undefined, country: string | null
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
 export const handlers = [
+  http.get(`${B}/playback/rewind`, () => HttpResponse.json({ mode: 'unavailable', advertised_start: null, advertised_end: null, verified: false, recording_enabled: false, granularity_seconds: 60, reason: 'Fixture has no archive.' })),
   http.get(`${B}/playback/options`, ({ request }) => {
     const id = new URL(request.url).searchParams.get('id') ?? ''
     const tile = tileById(id)

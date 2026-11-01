@@ -13,6 +13,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, quote_plus
 
@@ -25,7 +26,7 @@ from app.domain.entities import (
 )
 from app.domain.ports import DeeplinkProvider, LiveProvider, MetadataProvider, PlaybackProvider
 from app.infra.crypto import Crypto
-from app.infra.models import Channel, Source, Title
+from app.infra.models import Channel, Profile, Source, Title
 from app.services import ids
 from app.services.audio_selection import audio_info, preferred_audio
 from app.services.availability import AvailabilityService
@@ -33,6 +34,7 @@ from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
 from app.services.errors import BadGateway, Conflict, NotFound, ServiceError
+from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
 from app.services.tiles import row_to_channel, row_to_item
@@ -199,8 +201,11 @@ class PlaybackResolver:
         allow_unverified_audio: bool = False,
         client: str = "web",
         catchup_programme_id: str | None = None,
+        rewind_at: datetime | None = None,
         https_site: bool = False,
     ) -> dict[str, Any]:
+        if rewind_at is not None and (catchup_programme_id or not hub_id.startswith("ch:")):
+            raise ServiceError("Rewind requires a channel and cannot be combined with programme catch-up.")
         client = client if client in ("web", "web_hls", "android_tv") else "web"
         if hub_id.startswith("trailer:"):
             return await self._resolve_trailer(profile_id, hub_id)
@@ -216,7 +221,9 @@ class PlaybackResolver:
         except ValueError as exc:
             raise NotFound("unknown id") from exc
         if h.scheme == "ch":
-            return await self._resolve_channel(profile_id, hub_id, client, catchup_programme_id, https_site)
+            if source_id and source_id != h.a:
+                raise NotFound("channel does not belong to the selected source")
+            return await self._resolve_channel(profile_id, hub_id, client, catchup_programme_id, https_site, rewind_at)
         if h.scheme == "lib":
             row = await self._catalog.title_row(h.a, h.b)
             if row is None:
@@ -419,11 +426,31 @@ class PlaybackResolver:
                 ).scalars()
             )
 
+    async def rewind_capability(self, profile_id: str, hub_id: str) -> dict[str, Any]:
+        ch = await self._authorized_channel(profile_id, hub_id)
+        return archive_window(ch)
+
+    async def _authorized_channel(self, profile_id: str, hub_id: str) -> Channel:
+        async with self._sources._db.session() as session:
+            if await session.get(Profile, profile_id) is None:
+                raise NotFound("profile not found")
+        ch = await self._channels.channel_by_hub_id(hub_id)
+        src = await self._sources.get(ch.source_id)
+        if not src.enabled:
+            raise NotFound("channel source is disabled")
+        return ch
+
     # ------------------------------------------------------------------ channels
     async def _resolve_channel(
-        self, profile_id: str, hub_id: str, client: str, catchup_programme_id: str | None, https_site: bool
+        self,
+        profile_id: str,
+        hub_id: str,
+        client: str,
+        catchup_programme_id: str | None,
+        https_site: bool,
+        rewind_at: datetime | None = None,
     ) -> dict[str, Any]:
-        ch = await self._channels.channel_by_hub_id(hub_id)
+        ch = await self._authorized_channel(profile_id, hub_id)
         src, prov = await self._sources.provider_for(ch.source_id)
         if not isinstance(prov, LiveProvider):
             raise ServiceError("source cannot play live channels")
@@ -431,8 +458,24 @@ class PlaybackResolver:
         target: StreamTarget | None
         title = ch.name
         subtitle = None
-        if catchup_programme_id:
+        archive_start = archive_end = None
+        if rewind_at is not None:
+            archive_start, archive_end = archive_request(ch, rewind_at)
+            pinfo = ProgrammeInfo(
+                channel=ch.epg_id or ch.ext_id, start=archive_start, stop=archive_end, title="Provider archive"
+            )
+            target = await prov.catchup_for_channel(info, pinfo)
+            if target is None:
+                raise ServiceError("Provider did not supply the advertised archive.", code="rewind_unavailable")
+            subtitle = "Provider archive · " + archive_start.isoformat()
+        elif catchup_programme_id:
             prog = await self._channels.programme(catchup_programme_id)
+            now = datetime.now(UTC)
+            if prog.feed != ch.source_id or prog.epg_channel != ch.epg_id:
+                raise NotFound("programme does not belong to this channel")
+            if ch.catchup_days <= 0 or prog.start < now - timedelta(days=ch.catchup_days) or prog.stop > now:
+                raise ServiceError("Programme is outside provider archive retention.", code="catchup_unavailable")
+            archive_start, archive_end = prog.start, prog.stop
             pinfo = ProgrammeInfo(channel=prog.epg_channel, start=prog.start, stop=prog.stop, title=prog.title)
             target = await prov.catchup_for_channel(info, pinfo)
             if target is None:
@@ -453,11 +496,13 @@ class PlaybackResolver:
             target,
             client,
             https_site,
-            channel_key=None if catchup_programme_id else f"{src.id}:{ch.ext_id}",
+            channel_key=None if catchup_programme_id or rewind_at is not None else f"{src.id}:{ch.ext_id}",
             title=title,
             subtitle=subtitle,
             poster=ch.logo,
         )
+        desc["archive_start"] = archive_start
+        desc["archive_end"] = archive_end
         desc["channel_context"] = ctx
         return desc
 

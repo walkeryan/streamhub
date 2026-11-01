@@ -40,6 +40,7 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         allow_unverified_audio=body.allow_unverified_audio,
         client="web_hls" if body.client == "web" and body.prefer_hls else body.client,
         catchup_programme_id=body.catchup_programme_id,
+        rewind_at=body.rewind_at,
         https_site=is_https.get(),
     )
     c.proxy.ensure_running(generation)
@@ -49,6 +50,11 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
 @router.get("/playback/options", tags=["playback"])
 async def playback_options(id: str, c: C, p: P, source_id: str | None = None) -> dict[str, Any]:
     return await c.playback.options(p.profile_id, id, source_id)
+
+
+@router.get("/playback/rewind", response_model=S.RewindCapability, tags=["playback"])
+async def rewind_capability(id: str, c: C, p: P) -> dict[str, Any]:
+    return await c.playback.rewind_capability(p.profile_id, id)
 
 
 @router.get("/playback/generation", tags=["playback"])

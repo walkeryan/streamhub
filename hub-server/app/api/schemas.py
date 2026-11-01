@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
@@ -298,6 +298,7 @@ class PlaybackRequest(_M):
     prefer_hls: bool = False
     recovery_generation: str | None = Field(default=None, max_length=64)
     catchup_programme_id: str | None = None
+    rewind_at: AwareDatetime | None = None
 
 
 class ChannelContext(_M):
@@ -316,6 +317,16 @@ class Handoff(_M):
     supports_title_link: bool
 
 
+class RewindCapability(_M):
+    mode: Literal["provider_archive", "unavailable"]
+    advertised_start: datetime | None = None
+    advertised_end: datetime | None = None
+    verified: bool = False
+    recording_enabled: bool = False
+    granularity_seconds: int = 60
+    reason: str
+
+
 class PlaybackDescriptor(_M):
     id: str
     mode: Literal["direct", "proxy", "hls", "handoff"]
@@ -323,6 +334,8 @@ class PlaybackDescriptor(_M):
     mime: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     live: bool = False
+    archive_start: datetime | None = None
+    archive_end: datetime | None = None
     resume_position_ms: int = 0
     duration_ms: int | None = None
     title: str

@@ -8,6 +8,7 @@ import { useBackHandler, useOverlayFocus } from '../nav/back'
 import { setFocus } from '../nav/spatial'
 import { hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
+import { RewindControls } from '../player/RewindControls'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
@@ -26,6 +27,7 @@ export function Player() {
   const audioChoice = sp.get('audio_choice')
   const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId), [profileId, audioChoice, id, variantId])
   const catchup = sp.get('catchup')
+  const rewindAt = sp.get('rewind')
   const navigate = useNavigate()
   const videoRef = useRef<HTMLVideoElement>(null)
   const isChannel = id.startsWith('ch:')
@@ -34,10 +36,10 @@ export function Player() {
   const activeId = useRef(id)
   useLayoutEffect(() => { activeId.current = id }, [id])
 
-  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup }), [id, sourceId, variantId, allowUnverifiedAudio, catchup])
+  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt])
   const pb = usePlayback(videoRef, req)
   const { desc, state } = pb
-  const live = !!desc?.live || isChannel
+  const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
 
   const toast = useUi((s) => s.toast)
   const stored = useUi((s) => s.channelList)
@@ -75,7 +77,7 @@ export function Player() {
   const [ui, setUi] = useState(() => !isChannel)
   const [osd, setOsd] = useState(true)
   const [paused, setPaused] = useState(true)
-  const [time, setTime] = useState({ cur: 0, dur: 0 })
+  const [time, setTime] = useState({ cur: 0, dur: 0, seekable: false })
   const [aspect, setAspect] = useState<Aspect>('contain')
   const [digits, setDigits] = useState('')
   const digitsRef = useRef('')
@@ -108,7 +110,7 @@ export function Player() {
   useEffect(() => {
     const v = videoRef.current
     if (!v) return
-    const t = () => setTime({ cur: v.currentTime, dur: Number.isFinite(v.duration) ? v.duration : 0 })
+    const t = () => setTime({ cur: v.currentTime, dur: Number.isFinite(v.duration) ? v.duration : 0, seekable: v.seekable.length > 0 })
     const p = () => { setPaused(v.paused); if (v.paused) setUi(true) }
     v.addEventListener('timeupdate', t); v.addEventListener('pause', p); v.addEventListener('play', p); v.addEventListener('loadedmetadata', t)
     return () => { v.removeEventListener('timeupdate', t); v.removeEventListener('pause', p); v.removeEventListener('play', p); v.removeEventListener('loadedmetadata', t) }
@@ -116,7 +118,17 @@ export function Player() {
 
   const exit = useCallback(() => navigate(-1), [navigate])
   const togglePlay = useCallback(() => { const v = videoRef.current; if (!v) return; if (v.paused) void v.play(); else v.pause() }, [])
-  const seekBy = useCallback((s: number) => { const v = videoRef.current; if (v && Number.isFinite(v.duration)) v.currentTime = Math.min(v.duration, Math.max(0, v.currentTime + s)) }, [])
+  const seekBy = useCallback((s: number) => {
+    const v = videoRef.current
+    if (!v || !v.seekable.length) return
+    const wanted = v.currentTime + s
+    let closest = v.currentTime, distance = Infinity
+    for (let i = 0; i < v.seekable.length; i++) {
+      const candidate = Math.max(v.seekable.start(i), Math.min(v.seekable.end(i), wanted))
+      if (Math.abs(candidate - wanted) < distance) { closest = candidate; distance = Math.abs(candidate - wanted) }
+    }
+    v.currentTime = closest
+  }, [])
   const pip = useCallback(async () => {
     const v = videoRef.current
     if (!v) return
@@ -161,7 +173,7 @@ export function Player() {
   // zap never sees stale state.
   // zapping with the controls hidden keeps them hidden (poke() runs on every key)
   const hideIfHidden = useCallback((visible: boolean) => { if (!visible) hideChrome() }, [hideChrome])
-  const handlers = { live, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
+  const handlers = { live, isChannel, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
   const apiRef = useRef(handlers)
   apiRef.current = handlers
   useEffect(() => {
@@ -171,6 +183,7 @@ export function Player() {
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
       const handled = () => { e.preventDefault(); e.stopImmediatePropagation() }
+      if (chromeRef.current && document.activeElement?.closest('[data-testid="rewind-controls"]')) { a.poke(); return }
       if (overlayRef.current === 'bar' && e.key === 'ArrowUp') { handled(); setOverlay(null); a.poke(); return }
       const visible = chromeRef.current
       a.poke()
@@ -310,20 +323,29 @@ export function Player() {
           {!live && (
             <div className="flex items-center gap-3">
               <span className="label" style={{ color: '#fff' }}>{fmtDuration(time.cur)}</span>
-              <ProgressBar pct={pct} className="flex-1" />
+              <Focusable focusKey="pb:scrub" role="slider" className="flex-1" disabled={!time.seekable}
+                label={time.seekable ? `Seek ${fmtDuration(time.cur)} of ${fmtDuration(time.dur)}. Left and right move ten seconds.` : 'This stream has not supplied a seekable range.'}
+                onArrow={(direction) => { if (direction === 'left' || direction === 'right') { seekBy(direction === 'left' ? -10 : 10); return false } return true }}
+                onEnter={togglePlay}><ProgressBar pct={pct} /></Focusable>
               <span className="label" style={{ color: '#fff' }}>{fmtDuration(time.dur)}</span>
             </div>
           )}
+
           <FocusGroup focusKey="pb" className="flex gap-2 flex-wrap items-center" data-testid="player-bar">
             <Button focusKey="pb:play" primary iconOnly icon={paused ? 'play' : 'pause'} label={paused ? 'Play' : 'Pause'} onEnter={togglePlay} />
-            {!live && <Button focusKey="pb:back10" ghost onEnter={() => seekBy(-10)}>−10 s</Button>}
-            {!live && <Button focusKey="pb:fwd10" ghost onEnter={() => seekBy(10)}>+10 s</Button>}
-            {live && <Button focusKey="pb:ch-" ghost icon="down" label="Channel down" onEnter={() => zap(-1)} />}
-            {live && <Button focusKey="pb:ch+" ghost icon="up" label="Channel up" onEnter={() => zap(1)} />}
-            {live && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn">Channels</Button>}
+            {!live && <Button focusKey="pb:back10" disabled={!time.seekable} ghost onEnter={() => seekBy(-10)}>−10 s</Button>}
+            {!live && <Button focusKey="pb:fwd10" disabled={!time.seekable} ghost onEnter={() => seekBy(10)}>+10 s</Button>}
+            {isChannel && <Button focusKey="pb:ch-" ghost icon="down" label="Channel down" onEnter={() => zap(-1)} />}
+            {isChannel && <Button focusKey="pb:ch+" ghost icon="up" label="Channel up" onEnter={() => zap(1)} />}
+            {isChannel && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn">Channels</Button>}
             <Button focusKey="pb:menu" ghost icon="cc" onEnter={() => setOverlay('menu')} testId="player-menu-btn">Audio and subtitles</Button>
             <Button focusKey="pb:pip" ghost icon="pip" label="Picture in picture" onEnter={() => void pip()} testId="player-pip">PiP</Button>
             <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" onEnter={fullscreen} />
+          {isChannel && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
+            const next = new URLSearchParams(sp); next.delete("catchup");
+            if (at) next.set("rewind", at); else next.delete("rewind");
+            navigate(`/play/${encodeURIComponent(id)}?${next}`, { replace: true });
+          }} />}
           </FocusGroup>
         </div>
       </div>

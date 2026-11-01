@@ -227,7 +227,19 @@ components:
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         catchup_programme_id: {type: string, nullable: true}
+        rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
+    RewindCapability:
+      type: object
+      required: [mode, verified, recording_enabled, granularity_seconds, reason]
+      properties:
+        mode: {type: string, enum: [provider_archive, unavailable]}
+        advertised_start: {type: string, format: date-time, nullable: true}
+        advertised_end: {type: string, format: date-time, nullable: true}
+        verified: {type: boolean}
+        recording_enabled: {type: boolean}
+        granularity_seconds: {type: integer}
+        reason: {type: string}
     PlaybackDescriptor:
       type: object
       required: [mode, id]
@@ -238,6 +250,8 @@ components:
         mime: {type: string, nullable: true, description: "video/mp2t, application/x-mpegURL, video/mp4, application/dash+xml"}
         headers: { type: object, additionalProperties: {type: string} }
         live: {type: boolean, default: false}
+        archive_start: {type: string, format: date-time, nullable: true}
+        archive_end: {type: string, format: date-time, nullable: true}
         resume_position_ms: {type: integer, default: 0}
         duration_ms: {type: integer, nullable: true}
         title: {type: string}
@@ -485,6 +499,11 @@ paths:
         - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
         - { name: source_id, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { results: {type: array, items: {$ref: '#/components/schemas/Tile'}}, metadata_available: {type: boolean}, discovery_note: {type: string}, play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+  /playback/rewind:
+    get:
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string}}
+      responses: {'200': {description: Advertised provider archive window, content: {application/json: {schema: {$ref: '#/components/schemas/RewindCapability'}}}}}
   /playback/options:
     get:
       parameters:

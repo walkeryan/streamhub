@@ -5,7 +5,7 @@ import { attachSource, type PlayerHandle } from './engine'
 
 export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
 
-export interface PlaybackReq { id: string; variantId?: string; allowUnverifiedAudio?: boolean; sourceId?: string | null; catchupProgrammeId?: string | null }
+export interface PlaybackReq { id: string; variantId?: string; allowUnverifiedAudio?: boolean; sourceId?: string | null; catchupProgrammeId?: string | null; rewindAt?: string | null }
 
 async function playbackGeneration(): Promise<string> {
   const status = await unwrap<{ generation: string }>(api.GET('/playback/generation'))
@@ -16,7 +16,7 @@ export async function resolve(req: PlaybackReq, generation?: string): Promise<Pl
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), catchup_programme_id: req.catchupProgrammeId ?? null },
+      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null },
     }),
   )
 }
@@ -49,7 +49,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
     retryTimer.current = null
   }, [])
-  const key = req ? `${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}` : ''
+  const key = req ? `${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
 
   const reconnect = useCallback((_reason: string) => {
     if (terminal.current) return
