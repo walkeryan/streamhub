@@ -746,7 +746,9 @@ class StreamProxy:
                 self.ensure_running(generation)
                 now = self._clock()
                 if pair_lease_id:
-                    self._check_pair(pair_lease_id, key)
+                    lease = self._check_pair(pair_lease_id, key)
+                    if lease.members[key] != source_id or capacity < 1 or self._source_use(source_id) > capacity:
+                        raise Conflict("Provider capacity changed before startup.", code="multiview_capacity")
                 elif any(key in lease.members for lease in self._pairs.values()):
                     raise Conflict("Channel is reserved by a multiview session.", code="source_busy")
                 sess = self._hls.get(key)

@@ -185,3 +185,21 @@ async def test_http_success_failure_and_shared_viewers_count_producers(harness):
     proxy.pause()
     await proxy.stop_owned()
     assert proxy._source_use("source-a") == 0
+
+
+async def test_capacity_change_between_grant_and_start_never_opens_upstream(harness):
+    proxy, _, processes, _ = harness
+    lease = await reserve(proxy)
+    with pytest.raises(Conflict):
+        await proxy.hls_session(
+            "one",
+            "https://fixture.invalid/live",
+            {},
+            live=True,
+            transcode="none",
+            source_id="source-a",
+            max_connections=1,
+            pair_lease_id=lease,
+        )
+    assert not processes
+    await proxy.release_pair(lease, "p", "session")
