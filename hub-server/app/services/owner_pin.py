@@ -11,7 +11,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, literal, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 
 from app.infra.crypto import Crypto
@@ -341,7 +341,7 @@ class OwnerPinService:
             or row.target_profile_id != p.profile_id
         ):
             raise Forbidden("A matching local recovery grant is required", code="challenge_invalid")
-        lease = await self._reserve(row.credential_version)
+        lease = await self._reserve(row.credential_version, recovery_challenge=row.id)
         try:
             if not self._pin_valid(new_pin):
                 raise ServiceError("Owner PIN must contain 6 to 12 ASCII digits", code="owner_pin_invalid")
@@ -376,7 +376,7 @@ class OwnerPinService:
             await s.execute(update(OwnerPinChallenge).where(OwnerPinChallenge.id == cid).values(consumed=True))
             await s.commit()
 
-    async def _reserve(self, version: int) -> str:
+    async def _reserve(self, version: int, *, recovery_challenge: str | None = None) -> str:
         """One atomic writer reservation before counting/reserving a globally bounded attempt."""
         now, lease = utcnow(), secrets.token_hex(16)
         async with self.db.session() as s:
@@ -392,21 +392,34 @@ class OwnerPinService:
             )
             if acquired.scalar_one_or_none() is None:
                 raise Conflict("Owner PIN verification is busy; try again shortly", code="owner_pin_busy")
-            for seconds, maximum in ((900, 5), (86400, 20)):
+            for seconds, maximum in ((300, 3),) if recovery_challenge else ((900, 5), (86400, 20)):
                 count = (
                     await s.execute(
                         select(func.count())
                         .select_from(OwnerPinAttempt)
                         .where(
                             OwnerPinAttempt.created_at > now - timedelta(seconds=seconds),
-                            OwnerPinAttempt.succeeded.is_(False),
+                            OwnerPinAttempt.credential_version == version,
+                            OwnerPinAttempt.challenge_id == recovery_challenge
+                            if recovery_challenge
+                            else OwnerPinAttempt.purpose == "verify",
+                            literal(True) if recovery_challenge else OwnerPinAttempt.succeeded.is_(False),
                         )
                     )
                 ).scalar_one()
                 if count >= maximum:
                     raise OwnerPinRateLimited(seconds)
             await s.execute(delete(OwnerPinAttempt).where(OwnerPinAttempt.created_at < now - timedelta(days=1)))
-            s.add(OwnerPinAttempt(id=lease, created_at=now, succeeded=False))
+            s.add(
+                OwnerPinAttempt(
+                    id=lease,
+                    created_at=now,
+                    succeeded=False,
+                    credential_version=version,
+                    purpose="recovery" if recovery_challenge else "verify",
+                    challenge_id=recovery_challenge,
+                )
+            )
             await s.commit()
         return lease
 

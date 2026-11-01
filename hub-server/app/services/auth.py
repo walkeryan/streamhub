@@ -300,13 +300,7 @@ class AuthService:
             if not self.content_policy.is_restricted(target):
                 raise Forbidden("Owner PIN is required for this profile", code="owner_pin_required")
             if not self.effective_admin(current):
-                if not target.pin_hash and not target.password_hash:
-                    raise Forbidden("Owner approval is required for this profile", code="profile_switch_locked")
-                if not pin and not password:
-                    raise Forbidden(
-                        "Enter this profile's existing credential", code="profile_switch_credential_required"
-                    )
-                target, _ = await self.login(target_id, pin, password)
+                raise Forbidden("Owner PIN is required to switch profiles", code="owner_pin_required")
         await self.consume_session(principal.profile_id, principal.token_version, principal.session_id)
         return target, self.issue(
             target,

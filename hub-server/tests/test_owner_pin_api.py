@@ -144,3 +144,71 @@ async def test_recovery_requires_local_approval_and_revokes_old_sessions_only_on
     assert (await api.get("/home", headers=new)).status_code == 200
     assert (await api.get("/home", headers=owner)).status_code == 401
     assert (await api.get("/auth/owner-pin/recovery-status", headers=browser)).status_code == 401
+
+
+@respx.mock
+async def test_local_recovery_has_separate_budget_and_retains_old_failure_audit(api):
+    from datetime import UTC, datetime
+
+    from sqlalchemy import func, select
+
+    from app.infra.models import OwnerPinAttempt
+
+    owner = await setup(api, await pending(api))
+    revision = await api.c.owner_pin.credential_version()
+    async with api.c.db.session() as s:
+        s.add_all(
+            [
+                OwnerPinAttempt(
+                    id=f"fixture-failure-{i}",
+                    created_at=datetime.now(UTC),
+                    succeeded=False,
+                    credential_version=revision,
+                    purpose="verify",
+                )
+                for i in range(20)
+            ]
+        )
+        await s.commit()
+    challenge = (
+        await api.post("/auth/owner-pin/start", headers=owner, json={"profile_id": api.profile_id, "action": "login"})
+    ).json()
+    assert (
+        await api.post("/auth/owner-pin/verify", headers=owner, json={**challenge, "pin": FIXTURE_PIN})
+    ).status_code == 429
+    browser = await pending(api)
+    status = (await api.get("/auth/owner-pin/recovery-status", headers=browser)).json()
+    denied = await api.post(
+        "/auth/owner-pin/recover",
+        headers=browser,
+        json={"grant_id": status["recovery_request_id"], "grant_secret": "invalid", "pin": "763492"},
+    )
+    assert denied.status_code in {403, 410}
+    await api.c.owner_pin.approve_recovery_request(status["recovery_request_id"])
+    grant = (await api.get("/auth/owner-pin/recovery-status", headers=browser)).json()
+    r = await api.post(
+        "/auth/owner-pin/recover",
+        headers=browser,
+        json={"grant_id": grant["grant_id"], "grant_secret": grant["grant_secret"], "pin": "763492"},
+    )
+    assert r.status_code == 200, r.text
+    new = {"Authorization": "Bearer " + r.json()["access_token"]}
+    assert (await api.get("/home", headers=owner)).status_code == 401
+    async with api.c.db.session() as s:
+        assert (
+            await s.scalar(
+                select(func.count())
+                .select_from(OwnerPinAttempt)
+                .where(OwnerPinAttempt.credential_version == revision, OwnerPinAttempt.succeeded.is_(False))
+            )
+            == 20
+        )
+    challenge = (
+        await api.post("/auth/owner-pin/start", headers=new, json={"profile_id": api.profile_id, "action": "login"})
+    ).json()
+    assert (
+        await api.post("/auth/owner-pin/verify", headers=new, json={**challenge, "pin": FIXTURE_PIN})
+    ).status_code == 403
+    assert (
+        await api.post("/auth/owner-pin/verify", headers=new, json={**challenge, "pin": "763492"})
+    ).status_code == 200

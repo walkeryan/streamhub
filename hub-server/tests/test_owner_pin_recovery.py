@@ -126,3 +126,21 @@ async def test_recovery_requires_current_revision_at_local_approval(api: Api) ->
         await s.commit()
     with pytest.raises(Forbidden):
         await service.approve_recovery_request(request_id)
+
+
+async def test_local_recovery_grant_has_its_own_bounded_attempts(api: Api) -> None:
+    from app.services.errors import ServiceError
+    from app.services.owner_pin import OwnerPinRateLimited
+
+    service, p = await enrolled(api)
+    request = (await service.recovery_status(p))["recovery_request_id"]
+    await service.approve_recovery_request(request)
+    grant = await service.recovery_status(p)
+    for _ in range(3):
+        with pytest.raises(ServiceError):
+            await service.recover(p, grant["grant_id"], grant["grant_secret"], "invalid", p.google_subject)
+    with pytest.raises(OwnerPinRateLimited):
+        await service.recover(p, grant["grant_id"], grant["grant_secret"], NEW_PIN, p.google_subject)
+    assert await service.credential_version() == 1
+    normal = await service.start(p, p.profile_id, "login")
+    assert (await service.verify(p, normal["challenge_id"], normal["poll_token"], TEST_PIN)).credential_version == 1

@@ -107,7 +107,14 @@ async def test_global_failed_attempt_budget_survives_new_service(api: Api) -> No
             .values(created_at=utcnow() - timedelta(minutes=16))
         )
         for i in range(15):
-            s.add(OwnerPinAttempt(id=f"older-failure-{i}", created_at=utcnow() - timedelta(hours=1), succeeded=False))
+            s.add(
+                OwnerPinAttempt(
+                    id=f"older-failure-{i}",
+                    created_at=utcnow() - timedelta(hours=1),
+                    succeeded=False,
+                    credential_version=await service.credential_version(),
+                )
+            )
         await s.commit()
     with pytest.raises(OwnerPinRateLimited) as daily:
         await service.verify(p, challenge["challenge_id"], challenge["poll_token"], TEST_PIN)

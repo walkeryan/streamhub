@@ -351,3 +351,6 @@ class OwnerPinAttempt(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
     succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
+    credential_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    purpose: Mapped[str] = mapped_column(String(16), default="verify", server_default="verify")
+    challenge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
