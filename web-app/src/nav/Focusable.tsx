@@ -33,6 +33,7 @@ export interface FocusableHandle { focus: () => void; el: HTMLElement | null }
 export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Focusable(p, outer) {
   const onEnterRef = useRef(p.onEnter)
   onEnterRef.current = p.onEnter
+  const pointerPosition = useRef<{x:number;y:number}|null>(null)
   const disabledRef = useRef(p.disabled)
   disabledRef.current = p.disabled
   const { ref, focused, focusSelf, focusKey } = useFocusable({
@@ -79,7 +80,14 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
         await setFocus(focusKey)
         if ((ref.current as HTMLElement | null)?.isConnected && !disabledRef.current) onEnterRef.current?.()
       }}
-      onPointerMove={(e) => e.pointerType === 'mouse' && (e.movementX !== 0 || e.movementY !== 0) && !p.disabled && focusSelf()}
+      onPointerMove={(e) => {
+        if (e.pointerType !== 'mouse') return
+        const previous = pointerPosition.current
+        pointerPosition.current = {x:e.clientX,y:e.clientY}
+        // Absolute moves may report movementX/Y=0 (including the first hover).
+        // Coordinate comparison still rejects repeated stationary events.
+        if ((!previous || previous.x !== e.clientX || previous.y !== e.clientY) && !p.disabled) focusSelf()
+      }}
     >
       {typeof p.children === 'function' ? p.children({ focused }) : p.children}
     </div>
