@@ -201,8 +201,9 @@ test('approved live playback retains the exact750ms double-Back behavior', async
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => new URL(page.url()).pathname).not.toBe(first)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
-  await page.clock.install()
-  await page.clock.pauseAt(new Date())
+  // Freeze at a known future instant: host/browser wall clocks can differ.
+  await page.clock.install({ time: new Date("2026-11-01T12:00:00Z") })
+  await page.clock.pauseAt(new Date("2026-11-01T12:01:00Z"))
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('back-hint')).toBeVisible()
   await page.clock.runFor(749)
