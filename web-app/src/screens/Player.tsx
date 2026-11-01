@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useChannels } from '../api/hooks'
 import { Button, Chip, ProgressBar } from '../components/ui'
@@ -29,6 +29,10 @@ export function Player() {
   const navigate = useNavigate()
   const videoRef = useRef<HTMLVideoElement>(null)
   const isChannel = id.startsWith('ch:')
+  // Router URL updates can precede the next React commit. Remote events in
+  // that gap must use the selected channel, not the previous render's id.
+  const activeId = useRef(id)
+  useLayoutEffect(() => { activeId.current = id }, [id])
 
   const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup }), [id, sourceId, variantId, allowUnverifiedAudio, catchup])
   const pb = usePlayback(videoRef, req)
@@ -128,16 +132,19 @@ export function Player() {
   }, [])
 
   const zapTo = useCallback((cid: string) => {
-    if (cid === id) return
-    setLast(id)
+    const previous = activeId.current
+    if (cid === previous) return
+    activeId.current = cid
+    setLast(previous)
     navigate(`/play/${encodeURIComponent(cid)}`, { replace: true })
-  }, [id, navigate, setLast])
+  }, [navigate, setLast])
   const zap = useCallback((d: number) => {
     if (!list.length) return
-    const i = idx < 0 ? 0 : (idx + d + list.length) % list.length
+    const currentIndex = list.findIndex((c) => c.id === activeId.current)
+    const i = currentIndex < 0 ? 0 : (currentIndex + d + list.length) % list.length
     const c = list[i]
     if (c) zapTo(c.id)
-  }, [list, idx, zapTo])
+  }, [list, zapTo])
 
   const showChrome = ui || paused || overlay === 'bar'
   const chromeRef = useRef(false)
@@ -215,7 +222,7 @@ export function Player() {
     if (o) { closeOverlay(); if (o === 'bar') hideChrome(); return true }
     if (chromeRef.current && !pausedRef.current) { hideChrome(); return true }
     const last = useUi.getState().lastChannelId
-    if (!live || !last || last === id) return false
+    if (!live || !last || last === activeId.current) return false
     if (backTimer.current) {
       window.clearTimeout(backTimer.current); backTimer.current = 0; setBackHint(false)
       zapTo(last); showOsd()
