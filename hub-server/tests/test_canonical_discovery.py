@@ -174,3 +174,11 @@ async def test_metadata_discovery_212k_catalog_uses_bounded_indexed_matching(api
     assert len(response.json()["play_here"]) == 20
     assert fake.details.await_count == 20
     assert elapsed < 5, "Cold search should not scan the entire library once per metadata result"
+    started = time.perf_counter()
+    warm = await api.get("/search", params={"q": "Star Wars", "language": "all", "limit": 100})
+    warm_elapsed = time.perf_counter() - started
+    print(f"canonical metadata60 catalog212020 warm={warm_elapsed * 1000:.2f}ms")
+    assert warm.status_code == 200
+    assert warm.json() == response.json()
+    assert fake.search.await_count == 1
+    assert fake.details.await_count == 20
