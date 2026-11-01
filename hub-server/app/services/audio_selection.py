@@ -52,6 +52,8 @@ def provider_audio_extra(raw: Any) -> dict[str, Any]:
     for row in rows:
         if not isinstance(row, dict):
             continue
+        if row.get("codec_type") not in (None, "audio"):
+            continue
         raw_tags = row.get("tags")
         tags = raw_tags if isinstance(raw_tags, dict) else {}
         code = normalise_code(

@@ -32,6 +32,7 @@ from app.domain.entities import (
 from app.domain.ports import AdapterContext, CatalogSink
 from app.infra.http import request_with_retry
 from app.infra.logging import redact_url
+from app.services.audio_selection import provider_audio_extra
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ def map_vod(row: dict[str, Any], cats: dict[str, str], client: XtreamClient) -> 
         genres=F.genres_from(row.get("genre")),
         added_at=F.as_epoch(row.get("added")),
         headers={"User-Agent": client.ua} if client.ua else {},
-        extra={"ext": ext, "stream_id": sid},
+        extra={"ext": ext, "stream_id": sid, **provider_audio_extra(row.get("audio"))},
     )
 
 
@@ -262,7 +263,7 @@ def map_episodes(series_id: str, info: dict[str, Any], client: XtreamClient) -> 
                     duration_ms=dur_s * 1000 if dur_s else None,
                     added_at=F.as_epoch(ep.get("added")),
                     headers={"User-Agent": client.ua} if client.ua else {},
-                    extra={"ext": ext, "series_id": series_id},
+                    extra={"ext": ext, "series_id": series_id, **provider_audio_extra(einfo.get("audio"))},
                 )
             )
     return out
@@ -367,6 +368,11 @@ class XtreamSource:
             if isinstance(info, dict):
                 raw = info.get("info")
                 i: dict[str, Any] = raw if isinstance(raw, dict) else {}
+                # This response is already fetched for details. Preserve explicit
+                # track tags, never generic language/original_language/title hints.
+                if "audio" in i:
+                    audio = provider_audio_extra(i["audio"])
+                    item.extra.update(audio or {"audio_tracks": [], "audio_evidence": "unknown"})
                 item.overview = F.as_str(F.first(i, "plot", "description")) or item.overview
                 item.tmdb_id = item.tmdb_id or F.tmdb_from(i)
                 item.imdb_id = item.imdb_id or F.imdb_from(i)

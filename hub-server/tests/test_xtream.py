@@ -291,3 +291,73 @@ async def test_auth_failure(tmp_path: Path) -> None:
     respx.get(f"{SERVER}/player_api.php").mock(return_value=httpx.Response(200, json={"user_info": {"auth": 0}}))
     res = await make_source(tmp_path).test()
     assert not res.ok and "s3cret" not in res.message
+
+
+@pytest.mark.parametrize(
+    "audio,expected",
+    [
+        ({"codec_type": "audio", "tags": {"language": "eng"}, "disposition": {"default": 1}}, ["eng"]),
+        ([{"tags": {"language": "fra"}}, {"tags": {"language": "eng"}}], ["eng", "fra"]),
+        ({"codec_type": "audio", "codec_name": "aac"}, []),
+        ({"codec_type": "video", "tags": {"language": "eng"}}, []),
+        ("English", []),
+        (None, []),
+    ],
+)
+async def test_vod_detail_preserves_only_explicit_audio_metadata(tmp_path, audio, expected):
+    from unittest.mock import AsyncMock
+
+    from app.services.audio_selection import audio_info
+
+    src = make_source(tmp_path)
+    src.client.api = AsyncMock(
+        return_value={
+            "info": {
+                "audio": audio,
+                "original_language": "en",
+                "language": "en",
+            }
+        }
+    )
+    item = CatalogItem(ext_id="7", kind=MediaKind.VOD, title="EN - Film", extra={"ext": "mkv"})
+    result = await src.item_detail(item)
+    src.client.api.assert_awaited_once_with("get_vod_info", vod_id="7")
+    assert result.extra["ext"] == "mkv"
+    evidence = audio_info(result.extra)
+    assert evidence["audio_languages"] == expected
+    assert evidence["audio_verified"] is bool(expected)
+    assert "original_language" not in result.extra
+
+
+def test_vod_and_episode_mapping_retain_audio_tags(client):
+    from app.services.audio_selection import audio_info
+
+    item = map_vod({"stream_id": 7, "name": "FR Film", "audio": {"tags": {"language": "eng"}}}, {}, client)
+    assert audio_info(item.extra)["audio_languages"] == ["eng"]
+    episodes = map_episodes(
+        "9",
+        {
+            "episodes": {
+                "1": [
+                    {
+                        "id": "1001",
+                        "title": "EN Episode",
+                        "info": {"audio": {"tags": {"language": "fra"}}},
+                    }
+                ]
+            }
+        },
+        client,
+    )
+    assert audio_info(episodes[1].extra)["audio_languages"] == ["fra"]
+
+
+async def test_missing_audio_detail_does_not_fabricate_evidence(tmp_path):
+    from unittest.mock import AsyncMock
+
+    from app.services.audio_selection import audio_info
+
+    src = make_source(tmp_path)
+    src.client.api = AsyncMock(return_value={"info": {"original_language": "en", "language": "en"}})
+    item = CatalogItem(ext_id="7", kind=MediaKind.VOD, title="EN - Film", extra={"ext": "mkv"})
+    assert not audio_info((await src.item_detail(item)).extra)["audio_verified"]
