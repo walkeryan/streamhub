@@ -214,3 +214,32 @@ async def test_storage_preflight_rejects_reserve_before_start(dvr_harness):
     with pytest.raises(Conflict, match="reserve"):
         await lease(proxy)
     assert not processes and manager.key is None and not list(manager.root.iterdir())
+
+
+async def test_expired_seek_does_not_restart_and_segments_bind_exact_grant(api, dvr_harness):
+    _, manager, _, processes, _, now = dvr_harness
+    source = await add_source(api)
+    api.c.proxy.dvr = manager
+    channel = (await api.get("/channels", params={"language": "all"})).json()["channels"][0]
+    grant = StreamGrant(
+        api.profile_id, source["id"], "https://fixture.invalid/live", {}, "hls", True, channel["id"][3:], False
+    )
+    token = api.c.tokens.issue(grant)
+    response = await api.post("/playback/buffer/lease", json={"stream_token": token})
+    assert response.status_code == 200
+    body = {"stream_token": token, "lease_id": response.json()["lease_id"]}
+    seek = await api.post("/playback/buffer/seek", json={**body, "at": (now - timedelta(seconds=1)).isoformat()})
+    assert seek.status_code == 200
+    seek_url = seek.json()["url"]
+    media = await api.client.get(seek_url)
+    assert media.status_code == 200 and "TIME-OFFSET=1.000" in media.text
+    sid = response.json()["session_id"]
+    path = f"/api/v1/stream/{token}/hls/{sid}/seg_00000.ts"
+    assert (await api.client.get(path)).status_code == 200
+    grant.url = "https://fixture.invalid/different"
+    other_token = api.c.tokens.issue(grant)
+    assert (await api.client.get(path.replace(token, other_token))).status_code == 403
+    assert (await api.post("/playback/buffer/release", json=body)).status_code == 204
+    assert processes[0].stopped
+    assert (await api.client.get(seek_url)).status_code == 410
+    assert len(processes) == 1 and not manager.leases
