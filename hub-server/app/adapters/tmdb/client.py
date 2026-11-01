@@ -165,6 +165,26 @@ class TmdbClient:
                 break
         return out
 
+    async def discover(
+        self, media_type: str, page: int = 1, sort: str = "popular", year: int | None = None
+    ) -> tuple[list[MetaTitle], int]:
+        if media_type not in ("movie", "tv") or sort not in ("popular", "rating", "newest"):
+            raise ValueError("Unsupported discovery type or sort")
+        date_field = "primary_release_date" if media_type == "movie" else "first_air_date"
+        order = {"popular": "popularity.desc", "rating": "vote_average.desc", "newest": f"{date_field}.desc"}[sort]
+        params: dict[str, Any] = {"page": page, "sort_by": order, "include_adult": "false"}
+        if sort == "rating":
+            params["vote_count.gte"] = 100
+        if sort == "newest":
+            params[f"{date_field}.lte"] = datetime.now(UTC).date().isoformat()
+        if year is not None:
+            params["primary_release_year" if media_type == "movie" else "first_air_date_year"] = year
+        data = await self._get(f"/discover/{media_type}", TTL_TRENDING, **params)
+        if data is None:
+            raise RuntimeError("Metadata discovery unavailable")
+        metas = [meta for row in data.get("results", []) if (meta := to_meta(row, media_type))]
+        return metas[:20], max(0, int(data.get("total_results") or 0))
+
     async def _record_age_evidence(self, subject: str, evidence: dict[str, Any]) -> None:
         if self._evidence_writer is None:
             return

@@ -122,6 +122,31 @@ async def title(id: str, c: C, p: P) -> dict[str, Any]:
     return await c.catalog.detail(id, p.profile_id)
 
 
+@router.get("/discover/{section}", response_model=S.DiscoveryPage, tags=["catalog"])
+async def discover(
+    section: str,
+    c: C,
+    p: P,
+    response: Response,
+    page: int = Query(1, ge=1, le=500),
+    sort: str = Query("popular", pattern="^(popular|rating|newest)$"),
+    year: int | None = Query(None, ge=1888, le=2100),
+    language: str | None = None,
+    source_id: str | None = None,
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
+    return await listing_cached(
+        c.db,
+        p.profile_id,
+        "discover",
+        (section, page, sort, year, language, source_id),
+        lambda: c.catalog.discover(
+            section, p.profile_id, page=page, sort=sort, year=year, language=language, source_id=source_id
+        ),
+        ttl=30,
+    )
+
+
 @router.get("/browse/{section}", response_model=S.BrowsePage, tags=["catalog"])
 async def browse(
     section: str,

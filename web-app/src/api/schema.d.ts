@@ -1710,6 +1710,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/discover/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Paged metadata discovery independent of available sources */
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    sort?: "popular" | "rating" | "newest";
+                    year?: number;
+                    language?: string;
+                    source_id?: string;
+                };
+                header?: never;
+                path: {
+                    section: "movies" | "shows";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Metadata page with independently matched availability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DiscoveryPage"];
+                    };
+                };
+                /** @description Metadata unavailable or not configured; existing library remains available */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/browse/{section}": {
         parameters: {
             query?: never;
@@ -3270,6 +3321,16 @@ export interface components {
             episodes?: components["schemas"]["Tile"][];
             /** @description e.g. 'Availability data by JustWatch' */
             attribution?: string;
+        };
+        DiscoveryPage: {
+            tiles: components["schemas"]["Tile"][];
+            page: number;
+            /** @default 20 */
+            page_size: number;
+            /** @description Metadata-provider total; null for restricted profiles, never a count of playable sources. */
+            total: number | null;
+            has_more: boolean;
+            coverage_note: string;
         };
         Channel: {
             id: string;

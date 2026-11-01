@@ -226,6 +226,15 @@ class BrowsePage(_M):
     page_size: int = 60
 
 
+class DiscoveryPage(_M):
+    tiles: list[Tile]
+    page: int
+    page_size: int = 20
+    total: int | None = None
+    has_more: bool = False
+    coverage_note: str
+
+
 class Channel(_M):
     id: str
     source_id: str

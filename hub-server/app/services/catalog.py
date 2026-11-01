@@ -20,7 +20,7 @@ from app.infra.models import Channel, Favorite, Profile, Progress, Source, Title
 from app.services import ids
 from app.services.availability import ATTRIBUTION, AvailabilityService
 from app.services.context import absolute
-from app.services.errors import NotFound
+from app.services.errors import BadGateway, Forbidden, NotFound
 from app.services.search_match import CANDIDATE_LIMIT, anchors, search_tokens, token_match_rank
 from app.services.sources import LAZY_GEN, SourceService, item_row, upsert_titles
 from app.services.tiles import TileContext, badge_for_source, hub_id_for_title, meta_tile, row_to_item, sort_badges
@@ -55,6 +55,7 @@ class CatalogService:
         self.sources = sources
         self.availability = availability
         self.meta = meta
+        self._metadata_slots = asyncio.Semaphore(6)
 
     content_policy: Any = None
 
@@ -387,6 +388,90 @@ class CatalogService:
         if not detail.get("poster") and matches:
             detail["poster"] = ctx.title_tile(matches[0])["poster"]
         return detail
+
+    async def discover(
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        page: int = 1,
+        sort: str = "popular",
+        year: int | None = None,
+        language: str | None = None,
+        source_id: str | None = None,
+    ) -> dict[str, Any]:
+        media_type = {"movies": "movie", "shows": "tv"}.get(section)
+        if media_type is None:
+            raise NotFound("Unknown discovery section")
+        if not self.meta.enabled:
+            raise BadGateway(
+                "Connect metadata in Settings to discover movies and series. Your library remains available."
+            )
+        policy = self.content_policy
+        if policy is None:
+            raise Forbidden("Content policy service is unavailable.", code="content_policy_unavailable")
+        restricted = policy.is_restricted(await policy.profile(profile_id))
+        ctx = await self.tile_context(profile_id)
+        enabled = self._enabled(ctx)
+        if source_id:
+            enabled = [sid for sid in enabled if sid == source_id]
+        languages = await self.preferred_languages(profile_id, language)
+        try:
+            async with asyncio.timeout(12):
+                async with self._metadata_slots:
+                    metas, total = await self.meta.discover(media_type, page, sort, year)
+                by_id = {
+                    ids.tmdb_id(meta.media_type, meta.tmdb_id): meta
+                    for meta in metas[:20]
+                    if meta.media_type == media_type
+                }
+                # Restricted discovery uses verified classification only. Provider
+                # counts are not counts of permitted titles and must not be shown.
+                if restricted:
+                    allowed = await policy.allowed_refs(profile_id, list(by_id))
+                    by_id = {hub: meta for hub, meta in by_id.items() if hub in allowed}
+                matches = await self.availability.library_matches_many(list(by_id.values()))
+                match_ids = {row.id for rows in matches.values() for row in rows if row.source_id in enabled}
+                eligible_ids: set[int] = set()
+                if match_ids:
+                    query = await self._filter_title_languages(select(Title).where(Title.id.in_(match_ids)), languages)
+                    async with self._db.session() as session:
+                        eligible_ids = {row.id for row in (await session.execute(query)).scalars()}
+                scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
+
+                async def tile(hub: str, meta: Any) -> dict[str, Any]:
+                    badges = [
+                        badge_for_source(
+                            ctx.sources[row.source_id], in_app=ctx.is_in_app(ctx.sources[row.source_id].type)
+                        )
+                        for row in matches[hub]
+                        if row.id in eligible_ids
+                    ]
+                    async with self._metadata_slots:
+                        badges += await self.availability.handoff_badges(media_type, meta.tmdb_id, scoped_sources)
+                    return meta_tile(meta, sort_badges(badges, ctx.sources), ctx.favorites, ctx.progress_pct(hub))
+
+                tiles = await asyncio.gather(*(tile(hub, meta) for hub, meta in by_id.items()))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise BadGateway("Metadata discovery is temporarily unavailable. Your library remains available.") from exc
+        return {
+            "tiles": tiles,
+            "page": page,
+            "page_size": 20,
+            "total": None if restricted else total,
+            "has_more": page < min(500, (total + 19) // 20),
+            "coverage_note": (
+                "Only titles with permitted, verified classifications are shown. "
+                "Pages may be sparse; a permitted total is unavailable."
+            )
+            if restricted
+            else (
+                "Metadata catalog; coverage varies. Source and language filters affect availability, "
+                "not which titles are discovered."
+            ),
+        }
 
     # ------------------------------------------------------------------ browse
     def _browse_query(

@@ -183,6 +183,17 @@ components:
             episodes: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             attribution: {type: string, description: "e.g. 'Availability data by JustWatch'"}
 
+    DiscoveryPage:
+      type: object
+      required: [tiles, page, page_size, total, has_more, coverage_note]
+      properties:
+        tiles: {type: array, items: {$ref: '#/components/schemas/Tile'}}
+        page: {type: integer}
+        page_size: {type: integer, default: 20}
+        total: {type: [integer, 'null'], description: "Metadata-provider total; null for restricted profiles, never a count of playable sources."}
+        has_more: {type: boolean}
+        coverage_note: {type: string}
+
     Channel:
       type: object
       required: [id, source_id, name, number, language, group]
@@ -693,6 +704,20 @@ paths:
       responses: {'200': {description: Available source variants and audio evidence, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackOptions'}}}}}
   /titles/{id}:
     get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }
+  /discover/{section}:
+    get:
+      summary: Paged metadata discovery independent of available sources
+      parameters:
+        - {name: section, in: path, required: true, schema: {type: string, enum: [movies, shows]}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 1}}
+        - {name: sort, in: query, schema: {type: string, enum: [popular, rating, newest], default: popular}}
+        - {name: year, in: query, schema: {type: integer, minimum: 1888, maximum: 2100}}
+        - {name: language, in: query, schema: {type: string, description: "Availability only; omitted = profile languages; all = all languages."}}
+        - {name: source_id, in: query, schema: {type: string, description: "Availability only; never suppresses metadata identities."}}
+      responses:
+        '200': {description: Metadata page with independently matched availability, content: {application/json: {schema: {$ref: '#/components/schemas/DiscoveryPage'}}}}
+        '502': {description: Metadata unavailable or not configured; existing library remains available}
+
   /browse/{section}:
     get:
       summary: movies | shows | vod | series — paged grid with filters
