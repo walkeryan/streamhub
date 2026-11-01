@@ -10,7 +10,7 @@ import { CatalogPicker } from '../components/CatalogPicker'
 import { LanguageFilter } from '../components/LanguageFilter'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
-import { useRestoreFocus } from '../nav/back'
+import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
 import { useSession } from '../store/session'
 import { LANG_NAMES, useDebounced, useNow } from '../lib/util'
@@ -119,6 +119,7 @@ function SportsEvents() {
       </div>
       <p className="muted mb-4" role="status">{data.coverage.channels_with_sports_schedule.toLocaleString()} of {data.coverage.eligible_channels.toLocaleString()} eligible channels have sports in the inspected guide window. Missing or unclassified guide data may omit events. Updated {clock(data.as_of, zone)}.</p>
     </>}
+    <SportsRecordings language={language === 'mine' ? profile?.languages.join(',') || 'all' : language} sport={sport} term={term} />
     <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Sports filters" firstFocusKey="sports:search" wide>
       <div className="flex flex-col gap-4">
       <FocusableInput focusKey="sports:search" label="Search sports programmes or channels" value={search} onChange={setSearch} placeholder="Event, programme or channel" />
@@ -157,4 +158,54 @@ function SportsEvents() {
       <Button focusKey="sports:feeds:cancel" onEnter={close}>Back to events</Button>
     </Modal>
   </div>
+}
+
+
+/** Library metadata is deliberately separate from guide events and broadcast dates. */
+function SportsRecordings({ language, sport, term }: { language: string; sport: string; term: string }) {
+  const profile = useSession((s) => s.profile)
+  const go = useGo()
+  const [page, setPage] = useState(0)
+  const filter = `${profile?.id}|${profile?.languages.join(',')}|${language}|${sport}|${term}`
+  const [previousFilter, setPreviousFilter] = useState(filter)
+  if (previousFilter !== filter) { setPreviousFilter(filter); setPage(0) }
+  const query = useQuery({
+    queryKey: ['sports', profile?.id, 'recordings', filter, page],
+    enabled: !!profile,
+    queryFn: ({ signal }) => unwrap<components['schemas']['SportsRecordingsPage']>(api.GET('/sports/recordings', {
+      signal, params: { query: { language, sport: sport || undefined, q: term || undefined, limit: PAGE, offset: page * PAGE } },
+    })),
+    staleTime: 15_000, refetchInterval: 30_000,
+  })
+  const data = query.data
+  if (data && page > Math.max(0, Math.ceil(data.total / PAGE) - 1)) setPage(Math.max(0, Math.ceil(data.total / PAGE) - 1))
+  return <section className="sports-events-section" data-testid="sports-recordings" aria-label="Library sports videos and recordings">
+    <h2 className="heading mb-3">Library videos & recordings</h2>
+    <p className="label mb-3">On-demand library items, not live events. Sport, search and language filters apply; guide date and broadcast status do not. Unknown audio remains visible and requires a source choice.</p>
+    {query.error ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : query.isPending ? <Skeleton style={{ height: '10rem' }} /> : data && <>
+      {data.truncated && <p role="status">Library scan limit reached. Counts are a lower bound; narrow the sport or search.</p>}
+      {!data.items.length ? <Empty title="No matching library sports videos" hint="Only supported sports-tagged library videos with source media are included. Try All sports or another language; this is not a complete event archive." /> :
+        <FocusGroup focusKey="sports:recordings" className="sports-event-rail" label="Library sports recordings">
+          {data.items.map((item) => {
+            const exact = !!item.source_id && item.title_id.startsWith(`lib:${item.source_id}:`) && item.title_id.length > item.source_id.length + 5
+            const audio = item.audio_verified && item.audio_languages.length ? `Verified audio: ${item.audio_languages.map((code) => LANG_NAMES[code] ?? code).join(', ')}` : `Audio unverified${item.language_hint ? ` · Metadata hint: ${LANG_NAMES[item.language_hint] ?? item.language_hint}` : ''}`
+            return <article className="sports-event-item" data-testid="sports-recording" key={item.title_id}>
+              <div className="sports-event-card">
+                <div className="sports-event-header"><span className="badge">Library video · not live</span><span className="label">{item.sport}</span></div>
+                <h3 className="sports-event-title">{item.title}</h3>
+                <p className="label">{item.source_name}</p>
+                {item.originally_available_at && <p className="label">Original release date: {item.originally_available_at}</p>}
+                <p className="label">{audio}</p>
+                {exact ? <Button focusKey={`sports:recording:${item.title_id}`} onEnter={() => go(`/title/${encodeURIComponent(item.title_id)}?choose=1`)}>View recording and audio</Button> : <p role="status">No exact playable library match.</p>}
+              </div>
+            </article>
+          })}
+        </FocusGroup>}
+      <div className="flex flex-wrap gap-3 items-center mt-4">
+        <Button focusKey="sports:recordings:prev" disabled={!page} onEnter={() => setPage(page - 1)}>Previous recordings</Button>
+        <span>{data.truncated ? 'At least ' : ''}{data.total.toLocaleString()} library items · page {page + 1} of {Math.max(1, Math.ceil(data.total / PAGE))}</span>
+        <Button focusKey="sports:recordings:next" disabled={(page + 1) * PAGE >= data.total} onEnter={() => setPage(page + 1)}>Next recordings</Button>
+      </div>
+    </>}
+  </section>
 }
