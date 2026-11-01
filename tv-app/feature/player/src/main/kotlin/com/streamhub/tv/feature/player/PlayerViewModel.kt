@@ -410,7 +410,7 @@ class PlayerViewModel @Inject constructor(
         if (minutes != null) {
             sleepJob = viewModelScope.launch {
                 delay(minutes * 60_000L)
-                player.exoPlayer.pause()
+                player.pause()
                 _exit.tryEmit(Unit)
             }
         }

@@ -371,6 +371,8 @@ data class PlaybackDescriptor(
     @SerialName("archive_start") val archiveStart: String? = null,
     @SerialName("archive_end") val archiveEnd: String? = null,
     @SerialName("buffer_available") val bufferAvailable: Boolean = false,
+    @SerialName("preferred_audio_languages") val preferredAudioLanguages: List<String> = emptyList(),
+    @SerialName("audio_language_required") val audioLanguageRequired: Boolean = false,
 )
 
 @Serializable

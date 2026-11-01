@@ -26,6 +26,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.window.Dialog
+import com.streamhub.tv.core.player.TrackOption
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -104,7 +107,7 @@ private fun digitOf(key: Key): Int? = when (key.nativeKeyCode) {
  *  Live:  Up/Down, CH+/CH- = zap · 0-9 = channel number (commits after 2 s or OK) · OK = mini channel list
  *         Back = exit; Back twice within 500 ms = last channel
  *  VOD:   OK / Play-Pause = toggle · Left/Right / FF/RW = seek ∓10 s/30 s · Up/Down = show OSD
- *  Both:  hold OK (or Menu/Settings key) = audio/subtitles/aspect/sleep menu. Most Google TV remotes
+ *  VOD Down / Live Right opens visible audio/playback controls. Hold OK also opens the menu. Google TV remotes
  *         have no Menu key, so the short-press OK action fires on key *up* and a hold opens the menu.
  */
 @Composable
@@ -118,6 +121,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
     val ok = remember { OkPress() }
 
     LaunchedEffect(Unit) { vm.exit.collect { onExit() } }
+    LaunchedEffect(ps.audioBlocked) {if(ps.audioBlocked) vm.openMenu()}
     LaunchedEffect(s.overlay) {
         if (s.overlay == Overlay.None || s.overlay == Overlay.Osd) runCatching { rootFocus.requestFocus() }
     }
@@ -179,14 +183,14 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                 digitOf(e.key)?.let { vm.digit(it); return@onPreviewKeyEvent true }
                 when (e.key) {
                     Key.DirectionUp, Key.ChannelUp -> { if (s.live && !s.bufferTimeshift) vm.zap(+1) else vm.showOsd(); true }
-                    Key.DirectionDown, Key.ChannelDown -> { if (s.live && !s.bufferTimeshift) vm.zap(-1) else if(s.descriptor?.archiveStart != null || s.bufferTimeshift) vm.openMenu() else vm.showOsd(); true }
+                    Key.DirectionDown, Key.ChannelDown -> { if (s.live && !s.bufferTimeshift) vm.zap(-1) else vm.openMenu(); true }
                     Key.DirectionLeft -> { if(s.live && !s.bufferTimeshift) vm.openRewind() else { vm.player.seekBy(-10_000); vm.showOsd() }; true }
                     Key.DirectionRight -> { if(s.live && !s.bufferTimeshift) vm.openMenu() else { vm.player.seekBy(10_000); vm.showOsd() }; true }
                     Key.MediaRewind -> { vm.player.seekBy(-30_000); vm.showOsd(); true }
                     Key.MediaFastForward -> { vm.player.seekBy(30_000); vm.showOsd(); true }
                     Key.MediaPlayPause -> { vm.player.togglePlayPause(); vm.showOsd(); true }
-                    Key.MediaPlay -> { vm.player.exoPlayer.play(); vm.showOsd(); true }
-                    Key.MediaPause -> { vm.player.exoPlayer.pause(); vm.showOsd(); true }
+                    Key.MediaPlay -> { vm.player.resume(); vm.showOsd(); true }
+                    Key.MediaPause -> { vm.player.pause(); vm.showOsd(); true }
                     Key.Menu, Key.Settings -> { vm.openMenu(); true }
                     Key.Info, Key.Guide -> { vm.showOsd(); true }
                     Key.LastChannel -> { vm.lastChannel(); true }
@@ -274,9 +278,10 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
             }
         }
         Text(
-            if(s.bufferTimeshift) "Buffered history · ◀▶ seek · ▼ menu / Go Live" else if (s.live) "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel" else if(s.descriptor?.archiveStart != null) "Provider archive · ${if(ps.seekable) "◀▶ seek" else "Not seekable yet"} · ▼ Go Live/menu" else "OK play/pause · ${if(ps.seekable) "◀▶ seek" else "Not seekable"} · hold OK menu",
+            if(s.bufferTimeshift) "Buffered history · ◀▶ seek · ▼ menu / Go Live" else if (s.live) "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel" else if(s.descriptor?.archiveStart != null) "Provider archive · ${if(ps.seekable) "◀▶ seek" else "Not seekable yet"} · ▼ Go Live/menu" else "OK play/pause · ${if(ps.seekable) "◀▶ seek" else "Not seekable"} · ▼ audio/playback controls",
             style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(top = 10.dp),
         )
+        ps.audioNotice?.let {Text(it,color=t.textMuted,style=MaterialTheme.typography.labelMedium)}
         s.sleepEndsAt?.let {
             val min = ((it - System.currentTimeMillis()) / 60_000).coerceAtLeast(0)
             Text("Sleep in $min min", style = MaterialTheme.typography.labelMedium, color = t.accent)
@@ -338,6 +343,14 @@ private fun MiniList(channels: List<Channel>, currentId: String?, onPick: (Chann
 private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiState) {
     val t = LocalThemeTokens.current
     val first = remember { FocusRequester() }
+    val menuScope=rememberCoroutineScope()
+    var confirmation by remember {mutableStateOf<TrackOption?>(null)}
+    var confirmOpener by remember {mutableStateOf<FocusRequester?>(null)}
+    var trackMessage by remember {mutableStateOf<String?>(null)}
+    val dismissTrack:()->Unit={confirmation=null;menuScope.launch {withFrameNanos{};runCatching {(confirmOpener ?: first).requestFocus()}}}
+    LaunchedEffect(ps.audioTracks) {
+        if(confirmation!=null && confirmation !in ps.audioTracks) {confirmation=null;trackMessage="Audio tracks changed. Choose again.";withFrameNanos{};runCatching{first.requestFocus()}}
+    }
     LaunchedEffect(Unit) { delay(50); runCatching { first.requestFocus() } }
     Column(
         Modifier.fillMaxHeight().width(420.dp).background(t.overlay).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = Tokens.Canvas.SafeMarginY),
@@ -351,9 +364,16 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             s.bufferError?.let { Text(it,color=t.danger) }
         }
         Text("Audio", style = MaterialTheme.typography.titleSmall, color = t.text)
-        if (ps.audioTracks.isEmpty()) Text("Default", color = t.textMuted, style = MaterialTheme.typography.bodySmall)
+        ps.audioNotice?.let {Text(it,color=if(ps.audioBlocked)t.danger else t.textMuted)}
+        trackMessage?.let {Text(it,color=t.textMuted)}
+        if (ps.audioTracks.isEmpty()) Text("Audio track metadata unavailable", color = t.textMuted, style = MaterialTheme.typography.bodySmall)
         ps.audioTracks.forEachIndexed { i, tr ->
-            ShChip(tr.label, tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_AUDIO) }, if (i == 0 && s.descriptor?.id?.startsWith("ch:") != true) Modifier.focusRequester(first) else Modifier)
+            val opener=remember(tr.revision,tr.groupIndex,tr.trackIndex){FocusRequester()}
+            ShChip(tr.label + if(tr.language.isNullOrBlank() || tr.language.equals("und",true)) " · language unverified" else "", tr.selected, {
+                trackMessage=null
+                if(vm.player.audioTrackNeedsConfirmation(tr)) {vm.player.pause();confirmOpener=opener;confirmation=tr}
+                else if(!vm.player.selectTrack(tr,C.TRACK_TYPE_AUDIO)) trackMessage="Audio tracks changed. Choose again."
+            },Modifier.focusRequester(opener).then(if(i==0 && s.descriptor?.id?.startsWith("ch:")!=true)Modifier.focusRequester(first) else Modifier))
         }
         Text("Subtitles", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
         ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (ps.audioTracks.isEmpty() && s.descriptor?.id?.startsWith("ch:") != true) Modifier.focusRequester(first) else Modifier)
@@ -365,5 +385,21 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             PlayerViewModel.SLEEP_OPTIONS.forEach { m -> ShChip(m?.let { "$it" } ?: "Off", s.sleepMinutes == m, { vm.setSleep(m) }) }
         }
         if (ps.error != null) ShButton("Retry stream", vm::retry)
+        ShButton("Close controls",vm::hideOverlay)
+    }
+    confirmation?.let {track ->
+        val cancelFocus=remember {FocusRequester()}
+        Dialog(onDismissRequest=dismissTrack) {
+            Column(Modifier.width(520.dp).background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                Text("Use this audio track?",color=t.text,style=MaterialTheme.typography.titleLarge)
+                Text("${track.label} · ${track.language ?: "Language unverified"}. Its language is unverified or outside your preferred languages. Allow only this track for this playback?",color=t.textMuted)
+                ShButton("Cancel · keep paused",dismissTrack,Modifier.focusRequester(cancelFocus))
+                ShButton("Use this track once",{
+                    if(vm.player.selectTrack(track,C.TRACK_TYPE_AUDIO,allowUnverifiedAudio=true)) {vm.player.resume();dismissTrack()}
+                    else {trackMessage="Audio tracks changed. Choose again.";dismissTrack()}
+                })
+            }
+        }
+        LaunchedEffect(track){withFrameNanos{};runCatching{cancelFocus.requestFocus()}}
     }
 }

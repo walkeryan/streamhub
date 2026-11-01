@@ -42,6 +42,7 @@ data class TrackOption(
     val groupIndex: Int,
     val trackIndex: Int,
     val selected: Boolean,
+    val revision: Long = 0,
 )
 
 data class PlayerUiState(
@@ -55,6 +56,8 @@ data class PlayerUiState(
     val audioTracks: List<TrackOption> = emptyList(),
     val textTracks: List<TrackOption> = emptyList(),
     val subtitlesOff: Boolean = true,
+    val audioBlocked: Boolean = false,
+    val audioNotice: String? = null,
 )
 
 /**
@@ -77,6 +80,12 @@ class StreamHubPlayer(
     private var tickerJob: Job? = null
     private var reconnectJob: Job? = null
     private var current: PlaybackDescriptor? = null
+    private var mediaEpoch=0L
+    private var trackRevision=0L
+    private var wantsPlayback=false
+    private var waitingForAudio=false
+    private var updatingMedia=false
+    private val audioApproval=RuntimeAudioApproval<androidx.media3.common.TrackGroup>()
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -124,6 +133,7 @@ class StreamHubPlayer(
             if (playbackState == Player.STATE_READY) {
                 reconnectJob?.cancel()
                 _state.value = _state.value.copy(error = null, reconnectAttempt = 0)
+                enforceAudioLanguage()
             }
             if (playbackState == Player.STATE_ENDED) {
                 if(current?.bufferAvailable == true) _state.value = _state.value.copy(error="Buffered playback ended. Choose Go Live or retry.")
@@ -145,12 +155,14 @@ class StreamHubPlayer(
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            trackRevision++
             _state.value = _state.value.copy(
                 audioTracks = options(tracks, C.TRACK_TYPE_AUDIO),
                 textTracks = options(tracks, C.TRACK_TYPE_TEXT),
                 subtitlesOff = exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT) ||
                     options(tracks, C.TRACK_TYPE_TEXT).none { it.selected },
             )
+            enforceAudioLanguage()
         }
     }
 
@@ -175,19 +187,54 @@ class StreamHubPlayer(
     /** Start playing a descriptor (replaces whatever was playing). */
     fun play(d: PlaybackDescriptor, startPositionMs: Long = d.resumePositionMs) {
         if (current != null && current?.id != d.id) report(PlaybackState.STOPPED)
+        updatingMedia=true
+        exoPlayer.playWhenReady=false
         current = d
+        mediaEpoch++;trackRevision++;audioApproval.clear()
+        wantsPlayback=true;waitingForAudio=d.audioLanguageRequired
+        exoPlayer.playWhenReady=false
+        exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+            .setPreferredAudioLanguages(*d.preferredAudioLanguages.toTypedArray()).build()
         reconnectJob?.cancel()
-        _state.value = _state.value.copy(error = null, reconnectAttempt = 0)
+        _state.value = _state.value.copy(error = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList())
         httpFactory.setDefaultRequestProperties(d.headers.filterKeys { !it.equals("User-Agent", true) })
         httpFactory.setUserAgent(d.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: DEFAULT_UA)
         val item = MediaItemMapper.toMediaItem(d)
         if (d.live || startPositionMs <= 0) exoPlayer.setMediaItem(item) else exoPlayer.setMediaItem(item, startPositionMs)
         exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
+        updatingMedia=false
+        exoPlayer.playWhenReady = !waitingForAudio
+        enforceAudioLanguage()
         startProgressLoop()
     }
 
     val currentDescriptor: PlaybackDescriptor? get() = current
+
+    private fun enforceAudioLanguage(): Boolean {
+        if(updatingMedia) return false
+        val d=current ?: return false
+        val audio=options(exoPlayer.currentTracks,C.TRACK_TYPE_AUDIO)
+        val explicit=exoPlayer.currentTracks.groups.any {group ->
+            group.type==C.TRACK_TYPE_AUDIO && (0 until group.length).any {index->
+                group.isTrackSelected(index) && audioApproval.accepts(mediaEpoch,group.mediaTrackGroup,index)
+            }
+        }
+        val decision=runtimeAudioDecision(d.audioLanguageRequired,d.preferredAudioLanguages,audio.size,audio.filter{it.selected}.map{it.language},explicit)
+        if(decision==RuntimeAudioDecision.Blocked || (decision==RuntimeAudioDecision.Unobservable && exoPlayer.playbackState!=Player.STATE_READY)) {
+            exoPlayer.playWhenReady=false;waitingForAudio=true
+            if(exoPlayer.playbackState==Player.STATE_READY) _state.value=_state.value.copy(audioBlocked=true,audioNotice="Preferred audio is unavailable or unverified. Choose Audio in playback controls.")
+            return false
+        }
+        val wasBlocked=_state.value.audioBlocked
+        _state.value=_state.value.copy(audioBlocked=false,audioNotice=if(decision==RuntimeAudioDecision.Unobservable) "Runtime audio tags unavailable; using your source selection. Language is not newly verified." else null,error=if(wasBlocked)null else _state.value.error)
+        if(waitingForAudio) {waitingForAudio=false;exoPlayer.playWhenReady=wantsPlayback}
+        return true
+    }
+
+    fun audioTrackNeedsConfirmation(option:TrackOption):Boolean = current?.let {
+        it.audioLanguageRequired && !preferredAudioSelected(it.preferredAudioLanguages,listOf(option.language))
+    } ?: true
 
     private fun scheduleReconnect(reason: String) {
         val d = current ?: return
@@ -197,10 +244,16 @@ class StreamHubPlayer(
             val backoff = min(MAX_BACKOFF_MS, BASE_BACKOFF_MS shl min(attempt - 1, 5))
             _state.value = _state.value.copy(error = "Reconnecting… ($reason)", reconnectAttempt = attempt)
             delay(backoff)
-            if (current?.id == d.id) {
+            if (current === d) {
+                updatingMedia=true
+                mediaEpoch++;trackRevision++;audioApproval.clear();waitingForAudio=d.audioLanguageRequired
+                exoPlayer.playWhenReady=false
+                exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
                 exoPlayer.setMediaItem(MediaItemMapper.toMediaItem(d))
                 exoPlayer.prepare()
-                exoPlayer.playWhenReady = true
+                updatingMedia=false
+                exoPlayer.playWhenReady = wantsPlayback && !waitingForAudio
+                enforceAudioLanguage()
             }
         }
     }
@@ -235,7 +288,7 @@ class StreamHubPlayer(
             for (ti in 0 until g.length) {
                 if (!g.isTrackSupported(ti)) continue
                 val f = g.getTrackFormat(ti)
-                out += TrackOption(label(f, out.size), f.language, gi, ti, g.isTrackSelected(ti))
+                out += TrackOption(label(f, out.size), f.language, gi, ti, g.isTrackSelected(ti),trackRevision)
             }
         }
         return out
@@ -248,12 +301,20 @@ class StreamHubPlayer(
         return listOfNotNull(f.label ?: lang ?: "Track ${i + 1}", ch, codec).joinToString(" · ")
     }
 
-    fun selectTrack(option: TrackOption, type: Int) {
-        val group = exoPlayer.currentTracks.groups.getOrNull(option.groupIndex) ?: return
-        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(type, false)
-            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
-            .build()
+    fun selectTrack(option: TrackOption, type: Int, allowUnverifiedAudio:Boolean=false):Boolean {
+        if(option.revision!=trackRevision) return false
+        val group=exoPlayer.currentTracks.groups.getOrNull(option.groupIndex) ?: return false
+        if(group.type!=type || option.trackIndex !in 0 until group.length || !group.isTrackSupported(option.trackIndex)) return false
+        if(type==C.TRACK_TYPE_AUDIO) {
+            if(audioTrackNeedsConfirmation(option) && !allowUnverifiedAudio) return false
+            exoPlayer.playWhenReady=false;waitingForAudio=true
+            audioApproval.approve(mediaEpoch,group.mediaTrackGroup,option.trackIndex)
+        }
+        exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(type,false)
+            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup,option.trackIndex)).build()
+        if(type==C.TRACK_TYPE_AUDIO) enforceAudioLanguage()
+        return true
     }
 
     fun disableSubtitles() {
@@ -271,7 +332,9 @@ class StreamHubPlayer(
             .build()
     }
 
-    fun togglePlayPause() { if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play() }
+    fun pause() {wantsPlayback=false;exoPlayer.pause()}
+    fun resume() {wantsPlayback=true;if(enforceAudioLanguage())exoPlayer.play()}
+    fun togglePlayPause() {if(exoPlayer.isPlaying)pause() else resume()}
     fun seekBy(ms: Long) {
         if (exoPlayer.isCurrentMediaItemSeekable && exoPlayer.duration > 0) {
             exoPlayer.seekTo((exoPlayer.currentPosition + ms).coerceIn(0, exoPlayer.duration))
@@ -280,8 +343,9 @@ class StreamHubPlayer(
 
     fun stop() {
         report(PlaybackState.STOPPED)
+        current=null;wantsPlayback=false;waitingForAudio=false;audioApproval.clear();mediaEpoch++;trackRevision++
         exoPlayer.stop()
-        current = null
+        _state.value=_state.value.copy(audioBlocked=false,audioNotice=null,audioTracks=emptyList())
         progressJob?.cancel()
         reconnectJob?.cancel()
     }
