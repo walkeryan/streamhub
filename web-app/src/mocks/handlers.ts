@@ -1,3 +1,4 @@
+import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
 import type { PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
@@ -29,6 +30,10 @@ const countryMatches = (value: string | null | undefined, country: string | null
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
 export const handlers = [
+  http.get(`${B}/sports/recordings`, ({ request }) => {
+    const params = new URL(request.url).searchParams
+    return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])
+  }),
   http.get(`${B}/playback/rewind`, () => HttpResponse.json({ mode: 'unavailable', advertised_start: null, advertised_end: null, verified: false, recording_enabled: false, granularity_seconds: 60, reason: 'Fixture has no archive.' })),
   http.get(`${B}/playback/options`, ({ request }) => {
     const id = new URL(request.url).searchParams.get('id') ?? ''
