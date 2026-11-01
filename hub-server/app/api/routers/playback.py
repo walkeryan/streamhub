@@ -21,6 +21,7 @@ from app.proxy.stream_proxy import HlsSourceBusy
 from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
+from app.services.playback import StreamGrant
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -106,11 +107,12 @@ async def multiview(body: S.MultiviewRequest, c: C, p: P) -> dict[str, Any]:
         for desc, grant in zip(descriptors, grants, strict=True):
             # Recheck after all awaits so a policy/session change cannot slip
             # between the first pane's authorization and the atomic response.
-            await c.auth.session_valid(grant.profile_id, grant.profile_version, grant.session_id)
+            version, session_id, content_ref = _pair_identity(grant)
+            if grant.profile_id != p.profile_id or session_id != p.session_id:
+                raise Forbidden("Multiview grant belongs to another session.", code="multiview_expired")
+            await c.auth.session_valid(grant.profile_id, version, session_id)
             await c.content_policy.require_grant(grant, c.auth)
-            await c.playback._check_channel_audio(
-                p.profile_id, grant.content_ref, grant.audio_variant, grant.audio_consent
-            )
+            await c.playback._check_channel_audio(p.profile_id, content_ref, grant.audio_variant, grant.audio_consent)
             if await c.catalog.preferred_languages(p.profile_id, None) != grant.audio_preferred:
                 raise Conflict("Audio preferences changed; select the pair again.", code="audio_selection_required")
             grant.pair_lease_id = lease_id
@@ -277,6 +279,17 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
 
 
 # ---------------------------------------------------------------- streaming
+def _pair_identity(grant: StreamGrant) -> tuple[int, str, str]:
+    if (
+        grant.profile_version is None
+        or not grant.session_id
+        or not grant.content_ref
+        or not grant.content_ref.startswith("ch:")
+    ):
+        raise Forbidden("Multiview grant is missing its session or channel binding.", code="multiview_expired")
+    return grant.profile_version, grant.session_id, grant.content_ref
+
+
 async def _grant(c: C, token: str) -> Any:
     c.proxy.ensure_running()
     g = c.tokens.verify(token)
@@ -285,14 +298,15 @@ async def _grant(c: C, token: str) -> Any:
     try:
         await c.content_policy.require_grant(g, c.auth)
         if g.pair_lease_id:
-            await c.auth.session_valid(g.profile_id, g.profile_version, g.session_id)
+            version, session_id, content_ref = _pair_identity(g)
+            await c.auth.session_valid(g.profile_id, version, session_id)
             source = await c.sources.get(g.source_id)
             maximum = c.sources.max_connections(source)
             if not maximum or maximum < 1 or c.proxy._source_use(g.source_id) > maximum:
                 raise Conflict("Provider capacity changed.", code="multiview_capacity")
             if not source.enabled or await c.catalog.preferred_languages(g.profile_id, None) != g.audio_preferred:
                 raise Forbidden("Multiview source or audio preferences changed.", code="multiview_expired")
-            await c.playback._check_channel_audio(g.profile_id, g.content_ref, g.audio_variant, g.audio_consent)
+            await c.playback._check_channel_audio(g.profile_id, content_ref, g.audio_variant, g.audio_consent)
             await c.proxy.validate_pair(g.pair_lease_id, f"{g.source_id}:{g.url}:none", g.profile_id, g.session_id)
     except BaseException:
         if g.pair_lease_id:
