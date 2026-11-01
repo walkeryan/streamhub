@@ -109,3 +109,17 @@ test('profile change uses its own saved discovery filters and never reuses the p
   await expect(page.getByRole('button',{name:'Sort: Newest',exact:true})).toBeVisible()
   await expect.poll(async()=> (await requests(page)).at(-1)).toContain('year=2005')
 })
+
+test('default metadata fixtures support rail navigation and source scope without filtering out titles',async({page})=>{
+  await signIn(page)
+  await page.getByRole('link',{name:'Movies',exact:true}).click()
+  await expect(page.getByTestId('discover')).toBeVisible()
+  await expect(page.getByTestId('tile')).toHaveCount(12)
+  await page.getByRole('button',{name:'Availability source: All sources',exact:true}).click()
+  await page.getByRole('button',{name:'IPTV Provider',exact:true}).click()
+  await expect(page.getByTestId('tile')).toHaveCount(12)
+  await expect(page.getByTestId('tile').filter({hasText:'Harbor Lights'})).toContainText('Not available here')
+  await page.getByRole('link',{name:'Series',exact:true}).click()
+  await expect(page.getByTestId('tile')).toHaveCount(6)
+  await expect(page.getByTestId('discover')).toContainText('Synthetic metadata fixture catalog')
+})

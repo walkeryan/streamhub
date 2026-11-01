@@ -160,6 +160,29 @@ export const handlers = [
       attribution: 'Availability data by JustWatch',
     })
   }),
+  // Fixture metadata catalog; source/language scope changes availability only.
+  // Audio evidence here is the explicit English fixture used by playback/options.
+  http.get(`${B}/discover/:section`, async ({ params, request }) => {
+    const u = new URL(request.url)
+    const page = Math.max(1, Math.min(500, Number(u.searchParams.get('page') ?? 1)))
+    const source = u.searchParams.get('source_id'), language = u.searchParams.get('language')
+    const year = u.searchParams.get('year'), sort = u.searchParams.get('sort')
+    const kind = params.section === 'shows' ? 'show' : 'movie'
+    const profile = profiles.find((p) => p.id === currentProfileId(request))
+    const allowedAudio = !language || language === 'all' || language.split(',').includes('eng')
+    let list = titles.filter((t) => t.kind === kind && (!year || t.year === Number(year)))
+    if (sort === 'rating') list = [...list].sort((a,b) => (b.rating ?? 0) - (a.rating ?? 0))
+    if (sort === 'newest') list = [...list].sort((a,b) => (b.year ?? 0) - (a.year ?? 0))
+    // Unclassified fixtures are not a parental-policy bypass.
+    if (profile?.content_restricted) list = []
+    const size = 20
+    await delay(60)
+    return HttpResponse.json({
+      tiles: list.slice((page-1)*size,page*size).map((tile) => ({ ...tile, sources: allowedAudio ? tile.sources.filter((s) => !source || s.source_id === source) : [] })),
+      page, page_size:size, total:profile?.content_restricted ? null : list.length,
+      has_more:page*size<list.length, coverage_note:'Synthetic metadata fixture catalog. Availability is checked separately; this is not exhaustive coverage.',
+    } satisfies components['schemas']['DiscoveryPage'])
+  }),
   http.get(`${B}/browse/:section/categories`, () => HttpResponse.json([])),
   http.get(`${B}/browse/:section/languages`, () => HttpResponse.json([{ code: 'eng', name: 'English', count: titles.length }])),
   http.get(`${B}/browse/:section`, async ({ params, request }) => {

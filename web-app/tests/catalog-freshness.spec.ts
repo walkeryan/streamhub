@@ -23,6 +23,8 @@ test('source changes refresh genre facets with bounded polling and stable snapsh
   await page.clock.install()
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
+  await expect(page.getByTestId('discover')).toBeVisible()
+  await page.getByRole('button', { name: 'My library', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Genre: All genres', exact: true })).toBeVisible()
   const baseline = await page.evaluate(() => (window as unknown as { genreReads: number }).genreReads)
   await page.evaluate(() => { (window as unknown as { sourceSnapshot: object }).sourceSnapshot = { status: 'syncing', last_sync: '2026-10-31T18:00:00Z', count: 2 } })
