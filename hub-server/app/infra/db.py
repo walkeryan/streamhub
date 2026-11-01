@@ -12,6 +12,8 @@ from typing import Any
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from app.infra.result_cache import CatalogRevisions, ResultCache
+
 log = logging.getLogger(__name__)
 
 HUB_ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +22,8 @@ HUB_ROOT = Path(__file__).resolve().parents[2]
 class Database:
     def __init__(self, url: str) -> None:
         self.url = url
+        self.catalog_revisions = CatalogRevisions()
+        self.result_cache = ResultCache()
         self.engine: AsyncEngine = create_async_engine(url, future=True)
         if url.startswith("sqlite"):
 
@@ -37,6 +41,7 @@ class Database:
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessionmaker() as s:
+            self.catalog_revisions.observe(s.sync_session)
             yield s
 
     async def dispose(self) -> None:

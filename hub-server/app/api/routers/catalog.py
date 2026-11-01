@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, Response
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.services.errors import ServiceError
+from app.services.listing_cache import listing_cached, normalized_query
 from app.services.sports import sports_on_now
 
 router = APIRouter()
@@ -39,14 +40,23 @@ async def sports(
 async def search(
     c: C,
     p: P,
+    response: Response,
     q: str = Query(..., min_length=1, max_length=200),
     kinds: str | None = None,
     limit: int = Query(40, ge=1, le=100),
     language: str | None = None,
     source_id: str | None = None,
 ) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
     kind_set = {k.strip() for k in kinds.split(",") if k.strip()} if kinds else None
-    return await c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id)
+    q = normalized_query(q) or ""
+    return await listing_cached(
+        c.db,
+        p.profile_id,
+        "search",
+        (q, tuple(sorted(kind_set or [])), limit, language, source_id),
+        lambda: c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id),
+    )
 
 
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
@@ -59,6 +69,7 @@ async def browse(
     section: str,
     c: C,
     p: P,
+    response: Response,
     source_id: str | None = None,
     genre: str | None = None,
     category: str | None = None,
@@ -67,16 +78,25 @@ async def browse(
     sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
     page: int = Query(1, ge=1),
 ) -> dict[str, Any]:
-    return await c.catalog.browse(
-        section,
+    response.headers["Cache-Control"] = "private, no-store"
+    q = normalized_query(q)
+    return await listing_cached(
+        c.db,
         p.profile_id,
-        source_id=source_id,
-        genre=genre,
-        category=category,
-        sort=sort,
-        page=page,
-        language=language,
-        q=q,
+        "browse",
+        (section, source_id, genre, category, language, q, sort, page),
+        lambda: c.catalog.browse(
+            section,
+            p.profile_id,
+            source_id=source_id,
+            genre=genre,
+            category=category,
+            sort=sort,
+            page=page,
+            language=language,
+            q=q,
+        ),
+        ttl=60,
     )
 
 
