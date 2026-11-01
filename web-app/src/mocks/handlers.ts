@@ -205,6 +205,7 @@ export const handlers = [
     return HttpResponse.json(Object.fromEntries(ids.map((id) => [id, programmesFor(channels.find((c) => c.id === id) ?? channels[0]!, from, to)])))
   }),
 
+  http.get(`${B}/playback/generation`, () => HttpResponse.json({ generation: 'fixture-generation' })),
   http.post(`${B}/playback/resolve`, async ({ request }) => {
     const b = (await request.json()) as { id: string; source_id?: string | null }
     const t = tileById(b.id)

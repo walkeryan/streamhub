@@ -202,6 +202,11 @@ h1, h2, h3, p { margin: 0; }
 /* grid */
 .grid-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-poster-w), 1fr)); gap: 1.25rem var(--tile-gap); padding: 1rem 0.5rem; }
 .grid-tiles .tile { width: auto; aspect-ratio: 2/3; height: auto; }
+.search-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; align-items: start; }
+.search-controls { min-width: 0; }
+@media (min-width: 1024px) {
+  .search-layout { grid-template-columns: 22rem minmax(0, 1fr); }
+}
 
 /* player */
 .player { position: fixed; inset: 0; background: #000; color: #fff; z-index: 60; overflow: hidden; }

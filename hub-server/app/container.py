@@ -191,6 +191,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
 async def startup(c: Container, *, start_background: bool = True) -> None:
     await c.db.migrate()
     await c.app_settings.load()
+    c.proxy.paused = bool(c.app_settings.get("playback_recovery_paused"))
     await c.service_registry.seed()
     generated = await c.auth.ensure_admin(c.settings.admin_password)
     if generated and not c.settings.google_auth_required:

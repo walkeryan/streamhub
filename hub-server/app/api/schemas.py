@@ -20,6 +20,10 @@ class Error(_M):
     message: str
 
 
+class StreamRecoveryConfirm(_M):
+    confirm: Literal[True]
+
+
 class Profile(_M):
     id: str
     name: str
@@ -287,6 +291,7 @@ class PlaybackRequest(_M):
     source_id: str | None = None
     client: Literal["android_tv", "web"] = "web"
     prefer_hls: bool = False
+    recovery_generation: str | None = Field(default=None, max_length=64)
     catchup_programme_id: str | None = None
 
 

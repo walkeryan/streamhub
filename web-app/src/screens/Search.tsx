@@ -43,8 +43,8 @@ export function Search() {
   )
 
   return (
-    <div className="page-pad flex gap-8 flex-wrap md:flex-nowrap" data-testid="search" style={{ alignItems: 'flex-start' }}>
-      <FocusGroup focusKey="search:left" className="flex flex-col gap-4" style={{ width: 'min(22rem, 100%)', flex: 'none' }}>
+    <div className="page-pad search-layout" data-testid="search">
+      <FocusGroup focusKey="search:left" className="search-controls flex flex-col gap-4" data-testid="search-controls">
         <h1 className="title-xl">Search</h1>
         <FocusableInput focusKey="search:input" label="Search titles and channels" placeholder="Titles, shows, channels" value={q} onChange={setQ}
           inputRef={input} inputMode="search" onSubmit={() => setQ((v) => v.trim())} />
@@ -57,7 +57,7 @@ export function Search() {
         )}
         <p className="label" aria-live="polite">{isFetching ? 'Searching…' : dq.trim().length > 1 && data ? `${playHere.length + openIn.length + chans.length} results` : 'Type at least 2 letters.'}</p>
       </FocusGroup>
-      <div className="flex-1 min-w-0" style={{ minHeight: '20rem' }}>
+      <div className="min-w-0" data-testid="search-results" style={{ minHeight: '20rem' }}>
         {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : none ? (
           <Empty title={`No results for “${dq}”`} hint="Try a shorter title or All languages to include other and unknown languages.">
             <Button focusKey="search:all" onEnter={() => setLanguage('all')}>Search all languages</Button>

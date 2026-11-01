@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { api, reportProgress, unwrap } from '../api/client'
+import { api, ApiError, reportProgress, unwrap } from '../api/client'
 import type { PlaybackDescriptor } from '../api/types'
 import { attachSource, type PlayerHandle } from './engine'
 
@@ -7,10 +7,16 @@ export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'pau
 
 export interface PlaybackReq { id: string; sourceId?: string | null; catchupProgrammeId?: string | null }
 
-export async function resolve(req: PlaybackReq): Promise<PlaybackDescriptor> {
+async function playbackGeneration(): Promise<string> {
+  const status = await unwrap<{ generation: string }>(api.GET('/playback/generation'))
+  return status.generation
+}
+
+export async function resolve(req: PlaybackReq, generation?: string): Promise<PlaybackDescriptor> {
+  const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, source_id: req.sourceId ?? null, client: 'web', prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), catchup_programme_id: req.catchupProgrammeId ?? null },
+      body: { id: req.id, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), catchup_programme_id: req.catchupProgrammeId ?? null },
     }),
   )
 }
@@ -33,6 +39,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const retryTimer = useRef<number | null>(null)
   const waitingTimer = useRef<number | null>(null)
   const hasPlayed = useRef(false)
+  const terminal = useRef(false)
+  const intent = useRef<{ key: string; generation?: string }>({ key: '' })
   const clearWaiting = useCallback(() => {
     if (waitingTimer.current !== null) window.clearTimeout(waitingTimer.current)
     waitingTimer.current = null
@@ -44,6 +52,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const key = req ? `${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}` : ''
 
   const reconnect = useCallback((_reason: string) => {
+    if (terminal.current) return
     clearWaiting()
     if (retryTimer.current !== null) return
     if (retry.current >= MAX_RETRIES) {
@@ -58,7 +67,15 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
 
   // resolve + attach
   useEffect(() => {
-    if (!req) return
+    if (!req) {
+      intent.current = { key: '' }
+      terminal.current = false
+      return
+    }
+    if (intent.current.key !== key) {
+      intent.current = { key }
+      terminal.current = false
+    }
     let cancelled = false
     const controller = new AbortController()
     hasPlayed.current = false
@@ -69,7 +86,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     setError(null)
     ;(async () => {
       try {
-        const d = await resolve(req)
+        if (!intent.current.generation) {
+          const generation = await playbackGeneration()
+          if (cancelled) return
+          intent.current.generation = generation
+        }
+        const d = await resolve(req, intent.current.generation)
         if (cancelled) return
         setDesc(d)
         descRef.current = d
@@ -89,7 +111,22 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') { clearWaiting(); setState('paused') }
         }
       } catch (e) {
-        if (!cancelled) reconnect(e instanceof Error ? e.message : 'unknown error')
+        if (cancelled) return
+        // Re-resolving cannot repair missing content or denied access. Keep
+        // transient network/server failures on the bounded reconnect path.
+        if (e instanceof ApiError && [400, 401, 403, 404, 410, 422].includes(e.status)) {
+          terminal.current = true
+          clearWaiting()
+          clearRetry()
+          setState('error')
+          setError(e.code === 'playback_paused' || e.code === 'playback_stopped'
+            ? 'Playback was stopped by an administrator. Once playback is resumed, choose Try again to start a new stream.'
+            : e.code === 'playback_reload_required'
+            ? 'Playback controls have been updated. Reload Streamhub before trying again.'
+            : e.status === 401 || e.status === 403
+            ? 'Playback access was denied. Check your sign-in and source access, then try again.'
+            : 'This title or channel is unavailable from this source. Try another item or retry after the source is available.')
+        } else reconnect(e instanceof Error ? e.message : 'unknown error')
       }
     })()
     return () => {
@@ -114,7 +151,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       const d = descRef.current
       if (d && !d.live && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
     }
-    const onPlaying = () => { hasPlayed.current = true; clearWaiting(); clearRetry(); setState('playing') }
+    const onPlaying = () => { if (terminal.current) return; hasPlayed.current = true; clearWaiting(); clearRetry(); setState('playing') }
     const onPause = () => { clearWaiting(); if (!v.ended) setState((s) => (s === 'playing' || s === 'buffering' ? 'paused' : s)) }
     const onWaiting = () => {
       if (!hasPlayed.current || v.paused || waitingTimer.current !== null) return
@@ -188,6 +225,6 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     desc, state, error, tracks,
     setAudio: (i: number) => { handle.current?.setAudio(i); setTracksVersion((v) => v + 1) },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
-    retryNow: () => { clearWaiting(); clearRetry(); retry.current = 0; setAttempt((a) => a + 1) },
+    retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
   }
 }

@@ -6,8 +6,8 @@ export interface CatalogOption { id: string; label: string; count?: number }
 const PAGE_SIZE = 40
 
 /** Search and page metadata instead of mounting hundreds of category controls. */
-export function CatalogPicker({ scope, label, value, options, onChange }: {
-  scope: string; label: string; value: string; options: CatalogOption[]; onChange: (id: string) => void
+export function CatalogPicker({ scope, label, value, options, selectedLabel, onChange }: {
+  scope: string; label: string; value: string; options: CatalogOption[]; selectedLabel?: string; onChange: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -15,10 +15,13 @@ export function CatalogPicker({ scope, label, value, options, onChange }: {
   const matches = useMemo(() => options.filter((o) => o.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [options, query])
   const pageIndex = Math.min(page, Math.max(0, Math.ceil(matches.length / PAGE_SIZE) - 1))
   const selected = options.find((o) => o.id === value)
+  // Scoped facets may omit an active choice when another filter has no matches.
+  // Callers may supply a display name; opaque source IDs must never become labels.
+  const currentLabel = selected?.label ?? selectedLabel ?? 'Choose'
   const close = () => setOpen(false)
   return <>
-    <Button focusKey={`${scope}:pick`} onEnter={() => { setQuery(''); setPage(0); setOpen(true) }} label={`${label}: ${selected?.label ?? 'Choose'}`}>
-      {label}: {selected?.label ?? 'Choose'}
+    <Button focusKey={`${scope}:pick`} onEnter={() => { setQuery(''); setPage(0); setOpen(true) }} label={`${label}: ${currentLabel}`}>
+      {label}: {currentLabel}
     </Button>
     <Modal open={open} onClose={close} title={label} firstFocusKey={`${scope}:search`}>
       <FocusableInput focusKey={`${scope}:search`} label={`Search ${label.toLowerCase()}`} placeholder={`Search ${options.length.toLocaleString()} options`} value={query} onChange={(v) => { setQuery(v); setPage(0) }} />

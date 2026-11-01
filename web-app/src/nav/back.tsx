@@ -96,7 +96,9 @@ export function useOverlayFocus(open: boolean, firstKey: string): void {
     return () => {
       window.clearTimeout(id)
       const b = before.current
-      if (b) window.setTimeout(() => { if (doesFocusableExist(b)) void setFocus(b) }, 20)
+      // Cleanup runs after the closing render. Restore now: a delayed restore
+      // can steal focus from the user's next D-pad action after dismissal.
+      if (b && doesFocusableExist(b)) void setFocus(b)
     }
   }, [open, firstKey])
 }
