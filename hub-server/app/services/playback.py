@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, quote_plus
 
+from app.adapters.language.inferrer import normalise_code
 from app.domain.entities import (
     LIBRARY_SOURCE_TYPES,
     PlaybackMode,
@@ -223,6 +224,7 @@ class PlaybackResolver:
         if h.scheme == "ch":
             if source_id and source_id != h.a:
                 raise NotFound("channel does not belong to the selected source")
+            await self._check_channel_audio(profile_id, hub_id, variant_id, allow_unverified_audio)
             return await self._resolve_channel(profile_id, hub_id, client, catchup_programme_id, https_site, rewind_at)
         if h.scheme == "lib":
             row = await self._catalog.title_row(h.a, h.b)
@@ -276,12 +278,63 @@ class PlaybackResolver:
             )
         return options
 
+    async def _channel_audio_option(self, profile_id: str, hub_id: str) -> dict[str, Any]:
+        ch = await self._authorized_channel(profile_id, hub_id)
+        src = await self._sources.get(ch.source_id)
+        preferred = await self._catalog.preferred_languages(profile_id, None)
+        info = audio_info(ch.data or {}, label=ch.name, group=ch.group_name)
+        # Even a provider language tag is only a hint unless actual audio-track
+        # metadata was retained. Never promote inferred Channel.language to proof.
+        info["language_hint"] = normalise_code(ch.language) or info["language_hint"]
+        return {
+            "variant_id": ids.channel_id(ch.source_id, ch.ext_id),
+            "source_id": ch.source_id,
+            "source_name": src.name,
+            "provider_label": ch.name,
+            "kind": "channel",
+            "year": None,
+            **info,
+            "preferred_audio_available": preferred_audio(info, preferred),
+        }
+
+    async def _check_channel_audio(
+        self, profile_id: str, hub_id: str, variant_id: str | None, allow_unverified_audio: bool
+    ) -> None:
+        option = await self._channel_audio_option(profile_id, hub_id)
+        if variant_id is not None and variant_id != option["variant_id"]:
+            raise NotFound("audio variant does not belong to this channel")
+        preferred = await self._catalog.preferred_languages(profile_id, None)
+        if preferred and not option["preferred_audio_available"] and not (variant_id and allow_unverified_audio):
+            raise Conflict(
+                "No verified preferred audio. Confirm this channel's audio source.", code="audio_selection_required"
+            )
+
     async def options(self, profile_id: str, hub_id: str, source_id: str | None = None) -> dict[str, Any]:
         try:
             h = ids.parse(hub_id)
         except ValueError as exc:
             raise NotFound("unknown id") from exc
         rows: list[Title] = []
+        channel_id = hub_id if h.scheme == "ch" else None
+        if h.scheme == "prog":
+            prog = await self._channels.programme(hub_id)
+            channels = await self._channels_for_epg(prog.epg_channel, prog.feed)
+            if not channels:
+                raise NotFound("no channel for programme")
+            channel_id = ids.channel_id(channels[0].source_id, channels[0].ext_id)
+        if channel_id:
+            option = await self._channel_audio_option(profile_id, channel_id)
+            if source_id and source_id != option["source_id"]:
+                raise NotFound("channel does not belong to the selected source")
+            preferred = await self._catalog.preferred_languages(profile_id, None)
+            automatic = option["variant_id"] if not preferred or option["preferred_audio_available"] else None
+            return {
+                "id": hub_id,
+                "preferred_languages": preferred,
+                "options": [option],
+                "automatic_variant_id": automatic,
+                "selection_required": automatic is None,
+            }
         if h.scheme == "lib":
             row = await self._catalog.title_row(h.a, h.b)
             if row is not None:
@@ -421,7 +474,14 @@ class PlaybackResolver:
             return list(
                 (
                     await s.execute(
-                        select(Channel).where(Channel.epg_id == epg_channel).order_by(Channel.source_id != feed)
+                        select(Channel)
+                        .join(Source, Source.id == Channel.source_id)
+                        .where(
+                            Channel.epg_id == epg_channel,
+                            Channel.source_id == feed,
+                            Source.enabled.is_(True),
+                        )
+                        .order_by(Channel.id)
                     )
                 ).scalars()
             )
