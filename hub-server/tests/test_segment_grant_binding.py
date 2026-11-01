@@ -12,14 +12,19 @@ from starlette.requests import Request
 from app.api.routers.playback import _proxy_url, stream_segment
 from app.infra.crypto import Crypto
 from app.services.errors import Forbidden, Unauthorized
+from app.services.playback import StreamGrant
 
 
 @pytest.fixture
 def ctx() -> Any:
-    grant = SimpleNamespace(headers={}, source_id="fixture", recovery_generation=0)
+    grant = StreamGrant(
+        profile_id="fixture-profile", source_id="fixture", url="https://fixture.invalid/master.m3u8",
+        headers={}, mode="proxy", live=True, channel_key=None, transcode=False, recovery_generation=0,
+    )
     return SimpleNamespace(
         crypto=Crypto("local-fixture-only-segment-key"),
         tokens=SimpleNamespace(verify=lambda _: grant, ttl_s=300),
+        sources=SimpleNamespace(get=AsyncMock(return_value=object()), max_connections=Mock(return_value=1)),
         proxy=SimpleNamespace(ensure_running=Mock(), generation=0, passthrough=AsyncMock(), fetch_text=AsyncMock()),
         content_policy=SimpleNamespace(require_grant=AsyncMock()), auth=object(),
     )
