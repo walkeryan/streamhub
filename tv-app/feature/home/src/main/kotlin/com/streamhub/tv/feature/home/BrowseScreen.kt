@@ -3,6 +3,9 @@ package com.streamhub.tv.feature.home
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.unit.dp
@@ -108,13 +111,20 @@ fun BrowseScreen(title: String, vm: BrowseViewModel = hiltViewModel()) {
     val rail = LocalRailController.current
     val grid = rememberLazyGridState()
     var picker by remember { mutableStateOf<String?>(null) }
+    val firstControl = remember { FocusRequester() }
+    var needsInitialFocus by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(s.ready) {
+        if (s.ready && needsInitialFocus) {
+            runCatching { firstControl.requestFocus() }.onSuccess { needsInitialFocus = false }
+        }
+    }
     LaunchedEffect(s.page, s.filters) { grid.scrollToItem(0) }
     val sourceName = s.sources.find { it.id == s.filters.source }?.name ?: s.filters.source ?: "All sources"
     val languageName = s.languages.find { it.code == s.filters.language }?.name ?: when(s.filters.language) { null -> "My languages"; "all" -> "All languages"; "und" -> "Unknown"; else -> s.filters.language!! }
     Column(Modifier.fillMaxSize().padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("$title · ${s.total} titles", style = MaterialTheme.typography.headlineMedium, color = t.text)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ShButton("Source: $sourceName", { picker = "source" }, Modifier.weight(1f).leftOpensRail(rail), enabled = s.ready)
+            ShButton("Source: $sourceName", { picker = "source" }, Modifier.weight(1f).focusRequester(firstControl).leftOpensRail(rail), enabled = s.ready)
             ShButton("Genre: ${s.filters.genre ?: "All genres"}", { picker = "genre" }, Modifier.weight(1f), enabled = s.ready)
             ShButton(languageName, { picker = "language" }, Modifier.weight(1f), enabled = s.ready)
             ShButton("Sort", { picker = "sort" }, enabled = s.ready)

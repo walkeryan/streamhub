@@ -3,6 +3,9 @@ package com.streamhub.tv.feature.home
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -95,6 +98,13 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
     val launcher = LocalPlayLauncher.current
     val list = rememberLazyListState()
     var picker by remember { mutableStateOf<String?>(null) }
+    val firstControl = remember { FocusRequester() }
+    var needsInitialFocus by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(s.ready) {
+        if (s.ready && needsInitialFocus) {
+            runCatching { firstControl.requestFocus() }.onSuccess { needsInitialFocus = false }
+        }
+    }
     LaunchedEffect(s.page, s.filters) { list.scrollToItem(0) }
     // Only refresh while this destination is composed; never retain stale schedules indefinitely.
     LaunchedEffect(vm) { while (true) { delay(60_000); vm.refresh() } }
@@ -102,7 +112,7 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
         Text("Sports on now", style = MaterialTheme.typography.headlineMedium, color = t.text)
         Text("Current guide listings; may include replays and sports news. No scores or live-event claims.", color = t.textMuted)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ShButton(s.filters.sport ?: "All sports", { picker = "sport" }, Modifier.leftOpensRail(rail), enabled = s.ready)
+            ShButton(s.filters.sport ?: "All sports", { picker = "sport" }, Modifier.focusRequester(firstControl).leftOpensRail(rail), enabled = s.ready)
             ShButton(s.languages.find { it.code == s.filters.language }?.name ?: when(s.filters.language) { null -> "My languages"; "all" -> "All languages"; "und" -> "Unknown"; else -> s.filters.language!! }, { picker = "language" }, enabled = s.ready)
             ShButton("Refresh", { vm.refresh() }, enabled = s.ready && !s.loading)
             ShButton("Reset filters", { vm.filters(NativeSportsFilters()) }, enabled = s.ready)
