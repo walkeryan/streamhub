@@ -3,6 +3,28 @@ package com.streamhub.tv.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.api.ApiException
+import com.streamhub.tv.core.data.auth.Session
+import com.streamhub.tv.core.data.auth.sameSwitchSession
+import com.streamhub.tv.core.data.auth.validOwnerVerificationUri
+import com.streamhub.tv.core.data.model.AuthConfig
+import com.streamhub.tv.core.data.model.AuthTokens
+import com.streamhub.tv.core.data.model.OwnerReauthChallenge
+import com.streamhub.tv.core.data.model.OwnerReauthPoll
+import com.streamhub.tv.core.data.repo.ChannelListCache
+import com.streamhub.tv.core.data.repo.PlaybackCoordinator
+import com.streamhub.tv.core.data.repo.ProfileSwitchPath
+import com.streamhub.tv.core.data.repo.profileSwitchPath
+import com.streamhub.tv.core.data.repo.awaitOwnerReauth
+import com.streamhub.tv.core.data.repo.catalogScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Job
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.ChannelGroup
 import com.streamhub.tv.core.data.model.ChannelGroupPatch
@@ -44,6 +66,10 @@ data class SettingsState(
     val serverUrl: String? = null,
     val message: String? = null,
     val pinPromptFor: Profile? = null,
+    val authConfig: AuthConfig? = null,
+    val switching: Boolean = false,
+    val ownerReauth: OwnerReauthChallenge? = null,
+    val switchTargetName: String? = null,
 )
 
 @HiltViewModel
@@ -52,6 +78,8 @@ class SettingsViewModel @Inject constructor(
     private val session: SessionStore,
     private val prefs: LocalPrefs,
     private val themes: ThemeRepository,
+    private val playback: PlaybackCoordinator,
+    private val channelCache: ChannelListCache,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState())
     val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -59,26 +87,36 @@ class SettingsViewModel @Inject constructor(
     val selectedTheme = themes.selectedThemeId.stateIn(viewModelScope, SharingStarted.Eagerly, ThemeRepository.DEFAULT_THEME)
     val reducedMotion = prefs.reducedMotion.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    private var loadJob: Job? = null
+    private var switchJob: Job? = null
     init { load() }
 
     private fun pid() = _state.value.current?.id ?: "default"
 
-    fun load() = viewModelScope.launch {
-        val s = session.current()
-        _state.update { it.copy(current = s.profile, serverUrl = s.serverUrl) }
-        launch { runCatching { api.profiles() }.onSuccess { p -> _state.update { it.copy(profiles = p) } } }
-        launch { runCatching { api.channelLanguages() }.onSuccess { l -> _state.update { it.copy(languages = l) } } }
-        launch { runCatching { api.channelGroups() }.onSuccess { g -> _state.update { it.copy(groups = g) } } }
-        launch { runCatching { api.settings() }.onSuccess { st -> _state.update { it.copy(serverSettings = st) } } }
-        launch {
-            runCatching { api.home() }.onSuccess { h ->
-                val server = s.profile?.id?.let { p -> runCatching { api.homeLayout(p) }.getOrNull() }
-                val order = server?.rows?.takeIf { it.isNotEmpty() }?.sortedBy { it.sort ?: Int.MAX_VALUE }?.map { it.id } ?: prefs.rowOrder(pid()).first()
-                val hidden = server?.rows?.takeIf { it.isNotEmpty() }?.filter { it.hidden }?.map { it.id }?.toSet() ?: prefs.hiddenRows(pid()).first()
-                val rows = h.rows.sortedBy { r -> order.indexOf(r.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
-                _state.update { it.copy(rows = rows, rowOrder = rows.map { r -> r.id }, hiddenRows = hidden) }
+    fun load(): Job {
+        loadJob?.cancel()
+        return viewModelScope.launch {
+            val original=session.current()
+            suspend fun guard() { currentCoroutineContext().ensureActive(); if(session.current().catalogScope()!=original.catalogScope()) throw CancellationException("Profile changed") }
+            _state.update { it.copy(current=original.profile,serverUrl=original.serverUrl,rows=emptyList(),groups=emptyList(),languages=emptyList(),authConfig=null) }
+            launch { try { val config=api.authConfig();guard();_state.update {it.copy(authConfig=config)} } catch(e:CancellationException){throw e}catch(_:Exception){guard();_state.update{it.copy(message="Could not verify profile-switch capability. Retry when connected.")}} }
+            launch { try {val profiles=api.profiles();guard();_state.update{it.copy(profiles=profiles,current=profiles.firstOrNull{p->p.id==original.profile?.id} ?: it.current)}}catch(e:CancellationException){throw e}catch(_:Exception){} }
+            launch {try{val values=api.channelLanguages();guard();_state.update{it.copy(languages=values)}}catch(e:CancellationException){throw e}catch(_:Exception){} }
+            launch {try{val values=api.channelGroups();guard();_state.update{it.copy(groups=values)}}catch(e:CancellationException){throw e}catch(_:Exception){} }
+            launch {try{val values=api.settings();guard();_state.update{it.copy(serverSettings=values)}}catch(e:CancellationException){throw e}catch(_:Exception){} }
+            launch {
+                try {
+                    val home=api.home();guard()
+                    val id=original.profile?.id ?: return@launch
+                    val layout=runCatching{api.homeLayout(id)}.getOrNull();guard()
+                    val order=layout?.rows?.takeIf{it.isNotEmpty()}?.sortedBy{it.sort ?: Int.MAX_VALUE}?.map{it.id} ?: prefs.rowOrder(id).first()
+                    val hidden=layout?.rows?.takeIf{it.isNotEmpty()}?.filter{it.hidden}?.map{it.id}?.toSet() ?: prefs.hiddenRows(id).first()
+                    guard()
+                    val rows=home.rows.sortedBy{r->order.indexOf(r.id).let{if(it<0)Int.MAX_VALUE else it}}
+                    _state.update{it.copy(rows=rows,rowOrder=rows.map{it.id},hiddenRows=hidden)}
+                }catch(e:CancellationException){throw e}catch(_:Exception){}
             }
-        }
+        }.also {loadJob=it}
     }
 
     fun select(section: SettingsSection) = _state.update { it.copy(section = section) }
@@ -151,19 +189,85 @@ class SettingsViewModel @Inject constructor(
 
     // ---- Profiles -----------------------------------------------------------------------------
     fun switchProfile(p: Profile, pin: String? = null) {
-        if (p.hasPin && pin == null) { _state.update { it.copy(pinPromptFor = p) }; return }
-        viewModelScope.launch {
-            runCatching { api.login(LoginRequest(profileId = p.id, pin = pin)) }
-                .onSuccess { tokens ->
-                    session.saveTokens(tokens)
-                    themes.select(tokens.profile.themeId)
-                    _state.update { it.copy(current = tokens.profile, pinPromptFor = null, message = "Switched to ${tokens.profile.name}") }
+        if(_state.value.switching || p.id==_state.value.current?.id) return
+        switchJob?.cancel()
+        _state.update {it.copy(switching=true,message=null)}
+        switchJob=viewModelScope.launch {
+            val original=session.current()
+            try {
+                val config=api.authConfig()
+                currentCoroutineContext().ensureActive()
+                if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
+                _state.update{it.copy(authConfig=config)}
+                when(profileSwitchPath(config,_state.value.current,p)) {
+                    ProfileSwitchPath.SameProfile -> Unit
+                    ProfileSwitchPath.OwnerGoogle -> ownerReauthSafely(original,p)
+                    ProfileSwitchPath.ExistingPin -> if(pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.switchProfile(LoginRequest(p.id,pin=pin)))
+                    ProfileSwitchPath.Secure -> commitSwitch(original,p,api.switchProfile(LoginRequest(p.id)))
+                    ProfileSwitchPath.Legacy -> if(p.hasPin && pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.login(LoginRequest(p.id,pin=pin)))
+                    ProfileSwitchPath.OwnerReauthRequired -> _state.update{it.copy(message="This target requires owner reauthentication or an existing credential this TV cannot supply. Use the normal Google owner sign-in/pairing flow; no PIN bypass is available.")}
+                    ProfileSwitchPath.Unavailable -> _state.update{it.copy(message="Secure profile switching is unavailable. Google sign-in restrictions remain in place.")}
                 }
-                .onFailure { e -> _state.update { it.copy(message = "Couldn't switch: ${e.message}", pinPromptFor = null) } }
+            } catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner sign-in expired. Start a new request.",ownerReauth=null)}}
+            catch(e:CancellationException){throw e}
+            catch(e:ApiException) {
+                if(e.error?.code=="owner_reauth_required") ownerReauthSafely(original,p)
+                else _state.update{it.copy(message=when(e.status){401->"Authentication failed. Use the existing credential or sign in again.";403->"Profile switch denied. Owner reauthentication is required; no PIN bypass is available.";410->"Owner sign-in expired. Start again.";else->"Could not switch profiles. Current profile remains selected."},pinPromptFor=null)}
+            } catch(_:Exception){_state.update{it.copy(message="Could not switch profiles. Current profile remains selected.",pinPromptFor=null)}}
+            finally {_state.update{it.copy(switching=false)}}
         }
     }
 
-    fun cancelPin() = _state.update { it.copy(pinPromptFor = null) }
+    private suspend fun ownerReauthSafely(original: Session, target: Profile) {
+        try { ownerReauth(original,target) }
+        catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner sign-in expired. Start a new request.")}}
+        catch(e:CancellationException){throw e}
+        catch(_:Exception){_state.update{it.copy(message="Owner reauthentication was denied, expired or unavailable. Current profile remains selected.")}}
+    }
+
+    private suspend fun ownerReauth(original: Session, target: Profile) {
+        var challenge: OwnerReauthChallenge?=null
+        var pollingStarted=false
+        try {
+            currentCoroutineContext().ensureActive()
+            if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
+            challenge=api.startOwnerReauth(target.id)
+            require(validOwnerVerificationUri(original.serverUrl,challenge.verificationUri)) { "Owner sign-in requires the canonical HTTPS Streamhub address" }
+            currentCoroutineContext().ensureActive()
+            if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
+            _state.update{it.copy(ownerReauth=challenge,pinPromptFor=null,switchTargetName=target.name)}
+            pollingStarted=true
+            val tokens=awaitOwnerReauth(challenge,target.id,{sameSwitchSession(original,session.current())}, poll={ request ->
+                try {api.pollOwnerReauth(request)}catch(e:ApiException){if(e.status==428)null else throw e}
+            }, cancel=api::cancelOwnerReauth)
+            challenge=null // Poll consumed the challenge; never cancel using the target's new session.
+            _state.update{it.copy(ownerReauth=null)}
+            commitSwitch(original,target,tokens)
+        } finally {
+            if(!pollingStarted) challenge?.let { active -> withContext(NonCancellable) { withTimeoutOrNull(5000) {runCatching{api.cancelOwnerReauth(OwnerReauthPoll(active.challengeId,active.pollToken))}}} }
+            _state.update{it.copy(ownerReauth=null,switchTargetName=null)}
+        }
+    }
+
+    private suspend fun commitSwitch(original: Session, target: Profile, tokens: AuthTokens) {
+        currentCoroutineContext().ensureActive()
+        require(tokens.profile.id==target.id)
+        if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
+        loadJob?.cancel()
+        _state.update{it.copy(rows=emptyList(),groups=emptyList(),languages=emptyList(),pinPromptFor=null)}
+        playback.clearForProfileSwitch()
+        channelCache.clear()
+        currentCoroutineContext().ensureActive()
+        session.saveSwitchedTokens(original,target.id,tokens)
+        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}")
+        themes.select(tokens.profile.themeId)
+        load()
+    }
+
+    fun cancelPin() {
+        switchJob?.cancel()
+        _state.update{it.copy(pinPromptFor=null,ownerReauth=null,switchTargetName=null)}
+    }
 
     fun patchServer(s: Settings) = viewModelScope.launch {
         runCatching { api.patchSettings(s) }.onSuccess { _state.update { it.copy(serverSettings = (it.serverSettings ?: Settings()).merge(s)) } }

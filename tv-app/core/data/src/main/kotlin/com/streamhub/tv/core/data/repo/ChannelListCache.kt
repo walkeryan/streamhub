@@ -14,6 +14,8 @@ class ChannelListCache @Inject constructor(private val api: StreamHubApi, privat
     private val lists = LinkedHashMap<Pair<String, String>, List<Channel>>()
     private var lastKey: Pair<String, String>? = null
 
+    fun clear() = synchronized(lists) { lists.clear(); lastKey=null }
+
     private suspend fun scope(): String {
         val s = session.current()
         return "${s.apiBase}|${s.profile?.id}"

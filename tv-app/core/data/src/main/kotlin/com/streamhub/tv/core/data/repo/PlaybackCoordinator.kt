@@ -65,6 +65,16 @@ class PlaybackCoordinator @Inject constructor(
 
     fun cancelPending() { inFlight?.cancel(); choiceOwner=null }
 
+    /** Called before committing a profile switch, while the old profile can still release its leases. */
+    suspend fun clearForProfileSwitch() {
+        cancelPending()
+        val owner=activeOwner
+        val stop=stopActive
+        stop?.invoke()
+        cache.clear()
+        if(activeOwner==owner) { activeOwner=null; stopActive=null }
+    }
+
     private fun submit(request: PlaybackRequest, preflight: Boolean = true, expectedOwner: CatalogScope? = null) {
         inFlight?.cancel()
         inFlight = scope.launch {

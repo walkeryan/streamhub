@@ -133,6 +133,18 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     var qr by remember { mutableStateOf<HandoffResult.ShowQr?>(null) }
 
     LaunchedEffect(s.serverUrl, s.profile?.id, s.profile?.languages) { audioChoice = null; vm.coordinator.cancelPending() }
+    var previousProfile by remember { mutableStateOf(s.profile?.id) }
+    var previousServer by remember { mutableStateOf(s.serverUrl) }
+    LaunchedEffect(s.serverUrl,s.profile?.id) {
+        val oldProfile=previousProfile
+        val oldServer=previousServer
+        previousProfile=s.profile?.id; previousServer=s.serverUrl
+        if(oldProfile!=null && s.profile?.id!=null && (oldProfile!=s.profile?.id || oldServer!=s.serverUrl)) {
+            // Remove old Details/Search/Settings back-stack state; persisted per-profile data stays intact.
+            nav.navigate(if(oldServer==s.serverUrl) Routes.HOME else Routes.ONBOARDING) { popUpTo(nav.graph.id) {inclusive=true}; launchSingleTop=true }
+        }
+    }
+
 
     // Play events → player route (no intermediate screen) or hand-off.
     LaunchedEffect(Unit) {

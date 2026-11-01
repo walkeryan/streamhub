@@ -83,6 +83,18 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
         }
     }
 
+    /** Atomic compare-and-replace prevents a late challenge from overwriting a newer sign-in/server. */
+    suspend fun saveSwitchedTokens(expected: Session, targetId: String, tokens: AuthTokens) {
+        require(tokens.profile.id==targetId) { "Profile switch target mismatch" }
+        context.sessionStore.edit { values ->
+            val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) })
+            if(!sameSwitchSession(expected,current)) throw kotlinx.coroutines.CancellationException("Profile session changed")
+            values[K.access]=tokens.accessToken
+            values[K.refresh]=tokens.refreshToken
+            values[K.profile]=json.encodeToString(Profile.serializer(),tokens.profile)
+        }
+    }
+
     suspend fun updateProfile(profile: Profile) {
         context.sessionStore.edit { it[K.profile] = json.encodeToString(Profile.serializer(), profile) }
     }

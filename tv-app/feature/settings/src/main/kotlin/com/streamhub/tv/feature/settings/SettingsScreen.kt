@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +43,7 @@ import com.streamhub.tv.core.data.model.Settings
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.DISCLAIMER_TEXT
 import com.streamhub.tv.core.ui.components.DISCLAIMER_VERSION
+import com.streamhub.tv.core.ui.components.QrCode
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.ShTextField
@@ -60,8 +62,18 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
     val t = LocalThemeTokens.current
     val rail = LocalRailController.current
     val first = remember { FocusRequester() }
+    var switchOpener by remember { mutableStateOf<FocusRequester?>(null) }
+    var restoreSwitchFocus by remember { mutableStateOf(false) }
+    val cancelSwitch: () -> Unit = { restoreSwitchFocus=true; vm.cancelPin() }
+    LaunchedEffect(restoreSwitchFocus,s.switching) {
+        if(restoreSwitchFocus && !s.switching) {
+            withFrameNanos { }
+            runCatching { (switchOpener ?: first).requestFocus() }
+            restoreSwitchFocus=false
+        }
+    }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
-    DisposableEffect(Unit) { onDispose { vm.previewTheme(null) } }
+    DisposableEffect(Unit) { onDispose { vm.previewTheme(null); vm.cancelPin() } }
 
     Row(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
         Column(Modifier.width(260.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX).focusRestorer(first), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -82,7 +94,7 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
         Box(Modifier.weight(1f).fillMaxHeight().padding(start = 32.dp, end = Tokens.Canvas.SafeMarginX)) {
             s.message?.let { Text(it, color = t.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.align(Alignment.TopEnd)) }
             when (s.section) {
-                SettingsSection.Profiles -> ProfilesPane(s, vm)
+                SettingsSection.Profiles -> ProfilesPane(s, vm) { switchOpener=it }
                 SettingsSection.Theme -> ThemePane(vm)
                 SettingsSection.Languages -> LanguagesPane(s, vm)
                 SettingsSection.Rows -> RowsPane(s, vm)
@@ -92,7 +104,10 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
             }
         }
     }
-    s.pinPromptFor?.let { p -> PinDialog("Enter PIN for ${p.name}", onSubmit = { vm.switchProfile(p, it) }, onDismiss = vm::cancelPin) }
+    s.ownerReauth?.let { challenge ->
+        OwnerReauthDialog(challenge.verificationUri,s.switchTargetName ?: "selected profile",challenge.expiresIn,cancelSwitch)
+    }
+    s.pinPromptFor?.let { p -> PinDialog("Enter PIN for ${p.name}", onSubmit = { vm.switchProfile(p, it) }, onDismiss = cancelSwitch) }
 }
 
 @Composable
@@ -107,15 +122,19 @@ private fun Pane(title: String, content: androidx.compose.foundation.lazy.LazyLi
 }
 
 @Composable
-private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel) = Pane("Profiles") {
+private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel, onOpen: (FocusRequester) -> Unit) = Pane("Profiles") {
     items(s.profiles, key = { it.id }) { p ->
         val current = p.id == s.current?.id
+        val opener=remember(p.id){FocusRequester()}
         ShButton(
             (if (current) "✓ " else "") + p.name + (if (p.kids) " · Kids" else "") + (if (p.hasPin) " · 🔒" else ""),
-            { vm.switchProfile(p) },
+            { onOpen(opener); vm.switchProfile(p) },
+            modifier=Modifier.focusRequester(opener),
             style = if (current) ButtonStyle.Primary else ButtonStyle.Secondary,
+            enabled = !s.switching && s.authConfig != null,
         )
     }
+    item { Text(if(s.current?.contentRestricted==true) "Leaving this restricted profile requires fresh owner Google sign-in. A PIN cannot bypass it." else if(s.switching) "Checking profile authorization…" else "Profile changes keep each user's saved history and preferences separate.", color=LocalThemeTokensText()) }
     item { Text("Create and edit profiles from the web app (admin).", color = LocalThemeTokensText(), style = MaterialTheme.typography.bodySmall) }
 }
 
@@ -264,4 +283,20 @@ private fun PinDialog(title: String, onSubmit: (String) -> Unit, onDismiss: () -
         }
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+}
+
+@Composable
+private fun OwnerReauthDialog(uri: String, target: String, expires: Int, onCancel: () -> Unit) {
+    val t=LocalThemeTokens.current
+    val cancel=remember { FocusRequester() }
+    Dialog(onDismissRequest=onCancel) {
+        Column(Modifier.background(t.surface,RoundedCornerShape(Tokens.Radius.Lg)).padding(24.dp).width(540.dp),verticalArrangement=Arrangement.spacedBy(12.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+            Text("Owner Google sign-in required",style=MaterialTheme.typography.titleLarge,color=t.text)
+            Text("Scan with your phone to authorize switching to $target. This request expires in ${expires.coerceAtLeast(0)} seconds. A PIN cannot approve this change.",color=t.textMuted)
+            QrCode(uri)
+            Text("Waiting for fresh owner authentication…",color=t.textMuted)
+            ShButton("Cancel · stay on this profile",onCancel,Modifier.focusRequester(cancel))
+        }
+    }
+    LaunchedEffect(Unit){runCatching{cancel.requestFocus()}}
 }

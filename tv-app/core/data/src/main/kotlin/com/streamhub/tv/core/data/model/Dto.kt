@@ -56,6 +56,8 @@ data class Profile(
     @SerialName("has_pin") val hasPin: Boolean = false,
     val kids: Boolean = false,
     @SerialName("disclaimer_accepted_version") val disclaimerAcceptedVersion: String? = null,
+    @SerialName("has_password") val hasPassword: Boolean = false,
+    @SerialName("content_restricted") val contentRestricted: Boolean = false,
 )
 
 @Serializable
@@ -458,3 +460,21 @@ data class PlaybackOptions(
     val at: String? = null,
 )
 @Serializable data class BufferSeekResult(val url: String, val window: BufferWindow)
+
+@Serializable data class AuthConfig(
+    @SerialName("google_enabled") val googleEnabled: Boolean = false,
+    @SerialName("google_required") val googleRequired: Boolean = true,
+    @SerialName("content_policy_enabled") val contentPolicyEnabled: Boolean = false,
+)
+@Serializable data class OwnerReauthStart(@SerialName("profile_id") val profileId: String)
+@Serializable data class OwnerReauthChallenge(
+    @SerialName("challenge_id") val challengeId: String,
+    @SerialName("poll_token") val pollToken: String,
+    @SerialName("verification_uri") val verificationUri: String,
+    @SerialName("expires_in") val expiresIn: Int,
+    val interval: Int,
+)
+@Serializable data class OwnerReauthPoll(
+    @SerialName("challenge_id") val challengeId: String,
+    @SerialName("poll_token") val pollToken: String,
+)

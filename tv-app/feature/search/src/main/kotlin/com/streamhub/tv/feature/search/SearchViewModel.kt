@@ -29,8 +29,8 @@ class SearchViewModel @Inject constructor(
     private val loads = searchLoads(requests) { request ->
         api.search(request.query, languages = request.language?.let { if (it == "all") emptyList() else listOf(it) })
     }
-    val recent: StateFlow<List<String>> = session.session.map { it.profile?.id }.distinctUntilChanged()
-        .flatMapLatest { id -> if (id == null) flowOf(emptyList()) else prefs.recentSearches(id) }
+    val recent: StateFlow<List<String>> = session.session.map { it.serverUrl to it.profile?.id }.distinctUntilChanged()
+        .flatMapLatest { (server,id) -> if (server == null || id == null) flowOf(emptyList()) else prefs.recentSearches(server,id) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val ui: StateFlow<SearchUi> = combine(requests, loads) { request, loaded ->
@@ -42,8 +42,10 @@ class SearchViewModel @Inject constructor(
     fun onLanguage(value: String?) { language.value = value }
     fun commit() {
         val q = query.value.trim()
-        val profileId = requests.value?.scope?.profileId ?: return
+        val owner = requests.value?.scope ?: return
+        val profileId = owner.profileId ?: return
+        val server = owner.server ?: return
         if (q.length < 2) return
-        viewModelScope.launch { prefs.pushRecentSearch(profileId, q) }
+        viewModelScope.launch { prefs.pushRecentSearch(server, profileId, q) }
     }
 }

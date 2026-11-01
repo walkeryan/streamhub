@@ -228,6 +228,12 @@ class StreamHubApi @Inject constructor(
     suspend fun seekBuffer(action: BufferLeaseAction): BufferSeekResult = client.post(url("/playback/buffer/seek")) { setBody(action) }.ok()
     suspend fun releaseBuffer(action: BufferLeaseAction) { client.post(url("/playback/buffer/release")) { setBody(action) }.ok<Unit>() }
 
+    suspend fun authConfig(): AuthConfig = get("/auth/config")
+    suspend fun switchProfile(request: LoginRequest): AuthTokens = client.post(url("/auth/profile-switch")) { setBody(request) }.ok()
+    suspend fun startOwnerReauth(profileId: String): OwnerReauthChallenge = client.post(url("/auth/owner-reauth/start")) { setBody(OwnerReauthStart(profileId)) }.ok()
+    suspend fun pollOwnerReauth(request: OwnerReauthPoll): AuthTokens = client.post(url("/auth/owner-reauth/poll")) { setBody(request) }.ok()
+    suspend fun cancelOwnerReauth(request: OwnerReauthPoll) { client.post(url("/auth/owner-reauth/cancel")) { setBody(request) }.ok<Unit>() }
+
     suspend fun rewindCapability(id: String): RewindCapability = get("/playback/rewind") { parameter("id", id) }
 
     suspend fun playbackOptions(id: String, sourceId: String? = null): PlaybackOptions = get("/playback/options") {
