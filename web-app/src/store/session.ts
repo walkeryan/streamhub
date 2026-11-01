@@ -11,6 +11,9 @@ const sessionSchema = z.object({
 })
 
 interface SessionState {
+  /** Changes on login/logout, not ordinary token rotation. Never persisted. */
+  generation: number
+  refreshSession: (access: string, refresh: string, profile: Profile, expectedRefresh: string, expectedGeneration: number) => boolean
   access: string | null
   refresh: string | null
   profile: Profile | null
@@ -37,8 +40,13 @@ const persist = (s: Pick<SessionState, 'access' | 'refresh' | 'profile'>) =>
 
 export const useSession = create<SessionState>((set, get) => ({
   ...load(),
+  generation: 0,
+  refreshSession: (access, refresh, profile, expectedRefresh, expectedGeneration) => {
+    if (get().generation !== expectedGeneration || get().refresh !== expectedRefresh || get().profile?.id !== profile.id) return false
+    set({ access, refresh, profile }); persist(get()); return true
+  },
   setSession: (access, refresh, profile) => {
-    set({ access, refresh, profile })
+    set({ access, refresh, profile, generation: get().generation + 1 })
     persist(get())
   },
   setProfile: (profile) => {
@@ -46,7 +54,7 @@ export const useSession = create<SessionState>((set, get) => ({
     persist(get())
   },
   clear: () => {
-    set({ access: null, refresh: null, profile: null })
+    set({ access: null, refresh: null, profile: null, generation: get().generation + 1 })
     persist(get())
   },
 }))

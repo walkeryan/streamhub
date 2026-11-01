@@ -17,7 +17,7 @@ export class ApiError extends Error {
 const refreshes = new Map<string, Promise<boolean>>()
 
 async function refreshTokens(): Promise<boolean> {
-  const { refresh, setSession, clear } = useSession.getState()
+  const { refresh, refreshSession, clear, generation } = useSession.getState()
   if (!refresh) return false
   const existing = refreshes.get(refresh)
   if (existing) return existing
@@ -32,10 +32,10 @@ async function refreshTokens(): Promise<boolean> {
       const t = (await res.json()) as AuthTokens
       // A pending refresh must not restore a logged-out or replaced profile.
       if (useSession.getState().refresh !== refresh) return false
-      setSession(t.access_token, t.refresh_token, t.profile)
+      if (!refreshSession(t.access_token, t.refresh_token, t.profile, refresh, generation)) throw new Error('Refresh session changed')
       return true
     } catch {
-      if (useSession.getState().refresh === refresh) clear()
+      if (useSession.getState().refresh === refresh && useSession.getState().generation === generation) clear()
       return false
     } finally {
       window.setTimeout(() => refreshes.delete(refresh), 0)

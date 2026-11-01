@@ -4,6 +4,262 @@
  */
 
 export interface paths {
+    "/auth/owner-reauth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        profile_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Bound owner sign-in challenge */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            challenge_id: string;
+                            poll_token: string;
+                            verification_uri: string;
+                            expires_in: number;
+                            interval: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-reauth/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        challenge_id: string;
+                        poll_token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Approved target profile session */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+                /** @description Denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Expired */
+                410: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Pending */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-reauth/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        challenge_id: string;
+                        poll_token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Canceled */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/profile-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authenticated profile switch using existing credentials and server policy */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        profile_id: string;
+                        pin?: string;
+                        password?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/profiles/{id}/content-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Admin-only content policy */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ContentPolicy"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ContentPolicyInput"];
+                };
+            };
+            responses: {
+                /** @description Saved policy; target sessions invalidated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ContentPolicy"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -2664,6 +2920,22 @@ export interface components {
             refresh_token: string;
             profile: components["schemas"]["Profile"];
         };
+        ContentPolicy: {
+            profile_id: string;
+            feature_enabled: boolean;
+            restricted: boolean;
+            allowed_movie_codes: string[];
+            allowed_tv_codes: string[];
+            /** @default false */
+            allow_unknown: boolean;
+        };
+        ContentPolicyInput: {
+            restricted: boolean;
+            allowed_movie_codes: string[];
+            allowed_tv_codes: string[];
+            /** @default false */
+            allow_unknown: boolean;
+        };
         DeviceCode: {
             device_code: string;
             /** @description 6-char code shown on TV */
@@ -2680,6 +2952,10 @@ export interface components {
             /** @description ISO 639-3 filter for live TV; empty = all */
             languages: string[];
             has_pin: boolean;
+            /** @description Existing password credential available. Missing means unavailable. */
+            has_password?: boolean;
+            /** @description Server policy currently restricts this profile. */
+            content_restricted?: boolean;
             kids: boolean;
             disclaimer_accepted_version?: string | null;
         };

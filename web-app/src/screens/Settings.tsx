@@ -1,3 +1,5 @@
+import { ProfileSwitch } from '../components/ProfileSwitch'
+import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
 import { StreamRecovery } from '../components/StreamRecovery'
 import { useState } from 'react'
@@ -63,7 +65,6 @@ function useSaveProfile() {
 function ProfilesTab() {
   const { data, error, refetch } = useProfiles()
   const me = useCurrent()
-  const clear = useSession((s) => s.clear)
   const qc = useQueryClient()
   const toast = useUi((s) => s.toast)
   const [name, setName] = useState('')
@@ -91,7 +92,7 @@ function ProfilesTab() {
       <section className="flex flex-col gap-3">
         <h2 className="heading">Signed in as {me.name}</h2>
         <div className="flex gap-3 flex-wrap">
-          <Button focusKey="prof:switch" icon="user" onEnter={() => { clear(); qc.clear() }} testId="switch-profile">Switch profile</Button>
+          <ProfileSwitch />
         </div>
       </section>
       <section className="flex flex-col gap-3">
@@ -100,12 +101,12 @@ function ProfilesTab() {
           {(data ?? []).map((p) => (
             <div key={p.id} className="panel flex items-center gap-3">
               <span className="flex-1">{p.name}{p.id === me.id ? ' (you)' : ''}<span className="label"> {p.is_admin ? ' · Admin' : ''}{p.kids ? ' · Kids' : ''}{p.has_pin ? ' · PIN' : ''}</span></span>
-              {me.is_admin && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
+              {me.is_admin && !me.content_restricted && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
             </div>
           ))}
         </FocusGroup>
       </section>
-      {me.is_admin && (
+      {me.is_admin && !me.content_restricted && (
         <section className="flex flex-col gap-3">
           <h2 className="heading">Add a profile</h2>
           <div className="flex gap-3 flex-wrap items-center">
@@ -115,7 +116,7 @@ function ProfilesTab() {
           </div>
         </section>
       )}
-      <section className="flex flex-col gap-3">
+      {!me.content_restricted && <section className="flex flex-col gap-3">
         <h2 className="heading">PIN for {me.name}</h2>
         <p className="muted">{me.has_pin ? 'A PIN is required to open this profile.' : 'Anyone can open this profile. Add a PIN to lock it.'}</p>
         <div className="flex gap-3 flex-wrap items-center">
@@ -124,7 +125,7 @@ function ProfilesTab() {
           {me.has_pin && <Button focusKey="prof:pin-clear" danger onEnter={() => void savePin(null)}>Remove PIN</Button>}
         </div>
         {pinErr && <p role="alert" style={{ color: 'var(--t-danger)' }}>{pinErr}</p>}
-      </section>
+      </section>}
       <Modal open={!!confirm} onClose={() => setConfirm(null)} title={`Delete ${confirm?.name ?? ''}?`} firstFocusKey="del:cancel">
         <p>Their favorites, watchlist and resume positions are deleted too.</p>
         <div className="flex gap-3">
@@ -236,8 +237,9 @@ function ParentalTab() {
   return (
     <div className="flex flex-col gap-5">
       <section className="flex flex-col gap-2">
-        <h2 className="heading">Kids profile</h2>
-        <p className="muted">The kids profile label is saved, but rating-based restrictions are not yet enforced. Do not rely on this setting to block content.</p>
+        <ContentPolicySettings />
+        <h2 className="heading">Kids profile label</h2>
+        <p className="muted">This label alone does not block content. Server-enforced restrictions, when enabled, are managed separately by the owner.</p>
         <div><Chip focusKey="par:kids" pressed={me.kids} onEnter={() => save({ kids: !me.kids }, me.kids ? 'Kids label off.' : 'Kids label on.')}>{me.kids ? 'Kids label on' : 'Kids label off'}</Chip></div>
       </section>
       <section className="flex flex-col gap-2">

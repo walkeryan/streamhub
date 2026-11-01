@@ -20,6 +20,24 @@ components:
         access_token: {type: string}
         refresh_token: {type: string}
         profile: { $ref: '#/components/schemas/Profile' }
+    ContentPolicy:
+      type: object
+      required: [profile_id, feature_enabled, restricted, allowed_movie_codes, allowed_tv_codes, allow_unknown]
+      properties:
+        profile_id: {type: string}
+        feature_enabled: {type: boolean}
+        restricted: {type: boolean}
+        allowed_movie_codes: {type: array, items: {type: string}}
+        allowed_tv_codes: {type: array, items: {type: string}}
+        allow_unknown: {type: boolean, default: false}
+    ContentPolicyInput:
+      type: object
+      required: [restricted, allowed_movie_codes, allowed_tv_codes, allow_unknown]
+      properties:
+        restricted: {type: boolean}
+        allowed_movie_codes: {type: array, items: {type: string}}
+        allowed_tv_codes: {type: array, items: {type: string}}
+        allow_unknown: {type: boolean, default: false}
     DeviceCode:
       type: object
       required: [device_code, user_code, expires_in, interval]
@@ -40,6 +58,8 @@ components:
         theme_id: {type: string}
         languages: {type: array, items: {type: string}, description: "ISO 639-3 filter for live TV; empty = all"}
         has_pin: {type: boolean}
+        has_password: {type: boolean, description: Existing password credential available. Missing means unavailable.}
+        content_restricted: {type: boolean, description: Server policy currently restricts this profile.}
         kids: {type: boolean}
         disclaimer_accepted_version: {type: string, nullable: true}
 
@@ -497,6 +517,31 @@ components:
             channels_with_sports_schedule: {type: integer}
 
 paths:
+  /auth/owner-reauth/start:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string} } } } } }
+      responses: { '200': { description: Bound owner sign-in challenge, content: { application/json: { schema: { type: object, required: [challenge_id, poll_token, verification_uri, expires_in, interval], properties: { challenge_id: {type: string}, poll_token: {type: string}, verification_uri: {type: string}, expires_in: {type: integer}, interval: {type: integer} } } } } } }
+  /auth/owner-reauth/poll:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token], properties: { challenge_id: {type: string}, poll_token: {type: string} } } } } }
+      responses: { '200': { description: Approved target profile session, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }, '428': { description: Pending }, '410': { description: Expired }, '403': { description: Denied } }
+  /auth/owner-reauth/cancel:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token], properties: { challenge_id: {type: string}, poll_token: {type: string} } } } } }
+      responses: { '204': { description: Canceled } }
+  /auth/profile-switch:
+    post:
+      summary: Authenticated profile switch using existing credentials and server policy
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string}, pin: {type: string}, password: {type: string} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
+  /profiles/{id}/content-policy:
+    get:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: Admin-only content policy, content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
+    put:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicyInput' } } } }
+      responses: { '200': { description: Saved policy; target sessions invalidated, content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
   /auth/login:
     post:
       security: []
