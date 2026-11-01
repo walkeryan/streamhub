@@ -24,6 +24,7 @@ from app.infra.crypto import Crypto
 from app.infra.db import Database
 from app.infra.http import make_client
 from app.infra.settings import AppSettings
+from app.proxy.dvr import DvrManager
 from app.proxy.stream_proxy import StreamProxy
 from app.services.auth import AuthService
 from app.services.availability import AvailabilityService
@@ -150,6 +151,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         vaapi_device=settings.vaapi_device,
         on_start=active.inc,
         on_stop=active.dec,
+        dvr=DvrManager(settings.dvr_dir, enabled=settings.dvr_enabled, reserve_root=settings.dvr_reserve_dir),
     )
     return Container(
         settings=settings,

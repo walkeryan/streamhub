@@ -1002,6 +1002,160 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playback/buffer/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferLeaseRequest"];
+                };
+            };
+            responses: {
+                /** @description Owned viewer lease and actual window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BufferLeaseResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/buffer/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferViewerRequest"];
+                };
+            };
+            responses: {
+                /** @description Renewed viewer lease and actual window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BufferWindow"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/buffer/seek": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferSeekRequest"];
+                };
+            };
+            responses: {
+                /** @description Authorized seek playlist and actual window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BufferSeekResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/buffer/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferViewerRequest"];
+                };
+            };
+            responses: {
+                /** @description Viewer released; final viewer stops the owned producer */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/rewind": {
         parameters: {
             query?: never;
@@ -2694,6 +2848,38 @@ export interface components {
             /** @description Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients. */
             recovery_generation?: string | null;
         };
+        BufferWindow: {
+            /** @enum {string} */
+            mode: "local_buffer";
+            /** Format: date-time */
+            start?: string | null;
+            /** Format: date-time */
+            end?: string | null;
+            buffered_seconds: number;
+            target_seconds: number;
+            recording_enabled: boolean;
+        };
+        BufferLeaseRequest: {
+            stream_token: string;
+        };
+        BufferViewerRequest: components["schemas"]["BufferLeaseRequest"] & {
+            lease_id: string;
+            /** @default false */
+            paused: boolean;
+        };
+        BufferSeekRequest: components["schemas"]["BufferViewerRequest"] & {
+            /** Format: date-time */
+            at?: string | null;
+        };
+        BufferLeaseResponse: {
+            lease_id: string;
+            session_id: string;
+            window: components["schemas"]["BufferWindow"];
+        };
+        BufferSeekResponse: {
+            url: string;
+            window: components["schemas"]["BufferWindow"];
+        };
         RewindCapability: {
             /** @enum {string} */
             mode: "provider_archive" | "unavailable";
@@ -2718,6 +2904,8 @@ export interface components {
             };
             /** @default false */
             live: boolean;
+            /** @default false */
+            buffer_available: boolean;
             /** Format: date-time */
             archive_start?: string | null;
             /** Format: date-time */

@@ -317,6 +317,39 @@ class Handoff(_M):
     supports_title_link: bool
 
 
+class BufferWindow(_M):
+    mode: Literal["local_buffer"] = "local_buffer"
+    start: datetime | None = None
+    end: datetime | None = None
+    buffered_seconds: float = 0
+    target_seconds: int = 3600
+    recording_enabled: bool = True
+
+
+class BufferLeaseResponse(_M):
+    lease_id: str
+    session_id: str
+    window: BufferWindow
+
+
+class BufferSeekResponse(_M):
+    url: str
+    window: BufferWindow
+
+
+class BufferLeaseRequest(_M):
+    stream_token: str = Field(min_length=1, max_length=16384)
+
+
+class BufferViewerRequest(BufferLeaseRequest):
+    lease_id: str = Field(min_length=1, max_length=128)
+    paused: bool = False
+
+
+class BufferSeekRequest(BufferViewerRequest):
+    at: AwareDatetime | None = None
+
+
 class RewindCapability(_M):
     mode: Literal["provider_archive", "unavailable"]
     advertised_start: datetime | None = None
@@ -334,6 +367,7 @@ class PlaybackDescriptor(_M):
     mime: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     live: bool = False
+    buffer_available: bool = False
     archive_start: datetime | None = None
     archive_end: datetime | None = None
     resume_position_ms: int = 0

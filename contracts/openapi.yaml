@@ -229,6 +229,48 @@ components:
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
+    BufferWindow:
+      type: object
+      required: [mode, buffered_seconds, target_seconds, recording_enabled]
+      properties:
+        mode: {type: string, enum: [local_buffer]}
+        start: {type: string, format: date-time, nullable: true}
+        end: {type: string, format: date-time, nullable: true}
+        buffered_seconds: {type: number}
+        target_seconds: {type: integer}
+        recording_enabled: {type: boolean}
+    BufferLeaseRequest:
+      type: object
+      required: [stream_token]
+      properties:
+        stream_token: {type: string, maxLength: 16384}
+    BufferViewerRequest:
+      allOf:
+        - {$ref: '#/components/schemas/BufferLeaseRequest'}
+        - type: object
+          required: [lease_id]
+          properties:
+            lease_id: {type: string, maxLength: 128}
+            paused: {type: boolean, default: false}
+    BufferSeekRequest:
+      allOf:
+        - {$ref: '#/components/schemas/BufferViewerRequest'}
+        - type: object
+          properties:
+            at: {type: string, format: date-time, nullable: true}
+    BufferLeaseResponse:
+      type: object
+      required: [lease_id, session_id, window]
+      properties:
+        lease_id: {type: string}
+        session_id: {type: string}
+        window: {$ref: '#/components/schemas/BufferWindow'}
+    BufferSeekResponse:
+      type: object
+      required: [url, window]
+      properties:
+        url: {type: string}
+        window: {$ref: '#/components/schemas/BufferWindow'}
     RewindCapability:
       type: object
       required: [mode, verified, recording_enabled, granularity_seconds, reason]
@@ -250,6 +292,7 @@ components:
         mime: {type: string, nullable: true, description: "video/mp2t, application/x-mpegURL, video/mp4, application/dash+xml"}
         headers: { type: object, additionalProperties: {type: string} }
         live: {type: boolean, default: false}
+        buffer_available: {type: boolean, default: false}
         archive_start: {type: string, format: date-time, nullable: true}
         archive_end: {type: string, format: date-time, nullable: true}
         resume_position_ms: {type: integer, default: 0}
@@ -499,6 +542,22 @@ paths:
         - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
         - { name: source_id, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { results: {type: array, items: {$ref: '#/components/schemas/Tile'}}, metadata_available: {type: boolean}, discovery_note: {type: string}, play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+  /playback/buffer/lease:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferLeaseRequest'}}}}
+      responses: {'200': {description: Owned viewer lease and actual window, content: {application/json: {schema: {$ref: '#/components/schemas/BufferLeaseResponse'}}}}}
+  /playback/buffer/heartbeat:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferViewerRequest'}}}}
+      responses: {'200': {description: Renewed viewer lease and actual window, content: {application/json: {schema: {$ref: '#/components/schemas/BufferWindow'}}}}}
+  /playback/buffer/seek:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferSeekRequest'}}}}
+      responses: {'200': {description: Authorized seek playlist and actual window, content: {application/json: {schema: {$ref: '#/components/schemas/BufferSeekResponse'}}}}}
+  /playback/buffer/release:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferViewerRequest'}}}}
+      responses: {'204': {description: Viewer released; final viewer stops the owned producer}}
   /playback/rewind:
     get:
       parameters:

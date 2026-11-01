@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -14,8 +16,8 @@ from app.api.deps import Admin, C, P
 from app.domain.ports import ImageAuthProvider
 from app.proxy.stream_proxy import HlsSourceBusy
 from app.services import ids
-from app.services.context import is_https
-from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError, Unauthorized
+from app.services.context import absolute, is_https
+from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -44,6 +46,10 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         https_site=is_https.get(),
     )
     c.proxy.ensure_running(generation)
+    result["buffer_available"] = False
+    if c.proxy.dvr.enabled and result.get("mode") == "hls" and result.get("live") and body.id.startswith("ch:"):
+        capability = await c.playback.rewind_capability(p.profile_id, body.id)
+        result["buffer_available"] = capability["mode"] == "unavailable"
     return result
 
 
@@ -55,6 +61,63 @@ async def playback_options(id: str, c: C, p: P, source_id: str | None = None) ->
 @router.get("/playback/rewind", response_model=S.RewindCapability, tags=["playback"])
 async def rewind_capability(id: str, c: C, p: P) -> dict[str, Any]:
     return await c.playback.rewind_capability(p.profile_id, id)
+
+
+async def _buffer_grant(token: str, c: C, p: P) -> tuple[Any, str, Any]:
+    g = _grant(c, token)
+    if g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or g.transcode:
+        raise Forbidden("DVR requires this profile's authorized live codec-copy HLS playback grant.")
+    # This shared channel gate is also the integration point for current parental policy.
+    channel = await c.playback._authorized_channel(p.profile_id, "ch:" + g.channel_key)
+    if channel.source_id != g.source_id:
+        raise Forbidden("DVR channel does not belong to this playback source.")
+    source = await c.sources.get(g.source_id)
+    return g, f"{g.source_id}:{g.url}:none", source
+
+
+@router.post("/playback/buffer/lease", response_model=S.BufferLeaseResponse, tags=["playback"])
+async def buffer_lease(body: S.BufferLeaseRequest, c: C, p: P) -> dict[str, Any]:
+    g, key, source = await _buffer_grant(body.stream_token, c, p)
+    try:
+        return await c.proxy.buffer_lease(
+            key,
+            p.profile_id,
+            g.url,
+            g.headers,
+            source_id=g.source_id,
+            max_connections=c.sources.max_connections(source),
+            generation=g.recovery_generation,
+        )
+    except HlsSourceBusy as exc:
+        raise Conflict("Source connection limit is occupied.", code="source_busy") from exc
+
+
+@router.post("/playback/buffer/heartbeat", response_model=S.BufferWindow, tags=["playback"])
+async def buffer_heartbeat(body: S.BufferViewerRequest, c: C, p: P) -> dict[str, Any]:
+    _, key, _ = await _buffer_grant(body.stream_token, c, p)
+    c.proxy.dvr.heartbeat(key, p.profile_id, body.lease_id, body.paused)
+    return await c.proxy.buffer_window(key)
+
+
+@router.post("/playback/buffer/seek", response_model=S.BufferSeekResponse, tags=["playback"])
+async def buffer_seek(body: S.BufferSeekRequest, c: C, p: P) -> dict[str, Any]:
+    _, key, _ = await _buffer_grant(body.stream_token, c, p)
+    c.proxy.dvr.check(key, p.profile_id, body.lease_id)
+    await c.proxy.buffer_manifest(key, body.at)  # Reject expired/gap positions before changing playback.
+    query = {"lease_id": body.lease_id}
+    if body.at is not None:
+        query["at"] = body.at.isoformat()
+    return {
+        "url": absolute(f"/api/v1/stream/{body.stream_token}/index.m3u8?" + urlencode(query)),
+        "window": await c.proxy.buffer_window(key),
+    }
+
+
+@router.post("/playback/buffer/release", status_code=204, tags=["playback"])
+async def buffer_release(body: S.BufferViewerRequest, c: C, p: P) -> Response:
+    _, key, _ = await _buffer_grant(body.stream_token, c, p)
+    await c.proxy.buffer_release(key, p.profile_id, body.lease_id)
+    return Response(status_code=204)
 
 
 @router.get("/playback/generation", tags=["playback"])
@@ -204,12 +267,16 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
 
 
 @router.get("/stream/{token}/index.m3u8", tags=["playback"])
-async def stream_hls(token: str, c: C) -> Response:
+async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str | None = None) -> Response:
     g = _grant(c, token)
     transcode = str(c.app_settings.get("transcode_hw") or "none") if g.transcode else "none"
     if g.transcode and transcode == "none":
         transcode = "software"
     key = f"{g.source_id}:{g.url}:{transcode}"
+    if at is not None or lease_id is not None:
+        if lease_id is None or c.proxy.dvr.key != key:
+            raise Gone("Buffered session expired.", code="buffer_expired")
+        c.proxy.dvr.check(key, g.profile_id, lease_id)
     try:
         source = await c.sources.get(g.source_id)
         sess = await c.proxy.hls_session(
@@ -231,7 +298,16 @@ async def stream_hls(token: str, c: C) -> Response:
     except Exception as exc:
         log.warning("hls session failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("could not start HLS session") from exc
-    text = (sess.workdir / "index.m3u8").read_text(errors="ignore")
+    if c.proxy.dvr.key == key:
+        if at is not None or lease_id is not None:
+            if lease_id is None:
+                raise Forbidden("DVR seek requires a viewer lease.")
+            c.proxy.dvr.check(key, g.profile_id, lease_id)
+        text = await c.proxy.buffer_manifest(key, at)
+    else:
+        if at is not None or lease_id is not None:
+            raise NotFound("Buffered session expired.")
+        text = (sess.workdir / "index.m3u8").read_text(errors="ignore")
     base = f"/api/v1/stream/{token}/hls/{sess.sid}/"
     lines = [base + ln if ln and not ln.startswith("#") else ln for ln in text.splitlines()]
     return Response(
@@ -241,7 +317,13 @@ async def stream_hls(token: str, c: C) -> Response:
 
 @router.get("/stream/{token}/hls/{sid}/{name}", tags=["playback"], include_in_schema=False)
 async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
-    _grant(c, token)
+    g = _grant(c, token)
+    transcode = str(c.app_settings.get("transcode_hw") or "none") if g.transcode else "none"
+    if g.transcode and transcode == "none":
+        transcode = "software"
+    key = f"{g.source_id}:{g.url}:{transcode}"
+    if sid != c.proxy.session_id(key):
+        raise Forbidden("Segment does not belong to this playback grant.")
     sess = c.proxy.hls_by_sid(sid)
     if sess is None or "/" in name or ".." in name or not name.endswith((".ts", ".m4s", ".mp4", ".m3u8")):
         raise NotFound("segment not found")
