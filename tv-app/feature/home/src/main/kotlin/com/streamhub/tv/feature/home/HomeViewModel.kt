@@ -7,18 +7,25 @@ import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.HomeResponse
 import com.streamhub.tv.core.data.model.Row
 import com.streamhub.tv.core.data.model.Tile
+import com.streamhub.tv.core.data.repo.catalogScope
 import com.streamhub.tv.core.data.repo.LocalPrefs
 import com.streamhub.tv.core.ui.theme.ThemeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 
 sealed interface HomeUi {
@@ -39,41 +46,52 @@ class HomeViewModel @Inject constructor(
     prefs: LocalPrefs,
     private val themes: ThemeRepository,
 ) : ViewModel() {
-    private val raw = MutableStateFlow<Result<HomeResponse>?>(null)
+    private val refreshRequests = MutableStateFlow(0)
     private val sessionStore = session
     private val localPrefs = prefs
+    private val scope = session.session.map { it.catalogScope() }.distinctUntilChanged()
+    private val profileId = scope.map { if (it.profileId == null) null else it.toString() }.distinctUntilChanged()
+    private val raw = profileHomeLoads(profileId, refreshRequests, ::loadHome)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ProfileHomeLoad<HomeResponse>(null, null))
 
-    private val profileId = session.session.map { it.profile?.id ?: "default" }
-
-    val ui: StateFlow<HomeUi> = profileId.flatMapLatest { pid ->
+    val ui: StateFlow<HomeUi> = scope.flatMapLatest { owner ->
+        val pid = owner.profileId ?: return@flatMapLatest flowOf<HomeUi>(HomeUi.Loading)
         combine(raw, prefs.rowOrder(pid), prefs.hiddenRows(pid)) { r, order, hidden ->
+            val result = r.result
             when {
-                r == null -> HomeUi.Loading
-                r.isFailure -> HomeUi.Error(r.exceptionOrNull()?.message ?: "Couldn't load Home")
+                r.profileId != owner.toString() || result == null -> HomeUi.Loading
+                result.isFailure -> HomeUi.Error(result.exceptionOrNull()?.message ?: "Couldn't load Home")
                 else -> {
-                    val home = r.getOrThrow()
+                    val home = result.getOrThrow()
                     HomeUi.Ready(home.hero.ifEmpty { home.rows.firstOrNull()?.tiles?.take(5).orEmpty() }, arrange(home.rows, order, hidden))
                 }
             }
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUi.Loading)
+        }.onStart { emit(HomeUi.Loading) }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeUi.Loading)
 
-    init { refresh() }
+    fun refresh() { refreshRequests.update { it + 1 } }
 
-    fun refresh() {
-        viewModelScope.launch {
-            // Per-profile layout lives on the server (GET /profiles/{id}/home_layout); mirror it into
-            // LocalPrefs so Home renders in the right order even if that call fails/offline.
-            sessionStore.current().profile?.id?.let { pid ->
-                runCatching { api.homeLayout(pid) }.onSuccess { l ->
-                    if (l.rows.isNotEmpty()) {
-                        localPrefs.setRowOrder(pid, l.rows.sortedBy { it.sort ?: Int.MAX_VALUE }.map { it.id })
-                        localPrefs.setHiddenRows(pid, l.rows.filter { it.hidden }.map { it.id }.toSet())
-                    }
-                }
-            }
-            raw.value = runCatching { api.home() }
+    private suspend fun loadHome(owner: String): HomeResponse {
+        val current = sessionStore.current()
+        if (current.catalogScope().toString() != owner) throw CancellationException("Profile changed")
+        val profile = current.profile?.id ?: throw CancellationException("Profile unavailable")
+        // Layout writes remain scoped to the requesting profile. Never publish a
+        // response after its profile was replaced, even if a client ignores cancellation.
+        val layout = try { api.homeLayout(profile) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
+        currentCoroutineContext().ensureActive()
+        if (sessionStore.current().catalogScope().toString() != owner) throw CancellationException("Profile changed")
+        layout?.takeIf { it.rows.isNotEmpty() }?.let {
+            localPrefs.setRowOrder(profile, it.rows.sortedBy { row -> row.sort ?: Int.MAX_VALUE }.map { row -> row.id })
+            localPrefs.setHiddenRows(profile, it.rows.filter { row -> row.hidden }.map { row -> row.id }.toSet())
         }
+        currentCoroutineContext().ensureActive()
+        if (sessionStore.current().catalogScope().toString() != owner) throw CancellationException("Profile changed")
+        val home = api.home()
+        currentCoroutineContext().ensureActive()
+        if (sessionStore.current().catalogScope().toString() != owner) throw CancellationException("Profile changed")
+        return home
     }
 
     /** Poster Adaptive theme: feed the focused poster's dominant colour. */

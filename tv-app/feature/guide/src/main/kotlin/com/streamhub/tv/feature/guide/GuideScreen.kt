@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.streamhub.tv.core.data.model.LiveGuideFilters
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.CenterMessage
@@ -76,8 +78,11 @@ private fun Duration.toDp(): Dp = SLOT_WIDTH * (toMinutes() / 30f)
  * programme with catch_up_available offers Catch-up.
  */
 @Composable
-fun GuideScreen(vm: GuideViewModel = hiltViewModel()) {
+fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters = LiveGuideFilters(), compact: Boolean = false) {
+    LaunchedEffect(filters) { vm.applyFilters(filters) }
+    DisposableEffect(vm) { onDispose { vm.stopLoading() } }
     val s by vm.state.collectAsStateWithLifecycle()
+    if (s.filters != filters) { LoadingView(); return }
     val t = LocalThemeTokens.current
     val launcher = LocalPlayLauncher.current
     val hScroll = rememberScrollState()
@@ -94,7 +99,7 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel()) {
     }
 
     val totalWidth = Duration.between(s.windowStart, s.windowEnd).toDp()
-    Column(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
+    Column(Modifier.fillMaxSize().padding(vertical = if (compact) 0.dp else Tokens.Canvas.SafeMarginY)) {
         Column(Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 ShChip("With schedules", s.scheduledOnly, { vm.schedulesOnly(true) }, Modifier.leftOpensRail(LocalRailController.current))
@@ -109,12 +114,12 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel()) {
             s.loading -> { LoadingView(); return@Column }
             s.error != null -> { CenterMessage("Couldn't load the guide", s.error) { ShButton("Retry", { vm.load() }, style = ButtonStyle.Primary) }; return@Column }
             s.channels.isEmpty() -> {
-                CenterMessage("No matching channels", if (s.scheduledOnly) "No schedules match this search and your profile languages. Try All channels." else "Try a different channel name or number.")
+                CenterMessage("No matching channels", if (s.scheduledOnly) "No schedules match these Live TV filters. Try All channels or change the filters above." else "Try a different channel name or number.")
                 return@Column
             }
         }
         // Details header for the focused programme
-        Column(Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX).height(96.dp)) {
+        Column(Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX).height(if (compact) 64.dp else 96.dp)) {
             val sel = s.selected
             Text(sel?.p?.title ?: s.selectedChannel?.name.orEmpty(), style = MaterialTheme.typography.titleLarge, color = t.text, maxLines = 1)
             if (sel != null) {

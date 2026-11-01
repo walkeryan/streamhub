@@ -83,6 +83,10 @@ class StreamHubApi @Inject constructor(
 
     // ---- Profiles ------------------------------------------------------------------------------
 
+    suspend fun profilePrefs(profileId: String): JsonObject = get("/profiles/${id(profileId)}/prefs")
+    suspend fun putProfilePrefs(profileId: String, prefs: JsonObject): JsonObject =
+        client.put(url("/profiles/${id(profileId)}/prefs")) { setBody(prefs) }.ok()
+
     suspend fun profiles(): List<Profile> = get("/profiles")
     suspend fun createProfile(p: Profile) = client.post(url("/profiles")) { setBody(p) }.unit()
     suspend fun updateProfile(p: Profile) = client.patch(url("/profiles/${id(p.id)}")) { setBody(p) }.unit()
@@ -128,8 +132,9 @@ class StreamHubApi @Inject constructor(
 
     suspend fun home(): HomeResponse = get("/home")
 
-    suspend fun search(q: String, kinds: List<MediaKind>? = null, limit: Int = 40): SearchResponse = get("/search") {
+    suspend fun search(q: String, kinds: List<MediaKind>? = null, limit: Int = 40, languages: List<String>? = null, sourceId: String? = null): SearchResponse = get("/search") {
         parameter("q", q)
+        applySearchFilters(languages, sourceId)
         kinds?.let { k -> parameter("kinds", k.joinToString(",") { it.wire }) }
         parameter("limit", limit)
     }
@@ -142,11 +147,37 @@ class StreamHubApi @Inject constructor(
         genre: String? = null,
         sort: String? = null,
         page: Int = 1,
+        language: String? = null,
     ): BrowsePage = get("/browse/${id(section)}") {
         sourceId?.let { parameter("source_id", it) }
         genre?.let { parameter("genre", it) }
         sort?.let { parameter("sort", it) }
         parameter("page", page)
+        language?.let { parameter("language", it) }
+    }
+
+    suspend fun browseGenres(section: String, sourceId: String? = null, language: String? = null): List<CatalogFacet> =
+        get("/browse/${id(section)}/genres") {
+            sourceId?.let { parameter("source_id", it) }
+            language?.let { parameter("language", it) }
+        }
+    suspend fun browseLanguages(section: String, sourceId: String? = null): List<LanguageCount> =
+        get("/browse/${id(section)}/languages") { sourceId?.let { parameter("source_id", it) } }
+    suspend fun sportsEvents(filters: NativeSportsFilters, offset: Int = 0, limit: Int = 40): SportsEventsPage = get("/sports/events") {
+        filters.language?.let { parameter("language", it) }
+        filters.sport?.let { parameter("sport", it) }
+        filters.date?.let { parameter("date", it) }
+        parameter("timezone", "America/New_York")
+        parameter("status", filters.status)
+        parameter("offset", offset)
+        parameter("limit", limit)
+    }
+
+    suspend fun sports(language: String? = null, sport: String? = null, offset: Int = 0, limit: Int = 40): SportsPage = get("/sports") {
+        language?.let { parameter("language", it) }
+        sport?.let { parameter("sport", it) }
+        parameter("offset", offset)
+        parameter("limit", limit)
     }
 
     // ---- Live TV -------------------------------------------------------------------------------
@@ -161,6 +192,7 @@ class StreamHubApi @Inject constructor(
         hasEpg: Boolean? = null,
         limit: Int? = null,
         offset: Int? = null,
+        country: String? = null,
     ): ChannelList = get("/channels") {
         listId?.let { parameter("list_id", it) }
         hasEpg?.let { parameter("has_epg", it) }
@@ -168,13 +200,13 @@ class StreamHubApi @Inject constructor(
         offset?.let { parameter("offset", it) }
         sourceId?.let { parameter("source_id", it) }
         group?.let { parameter("group", it) }
-        languages?.let { parameter("language", it.joinToString(",")) }
+        applyLiveRegionLanguage(languages, country)
         favorites?.let { parameter("favorites", it) }
         q?.let { parameter("q", it) }
     }
 
-    suspend fun channelGroups(languages: List<String>? = null, favorites: Boolean? = null): List<ChannelGroup> = get("/channels/groups") {
-        languages?.let { parameter("language", it.joinToString(",")) }
+    suspend fun channelGroups(languages: List<String>? = null, favorites: Boolean? = null, country: String? = null): List<ChannelGroup> = get("/channels/groups") {
+        applyLiveRegionLanguage(languages, country)
         favorites?.let { parameter("favorites", it) }
     }
     suspend fun patchChannelGroup(groupId: String, patch: ChannelGroupPatch) =
@@ -182,13 +214,21 @@ class StreamHubApi @Inject constructor(
     suspend fun channelLanguages(): List<LanguageCount> = get("/channels/languages")
     suspend fun patchChannel(channel: Channel) = client.patch(url("/channels/${id(channel.id)}")) { setBody(channel) }.unit()
 
-    suspend fun epg(channelIds: List<String>, from: String, to: String): Map<String, List<Programme>> = get("/epg") {
+    suspend fun epg(channelIds: List<String>, from: String, to: String, country: String? = null): Map<String, List<Programme>> = get("/epg") {
+        country?.let { parameter("country", it) }
         parameter("channel_ids", channelIds.joinToString(","))
         parameter("from", from)
         parameter("to", to)
     }
 
     // ---- Playback ------------------------------------------------------------------------------
+
+    suspend fun rewindCapability(id: String): RewindCapability = get("/playback/rewind") { parameter("id", id) }
+
+    suspend fun playbackOptions(id: String, sourceId: String? = null): PlaybackOptions = get("/playback/options") {
+        parameter("id", id)
+        sourceId?.let { parameter("source_id", it) }
+    }
 
     suspend fun resolve(req: PlaybackRequest): PlaybackDescriptor =
         client.post(url("/playback/resolve")) { setBody(req) }.ok()

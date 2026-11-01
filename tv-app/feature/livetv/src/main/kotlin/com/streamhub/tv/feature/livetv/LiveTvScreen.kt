@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +45,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,7 +61,6 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.data.model.ChannelGroup
-import com.streamhub.tv.core.player.VideoSurface
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.ProgressLine
 import com.streamhub.tv.core.ui.components.ShChip
@@ -69,6 +74,8 @@ import com.streamhub.tv.core.ui.focus.leftOpensRail
 import com.streamhub.tv.core.ui.theme.LocalReducedMotion
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -77,7 +84,7 @@ private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
 internal fun hhmm(iso: String): String = runCatching { ZonedDateTime.parse(iso).withZoneSameInstant(ZoneId.systemDefault()).format(HHMM) }.getOrDefault("")
 
 @Composable
-fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
+fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = false) {
     val s by vm.state.collectAsStateWithLifecycle()
     val t = LocalThemeTokens.current
     val launcher = LocalPlayLauncher.current
@@ -86,6 +93,33 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
     var groupsOpen by remember { mutableStateOf(false) }
     var restoreGroupFocus by remember { mutableStateOf(false) }
     val groupOpener = remember { FocusRequester() }
+    val firstChannel = remember { FocusRequester() }
+    val channelListState = rememberLazyListState()
+    var enterChannelsWhenReady by remember { mutableStateOf(false) }
+    var entryFromGroups by remember { mutableStateOf(false) }
+    var groupsFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(s.loading, s.error, s.channels.firstOrNull()?.id,
+        enterChannelsWhenReady, entryFromGroups, groupsFocused) {
+        if (filtersOnly || !enterChannelsWhenReady) return@LaunchedEffect
+        // A queued Down must not pull focus back after the user navigates elsewhere.
+        if (entryFromGroups && !groupsFocused) {
+            enterChannelsWhenReady = false
+            return@LaunchedEffect
+        }
+        if (s.loading) return@LaunchedEffect
+        val firstId = s.channels.firstOrNull()?.id
+        if (firstId != null && s.error == null) {
+            channelListState.scrollToItem(1)
+            // Lazy composition/layout can take more than one frame after a filter/page load.
+            val laidOut = withTimeoutOrNull(1_500) {
+                snapshotFlow { channelListState.layoutInfo.visibleItemsInfo.any { it.key == firstId } }
+                    .first { it }
+            } == true
+            if (laidOut) runCatching { firstChannel.requestFocus() }
+        }
+        // A failed handoff leaves normal directional navigation available for the next key.
+        enterChannelsWhenReady = false
+    }
     val choices = remember(s.groups) { groupChoices(s.groups) }
     LaunchedEffect(groupsOpen) {
         if (!groupsOpen && restoreGroupFocus) {
@@ -103,7 +137,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
     )
 
 
-    Column(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
+    Column((if (filtersOnly) Modifier.fillMaxWidth() else Modifier.fillMaxSize()).padding(vertical = if (filtersOnly) 0.dp else Tokens.Canvas.SafeMarginY)) {
         // Language chips (profile languages + All) and favorites filter.
         LazyRow(
             Modifier.fillMaxWidth().focusRestorer(),
@@ -126,34 +160,62 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
                 restoreGroupFocus = true
                 groupsOpen = true
                 vm.stopPreview()
-            }, Modifier.width(360.dp).focusRequester(groupOpener).leftOpensRail(rail))
+            }, Modifier.width(360.dp).focusRequester(groupOpener).leftOpensRail(rail)
+                .onFocusChanged { groupsFocused = it.isFocused }
+                .onPreviewKeyEvent { event ->
+                    if (!filtersOnly && event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown) {
+                        val firstId = s.channels.firstOrNull()?.id
+                        val visible = !s.loading && s.error == null && firstId != null &&
+                            channelListState.layoutInfo.visibleItemsInfo.any { it.key == firstId }
+                        if (visible) {
+                            // The common case needs no scroll or deferred effect. Never eat a
+                            // failed request: Compose can still perform its normal focus search.
+                            runCatching { firstChannel.requestFocus() }.getOrDefault(false)
+                        } else {
+                            if (s.loading || (firstId != null && s.error == null)) {
+                                entryFromGroups = true
+                                enterChannelsWhenReady = true
+                            }
+                            false
+                        }
+                    } else false
+                })
             Text(if (s.groupsLoading) "Updating groups…" else if (s.groupsError != null) "Group counts unavailable" else {
                 val count = if (s.selectedGroup == null) choices.sumOf { it.channelCount } else choices.firstOrNull { it.name == s.selectedGroup }?.channelCount ?: 0
                 "$count channels · ${choices.size} groups"
             }, color = t.textMuted, style = MaterialTheme.typography.labelMedium)
         }
 
-        Row(Modifier.fillMaxSize().padding(top = 16.dp)) {
+        s.notice?.let { Text(it, color = t.textMuted, modifier = Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX)) }
+        if (!filtersOnly) Row(Modifier.weight(1f).fillMaxWidth().padding(top = 16.dp)) {
             // Channel list (left)
             Box(Modifier.width(440.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX)) {
                 when {
                     s.loading && s.channels.isEmpty() -> Text("Loading channels…", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
-                    s.error != null -> Text("Couldn't load channels: ${s.error}", color = t.danger, style = MaterialTheme.typography.bodyLarge)
-                    s.channels.isEmpty() -> Text(if (s.favoritesOnly) "No favorite channels yet. Long-press OK on a channel to add it." else "No channels match these filters.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
+                    s.error != null -> Column { Text("Couldn't load channels", color = t.danger); ShButton("Retry", { entryFromGroups = false; enterChannelsWhenReady = true; vm.load(s.offset) }, Modifier.focusRequester(firstChannel)) }
+                    s.channels.isEmpty() -> Column { Text(if (s.favoritesOnly) "No favorite channels yet. Choose a channel, then select Add favorite in its details." else "No channels match these filters.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge); ShButton("Change filters", { groupOpener.requestFocus() }, Modifier.focusRequester(firstChannel)) }
                     else -> PivotScroll(leadingOffset = 72.dp) {
                         LazyColumn(
-                            state = rememberLazyListState(),
+                            state = channelListState,
                             modifier = Modifier.fillMaxSize().focusRestorer(),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                             contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
                         ) {
-                            itemsIndexed(s.channels, key = { _, c -> c.id }) { _, ch ->
+                            item("page-navigation") {
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    if (s.offset > 0) ShButton("Previous 60", { entryFromGroups = false; enterChannelsWhenReady = true; vm.previousPage() })
+                                    if (s.offset + 60 < s.total) ShButton("Next 60", { entryFromGroups = false; enterChannelsWhenReady = true; vm.nextPage() })
+                                }
+                            }
+                            itemsIndexed(s.channels, key = { _, c -> c.id }) { index, ch ->
                                 ChannelRow(
                                     ch,
                                     playing = ch.id == s.previewChannelId,
                                     onClick = { launcher.play(ch.id) },
                                     onLongClick = { vm.toggleFavorite(ch) },
-                                    modifier = Modifier.leftOpensRail(rail).onFocusChanged { if (it.isFocused) vm.onChannelFocused(ch) },
+                                    modifier = Modifier
+                                        .then(if (index == 0) Modifier.focusRequester(firstChannel) else Modifier)
+                                        .leftOpensRail(rail).onFocusChanged { if (it.isFocused) vm.onChannelFocused(ch) },
                                 )
                             }
                         }
@@ -163,9 +225,11 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
             // Preview (right)
             Column(Modifier.weight(1f).padding(start = 24.dp, end = Tokens.Canvas.SafeMarginX)) {
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(Tokens.Radius.Md)).background(androidx.compose.ui.graphics.Color.Black)) {
-                    VideoSurface(vm.preview, Modifier.fillMaxSize())
+                    val focusedChannel = s.channels.firstOrNull { it.id == s.previewChannelId }
+                    if (focusedChannel?.logo != null) AsyncImage(focusedChannel.logo, focusedChannel.name,
+                        contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(32.dp))
                     if (s.previewChannelId == null) {
-                        Text("Focus a channel to preview", color = t.textMuted, modifier = Modifier.align(Alignment.Center), style = MaterialTheme.typography.bodyLarge)
+                        Text("Focus a channel for details", color = t.textMuted, modifier = Modifier.align(Alignment.Center), style = MaterialTheme.typography.bodyLarge)
                     }
                 }
                 val ch = s.channels.firstOrNull { it.id == s.previewChannelId }
@@ -174,7 +238,10 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel()) {
                     ch.now?.let { Text("Now  ${hhmm(it.start)}–${hhmm(it.stop)}  ${it.title}", style = MaterialTheme.typography.bodyMedium, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     ch.now?.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = t.textMuted, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp)) }
                     ch.next?.let { Text("Next ${hhmm(it.start)}  ${it.title}", style = MaterialTheme.typography.bodyMedium, color = t.textMuted, maxLines = 1, modifier = Modifier.padding(top = 4.dp)) }
-                    Text("OK to watch full screen · long-press OK to favorite", style = MaterialTheme.typography.labelMedium, color = t.textMuted, modifier = Modifier.padding(top = 12.dp))
+                    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ShButton("Watch", { launcher.play(ch.id) })
+                        ShButton(if (ch.isFavorite) "Remove favorite" else "Add favorite", { vm.toggleFavorite(ch) })
+                    }
                 }
             }
         }
@@ -194,7 +261,7 @@ private fun ChannelRow(ch: Channel, playing: Boolean, onClick: () -> Unit, onLon
         glow = false,
     ) {
         Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(ch.number.toString(), style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.width(44.dp))
+            Text(ch.number.toString(), style = MaterialTheme.typography.labelLarge, color = t.textMuted, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(64.dp))
             Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
                 if (ch.logo != null) AsyncImage(ch.logo, ch.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
                 else Text(ch.name.take(2).uppercase(), color = t.text, style = MaterialTheme.typography.labelLarge)

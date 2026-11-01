@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -33,13 +34,13 @@ import com.streamhub.tv.core.ui.components.HeroIcons
 import com.streamhub.tv.core.ui.components.HeroInfo
 import com.streamhub.tv.core.ui.components.LoadingView
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
-import com.streamhub.tv.core.ui.components.MediaRow
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.focus.InitialFocusOnce
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
 import com.streamhub.tv.core.ui.theme.Tokens
+import java.time.Instant
 import kotlinx.coroutines.delay
 
 @Composable
@@ -58,6 +59,7 @@ fun HomeScreen(vm: HomeViewModel = hiltViewModel()) {
 
 @Composable
 private fun HomeContent(u: HomeUi.Ready) {
+    val now by produceState(Instant.now()) { while (true) { delay(30_000); value = Instant.now() } }
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
     var heroIndex by rememberSaveable { mutableStateOf(0) }
@@ -89,8 +91,8 @@ private fun HomeContent(u: HomeUi.Ready) {
                 item(key = "hero") {
                     HeroInfo(
                         tile = heroTile,
-                        modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = Tokens.Canvas.SafeMarginY + 40.dp, bottom = 16.dp),
-                        height = 260.dp,
+                        modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = Tokens.Canvas.SafeMarginY, bottom = 16.dp),
+                        height = 208.dp,
                     ) {
                         val tile = heroTile
                         val inApp = tile?.playableInApp == true
@@ -111,12 +113,12 @@ private fun HomeContent(u: HomeUi.Ready) {
                     }
                 }
                 items(u.rows, key = { it.id }) { row ->
-                    MediaRow(
+                    HomeProgrammeRow(
                         row = row,
+                        now = now,
                         onPlay = { launcher.play(it.id) },
                         onOpen = { launcher.openDetails(it.id) },
                         onFocusTile = { focusedTile = it },
-                        state = rememberLazyListState(),
                     )
                 }
                 item { Spacer(Modifier.fillMaxWidth().height(120.dp)) }

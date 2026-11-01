@@ -123,14 +123,15 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                         }
                     }
                 }
+                if (d.sources.isEmpty()) item("unavailable") { Text("Not available from your sources", color = t.textMuted, modifier = Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX)) }
                 item("actions") {
                     LazyRow(
                         Modifier.fillMaxWidth().focusRestorer(),
                         contentPadding = PaddingValues(horizontal = Tokens.Canvas.SafeMarginX, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        item("play") {
-                            val label = if (inApp.isNotEmpty()) resumeLabel(d) ?: "Play" else "Open in ${handoff.firstOrNull()?.name ?: "app"}"
+                        if (d.sources.isNotEmpty()) item("play") {
+                            val label = if (inApp.isNotEmpty()) "Choose audio / source" else "Open in ${handoff.firstOrNull()?.name ?: "app"}"
                             ShButton(
                                 label,
                                 onClick = { launcher.play(d.id, sourceId = chosenSource?.sourceId ?: handoff.firstOrNull()?.sourceId) },
@@ -144,7 +145,7 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                                 ShChip("${b.shortLabel()}${b.quality?.let { " $it" } ?: ""}", chosenSource == b, { chosenSource = b })
                             }
                         }
-                        item("wl") { ShButton(if (s.inWatchlist) "In watchlist" else "Watchlist", vm::toggleWatchlist, icon = if (s.inWatchlist) Icons.Filled.PlaylistAddCheck else Icons.Filled.PlaylistAdd) }
+                        item("wl") { ShButton(if (s.inWatchlist) "In watchlist" else "Watchlist", vm::toggleWatchlist, modifier = if (d.sources.isEmpty()) Modifier.focusRequester(playFocus) else Modifier, icon = if (s.inWatchlist) Icons.Filled.PlaylistAddCheck else Icons.Filled.PlaylistAdd) }
                         item("fav") { ShButton(if (d.isFavorite) "Favorited" else "Favorite", vm::toggleFavorite, icon = if (d.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder) }
                         item("trailer") {
                             // Trailer is resolved server-side to a YouTube hand-off descriptor.

@@ -237,6 +237,8 @@ data class TitleDetail(
 
 @Serializable
 data class SearchResponse(
+    val results: List<Tile>? = null,
+    @SerialName("discovery_note") val discoveryNote: String? = null,
     @SerialName("play_here") val playHere: List<Tile> = emptyList(),
     @SerialName("open_in_app") val openInApp: List<Tile> = emptyList(),
     val channels: List<Channel> = emptyList(),
@@ -317,6 +319,9 @@ data class PlaybackRequest(
     @SerialName("source_id") val sourceId: String? = null,
     val client: String = "android_tv",
     @SerialName("catchup_programme_id") val catchupProgrammeId: String? = null,
+    @SerialName("variant_id") val variantId: String? = null,
+    @SerialName("allow_unverified_audio") val allowUnverifiedAudio: Boolean = false,
+    @SerialName("rewind_at") val rewindAt: String? = null,
 )
 
 @Serializable
@@ -361,6 +366,8 @@ data class PlaybackDescriptor(
     val poster: String? = null,
     @SerialName("channel_context") val channelContext: ChannelContext? = null,
     val handoff: Handoff? = null,
+    @SerialName("archive_start") val archiveStart: String? = null,
+    @SerialName("archive_end") val archiveEnd: String? = null,
 )
 
 @Serializable
@@ -398,4 +405,35 @@ data class Settings(
     @SerialName("epg_refresh_hours") val epgRefreshHours: Int? = null,
     @SerialName("transcode_hw") val transcodeHw: String? = null,
     @SerialName("proxy_mode") val proxyMode: String? = null,
+)
+
+@Serializable
+data class PlaybackOption(
+    @SerialName("variant_id") val variantId: String,
+    @SerialName("source_id") val sourceId: String,
+    @SerialName("source_name") val sourceName: String,
+    @SerialName("provider_label") val providerLabel: String,
+    @SerialName("audio_languages") val audioLanguages: List<String> = emptyList(),
+    @SerialName("audio_verified") val audioVerified: Boolean = false,
+    @SerialName("default_audio_language") val defaultAudioLanguage: String? = null,
+    @SerialName("language_hint") val languageHint: String? = null,
+    @SerialName("preferred_audio_available") val preferredAudioAvailable: Boolean = false,
+)
+
+@Serializable
+data class PlaybackOptions(
+    val id: String,
+    val options: List<PlaybackOption> = emptyList(),
+    @SerialName("automatic_variant_id") val automaticVariantId: String? = null,
+    @SerialName("preferred_languages") val preferredLanguages: List<String> = emptyList(),
+)
+
+@Serializable data class RewindCapability(
+    val mode: String = "unavailable",
+    @SerialName("advertised_start") val advertisedStart: String? = null,
+    @SerialName("advertised_end") val advertisedEnd: String? = null,
+    val verified: Boolean = false,
+    @SerialName("recording_enabled") val recordingEnabled: Boolean = false,
+    @SerialName("granularity_seconds") val granularitySeconds: Int = 60,
+    val reason: String = "No provider archive advertised",
 )
