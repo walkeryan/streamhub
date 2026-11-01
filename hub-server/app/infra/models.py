@@ -79,6 +79,8 @@ class DeviceCode(Base):
     device_code: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_code: Mapped[str] = mapped_column(String(8), unique=True)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    owner_pin_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approved_google_subject: Mapped[str | None] = mapped_column(String(256), nullable=True)
     approved_profile_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     owner_auth_time: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -314,3 +316,38 @@ class CacheEntry(Base):
     key: Mapped[str] = mapped_column(String(512), primary_key=True)
     value: Mapped[Any] = mapped_column(JSON, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class OwnerCredential(Base):
+    __tablename__ = "owner_credential"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    credential_version: Mapped[int] = mapped_column(Integer, default=0)
+    password_hash: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    owner_profile_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    google_subject: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    lease_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class OwnerPinChallenge(Base):
+    __tablename__ = "owner_pin_challenge"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    grant_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secret_hash: Mapped[str] = mapped_column(String(64))
+    source_profile_id: Mapped[str] = mapped_column(String(32))
+    source_version: Mapped[int] = mapped_column(Integer)
+    source_session_id: Mapped[str] = mapped_column(String(64))
+    target_profile_id: Mapped[str] = mapped_column(String(32))
+    target_version: Mapped[int] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(32))
+    credential_version: Mapped[int] = mapped_column(Integer)
+    google_subject: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class OwnerPinAttempt(Base):
+    __tablename__ = "owner_pin_attempt"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
