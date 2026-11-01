@@ -55,6 +55,41 @@ def _backoff(attempt: int) -> float:
     return float(min(MAX_BACKOFF, 0.5 * (2**attempt)))
 
 
+class OwnedStream(AsyncIterator[bytes]):
+    """An acquired upstream has a lifetime even before its body is iterated."""
+
+    def __init__(self, stream: AsyncIterator[bytes], close: Callable[[], Awaitable[None]]) -> None:
+        self._stream = stream
+        self._close = close
+        self._closed = False
+        self._close_lock = asyncio.Lock()
+
+    def __aiter__(self) -> OwnedStream:
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._closed:
+            raise StopAsyncIteration
+        try:
+            return await anext(self._stream)
+        except BaseException:
+            # A second caller cancellation cannot abandon the owned cleanup.
+            await asyncio.shield(self.aclose())
+            raise
+
+    async def aclose(self) -> None:
+        async with self._close_lock:
+            if self._closed:
+                return
+            try:
+                close_body = getattr(self._stream, "aclose", None)
+                if close_body is not None:
+                    await close_body()
+            finally:
+                await self._close()
+            self._closed = True
+
+
 class SharedUpstream:
     """One upstream HTTP connection broadcast to many subscribers."""
 
@@ -327,6 +362,8 @@ class StreamProxy:
 
     async def _close_http(self, sess: HttpSession) -> None:
         async with sess.close_lock:
+            if sess not in self._http:
+                return
             try:
                 if sess.response is not None:
                     await sess.response.aclose()
@@ -596,7 +633,11 @@ class StreamProxy:
                 up.unsubscribe(q)
                 self._finish_viewer(q)
 
-        return up.content_type, gen()
+        async def close_viewer() -> None:
+            up.unsubscribe(q)
+            self._finish_viewer(q)
+
+        return up.content_type, OwnedStream(gen(), close_viewer)
 
     async def passthrough(
         self,
@@ -667,7 +708,7 @@ class StreamProxy:
             finally:
                 await self._close_http(sess)
 
-        return status, out_headers, gen()
+        return status, out_headers, OwnedStream(gen(), lambda: self._close_http(sess))
 
     async def fetch_text(
         self,

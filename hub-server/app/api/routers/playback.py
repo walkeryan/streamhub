@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
+from app.api.streaming import OwnedStreamingResponse
 from app.domain.ports import ImageAuthProvider
 from app.proxy.stream_proxy import HlsSourceBusy
 from app.services import ids
@@ -340,8 +341,11 @@ async def stream(token: str, request: Request, c: C) -> Response:
             ctype, gen = await c.proxy.live_shared(
                 g.channel_key, g.url, g.headers, g.source_id, generation=g.recovery_generation, max_connections=maximum
             )
-            return StreamingResponse(
-                c.content_policy.guard_stream(g, c.auth, gen), media_type=ctype, headers={"Cache-Control": "no-cache"}
+            return OwnedStreamingResponse(
+                c.content_policy.guard_stream(g, c.auth, gen),
+                owned_stream=gen,
+                media_type=ctype,
+                headers={"Cache-Control": "no-cache"},
             )
         status, headers, gen = await c.proxy.passthrough(
             g.url,
@@ -359,8 +363,9 @@ async def stream(token: str, request: Request, c: C) -> Response:
     except Exception as exc:
         log.warning("stream proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
-    return StreamingResponse(
+    return OwnedStreamingResponse(
         c.content_policy.guard_stream(g, c.auth, gen),
+        owned_stream=gen,
         status_code=status,
         headers=headers,
         media_type=headers.get("content-type", "application/octet-stream"),
@@ -403,8 +408,9 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
     except Exception as exc:
         log.warning("stream segment proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
-    return StreamingResponse(
+    return OwnedStreamingResponse(
         c.content_policy.guard_stream(g, c.auth, gen),
+        owned_stream=gen,
         status_code=status,
         headers=headers,
         media_type=headers.get("content-type", "video/mp2t"),
