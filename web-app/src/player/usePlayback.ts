@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { api, reportProgress, unwrap } from '../api/client'
+import { api, ApiError, reportProgress, unwrap } from '../api/client'
 import type { PlaybackDescriptor } from '../api/types'
 import { attachSource, type PlayerHandle } from './engine'
 
@@ -89,7 +89,17 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') { clearWaiting(); setState('paused') }
         }
       } catch (e) {
-        if (!cancelled) reconnect(e instanceof Error ? e.message : 'unknown error')
+        if (cancelled) return
+        // Re-resolving cannot repair missing content or denied access. Keep
+        // transient network/server failures on the bounded reconnect path.
+        if (e instanceof ApiError && [400, 401, 403, 404, 410, 422].includes(e.status)) {
+          clearWaiting()
+          clearRetry()
+          setState('error')
+          setError(e.status === 401 || e.status === 403
+            ? 'Playback access was denied. Check your sign-in and source access, then try again.'
+            : 'This title or channel is unavailable from this source. Try another item or retry after the source is available.')
+        } else reconnect(e instanceof Error ? e.message : 'unknown error')
       }
     })()
     return () => {
