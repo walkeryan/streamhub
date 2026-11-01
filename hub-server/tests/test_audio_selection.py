@@ -194,3 +194,18 @@ async def test_invalid_tmdb_type_rejected_and_library_episode_has_own_progress_i
     r._resolve_title = AsyncMock(return_value={})
     await r.resolve("p", "lib:iptv:show")
     assert r._resolve_title.call_args.args[2] == "lib:iptv:ep"
+
+
+async def test_runtime_descriptor_retains_preferences_and_actual_evidence():
+    r = resolver()
+    verified = await r._runtime_audio("p", tracks("eng"), False)
+    assert verified["audio_language_required"] is True
+    assert verified["preferred_audio_languages"] == ["eng"]
+    assert verified["default_audio_language"] == "eng"
+    assert verified["audio_evidence"] == "audio_track_metadata"
+    consented = await r._runtime_audio("p", {"language": "en"}, True)
+    assert consented["audio_language_required"] is False
+    assert consented["preferred_audio_languages"] == ["eng"]
+    assert consented["audio_verified"] is False
+    r._catalog.preferred_languages.return_value = []
+    assert (await r._runtime_audio("p", {}, False))["audio_language_required"] is False

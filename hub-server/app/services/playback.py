@@ -259,14 +259,29 @@ class PlaybackResolver:
             if source_id and source_id != h.a:
                 raise NotFound("channel does not belong to the selected source")
             await self._check_channel_audio(profile_id, hub_id, variant_id, allow_unverified_audio)
-            return await self._resolve_channel(profile_id, hub_id, client, catchup_programme_id, https_site, rewind_at)
+            return await self._resolve_channel(
+                profile_id,
+                hub_id,
+                client,
+                catchup_programme_id,
+                https_site,
+                rewind_at,
+                bool(variant_id and allow_unverified_audio),
+            )
         if h.scheme == "lib":
             row = await self._catalog.title_row(h.a, h.b)
             if row is None:
                 raise NotFound("title not found")
             row = await self._select_audio(profile_id, [row], variant_id, allow_unverified_audio, source_id)
             playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
-            return await self._resolve_title(profile_id, row, playback_id, client, https_site)
+            return await self._resolve_title(
+                profile_id,
+                row,
+                playback_id,
+                client,
+                https_site,
+                audio_consent=bool(variant_id and allow_unverified_audio),
+            )
         if h.scheme == "tmdb" and h.a in ("movie", "tv") and h.b.isdigit():
             return await self._resolve_tmdb(
                 profile_id,
@@ -551,6 +566,7 @@ class PlaybackResolver:
         catchup_programme_id: str | None,
         https_site: bool,
         rewind_at: datetime | None = None,
+        audio_consent: bool = False,
     ) -> dict[str, Any]:
         policy_at = rewind_at
         if catchup_programme_id:
@@ -615,6 +631,7 @@ class PlaybackResolver:
             policy_at=archive_start,
             policy_until=archive_end,
         )
+        desc.update(await self._runtime_audio(profile_id, ch.data or {}, audio_consent))
         desc["archive_start"] = archive_start
         desc["archive_end"] = archive_end
         desc["channel_context"] = ctx
@@ -640,6 +657,7 @@ class PlaybackResolver:
         client: str,
         https_site: bool,
         progress_ids: list[str] | None = None,
+        audio_consent: bool = False,
     ) -> dict[str, Any]:
         await self._require_content(profile_id, ids.lib_id(row.source_id, row.ext_id))
         src, prov = await self._sources.provider_for(row.source_id)
@@ -665,7 +683,7 @@ class PlaybackResolver:
                 f" · {target.subtitle}" if target.subtitle else ""
             )
         image = self._catalog.image_fn({src.id: src})
-        return self._descriptor(
+        desc = self._descriptor(
             profile_id,
             src,
             hub_id,
@@ -677,6 +695,21 @@ class PlaybackResolver:
             subtitle=subtitle,
             poster=image(src, row.poster, ids.lib_id(row.source_id, row.ext_id)),
         )
+
+        desc.update(await self._runtime_audio(profile_id, row.extra or {}, audio_consent))
+        return desc
+
+    async def _runtime_audio(self, profile_id: str, extra: dict[str, Any], consent: bool) -> dict[str, Any]:
+        preferred = await self._catalog.preferred_languages(profile_id, None)
+        info = audio_info(extra)
+        return {
+            "preferred_audio_languages": preferred,
+            "audio_language_required": bool(preferred) and not consent,
+            **{
+                key: info[key]
+                for key in ("audio_languages", "audio_verified", "audio_evidence", "default_audio_language")
+            },
+        }
 
     async def _resolve_tmdb(
         self,
@@ -705,7 +738,14 @@ class PlaybackResolver:
         if matches and (not source_id or any(m.source_id == source_id for m in matches)):
             row = await self._select_audio(profile_id, matches, variant_id, allow_unverified_audio, source_id)
             playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
-            return await self._resolve_title(profile_id, row, playback_id, client, https_site)
+            return await self._resolve_title(
+                profile_id,
+                row,
+                playback_id,
+                client,
+                https_site,
+                audio_consent=bool(variant_id and allow_unverified_audio),
+            )
         if variant_id:
             raise NotFound("variant does not belong to this title or source")
         chosen = None

@@ -373,6 +373,12 @@ class RewindCapability(_M):
 
 
 class PlaybackDescriptor(_M):
+    preferred_audio_languages: list[str] = Field(default_factory=list)
+    audio_language_required: bool = True
+    audio_languages: list[str] = Field(default_factory=list)
+    audio_verified: bool = False
+    audio_evidence: Literal["unknown", "audio_track_metadata", "media_probe"] = "unknown"
+    default_audio_language: str | None = None
     id: str
     mode: Literal["direct", "proxy", "hls", "handoff"]
     url: str | None = None
