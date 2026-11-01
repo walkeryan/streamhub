@@ -93,9 +93,9 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
     val firstChannel = remember { FocusRequester() }
     val channelListState = rememberLazyListState()
     var enterChannelsWhenReady by remember { mutableStateOf(false) }
-    LaunchedEffect(s.loading, s.channels.firstOrNull()?.id, enterChannelsWhenReady) {
-        if (!filtersOnly && enterChannelsWhenReady && !s.loading && s.channels.isNotEmpty()) {
-            channelListState.scrollToItem(1)
+    LaunchedEffect(s.loading, s.error, s.channels.firstOrNull()?.id, enterChannelsWhenReady) {
+        if (!filtersOnly && enterChannelsWhenReady && !s.loading) {
+            if (s.channels.isNotEmpty() && s.error == null) channelListState.scrollToItem(1)
             withFrameNanos { }
             firstChannel.requestFocus()
             enterChannelsWhenReady = false
@@ -160,8 +160,8 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
             Box(Modifier.width(440.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX)) {
                 when {
                     s.loading && s.channels.isEmpty() -> Text("Loading channels…", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
-                    s.error != null -> Column { Text("Couldn't load channels", color = t.danger); ShButton("Retry", { vm.load(s.offset) }) }
-                    s.channels.isEmpty() -> Text(if (s.favoritesOnly) "No favorite channels yet. Choose a channel, then select Add favorite in its details." else "No channels match these filters.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
+                    s.error != null -> Column { Text("Couldn't load channels", color = t.danger); ShButton("Retry", { enterChannelsWhenReady = true; vm.load(s.offset) }, Modifier.focusRequester(firstChannel)) }
+                    s.channels.isEmpty() -> Column { Text(if (s.favoritesOnly) "No favorite channels yet. Choose a channel, then select Add favorite in its details." else "No channels match these filters.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge); ShButton("Change filters", { groupOpener.requestFocus() }, Modifier.focusRequester(firstChannel)) }
                     else -> PivotScroll(leadingOffset = 72.dp) {
                         LazyColumn(
                             state = channelListState,
