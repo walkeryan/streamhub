@@ -307,10 +307,21 @@ class PlaybackRequest(_M):
     allow_unverified_audio: bool = False
     source_id: str | None = None
     client: Literal["android_tv", "web"] = "web"
+    multiview: bool = False
+    companion_id: str | None = None
     prefer_hls: bool = False
     recovery_generation: str | None = Field(default=None, max_length=64)
     catchup_programme_id: str | None = None
     rewind_at: AwareDatetime | None = None
+
+
+class MultiviewRequest(_M):
+    panes: list[PlaybackRequest] = Field(min_length=2, max_length=2)
+    recovery_generation: str = Field(max_length=64)
+
+
+class MultiviewRelease(_M):
+    lease_id: str = Field(min_length=1, max_length=64)
 
 
 class ChannelContext(_M):
@@ -396,6 +407,12 @@ class PlaybackDescriptor(_M):
     channel_context: ChannelContext | None = None
     handoff: Handoff | None = None
     drm: None = None
+
+
+class MultiviewDescriptor(_M):
+    lease_id: str
+    expires_in_seconds: int = 60
+    panes: list[PlaybackDescriptor]
 
 
 class ProgressReport(_M):

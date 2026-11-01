@@ -62,6 +62,10 @@ class StreamGrant:
     session_id: str | None = None
     policy_at: str | None = None
     policy_until: str | None = None
+    pair_lease_id: str | None = None
+    audio_variant: str | None = None
+    audio_consent: bool = False
+    audio_preferred: list[str] | None = None
 
 
 class StreamTokens:
@@ -82,6 +86,10 @@ class StreamTokens:
                 "sid": grant.session_id,
                 "at": grant.policy_at,
                 "until": grant.policy_until,
+                "pair": grant.pair_lease_id,
+                "av": grant.audio_variant,
+                "ac": grant.audio_consent,
+                "ap": grant.audio_preferred,
                 "s": grant.source_id,
                 "u": grant.url,
                 "h": grant.headers,
@@ -105,6 +113,10 @@ class StreamTokens:
             session_id=d.get("sid"),
             policy_at=d.get("at"),
             policy_until=d.get("until"),
+            pair_lease_id=d.get("pair"),
+            audio_variant=d.get("av"),
+            audio_consent=bool(d.get("ac")),
+            audio_preferred=d.get("ap"),
             source_id=str(d["s"]),
             url=str(d["u"]),
             headers=dict(d.get("h") or {}),
