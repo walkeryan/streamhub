@@ -810,6 +810,30 @@ class CatalogService:
                 ((Title.tmdb_id > 0) & Title.kind.in_(("movie", "vod", "show", "series")), self._canonical_key()),
                 else_=literal("lib:") + Title.source_id + ":" + Title.ext_id,
             )
+            # Bound expensive canonical-title UDF work after a cheap SQL pass.
+            # Budget distinct works so duplicate editions cannot crowd them out.
+            cheap_phrase = case(
+                (Title.norm_title == norm, 0),
+                (Title.norm_title.like("% " + _escape_like(norm), escape="\\"), 1),
+                (Title.norm_title.like("% " + _escape_like(norm) + " " + cast(Title.year, String), escape="\\"), 1),
+                (Title.norm_title.like("%" + _escape_like(norm) + "%", escape="\\"), 2),
+                else_=3,
+            )
+            cheap_order = (cheap_phrase, score.desc(), func.length(Title.norm_title), Title.id)
+            preliminary = query.with_only_columns(
+                Title.id.label("id"),
+                cheap_phrase.label("phrase"),
+                score.label("score"),
+                func.length(Title.norm_title).label("length"),
+                func.row_number().over(partition_by=work, order_by=cheap_order).label("edition"),
+            ).subquery()
+            candidate_ids = (
+                select(preliminary.c.id)
+                .where(preliminary.c.edition == 1)
+                .order_by(preliminary.c.phrase, preliminary.c.score.desc(), preliminary.c.length, preliminary.c.id)
+                .limit(CANDIDATE_LIMIT * 4)
+            )
+            query = select(Title).where(Title.id.in_(candidate_ids))
             ranked = query.with_only_columns(
                 Title.id.label("id"),
                 phrase_rank.label("phrase_rank"),

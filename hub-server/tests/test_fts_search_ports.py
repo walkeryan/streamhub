@@ -170,3 +170,43 @@ def test_fts_upgrade_from_pin_schema_preserves_existing_data(tmp_path):
     command.downgrade(cfg, "0005")
     preserved()
     engine.dispose()
+
+
+async def test_canonical_original_after_two_thousand_distinct_parodies(api):
+    await seed_catalog(api)
+    fake = AsyncMock()
+    fake.enabled = False
+    api.c.catalog.meta = fake
+    async with api.c.db.session() as session:
+        await session.execute(
+            insert(Title),
+            [
+                dict(
+                    source_id="catalog",
+                    ext_id=f"parody-{n}",
+                    kind="vod",
+                    title=f"Star Wars Parody {n}",
+                    norm_title=f"star wars parody {n}",
+                    tmdb_id=1000 + n,
+                    year=2020,
+                )
+                for n in range(2200)
+            ],
+        )
+        raw = "4K-EN-NETFLIX-Star Wars (1977)"
+        session.add(
+            Title(
+                source_id="catalog",
+                ext_id="rare-original",
+                kind="vod",
+                title=raw,
+                norm_title=normalise_title(raw),
+                tmdb_id=11,
+                year=1977,
+            )
+        )
+        await session.commit()
+    result = await api.get("/search", params={"q": "Star Wars", "language": "all", "kinds": "movie"})
+    assert result.status_code == 200, result.text
+    assert result.json()["results"][0]["id"] == "tmdb:movie:11"
+    assert result.json()["results"][0]["title"] == "Star Wars"
