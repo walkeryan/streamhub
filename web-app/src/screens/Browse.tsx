@@ -66,8 +66,8 @@ export function Browse() {
       <LanguageFilter scope="browse" value={lang} onChange={setLang} languages={languages.data} />
       <div className="flex gap-2 flex-wrap items-center">
         <div style={{ width: 'min(24rem, 100%)' }}><FocusableInput focusKey="browse:search" label="Search this library" placeholder="Search titles in this library" value={search} onChange={setSearch} inputMode="search" /></div>
-        <CatalogPicker scope="browse:category" label="Category" value={category} options={[{ id: '', label: 'All categories' }, ...(categories.data ?? []).map((c) => ({ id: c.name, label: c.name, count: c.count }))]} onChange={setCategory} />
-        <CatalogPicker scope="browse:genre" label="Genre" value={genre} options={[{ id: '', label: 'All genres' }, ...(genres.data ?? []).map((g) => ({ id: g.name, label: g.name.charAt(0).toLocaleUpperCase() + g.name.slice(1), count: g.count }))]} onChange={setGenre} />
+        <CatalogPicker scope="browse:category" label="Category" value={category} selectedLabel={category || undefined} options={[{ id: '', label: 'All categories' }, ...(categories.data ?? []).map((c) => ({ id: c.name, label: c.name, count: c.count }))]} onChange={setCategory} />
+        <CatalogPicker scope="browse:genre" label="Genre" value={genre} selectedLabel={genre ? genre.charAt(0).toLocaleUpperCase() + genre.slice(1) : undefined} options={[{ id: '', label: 'All genres' }, ...(genres.data ?? []).map((g) => ({ id: g.name, label: g.name.charAt(0).toLocaleUpperCase() + g.name.slice(1), count: g.count }))]} onChange={setGenre} />
         {libs.length > 0 && <CatalogPicker scope="browse:source" label="Source" value={source} options={[{ id: '', label: 'All sources' }, ...libs.map((s) => ({ id: s.id, label: s.name }))]} onChange={setSource} />}
         {(source || category || genre || search || sort !== defaults.sort || lang !== defaults.language) && <Button focusKey="browse:clear" ghost onEnter={reset}>Clear filters</Button>}
       </div>
