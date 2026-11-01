@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { api, ApiError, reportProgress, unwrap } from '../api/client'
 import type { PlaybackDescriptor } from '../api/types'
+import { useSession } from '../store/session'
+import { BufferSession, bufferError, type BufferWindow } from './bufferSession'
 import { attachSource, type PlayerHandle } from './engine'
 
 export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
@@ -27,7 +29,13 @@ const MAX_RETRIES = 6
  * Resolves + attaches a stream to <video>. Reconnects with exponential backoff on fatal errors by re-resolving
  * (fresh proxy token). Reports progress every 10 s, on pause/ended and on page unload.
  */
-export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: { muted?: boolean; report?: boolean } = {}) {
+export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: { muted?: boolean; report?: boolean; buffer?: boolean } = {}) {
+  const profileId = useSession((s) => s.profile?.id)
+  const [bufferWindow, setBufferWindow] = useState<BufferWindow | null>(null)
+  const [bufferIssue, setBufferIssue] = useState<string | null>(null)
+  const buffer = useRef<BufferSession | null>(null)
+  const pendingRelease = useRef<Promise<void>>(Promise.resolve())
+  const seekBufferRef = useRef<((at: string | null) => Promise<void>) | null>(null)
   const [desc, setDesc] = useState<PlaybackDescriptor | null>(null)
   const [state, setState] = useState<PlayState>('resolving')
   const [error, setError] = useState<string | null>(null)
@@ -49,11 +57,21 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
     retryTimer.current = null
   }, [])
-  const key = req ? `${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
+  const key = req ? `${profileId}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
 
   const reconnect = useCallback((_reason: string) => {
     if (terminal.current) return
     clearWaiting()
+    if (buffer.current) {
+      terminal.current = true
+      handle.current?.destroy()
+      pendingRelease.current = buffer.current.release()
+      buffer.current = null
+      setBufferWindow(null)
+      setState('error')
+      setError('Buffered playback stopped. Choose Try again to start a new playback session.')
+      return
+    }
     if (retryTimer.current !== null) return
     if (retry.current >= MAX_RETRIES) {
       setState('error')
@@ -81,11 +99,21 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     hasPlayed.current = false
     clearWaiting()
     let owned: PlayerHandle | null = null
+    let lease: BufferSession | null = null
+    let attachController = new AbortController()
+    let attachSequence = 0
+    let pauseHeartbeat: (() => void) | null = null
+    setBufferWindow(null)
+    setBufferIssue(null)
     const video = videoRef.current
+    const releaseOnHide = () => { if (lease) pendingRelease.current = lease.release() }
+    window.addEventListener('pagehide', releaseOnHide)
     setState((s) => (s === 'reconnecting' ? s : 'resolving'))
     setError(null)
     ;(async () => {
       try {
+        await pendingRelease.current
+        if (cancelled) return
         if (!intent.current.generation) {
           const generation = await playbackGeneration()
           if (cancelled) return
@@ -97,19 +125,61 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         descRef.current = d
         if (d.mode === 'handoff') { setState('handoff'); return }
         if (!video) return
-        setState('loading')
-        handle.current?.destroy()
-        owned = await attachSource(video, d, {
-          signal: controller.signal,
-          onFatal: (r) => !cancelled && reconnect(r),
-          onTracks: () => { if (!cancelled) setTracksVersion((v) => v + 1) },
-        })
-        if (cancelled) { owned.destroy(); return }
-        handle.current = owned
-        video.muted = !!opts.muted
-        try { await video.play() } catch (e) {
-          if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') { clearWaiting(); setState('paused') }
+        const attach = async (descriptor: PlaybackDescriptor) => {
+          const sequence = ++attachSequence
+          attachController.abort()
+          attachController = new AbortController()
+          setState('loading')
+          handle.current?.destroy()
+          const next = await attachSource(video, descriptor, {
+            signal: attachController.signal,
+            onFatal: (r) => !cancelled && sequence === attachSequence && reconnect(r),
+            onTracks: () => { if (!cancelled && sequence === attachSequence) setTracksVersion((v) => v + 1) },
+          })
+          if (cancelled || sequence !== attachSequence) { next.destroy(); return }
+          owned = next
+          handle.current = next
+          video.muted = !!opts.muted
+          try { await video.play() } catch (e) {
+            if (!cancelled && e instanceof DOMException && e.name === 'NotAllowedError') { clearWaiting(); setState('paused') }
+          }
         }
+        if (opts.buffer === true && d.buffer_available && d.live && d.mode === 'hls') {
+          try {
+            lease = await BufferSession.acquire(d, controller.signal)
+            if (cancelled) { await lease.release(); return }
+            buffer.current = lease
+            setBufferWindow(lease.window)
+            pauseHeartbeat = lease.startHeartbeat(() => video.paused, (value) => {
+              if (!cancelled) setBufferWindow(value)
+            }, (failure) => {
+              if (cancelled) return
+              terminal.current = true
+              clearRetry(); clearWaiting()
+              owned?.destroy()
+              setState('error'); setError(bufferError(failure)); setBufferWindow(null)
+            })
+            video.addEventListener('pause', pauseHeartbeat)
+            seekBufferRef.current = async (at) => {
+              if (!lease || cancelled) return
+              try {
+                const result = await lease.seek(at)
+                if (cancelled) return
+                setBufferWindow(result.window); setBufferIssue(null)
+                await attach({ ...d, url: result.url })
+              } catch (failure) {
+                if (!cancelled && !(failure instanceof DOMException && failure.name === 'AbortError')) setBufferIssue(bufferError(failure))
+              }
+            }
+          } catch (failure) {
+            if (cancelled) return
+            // Access/recovery failures must never fall back to an unleased stream.
+            terminal.current = true
+            setState('error'); setError(bufferError(failure))
+            return
+          }
+        }
+        await attach(d)
       } catch (e) {
         if (cancelled) return
         // Re-resolving cannot repair missing content or denied access. Keep
@@ -132,6 +202,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     return () => {
       cancelled = true
       controller.abort()
+      window.removeEventListener('pagehide', releaseOnHide)
+      attachController.abort()
+      seekBufferRef.current = null
+      if (pauseHeartbeat) video?.removeEventListener('pause', pauseHeartbeat)
+      if (lease) pendingRelease.current = lease.release()
+      if (buffer.current === lease) buffer.current = null
       clearRetry()
       clearWaiting()
       owned?.destroy()
@@ -222,7 +298,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   }, [tracksVersion])
 
   return {
-    desc, state, error, tracks,
+    desc, state, error, tracks, bufferWindow, bufferIssue, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
     setAudio: (i: number) => { handle.current?.setAudio(i); setTracksVersion((v) => v + 1) },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
     retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },

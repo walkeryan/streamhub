@@ -9,6 +9,7 @@ import { setFocus } from '../nav/spatial'
 import { ChannelAudioPrompt, useChannelAudio } from '../player/channelAudio'
 import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
+import { LocalBufferControls } from '../player/LocalBufferControls'
 import { RewindControls } from '../player/RewindControls'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
@@ -42,7 +43,7 @@ export function Player() {
 
   const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt])
   const audio = useChannelAudio(req, manualChoice === selectionKey)
-  const pb = usePlayback(videoRef, audio.request)
+  const pb = usePlayback(videoRef, audio.request, { buffer: true })
   const { desc, state } = pb
   const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
 
@@ -189,7 +190,7 @@ export function Player() {
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
       const handled = () => { e.preventDefault(); e.stopImmediatePropagation() }
-      if (chromeRef.current && document.activeElement?.closest('[data-testid="rewind-controls"]')) { a.poke(); return }
+      if (chromeRef.current && document.activeElement?.closest('[data-testid="rewind-controls"], [data-testid="local-buffer-controls"]')) { a.poke(); return }
       if (overlayRef.current === 'bar' && e.key === 'ArrowUp') { handled(); setOverlay(null); a.poke(); return }
       const visible = chromeRef.current
       a.poke()
@@ -348,7 +349,9 @@ export function Player() {
             <Button focusKey="pb:menu" ghost icon="cc" onEnter={() => setOverlay('menu')} testId="player-menu-btn">Audio and subtitles</Button>
             <Button focusKey="pb:pip" ghost icon="pip" label="Picture in picture" onEnter={() => void pip()} testId="player-pip">PiP</Button>
             <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" onEnter={fullscreen} />
-          {isChannel && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
+          {pb.bufferWindow && <LocalBufferControls window={pb.bufferWindow} issue={pb.bufferIssue} onSeek={pb.seekBuffer} />}
+          {pb.bufferIssue && !pb.bufferWindow && <span role="status">{pb.bufferIssue}</span>}
+          {isChannel && !pb.bufferWindow && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
             const next = new URLSearchParams(sp); next.delete("catchup");
             if (at) next.set("rewind", at); else next.delete("rewind");
             navigate(`/play/${encodeURIComponent(id)}?${next}`, { replace: true });
@@ -367,7 +370,7 @@ export function Player() {
 
       {/* channel OSD */}
       {live && (
-        <div className="osd" data-show={osd || ui} data-testid="osd">
+        <div className="osd" data-show={(osd || ui) && !(pb.bufferWindow && showChrome)} data-testid="osd">
           <div className="flex items-center gap-4">
             <span className="osd-num">{channel?.number ?? ''}</span>
             <div className="min-w-0 flex-1">
