@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import ColumnElement, Select, case, func, literal, or_, select, true
+from sqlalchemy import ColumnElement, Select, String, case, cast, func, literal, or_, select, true
 
 from app.adapters.language.inferrer import lang_from_flag, lang_from_group, normalise_code
 from app.domain.entities import CatalogItem, MediaKind
@@ -291,7 +291,7 @@ class CatalogService:
                 if merged:
                     return merged
             return await self._lib_detail(row, ctx)
-        if h.scheme == "tmdb" and h.b.isdigit():
+        if h.scheme == "tmdb" and h.a in {"movie", "tv"} and h.b.isdigit():
             d = await self._tmdb_detail(h.a, int(h.b), ctx)
             if d:
                 return d
@@ -324,7 +324,13 @@ class CatalogService:
         self, media_type: str, tmdb_id: int, ctx: TileContext, preferred: Title | None = None
     ) -> dict[str, Any] | None:
         hub = ids.tmdb_id(media_type, tmdb_id)
-        meta = await self.meta.details(media_type, tmdb_id) if self.meta.enabled else None
+        try:
+            async with asyncio.timeout(8):
+                meta = await self.meta.details(media_type, tmdb_id) if self.meta.enabled else None
+        except Exception:
+            meta = None
+        if meta and (meta.media_type != media_type or meta.tmdb_id != tmdb_id):
+            meta = None
         badges, matches = await self.availability.badges_for(
             media_type,
             tmdb_id=tmdb_id,
@@ -342,7 +348,9 @@ class CatalogService:
         if meta is None and not matches:
             return None
         if meta is not None:
-            tile = meta_tile(meta, badges, ctx.favorites, ctx.progress_pct(hub))
+            refs = [ids.lib_id(m.source_id, m.ext_id) for m in matches]
+            tile = meta_tile(meta, badges, ctx.favorites, ctx.progress_pct(hub, *refs))
+            tile["is_favorite"] = hub in ctx.favorites or any(ref in ctx.favorites for ref in refs)
             detail = {
                 **tile,
                 "overview": meta.overview or "",
@@ -357,6 +365,9 @@ class CatalogService:
             primary = matches[0]
             tile = ctx.title_tile(primary)
             tile["sources"] = badges
+            refs = [ids.lib_id(m.source_id, m.ext_id) for m in matches]
+            tile["is_favorite"] = hub in ctx.favorites or any(ref in ctx.favorites for ref in refs)
+            tile["progress_pct"] = ctx.progress_pct(hub, *refs)
             detail = await self._lib_detail(primary, ctx, base=tile)
             detail["id"] = hub
             return detail
@@ -432,7 +443,7 @@ class CatalogService:
         async with self._db.session() as s:
             rows = (
                 await s.execute(
-                    query.with_only_columns(Title.group_name, func.count(Title.id))
+                    query.with_only_columns(Title.group_name, func.count(func.distinct(self._canonical_key())))
                     .group_by(Title.group_name)
                     .order_by(Title.group_name)
                 )
@@ -447,20 +458,64 @@ class CatalogService:
             raise NotFound("unknown section")
         ctx = await self.tile_context(profile_id)
         query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
-        async with self._db.session() as s:
+        async with self._db.session() as session:
+            groups = list((await session.execute(query.with_only_columns(Title.group_name).distinct())).scalars())
+            by_language: dict[str, list[str]] = {}
+            for group in groups:
+                if group is not None:
+                    by_language.setdefault(self.category_language(group), []).append(group)
+            code = (
+                case(*[(Title.group_name.in_(names), lang) for lang, names in by_language.items()], else_="und")
+                if by_language
+                else literal("und")
+            )
             rows = (
-                await s.execute(
-                    query.with_only_columns(Title.group_name, func.count(Title.id)).group_by(Title.group_name)
+                await session.execute(
+                    query.with_only_columns(code, func.count(func.distinct(self._canonical_key()))).group_by(code)
                 )
             ).all()
-        counts: dict[str, int] = {}
-        for group, count in rows:
-            code = self.category_language(group)
-            counts[code] = counts.get(code, 0) + int(count)
+        counts = {code: int(count) for code, count in rows}
         return [
             {"code": code, "name": self.sources.language.language_name(code), "count": count}
             for code, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
         ]
+
+    @staticmethod
+    def _canonical_key() -> ColumnElement[str]:
+        media_type = case((Title.kind.in_(ids.MOVIE_KINDS), "movie"), else_="tv")
+        return case(
+            (Title.tmdb_id != 0, literal("tmdb:") + media_type + ":" + cast(Title.tmdb_id, String)),
+            else_=literal("lib:") + Title.source_id + ":" + Title.ext_id,
+        )
+
+    async def _enrich_page(self, tiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Only this bounded page; existing TMDB detail cache serves repeated IDs."""
+        if not self.meta.enabled:
+            return tiles
+        semaphore = asyncio.Semaphore(6)
+
+        async def enrich(tile: dict[str, Any]) -> dict[str, Any]:
+            if not tile["id"].startswith("tmdb:"):
+                return tile
+            parsed = ids.parse(tile["id"])
+            try:
+                # Includes semaphore wait, so upstream outages cannot turn a page
+                # into 60 sequential retry windows.
+                async with asyncio.timeout(8):
+                    async with semaphore:
+                        meta = await self.meta.details(parsed.a, int(parsed.b))
+            except Exception:
+                return tile
+            if meta is None or meta.media_type != parsed.a or meta.tmdb_id != int(parsed.b):
+                return tile
+            enriched = meta_tile(meta, tile["sources"], set(), tile.get("progress_pct"))
+            enriched["is_favorite"] = tile["is_favorite"]
+            for field in ("poster", "backdrop", "logo", "rating"):
+                if enriched.get(field) is None:
+                    enriched[field] = tile.get(field)
+            return enriched
+
+        return list(await asyncio.gather(*(enrich(tile) for tile in tiles)))
 
     async def browse(
         self,
@@ -490,21 +545,75 @@ class CatalogService:
                 Title.norm_title.like("%" + _escape_like(ids.normalise_title(text_query)) + "%", escape="\\")
             )
         query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        # Count and page identities before loading variants. Merging raw pages
+        # allowed the same TMDB film to recur on later pages and inflated totals.
+        key = self._canonical_key()
+        grouped = (
+            query.with_only_columns(
+                key.label("hub"),
+                func.min(Title.norm_title).label("title_sort"),
+                func.max(Title.year).label("year_sort"),
+                func.max(Title.rating).label("rating_sort"),
+                func.max(Title.added_at).label("added_sort"),
+                func.max(Title.id).label("id_sort"),
+            )
+            .group_by(key)
+            .subquery()
+        )
         orders: dict[str, list[Any]] = {
-            "title": [Title.norm_title.asc()],
-            "year": [Title.year.desc().nulls_last(), Title.norm_title],
-            "rating": [Title.rating.desc().nulls_last(), Title.norm_title],
+            "title": [grouped.c.title_sort],
+            "year": [grouped.c.year_sort.desc().nulls_last(), grouped.c.title_sort],
+            "rating": [grouped.c.rating_sort.desc().nulls_last(), grouped.c.title_sort],
         }
-        order = orders.get(sort or "added", [Title.added_at.desc().nulls_last(), Title.id.desc()])
-        async with self._db.session() as s:
-            total = (await s.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-            rows = list(
+        order = orders.get(sort or "added", [grouped.c.added_sort.desc().nulls_last(), grouped.c.id_sort.desc()])
+        tracked = ctx.favorites | set(ctx.progress)
+        lib_key = literal("lib:") + Title.source_id + ":" + Title.ext_id
+        async with self._db.session() as session:
+            total = int((await session.execute(select(func.count()).select_from(grouped))).scalar_one())
+            hubs = list(
                 (
-                    await s.execute(query.order_by(*order, Title.id).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE))
+                    await session.execute(
+                        select(grouped.c.hub)
+                        .order_by(*order, grouped.c.hub)
+                        .offset((page - 1) * PAGE_SIZE)
+                        .limit(PAGE_SIZE)
+                    )
                 ).scalars()
             )
-        tiles = ctx.merge(ctx.title_tile(r) for r in rows)
-        return {"tiles": tiles, "page": page, "total": int(total), "has_more": page * PAGE_SIZE < int(total)}
+            if not hubs:
+                return {"tiles": [], "page": page, "total": total, "has_more": False}
+            page_query = query.where(key.in_(hubs))
+            representatives = page_query.with_only_columns(func.min(Title.id)).group_by(key, Title.source_id)
+            rows = list(
+                (
+                    await session.execute(
+                        select(Title).where(Title.id.in_(representatives)).order_by(Title.source_id, Title.id)
+                    )
+                ).scalars()
+            )
+            refs = (
+                list(
+                    (
+                        await session.execute(
+                            select(key, lib_key).where(
+                                key.in_(hubs), Title.source_id.in_(enabled), lib_key.in_(tracked)
+                            )
+                        )
+                    ).all()
+                )
+                if tracked
+                else []
+            )
+        merged = {tile["id"]: tile for tile in ctx.merge(ctx.title_tile(row) for row in rows)}
+        references: dict[str, list[str]] = {}
+        for hub, ref in refs:
+            references.setdefault(hub, []).append(ref)
+        for hub, tile in merged.items():
+            matched_refs = sorted(references.get(hub, []))
+            tile["is_favorite"] = hub in ctx.favorites or any(ref in ctx.favorites for ref in matched_refs)
+            tile["progress_pct"] = ctx.progress_pct(hub, *matched_refs)
+        tiles = await self._enrich_page([merged[hub] for hub in hubs])
+        return {"tiles": tiles, "page": page, "total": total, "has_more": page * PAGE_SIZE < total}
 
     async def genre_facets(
         self,
@@ -526,11 +635,11 @@ class CatalogService:
         if q and q.strip():
             query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
         query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
-        scoped = query.with_only_columns(Title.id, Title.genres).subquery()
+        scoped = query.with_only_columns(self._canonical_key().label("hub"), Title.genres).subquery()
         values = func.json_each(scoped.c.genres).table_valued("value", "type")
         name = func.lower(func.trim(values.c.value))
         statement = (
-            select(name.label("name"), func.count(func.distinct(scoped.c.id)))
+            select(name.label("name"), func.count(func.distinct(scoped.c.hub)))
             .select_from(scoped.join(values, true()))
             .where(values.c.type == "text", name != "")
             .group_by(name)
