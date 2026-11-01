@@ -128,7 +128,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             .background(Color.Black)
             .focusRequester(rootFocus)
             .onPreviewKeyEvent { e ->
-                val overlayOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu || s.overlay == Overlay.Rewind
+                val overlayOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu || s.overlay == Overlay.Rewind || s.overlay == Overlay.Buffer
                 if (e.key == Key.Back) {
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                     when {
@@ -167,7 +167,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                                 handled -> Unit
                                 wasLong -> vm.openMenu() // remotes that send no auto-repeat while held
                                 vm.commitNumber() -> Unit
-                                s.live -> vm.openMiniList()
+                                s.live && !s.bufferTimeshift -> vm.openMiniList()
                                 else -> { vm.player.togglePlayPause(); vm.showOsd() }
                             }
                         }
@@ -178,10 +178,10 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 digitOf(e.key)?.let { vm.digit(it); return@onPreviewKeyEvent true }
                 when (e.key) {
-                    Key.DirectionUp, Key.ChannelUp -> { if (s.live) vm.zap(+1) else vm.showOsd(); true }
-                    Key.DirectionDown, Key.ChannelDown -> { if (s.live) vm.zap(-1) else if(s.descriptor?.archiveStart != null) vm.openMenu() else vm.showOsd(); true }
-                    Key.DirectionLeft -> { if(s.live) vm.openRewind() else { vm.player.seekBy(-10_000); vm.showOsd() }; true }
-                    Key.DirectionRight -> { if(s.live) vm.openMenu() else { vm.player.seekBy(10_000); vm.showOsd() }; true }
+                    Key.DirectionUp, Key.ChannelUp -> { if (s.live && !s.bufferTimeshift) vm.zap(+1) else vm.showOsd(); true }
+                    Key.DirectionDown, Key.ChannelDown -> { if (s.live && !s.bufferTimeshift) vm.zap(-1) else if(s.descriptor?.archiveStart != null || s.bufferTimeshift) vm.openMenu() else vm.showOsd(); true }
+                    Key.DirectionLeft -> { if(s.live && !s.bufferTimeshift) vm.openRewind() else { vm.player.seekBy(-10_000); vm.showOsd() }; true }
+                    Key.DirectionRight -> { if(s.live && !s.bufferTimeshift) vm.openMenu() else { vm.player.seekBy(10_000); vm.showOsd() }; true }
                     Key.MediaRewind -> { vm.player.seekBy(-30_000); vm.showOsd(); true }
                     Key.MediaFastForward -> { vm.player.seekBy(30_000); vm.showOsd(); true }
                     Key.MediaPlayPause -> { vm.player.togglePlayPause(); vm.showOsd(); true }
@@ -197,10 +197,11 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
     ) {
         VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect)
         if(s.overlay == Overlay.Rewind && s.audioChoice == null) ProviderRewindDialog(vm, s)
+        if(s.overlay == Overlay.Buffer && s.audioChoice == null) BufferPlaybackDialog(vm,s,ps)
         s.audioChoice?.let { choice -> AudioSourceDialog(choice.options, vm::cancelAudioChoice, vm::confirmAudioChoice) }
 
-        if (ps.buffering || ps.error != null || s.message != null) {
-            StatusBadge(ps.error ?: s.message ?: "Buffering…", Modifier.align(Alignment.Center))
+        if (ps.buffering || ps.error != null || s.message != null || s.bufferBusy) {
+            StatusBadge(ps.error ?: s.message ?: if(s.bufferBusy) "Preparing buffer…" else "Buffering…", Modifier.align(Alignment.Center))
         }
 
         AnimatedVisibility(s.overlay == Overlay.Osd || s.numberEntry.isNotEmpty(), enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
@@ -244,7 +245,7 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
             .padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY)
             .padding(top = 64.dp),
     ) {
-        if (s.live) {
+        if (s.live && !s.bufferTimeshift) {
             val ch = s.osdChannel
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (ch?.logo != null) AsyncImage(ch.logo, null, contentScale = ContentScale.Fit, modifier = Modifier.size(64.dp))
@@ -273,7 +274,7 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
             }
         }
         Text(
-            if (s.live) "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel" else if(s.descriptor?.archiveStart != null) "Provider archive · ${if(ps.seekable) "◀▶ seek" else "Not seekable yet"} · ▼ Go Live/menu" else "OK play/pause · ${if(ps.seekable) "◀▶ seek" else "Not seekable"} · hold OK menu",
+            if(s.bufferTimeshift) "Buffered history · ◀▶ seek · ▼ menu / Go Live" else if (s.live) "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel" else if(s.descriptor?.archiveStart != null) "Provider archive · ${if(ps.seekable) "◀▶ seek" else "Not seekable yet"} · ▼ Go Live/menu" else "OK play/pause · ${if(ps.seekable) "◀▶ seek" else "Not seekable"} · hold OK menu",
             style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(top = 10.dp),
         )
         s.sleepEndsAt?.let {
@@ -343,9 +344,11 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if(s.descriptor?.id?.startsWith("ch:") == true) {
-            ShButton("Provider archive · unverified", vm::openRewind, Modifier.focusRequester(first))
+            ShButton(if(s.bufferWindow!=null) "Buffered rewind" else "Provider archive · unverified", vm::openRewind, Modifier.focusRequester(first))
             ShButton("Go Live", vm::goLive)
             s.rewindError?.let { Text(it, color=t.danger) }
+            s.bufferWindow?.let { Text("${it.bufferedSeconds.toInt()} seconds retained · grows while watched",color=t.textMuted) }
+            s.bufferError?.let { Text(it,color=t.danger) }
         }
         Text("Audio", style = MaterialTheme.typography.titleSmall, color = t.text)
         if (ps.audioTracks.isEmpty()) Text("Default", color = t.textMuted, style = MaterialTheme.typography.bodySmall)

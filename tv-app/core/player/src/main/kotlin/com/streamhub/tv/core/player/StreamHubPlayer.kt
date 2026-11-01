@@ -126,13 +126,16 @@ class StreamHubPlayer(
                 _state.value = _state.value.copy(error = null, reconnectAttempt = 0)
             }
             if (playbackState == Player.STATE_ENDED) {
-                if (current?.live == true) scheduleReconnect("Stream ended") else report(PlaybackState.STOPPED)
+                if(current?.bufferAvailable == true) _state.value = _state.value.copy(error="Buffered playback ended. Choose Go Live or retry.")
+                else if (current?.live == true) scheduleReconnect("Stream ended") else report(PlaybackState.STOPPED)
             }
         }
 
         override fun onPlayerError(error: PlaybackException) {
             val d = current
-            if (d?.live == true) {
+            if(d?.bufferAvailable == true) {
+                _state.value = _state.value.copy(error="Buffered playback interrupted. Choose Go Live or retry.")
+            } else if (d?.live == true) {
                 scheduleReconnect(error.errorCodeName)
             } else if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                 exoPlayer.seekToDefaultPosition(); exoPlayer.prepare()

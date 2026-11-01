@@ -47,8 +47,8 @@ class PlaybackCoordinator @Inject constructor(
     private var inFlight: Job? = null
     private var choiceOwner: CatalogScope? = null
     private var activeOwner: String? = null
-    private var stopActive: (() -> Unit)? = null
-    fun registerActivePlayer(owner: String, stop: () -> Unit) { activeOwner = owner; stopActive = stop }
+    private var stopActive: (suspend () -> Unit)? = null
+    fun registerActivePlayer(owner: String, stop: suspend () -> Unit) { activeOwner = owner; stopActive = stop }
     fun unregisterActivePlayer(owner: String) { if(activeOwner == owner) { activeOwner=null; stopActive=null } }
 
 

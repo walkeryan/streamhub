@@ -223,6 +223,11 @@ class StreamHubApi @Inject constructor(
 
     // ---- Playback ------------------------------------------------------------------------------
 
+    suspend fun acquireBuffer(token: String): BufferLease = client.post(url("/playback/buffer/lease")) { setBody(BufferLeaseRequest(token)) }.ok()
+    suspend fun heartbeatBuffer(action: BufferLeaseAction): BufferWindow = client.post(url("/playback/buffer/heartbeat")) { setBody(action) }.ok()
+    suspend fun seekBuffer(action: BufferLeaseAction): BufferSeekResult = client.post(url("/playback/buffer/seek")) { setBody(action) }.ok()
+    suspend fun releaseBuffer(action: BufferLeaseAction) { client.post(url("/playback/buffer/release")) { setBody(action) }.ok<Unit>() }
+
     suspend fun rewindCapability(id: String): RewindCapability = get("/playback/rewind") { parameter("id", id) }
 
     suspend fun playbackOptions(id: String, sourceId: String? = null): PlaybackOptions = get("/playback/options") {

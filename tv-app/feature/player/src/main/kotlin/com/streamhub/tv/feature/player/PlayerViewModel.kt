@@ -10,6 +10,17 @@ import com.streamhub.tv.core.data.repo.catalogScope
 import com.streamhub.tv.core.data.repo.resolveArchiveSelection
 import com.streamhub.tv.core.data.repo.ExpiredArchiveSelection
 import com.streamhub.tv.core.data.model.RewindCapability
+import com.streamhub.tv.core.data.model.BufferWindow
+import com.streamhub.tv.core.data.model.BufferLease
+import com.streamhub.tv.core.data.model.BufferLeaseAction
+import com.streamhub.tv.core.data.model.BufferSeekResult
+import com.streamhub.tv.core.data.repo.BufferLeaseApi
+import com.streamhub.tv.core.data.repo.BufferLeaseSession
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import com.streamhub.tv.core.data.model.PlaybackRequest
 import com.streamhub.tv.core.data.repo.AudioPlaybackAttempt
 import com.streamhub.tv.core.data.repo.audioPlaybackAttempt
@@ -41,7 +52,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class Overlay { None, Osd, MiniList, Menu, Rewind }
+enum class Overlay { None, Osd, MiniList, Menu, Rewind, Buffer }
 
 data class PlayerScreenState(
     val descriptor: PlaybackDescriptor? = null,
@@ -49,6 +60,11 @@ data class PlayerScreenState(
     val rewindLoading: Boolean = false,
     val rewindError: String? = null,
     val audioChoice: AudioPlaybackAttempt.Choice? = null,
+    val bufferWindow: BufferWindow? = null,
+    val bufferBusy: Boolean = false,
+    val bufferError: String? = null,
+    val bufferTimeshift: Boolean = false,
+
     val live: Boolean = false,
     val overlay: Overlay = Overlay.Osd,
     /** Channel shown in the OSD: the playing one, or the zap target while the user is still pressing Up/Down. */
@@ -97,35 +113,133 @@ class PlayerViewModel @Inject constructor(
     private var osdJob: Job? = null
     private var sleepJob: Job? = null
     private var rewindJob: Job? = null
+    private var attachJob: Job? = null
+    private var bufferHeartbeat: Job? = null
+    private var bufferSeekJob: Job? = null
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val buffer = BufferLeaseSession(object: BufferLeaseApi {
+        override suspend fun acquire(token: String): BufferLease = api.acquireBuffer(token)
+        override suspend fun heartbeat(action: BufferLeaseAction): BufferWindow = api.heartbeatBuffer(action)
+        override suspend fun seek(action: BufferLeaseAction): BufferSeekResult = api.seekBuffer(action)
+        override suspend fun release(action: BufferLeaseAction) = api.releaseBuffer(action)
+    })
     private var audioOwner: CatalogScope? = null
     private var choiceArchiveAction = false
 
     init {
-        coordinator.registerActivePlayer(key) { player.stop(); currentStopped=true }
+        coordinator.registerActivePlayer(key) { stopCurrentPlayback() }
         val d = coordinator.take(key)
         if (d == null) {
             _state.update { it.copy(message = "Nothing to play") }
         } else {
-            start(d)
-            if (d.live) viewModelScope.launch { loadChannelList(d) }
+            attachJob = viewModelScope.launch { start(d); if(d.live) loadChannelList(d) }
         }
         showOsd()
         viewModelScope.launch {
             sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
-                rewindJob?.cancel(); _state.update { it.copy(audioChoice=null) }; player.stop(); _exit.emit(Unit)
+                rewindJob?.cancel(); _state.update { it.copy(audioChoice=null) }; stopCurrentPlayback(); _exit.emit(Unit)
             }
         }
     }
 
-    private fun start(d: PlaybackDescriptor) {
-        currentStopped=false
+    private suspend fun releaseCurrentBuffer() {
+        bufferHeartbeat?.cancel(); bufferHeartbeat=null
+        bufferSeekJob?.cancel(); bufferSeekJob=null
+        player.stop(); currentStopped=true
+        withContext(NonCancellable) { buffer.close() }
+        _state.update { it.copy(bufferWindow=null, bufferBusy=false,bufferTimeshift=false) }
+    }
+
+    private suspend fun stopCurrentPlayback() {
+        attachJob?.cancel(); attachJob=null
+        releaseCurrentBuffer()
+    }
+
+    private suspend fun start(d: PlaybackDescriptor) {
+        releaseCurrentBuffer()
         if (d.mode == PlaybackMode.HANDOFF) {
-            d.handoff?.let { launcher.launch(it) }
-            _exit.tryEmit(Unit)
-            return
+            d.handoff?.let { launcher.launch(it) }; _exit.tryEmit(Unit); return
         }
-        _state.update { it.copy(descriptor = d, live = d.live, message = null) }
-        player.play(d)
+        val owner=sessions.current().catalogScope()
+        _state.update { it.copy(descriptor=d, live=d.live, message=null, bufferError=null, bufferBusy=d.bufferAvailable) }
+        var acquiredLeaseId: String? = null
+        try {
+            val lease=if(d.bufferAvailable) buffer.open(d) else null
+            acquiredLeaseId=lease?.leaseId
+            currentCoroutineContext().ensureActive()
+            if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
+            currentStopped=false
+            player.play(d)
+            _state.update { it.copy(bufferWindow=lease?.window,bufferBusy=false) }
+            if(lease != null) bufferHeartbeat=viewModelScope.launch {
+                try {
+                    while(true) {
+                        delay(30_000)
+                        if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
+                        val window=buffer.heartbeat(paused=!player.exoPlayer.playWhenReady)
+                        currentCoroutineContext().ensureActive()
+                        if(sessions.current().catalogScope()!=owner || buffer.leaseId!=lease.leaseId) return@launch
+                        _state.update { it.copy(bufferWindow=window) }
+                    }
+                } catch(e:CancellationException) { throw e }
+                catch(_:Exception) {
+                    if(buffer.leaseId==lease.leaseId) {
+                        bufferHeartbeat=null
+                        player.stop(); currentStopped=true
+                        withContext(NonCancellable) { buffer.close(lease.leaseId) }
+                        if(buffer.leaseId==null && _state.value.descriptor==d) _state.update { it.copy(bufferWindow=null,bufferBusy=false,bufferTimeshift=false,bufferError="Buffer lease expired or could not renew. Playback stopped. Choose Play/Retry to start again.",overlay=Overlay.Buffer) }
+                    }
+                }
+            }
+        } catch(e:CancellationException) {
+            acquiredLeaseId?.let { id -> withContext(NonCancellable) { buffer.close(id) } }; throw e
+        } catch(_:Exception) {
+            acquiredLeaseId?.let { id -> withContext(NonCancellable) { buffer.close(id) } }
+            currentCoroutineContext().ensureActive()
+            if(sessions.current().catalogScope()!=owner) return
+            _state.update { it.copy(bufferBusy=false,bufferError="Buffer unavailable. Nothing was attached. Retry or choose live without buffering.",overlay=Overlay.Buffer) }
+        }
+    }
+
+    fun playWithoutBuffer() {
+        val descriptor=_state.value.descriptor ?: return
+        attachJob?.cancel(); attachJob=viewModelScope.launch { start(descriptor.copy(bufferAvailable=false)); showOsd() }
+    }
+
+    fun openBuffer() { _state.update { it.copy(overlay=Overlay.Buffer) }; refreshBuffer() }
+    fun refreshBuffer() {
+        if(buffer.leaseId==null) return
+        bufferSeekJob?.cancel()
+        val lease=buffer.leaseId
+        bufferSeekJob=viewModelScope.launch {
+            val owner=sessions.current().catalogScope()
+            try {
+                val window=buffer.heartbeat(paused=!player.exoPlayer.playWhenReady)
+                currentCoroutineContext().ensureActive()
+                if(buffer.leaseId==lease && sessions.current().catalogScope()==owner) _state.update { it.copy(bufferWindow=window,bufferError=null) }
+            } catch(e:CancellationException) { throw e }
+            catch(_:Exception) { currentCoroutineContext().ensureActive(); if(buffer.leaseId==lease) _state.update { it.copy(bufferError="Could not refresh the retained window. Go Live or retry.") } }
+        }
+    }
+
+    fun seekBuffer(at: Instant?) {
+        if(buffer.leaseId==null) return
+        bufferSeekJob?.cancel()
+        val descriptor=_state.value.descriptor ?: return
+        val lease=buffer.leaseId
+        _state.update { it.copy(bufferBusy=true,bufferError=null) }
+        bufferSeekJob=viewModelScope.launch {
+            val owner=sessions.current().catalogScope()
+            try {
+                val result=buffer.seek(at)
+                currentCoroutineContext().ensureActive()
+                if(buffer.leaseId!=lease || sessions.current().catalogScope()!=owner) return@launch
+                player.play(descriptor.copy(url=result.url))
+                _state.update { it.copy(bufferWindow=result.window,bufferBusy=false,bufferTimeshift=at!=null,overlay=Overlay.Osd) }
+                showOsd()
+            } catch(e:CancellationException) { throw e }
+            catch(_:Exception) { currentCoroutineContext().ensureActive(); if(buffer.leaseId==lease) _state.update { it.copy(bufferBusy=false,bufferError="That position expired or could not be loaded. Choose Go Live or refresh the retained window.") } }
+        }
     }
 
     private suspend fun loadChannelList(d: PlaybackDescriptor) {
@@ -138,7 +252,7 @@ class PlayerViewModel @Inject constructor(
     // ---- OSD -----------------------------------------------------------------------------------
 
     fun showOsd() {
-        if (_state.value.overlay == Overlay.MiniList || _state.value.overlay == Overlay.Menu) return
+        if (_state.value.overlay in listOf(Overlay.MiniList, Overlay.Menu, Overlay.Rewind, Overlay.Buffer)) return
         _state.update { it.copy(overlay = Overlay.Osd) }
         osdJob?.cancel()
         osdJob = viewModelScope.launch {
@@ -147,11 +261,12 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun hideOverlay() { rewindJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false, audioChoice=null) } }
+    fun hideOverlay() { rewindJob?.cancel(); bufferSeekJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false, bufferBusy=false, audioChoice=null) } }
     fun openMiniList() { if (_state.value.live && _state.value.channels.isNotEmpty()) _state.update { it.copy(overlay = Overlay.MiniList) } }
     fun openMenu() { _state.update { it.copy(overlay = Overlay.Menu) } }
 
     fun openRewind() {
+        if(buffer.leaseId != null) { openBuffer(); return }
         val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
         rewindJob?.cancel()
         _state.update { it.copy(overlay = Overlay.Rewind, rewind = null, rewindLoading = true, rewindError = null) }
@@ -168,7 +283,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun playArchive(at: Instant) = resolveChannelTime(at)
-    fun goLive() = resolveChannelTime(null)
+    fun goLive() { if(buffer.leaseId!=null) seekBuffer(null) else resolveChannelTime(null) }
 
     private fun resolveChannelTime(at: Instant?) {
         val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
@@ -196,7 +311,7 @@ class PlayerViewModel @Inject constructor(
             suspend fun stopForAcceptedPlayback() {
                 currentCoroutineContext().ensureActive()
                 if(sessions.current().catalogScope() != owner) throw CancellationException("Profile changed")
-                player.stop(); currentStopped=true; previousStopped=true
+                stopCurrentPlayback(); previousStopped=true
             }
             try {
                 val result = audioPlaybackAttempt(request, preflight, api::playbackOptions, { accepted ->
@@ -301,10 +416,11 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun retry() { _state.value.descriptor?.let(::start) }
+    fun retry() { _state.value.descriptor?.let { d -> attachJob?.cancel(); attachJob=viewModelScope.launch { start(d) } } }
 
     override fun onCleared() {
-        rewindJob?.cancel()
+        rewindJob?.cancel(); attachJob?.cancel(); bufferHeartbeat?.cancel(); bufferSeekJob?.cancel()
+        cleanupScope.launch { buffer.close() }
         coordinator.unregisterActivePlayer(key)
         player.release()
         coordinator.release(key)

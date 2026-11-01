@@ -368,6 +368,7 @@ data class PlaybackDescriptor(
     val handoff: Handoff? = null,
     @SerialName("archive_start") val archiveStart: String? = null,
     @SerialName("archive_end") val archiveEnd: String? = null,
+    @SerialName("buffer_available") val bufferAvailable: Boolean = false,
 )
 
 @Serializable
@@ -437,3 +438,23 @@ data class PlaybackOptions(
     @SerialName("granularity_seconds") val granularitySeconds: Int = 60,
     val reason: String = "No provider archive advertised",
 )
+
+@Serializable data class BufferWindow(
+    val mode: String = "local_buffer", val start: String? = null, val end: String? = null,
+    @SerialName("buffered_seconds") val bufferedSeconds: Double = 0.0,
+    @SerialName("target_seconds") val targetSeconds: Int = 3600,
+    @SerialName("recording_enabled") val recordingEnabled: Boolean = false,
+)
+@Serializable data class BufferLease(
+    @SerialName("lease_id") val leaseId: String,
+    @SerialName("session_id") val sessionId: String,
+    val window: BufferWindow,
+)
+@Serializable data class BufferLeaseRequest(@SerialName("stream_token") val streamToken: String)
+@Serializable data class BufferLeaseAction(
+    @SerialName("stream_token") val streamToken: String,
+    @SerialName("lease_id") val leaseId: String,
+    val paused: Boolean = false,
+    val at: String? = null,
+)
+@Serializable data class BufferSeekResult(val url: String, val window: BufferWindow)
