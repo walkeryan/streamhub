@@ -77,6 +77,28 @@ test('UAT P2-8: Back twice returns to the last channel; Back once leaves the pla
   await expect(page).toHaveURL(/\/live/, { timeout: 3000 })
 })
 
+test('closing Audio restores focus immediately and cannot steal the next Up action', async ({ page }) => {
+  await openLiveChannel(page)
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(true)
+  for (let i = 0; i < 6 && !/Audio/.test((await page.locator('[data-testid="player-bar"] .fx[data-focused="true"]').textContent()) ?? ''); i++) {
+    await page.keyboard.press('ArrowRight')
+  }
+  await page.keyboard.press('Enter')
+  await expect.poll(() => focusedKeyIn(page, 'player-menu')).toBe(true)
+  await page.clock.install()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')).toContainText('Audio and subtitles')
+  await page.keyboard.press('ArrowUp')
+  await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(false)
+  await page.clock.fastForward(50)
+  await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(false)
+  const before = new URL(page.url()).pathname
+  await page.keyboard.press('ArrowUp')
+  await expect.poll(() => new URL(page.url()).pathname).not.toBe(before)
+})
+
 test('UAT P1-4: Search keeps the query, results and focused result on Back', async ({ page }) => {
   await signIn(page)
   await page.keyboard.press('ArrowLeft')
