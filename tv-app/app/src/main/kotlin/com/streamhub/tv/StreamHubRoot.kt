@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarViewWeek
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
@@ -59,11 +58,9 @@ import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.RailController
 import com.streamhub.tv.feature.details.DetailsScreen
 import com.streamhub.tv.feature.favorites.FavoritesScreen
-import com.streamhub.tv.feature.guide.GuideScreen
 import com.streamhub.tv.feature.home.BrowseScreen
 import com.streamhub.tv.feature.home.HomeScreen
 import com.streamhub.tv.feature.home.SportsScreen
-import com.streamhub.tv.feature.livetv.LiveTvScreen
 import com.streamhub.tv.feature.onboarding.OnboardingScreen
 import com.streamhub.tv.feature.player.PlayerScreen
 import com.streamhub.tv.feature.search.SearchScreen
@@ -99,7 +96,6 @@ private val RAIL = listOf(
     RailItem(Routes.HOME, "Home", Icons.Filled.Home),
     RailItem(Routes.SEARCH, "Search", Icons.Filled.Search),
     RailItem(Routes.LIVE, "Live TV", Icons.Filled.LiveTv),
-    RailItem(Routes.GUIDE, "Guide", Icons.Filled.CalendarViewWeek),
     RailItem(Routes.SPORTS, "Sports", Icons.Filled.SportsSoccer),
     RailItem(Routes.MOVIES, "Movies", Icons.Filled.Movie),
     RailItem(Routes.SHOWS, "Shows", Icons.Filled.Tv),
@@ -181,7 +177,7 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
     val railFocus = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
     val railController = remember { RailController { runCatching { railFocus.requestFocus() } } }
-    val topLevel = RAIL.any { it.route == route }
+    val topLevel = RAIL.any { it.route == route } || route == Routes.GUIDE
 
     // Back on a top-level screen (other than Home) opens the rail first, then Home; never a dead end.
     BackHandler(enabled = showRail && topLevel && !railExpanded && route != Routes.HOME) { railController.openRail() }
@@ -202,9 +198,9 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
                     }
                     composable(Routes.HOME) { HomeScreen() }
                     composable(Routes.SEARCH) { SearchScreen() }
-                    composable(Routes.LIVE) { LiveTvScreen() }
+                    composable(Routes.LIVE) { LiveDestination() }
                     composable(Routes.SPORTS) { SportsScreen() }
-                    composable(Routes.GUIDE) { GuideScreen() }
+                    composable(Routes.GUIDE) { LiveDestination(startInGuide = true) }
                     composable("browse/{section}", arguments = listOf(navArgument("section") { type = NavType.StringType })) { e ->
                         BrowseScreen(title = if (e.arguments?.getString("section") == "shows") "Shows" else "Movies")
                     }
@@ -220,7 +216,7 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
             if (showRail) {
                 LeftRail(
                     items = RAIL,
-                    selectedRoute = RAIL.firstOrNull { route?.startsWith(it.route) == true }?.route
+                    selectedRoute = if (route == Routes.GUIDE) Routes.LIVE else RAIL.firstOrNull { route?.startsWith(it.route) == true }?.route
                         ?: if (route?.startsWith("details") == true) null else route,
                     expanded = railExpanded,
                     onExpandedChange = { railExpanded = it },

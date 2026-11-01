@@ -3,6 +3,7 @@ package com.streamhub.tv.feature.guide
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.model.LiveGuideFilters
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.data.model.Programme
 import com.streamhub.tv.core.data.repo.ChannelListCache
@@ -26,6 +27,7 @@ data class GuideState(
     val loading: Boolean = true,
     val error: String? = null,
     val query: String = "",
+    val filters: LiveGuideFilters = LiveGuideFilters(),
     val scheduledOnly: Boolean = true,
     val page: Int = 0,
     val total: Int? = null,
@@ -55,7 +57,19 @@ class GuideViewModel @Inject constructor(
 
     private var loadJob: Job? = null
 
-    init { load() }
+    private var initialized = false
+
+    /** Entry refreshes the current page; changed shared filters start a fresh page. */
+    fun applyFilters(filters: LiveGuideFilters) {
+        if (!initialized || _state.value.filters != filters) {
+            initialized = true
+            _state.update { it.copy(filters = filters, page = 0, channels = emptyList(), programmes = emptyMap(), selected = null, selectedChannel = null) }
+        }
+        load()
+    }
+
+    fun stopLoading() { loadJob?.cancel() }
+
 
     fun search(value: String) {
         _state.update { it.copy(query = value, page = 0) }
@@ -83,13 +97,15 @@ class GuideViewModel @Inject constructor(
             val request = _state.value
             runCatching {
                 val list = cache.fetch(q = request.query.trim().ifBlank { null },
+                    group = request.filters.group, languages = request.filters.languages,
+                    favorites = request.filters.favorites, country = request.filters.country,
                     hasEpg = request.scheduledOnly, limit = PAGE_SIZE, offset = request.page * PAGE_SIZE)
                 check(list.channels.size <= PAGE_SIZE) { "Update the hub server to enable paged guide loading." }
                 // Grid starts 2 h back so catch-up programmes are reachable by pressing Left.
                 val start = floor30(Instant.now()).minus(Duration.ofHours(2))
                 val end = start.plus(Duration.ofHours(8))
                 val ids = list.channels.map { it.id }
-                val epg = if (ids.isEmpty()) emptyMap() else api.epg(ids, start.toString(), end.toString())
+                val epg = if (ids.isEmpty()) emptyMap() else api.epg(ids, start.toString(), end.toString(), country = request.filters.country)
                 val progs = epg.mapValues { (_, l) ->
                     l.mapNotNull { p ->
                         runCatching { GuideProgramme(p, Instant.parse(p.start), Instant.parse(p.stop)) }.getOrNull()

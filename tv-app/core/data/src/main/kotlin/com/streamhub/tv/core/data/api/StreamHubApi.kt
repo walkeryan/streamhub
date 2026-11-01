@@ -181,6 +181,7 @@ class StreamHubApi @Inject constructor(
         hasEpg: Boolean? = null,
         limit: Int? = null,
         offset: Int? = null,
+        country: String? = null,
     ): ChannelList = get("/channels") {
         listId?.let { parameter("list_id", it) }
         hasEpg?.let { parameter("has_epg", it) }
@@ -188,13 +189,13 @@ class StreamHubApi @Inject constructor(
         offset?.let { parameter("offset", it) }
         sourceId?.let { parameter("source_id", it) }
         group?.let { parameter("group", it) }
-        languages?.let { parameter("language", it.joinToString(",")) }
+        applyLiveRegionLanguage(languages, country)
         favorites?.let { parameter("favorites", it) }
         q?.let { parameter("q", it) }
     }
 
-    suspend fun channelGroups(languages: List<String>? = null, favorites: Boolean? = null): List<ChannelGroup> = get("/channels/groups") {
-        languages?.let { parameter("language", it.joinToString(",")) }
+    suspend fun channelGroups(languages: List<String>? = null, favorites: Boolean? = null, country: String? = null): List<ChannelGroup> = get("/channels/groups") {
+        applyLiveRegionLanguage(languages, country)
         favorites?.let { parameter("favorites", it) }
     }
     suspend fun patchChannelGroup(groupId: String, patch: ChannelGroupPatch) =
@@ -202,7 +203,8 @@ class StreamHubApi @Inject constructor(
     suspend fun channelLanguages(): List<LanguageCount> = get("/channels/languages")
     suspend fun patchChannel(channel: Channel) = client.patch(url("/channels/${id(channel.id)}")) { setBody(channel) }.unit()
 
-    suspend fun epg(channelIds: List<String>, from: String, to: String): Map<String, List<Programme>> = get("/epg") {
+    suspend fun epg(channelIds: List<String>, from: String, to: String, country: String? = null): Map<String, List<Programme>> = get("/epg") {
+        country?.let { parameter("country", it) }
         parameter("channel_ids", channelIds.joinToString(","))
         parameter("from", from)
         parameter("to", to)

@@ -39,10 +39,11 @@ class ChannelListCache @Inject constructor(private val api: StreamHubApi, privat
         hasEpg: Boolean? = null,
         limit: Int? = null,
         offset: Int? = null,
+        country: String? = null,
     ): ChannelList {
         val owner = scope()
         return put(api.channels(group = group, languages = languages, favorites = favorites,
-            q = q, hasEpg = hasEpg, limit = limit, offset = offset), owner)
+            q = q, hasEpg = hasEpg, limit = limit, offset = offset, country = country), owner)
     }
 
     suspend fun resolve(listId: String?, currentChannelId: String): List<Channel> {
