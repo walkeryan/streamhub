@@ -151,7 +151,7 @@ function SportsEvents() {
         {selected.feeds.map((feed) => <div key={`${feed.channel_id}:${feed.programme_id}`} className="sports-feed-option">
           <p><strong>{feed.channel_name}</strong> · {feed.source_name}</p>
           <p className="label">{feed.language_verified ? `Verified audio: ${LANG_NAMES[feed.language ?? ''] ?? feed.language ?? 'Unknown'}` : `Audio unverified${feed.language ? ` · Channel hint: ${LANG_NAMES[feed.language] ?? feed.language}` : ''}`}</p>
-          {airing(selected, now) && <Button focusKey={`sports:feed:${feed.channel_id}:${feed.programme_id}`} onEnter={() => { if (airing(selected, Date.now())) { setFocus(`sports:event:${selected.id}`); void play({ id: feed.channel_id, kind: 'channel' }, null, { variantId: feed.channel_id, allowUnverifiedAudio: true }) } }}>Watch {feed.channel_name}</Button>}
+          {airing(selected, now) && <Button focusKey={`sports:feed:${feed.channel_id}:${feed.programme_id}`} onEnter={async () => { if (airing(selected, Date.now())) { await setFocus(`sports:event:${selected.id}`); void play({ id: feed.channel_id, kind: 'channel' }, null, { variantId: feed.channel_id, allowUnverifiedAudio: true }) } }}>Watch {feed.channel_name}</Button>}
         </div>)}
         {!selected.feeds.length && <p>No authorized channel feed is available for this listing.</p>}
       </>}

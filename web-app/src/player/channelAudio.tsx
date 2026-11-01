@@ -41,7 +41,7 @@ export function ChannelAudioPrompt({ audio, onChoose, onCancel }: {
       <Button focusKey="channel-audio:retry" onEnter={() => void audio.query.refetch()}>Retry audio check</Button>
     </> : <>
       <p>Preferred audio: {audio.query.data?.preferred_languages.map((code) => LANG_NAMES[code] ?? code).join(', ') || 'All languages'}. A provider name or language hint does not prove spoken audio.</p>
-      <p className="label">Choosing a source below explicitly accepts its listed audio for this playback. Cancel returns to Live TV without starting a stream.</p>
+      <p className="label">Choosing a source below explicitly accepts its listed audio for this playback. Cancel leaves this playback request without starting a new stream.</p>
       {audio.query.data?.options.map((option) => <Button key={option.variant_id} focusKey={`channel-audio:${option.variant_id}`} onEnter={() => onChoose(option, option.variant_id !== audio.query.data?.automatic_variant_id)}>
         <span>Play {option.source_name} · {audioDescription(option)}{option.language_hint ? ` · Provider hint: ${LANG_NAMES[option.language_hint] ?? option.language_hint}` : ''}<br /><span className="label">{option.provider_label}</span></span>
       </Button>)}

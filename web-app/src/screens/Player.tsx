@@ -4,7 +4,7 @@ import { useChannels } from '../api/hooks'
 import { Button, Chip, ProgressBar } from '../components/ui'
 import { ChannelRow } from '../components/ChannelRow'
 import { FocusGroup, Focusable } from '../nav/Focusable'
-import { useBackHandler, useOverlayFocus } from '../nav/back'
+import { hasPlaybackEntry, useBackHandler, useOverlayFocus } from '../nav/back'
 import { setFocus } from '../nav/spatial'
 import { ChannelAudioPrompt, useChannelAudio } from '../player/channelAudio'
 import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
@@ -30,10 +30,15 @@ export function Player() {
   const catchup = sp.get('catchup')
   const rewindAt = sp.get('rewind')
   const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId, { sourceId, catchupProgrammeId: catchup, rewindAt }), [profileId, audioChoice, id, variantId, sourceId, catchup, rewindAt])
-  const locationKey = useLocation().key
+  const location = useLocation()
+  const locationKey = location.key
   const selectionKey = `${profileId}|${id}|${sp.toString()}|${locationKey}`
   const [manualChoice, setManualChoice] = useState<string | null>(null)
   const navigate = useNavigate()
+  const cancelPending = () => {
+    if (activeId.current === id && hasPlaybackEntry(location.state, location.pathname + location.search)) navigate(-1)
+    else navigate('/live', {replace:true})
+  }
   const videoRef = useRef<HTMLVideoElement>(null)
   const isChannel = id.startsWith('ch:')
   // Router URL updates can precede the next React commit. Remote events in
@@ -247,7 +252,7 @@ export function Player() {
   const backTimer = useRef(0)
   useEffect(() => () => window.clearTimeout(backTimer.current), [])
   useBackHandler(() => {
-    if (audio.blocked || activeId.current !== id) { navigate('/live', { replace: true }); return true }
+    if (audio.blocked || activeId.current !== id) { cancelPending(); return true }
     const o = overlayRef.current
     if (o) { closeOverlay(); if (o === 'bar') hideChrome(); return true }
     if (chromeRef.current && !pausedRef.current) { hideChrome(); return true }
@@ -371,7 +376,7 @@ export function Player() {
         </div>
       </div>
 
-      <ChannelAudioPrompt audio={audio} onCancel={() => navigate('/live', { replace: true })} onChoose={(option, explicit) => {
+      <ChannelAudioPrompt audio={audio} onCancel={cancelPending} onChoose={(option, explicit) => {
         const next = new URLSearchParams(sp)
         next.set('variant', option.variant_id)
         if (explicit) next.set('audio_choice', grantAudioConsent(id, option.variant_id, { sourceId, catchupProgrammeId: catchup, rewindAt }))
