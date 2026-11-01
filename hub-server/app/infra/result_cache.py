@@ -21,7 +21,12 @@ class ResultCache:
         self.waiters: dict[Hashable, int] = {}
 
     async def get(
-        self, key: Hashable, load: Callable[[], Awaitable[Any]], ttl: float, valid: Callable[[], bool] = lambda: True
+        self,
+        key: Hashable,
+        load: Callable[[], Awaitable[Any]],
+        ttl: float,
+        valid: Callable[[], bool] = lambda: True,
+        cacheable: Callable[[Any], bool] = lambda _value: True,
     ) -> Any:
         now = time.monotonic()
         for expired in [k for k, (until, _, _) in self.entries.items() if until <= now]:
@@ -37,7 +42,7 @@ class ResultCache:
             async def run() -> Any:
                 value = await load()
                 size = len(json.dumps(value, default=str).encode())
-                if valid() and size <= min(self.max_bytes, 512 * 1024):
+                if valid() and cacheable(value) and size <= min(self.max_bytes, 512 * 1024):
                     while self.entries and (len(self.entries) >= self.capacity or self.bytes + size > self.max_bytes):
                         self.bytes -= self.entries.popitem(last=False)[1][1]
                     self.entries[key] = (time.monotonic() + ttl, size, copy.deepcopy(value))

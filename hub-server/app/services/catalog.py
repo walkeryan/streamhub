@@ -745,6 +745,7 @@ class CatalogService:
         local_tiles = ctx.merge(ctx.title_tile(r) for r in rows)
         combined = {tile["id"]: tile for tile in local_tiles}
         metadata_available = False
+        metadata_incomplete = False
         popularity: dict[str, float] = {}
         note = "Metadata discovery is not configured; searching your sources only."
         if self.meta.enabled and ({"movie", "show", "vod", "series"} & want):
@@ -800,6 +801,7 @@ class CatalogService:
                 log.warning("Metadata discovery unavailable", exc_info=False)
                 note = "Metadata discovery is temporarily unavailable; showing source matches."
                 metadata_available = False
+                metadata_incomplete = True
 
         def relevance(tile: dict[str, Any]) -> tuple[Any, ...]:
             title_norm = ids.normalise_title(tile["title"])
@@ -837,6 +839,7 @@ class CatalogService:
         return {
             "results": ordered,
             "metadata_available": metadata_available,
+            "metadata_incomplete": metadata_incomplete,
             "discovery_note": note,
             "play_here": play_here[:limit],
             "open_in_app": open_in_app[:limit],

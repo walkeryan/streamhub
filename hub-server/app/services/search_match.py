@@ -20,6 +20,12 @@ def near_word(a: str, b: str) -> bool:
     budget = 2 if min(len(a), len(b)) >= 6 else 1
     if min(len(a), len(b)) < 4 or max(len(a), len(b)) > 64 or a[0] != b[0] or abs(len(a) - len(b)) > budget:
         return False
+    if len(a) == len(b):
+        differences = [i for i, (left, right) in enumerate(zip(a, b, strict=True)) if left != right]
+        if len(differences) == 2:
+            i, j = differences
+            if j == i + 1 and a[i] == b[j] and a[j] == b[i]:
+                return True
     row = list(range(len(b) + 1))
     for i, char in enumerate(a, 1):
         next_row = [i]

@@ -31,7 +31,13 @@ async def listing_cached(
         revision = db.catalog_revisions.version(profile)
         key = (operation, profile, image_session, revision, public_base.get(), params)
         valid = lambda revision=revision: revision == db.catalog_revisions.version(profile)  # noqa: E731
-        result = await db.result_cache.get(key, load, ttl, valid)
+        result = await db.result_cache.get(
+            key,
+            load,
+            ttl,
+            valid,
+            cacheable=lambda value: not (isinstance(value, dict) and value.get("metadata_incomplete", False)),
+        )
         if valid():
             return result
     raise Conflict("Catalog changed while loading. Please retry.", code="catalog_changed")
