@@ -122,15 +122,28 @@ class ClassificationStore:
     async def record(self, subject_key: str, evidence: dict[str, Any]) -> None:
         provider = str(evidence.get("provider") or "tmdb")
         value = {**evidence, "subject_key": subject_key}
+        # A cached metadata read is not a new observation. Missing provenance is
+        # deliberately stale for policy, and late responses cannot replace newer evidence.
+        observed = datetime.fromtimestamp(0, UTC)
+        try:
+            retrieved = datetime.fromisoformat(str(evidence.get("retrieved_at") or ""))
+            if retrieved.tzinfo is not None and retrieved <= datetime.now(UTC):
+                observed = retrieved.astimezone(UTC)
+        except ValueError:
+            pass
         async with self._db.session() as session:
+            existing = await session.get(AgeClassification, (subject_key, provider))
+            if existing is not None and (existing.evidence == value or existing.observed_at > observed):
+                return
             statement = insert(AgeClassification).values(
-                subject_key=subject_key, provider=provider, evidence=value, observed_at=datetime.now(UTC)
+                subject_key=subject_key, provider=provider, evidence=value, observed_at=observed
             )
             await session.execute(
                 statement.on_conflict_do_update(
                     index_elements=[AgeClassification.subject_key, AgeClassification.provider],
                     set_={"evidence": statement.excluded.evidence, "observed_at": statement.excluded.observed_at},
-                    where=AgeClassification.evidence != statement.excluded.evidence,
+                    where=(AgeClassification.evidence != statement.excluded.evidence)
+                    & (AgeClassification.observed_at <= statement.excluded.observed_at),
                 )
             )
             await session.commit()

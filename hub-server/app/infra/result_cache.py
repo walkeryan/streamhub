@@ -62,7 +62,9 @@ class ResultCache:
 class CatalogRevisions:
     """Commit-scoped revisions. Profile updates never evict unrelated profiles."""
 
-    GLOBAL = {"source", "title", "channel", "channel_group", "programme", "setting", "service_registry"}
+    GLOBAL = {
+        "source", "title", "channel", "channel_group", "programme", "setting", "service_registry", "age_classification"
+    }
     PERSONAL = {"profile", "favorite", "progress", "watchlist"}
 
     def __init__(self) -> None:
