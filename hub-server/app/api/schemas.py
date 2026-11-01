@@ -35,6 +35,9 @@ class Profile(_M):
     kids: bool
     disclaimer_accepted_version: str | None = None
 
+    has_password: bool = False
+    content_restricted: bool = False
+
 
 class ProfileWrite(_M):
     """Profile body for POST/PATCH (all fields optional; server-owned fields ignored)."""
@@ -538,3 +541,16 @@ class SportsEventsPage(_M):
     sports: list[SportCount]
     coverage: SportsEventsCoverage
     truncated: bool
+
+
+class ContentPolicyWrite(_M):
+    restricted: bool = False
+    allowed_movie_codes: list[str] = Field(default_factory=list, max_length=5)
+    allowed_tv_codes: list[str] = Field(default_factory=list, max_length=6)
+    allow_unknown: bool = False
+
+
+class ProfileSwitch(_M):
+    profile_id: str
+    pin: str | None = None
+    password: str | None = None

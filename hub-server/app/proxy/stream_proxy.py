@@ -225,8 +225,10 @@ def ffmpeg_args(
     else:  # software
         args += ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-c:a", "aac", "-b:a", "160k"]
     flags = "delete_segments+independent_segments" if live else "independent_segments"
+    if live:
+        flags += "+program_date_time"
     if buffered:
-        flags += "+program_date_time+temp_file"
+        flags += "+temp_file"
     args += [
         "-f",
         "hls",

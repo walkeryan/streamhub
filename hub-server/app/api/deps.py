@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -22,10 +23,23 @@ def get_container(request: Request) -> Container:
 C = Annotated[Container, Depends(get_container)]
 
 
-def current_principal(c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> Principal:
+async def current_principal(
+    request: Request, c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+) -> AsyncIterator[Principal]:
     if creds is None or not creds.credentials:
         raise Unauthorized("missing bearer token")
-    return c.auth.principal_from_access(creds.credentials)
+    principal = await c.auth.resolve_principal(creds.credentials)
+    request.state.principal = principal
+    from app.services.content_policy import active_policy, active_principal
+
+    profile = await c.content_policy.profile(principal.profile_id) if c.content_policy.enabled else None
+    principal_token = active_principal.set(principal)
+    token = active_policy.set((c.content_policy, profile) if profile is not None else None)
+    try:
+        yield principal
+    finally:
+        active_policy.reset(token)
+        active_principal.reset(principal_token)
 
 
 P = Annotated[Principal, Depends(current_principal)]

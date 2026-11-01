@@ -56,7 +56,11 @@ async def begin(api: Api) -> tuple[str, str]:
 
 async def test_missing_configuration_fails_closed(api: Api) -> None:
     api.c.settings.google_auth_required = True
-    assert (await api.get("/auth/config")).json() == {"google_enabled": False, "google_required": True}
+    assert (await api.get("/auth/config")).json() == {
+        "google_enabled": False,
+        "google_required": True,
+        "content_policy_enabled": False,
+    }
     assert (await api.get("/auth/google/start")).status_code == 403
     assert (
         await api.post("/auth/login", json={"profile_id": api.profile_id, "password": "test-admin-pw"})

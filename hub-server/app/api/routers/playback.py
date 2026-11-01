@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -64,7 +66,7 @@ async def rewind_capability(id: str, c: C, p: P) -> dict[str, Any]:
 
 
 async def _buffer_grant(token: str, c: C, p: P) -> tuple[Any, str, Any]:
-    g = _grant(c, token)
+    g = await _grant(c, token)
     if g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or g.transcode:
         raise Forbidden("DVR requires this profile's authorized live codec-copy HLS playback grant.")
     # This shared channel gate is also the integration point for current parental policy.
@@ -101,7 +103,9 @@ async def buffer_heartbeat(body: S.BufferViewerRequest, c: C, p: P) -> dict[str,
 
 @router.post("/playback/buffer/seek", response_model=S.BufferSeekResponse, tags=["playback"])
 async def buffer_seek(body: S.BufferSeekRequest, c: C, p: P) -> dict[str, Any]:
-    _, key, _ = await _buffer_grant(body.stream_token, c, p)
+    g, key, _ = await _buffer_grant(body.stream_token, c, p)
+    if body.at is not None and g.content_ref:
+        await c.content_policy.require(p.profile_id, g.content_ref, at=body.at)
     c.proxy.dvr.check(key, p.profile_id, body.lease_id)
     await c.proxy.buffer_manifest(key, body.at)  # Reject expired/gap positions before changing playback.
     query = {"lease_id": body.lease_id}
@@ -155,6 +159,7 @@ async def recovery_resume(body: S.StreamRecoveryConfirm, c: C, p: Admin) -> dict
 
 @router.post("/playback/progress", status_code=204, tags=["playback"])
 async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
+    await c.content_policy.require(p.profile_id, body.id)
     ref_id = body.id
     source_id = body.source_id
     forward = None
@@ -194,23 +199,24 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
 
 
 # ---------------------------------------------------------------- streaming
-def _grant(c: C, token: str) -> Any:
+async def _grant(c: C, token: str) -> Any:
     c.proxy.ensure_running()
     g = c.tokens.verify(token)
     if g is None:
         raise Unauthorized("invalid or expired stream token")
+    await c.content_policy.require_grant(g, c.auth)
     g.recovery_generation = c.proxy.generation
     return g
 
 
 def _proxy_url(token: str, upstream: str, c: C) -> str:
-    sub = c.crypto.encrypt_json({"u": upstream})
+    sub = c.crypto.encrypt_json({"u": upstream, "grant": hashlib.sha256(token.encode()).hexdigest()})
     return f"/api/v1/stream/{token}/seg/{sub}"
 
 
 @router.get("/stream/{token}", tags=["playback"], response_class=StreamingResponse)
 async def stream(token: str, request: Request, c: C) -> Response:
-    g = _grant(c, token)
+    g = await _grant(c, token)
     if g.mode == "hls":
         return Response(status_code=307, headers={"Location": f"/api/v1/stream/{token}/index.m3u8"})
     is_hls_upstream = ".m3u8" in g.url.split("?", 1)[0].lower()
@@ -223,7 +229,9 @@ async def stream(token: str, request: Request, c: C) -> Response:
             ctype, gen = await c.proxy.live_shared(
                 g.channel_key, g.url, g.headers, g.source_id, generation=g.recovery_generation
             )
-            return StreamingResponse(gen, media_type=ctype, headers={"Cache-Control": "no-cache"})
+            return StreamingResponse(
+                c.content_policy.guard_stream(g, c.auth, gen), media_type=ctype, headers={"Cache-Control": "no-cache"}
+            )
         status, headers, gen = await c.proxy.passthrough(
             g.url, g.headers, g.source_id, request.headers.get("range"), live=g.live, generation=g.recovery_generation
         )
@@ -235,15 +243,23 @@ async def stream(token: str, request: Request, c: C) -> Response:
         log.warning("stream proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
     return StreamingResponse(
-        gen, status_code=status, headers=headers, media_type=headers.get("content-type", "application/octet-stream")
+        c.content_policy.guard_stream(g, c.auth, gen),
+        status_code=status,
+        headers=headers,
+        media_type=headers.get("content-type", "application/octet-stream"),
     )
 
 
 @router.get("/stream/{token}/seg/{sub}", tags=["playback"], include_in_schema=False)
 async def stream_segment(token: str, sub: str, request: Request, c: C) -> Response:
-    g = _grant(c, token)
+    g = await _grant(c, token)
     d = c.crypto.try_decrypt_json(sub, ttl=c.tokens.ttl_s)
-    if not isinstance(d, dict) or "u" not in d:
+    if (
+        not isinstance(d, dict)
+        or not isinstance(d.get("u"), str)
+        or not isinstance(d.get("grant"), str)
+        or not hmac.compare_digest(d["grant"], hashlib.sha256(token.encode()).hexdigest())
+    ):
         raise Unauthorized("invalid segment token")
     url = str(d["u"])
     try:
@@ -262,13 +278,18 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
         log.warning("stream segment proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
     return StreamingResponse(
-        gen, status_code=status, headers=headers, media_type=headers.get("content-type", "video/mp2t")
+        c.content_policy.guard_stream(g, c.auth, gen),
+        status_code=status,
+        headers=headers,
+        media_type=headers.get("content-type", "video/mp2t"),
     )
 
 
 @router.get("/stream/{token}/index.m3u8", tags=["playback"])
 async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str | None = None) -> Response:
-    g = _grant(c, token)
+    g = await _grant(c, token)
+    if at is not None and g.content_ref:
+        await c.content_policy.require(g.profile_id, g.content_ref, at=at)
     transcode = str(c.app_settings.get("transcode_hw") or "none") if g.transcode else "none"
     if g.transcode and transcode == "none":
         transcode = "software"
@@ -317,7 +338,7 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
 
 @router.get("/stream/{token}/hls/{sid}/{name}", tags=["playback"], include_in_schema=False)
 async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
-    g = _grant(c, token)
+    g = await _grant(c, token)
     transcode = str(c.app_settings.get("transcode_hw") or "none") if g.transcode else "none"
     if g.transcode and transcode == "none":
         transcode = "software"
@@ -330,10 +351,11 @@ async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
     path: Path = sess.workdir / name
     if not path.is_file():
         raise NotFound("segment not found")
+    await c.content_policy.require_segment(g, c.auth, path, sess.workdir / "index.m3u8")
     return FileResponse(
         path,
         media_type="video/mp2t" if name.endswith(".ts") else "application/octet-stream",
-        headers={"Cache-Control": "max-age=60"},
+        headers={"Cache-Control": "private, no-store"} if c.content_policy.enabled else {"Cache-Control": "max-age=60"},
     )
 
 
@@ -343,6 +365,9 @@ async def image_proxy(token: str, c: C) -> Response:
     d = c.crypto.verify_json(token)
     if not isinstance(d, dict):
         raise NotFound("image not found")
+    from app.services.image_grants import validate_image_grant
+
+    await validate_image_grant(d, c.content_policy, c.auth)
     try:
         _src, prov = await c.sources.provider_for(str(d.get("s")))
     except NotFound:
@@ -360,8 +385,9 @@ async def image_proxy(token: str, c: C) -> Response:
         raise BadGateway("image unavailable") from exc
     if resp.status_code >= 400:
         raise NotFound("image not found")
+    await validate_image_grant(d, c.content_policy, c.auth)
     return Response(
         resp.content,
         media_type=resp.headers.get("content-type", "image/jpeg"),
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "private, no-store" if c.content_policy.enabled else "public, max-age=86400"},
     )

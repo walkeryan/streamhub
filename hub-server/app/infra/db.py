@@ -42,6 +42,15 @@ class Database:
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessionmaker() as s:
             self.catalog_revisions.observe(s.sync_session)
+            from app.services.content_policy import active_policy
+
+            @event.listens_for(s.sync_session, "do_orm_execute")
+            def content_scope(state: Any) -> None:
+                active = active_policy.get()
+                if state.is_select and active is not None:
+                    policy, profile = active
+                    state.statement = policy.scope_statement(state.statement, profile)
+
             yield s
 
     async def dispose(self) -> None:

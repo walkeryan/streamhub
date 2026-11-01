@@ -9,12 +9,13 @@ from fastapi import APIRouter, Query, Response
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
+from app.api.policy_route import PolicyCatalogRoute
 from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
 from app.services.sports import sports_events, sports_on_now
 from app.services.sports_recordings import sports_recordings
 
-router = APIRouter()
+router = APIRouter(route_class=PolicyCatalogRoute)
 
 
 @router.get("/home", response_model=S.Home, tags=["catalog"])

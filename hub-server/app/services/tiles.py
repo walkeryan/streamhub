@@ -10,7 +10,7 @@ from app.domain.entities import CatalogItem, ChannelInfo, MediaKind, SourceType
 from app.infra.models import Channel, Progress, Source, Title
 from app.services import ids
 
-ImageFn = Callable[[Source | None, str | None], str | None]
+ImageFn = Callable[[Source | None, str | None, str | None], str | None]
 TOP_LEVEL_KINDS = {"movie", "show", "vod", "series"}
 LIBRARY_TYPES = {SourceType.PLEX.value, SourceType.JELLYFIN.value}
 IPTV_TYPES = {SourceType.XTREAM.value, SourceType.M3U.value}
@@ -140,8 +140,8 @@ class TileContext:
             "title": ids.clean_display_title(row.title) if ids.tmdb_type_for_kind(row.kind) else row.title,
             "subtitle": subtitle_for(row),
             "year": row.year,
-            "poster": self.image(src, row.poster),
-            "backdrop": self.image(src, row.backdrop),
+            "poster": self.image(src, row.poster, lib),
+            "backdrop": self.image(src, row.backdrop, lib),
             "logo": None,
             "rating": row.rating,
             "progress_pct": self.progress_pct(hub, lib),

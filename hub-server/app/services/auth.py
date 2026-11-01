@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -10,11 +11,12 @@ from datetime import timedelta
 from typing import Any
 
 import jwt
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, literal, select, update
+from sqlalchemy.dialects.sqlite import insert
 
 from app.infra.crypto import Crypto, hash_secret, verify_secret
 from app.infra.db import Database
-from app.infra.models import DeviceCode, DisclaimerAcceptance, Profile, utcnow
+from app.infra.models import DeviceCode, DisclaimerAcceptance, Profile, RevokedSession, utcnow
 from app.services.errors import (
     Conflict,
     Forbidden,
@@ -39,6 +41,9 @@ class Principal:
     profile_id: str
     is_admin: bool
     kids: bool
+    token_version: int = 0
+    session_id: str = ""
+    owner_auth_time: float | None = None
 
 
 class AuthService:
@@ -48,6 +53,7 @@ class AuthService:
         self.access_ttl = access_ttl
         self.refresh_ttl = refresh_ttl
         self._fail: dict[str, list[float]] = {}
+        self.content_policy: Any = None
 
     # ------------------------------------------------------------------ bootstrap
     async def ensure_admin(self, password: str | None) -> str | None:
@@ -75,24 +81,44 @@ class AuthService:
             return generated
 
     # ------------------------------------------------------------------ tokens
-    def _encode(self, profile: Profile, typ: str, ttl: int) -> str:
+    def _encode(
+        self, profile: Profile, typ: str, ttl: int, session_id: str = "", owner_auth_time: float | None = None
+    ) -> str:
         now = int(time.time())
         payload = {
             "sub": profile.id,
             "typ": typ,
-            "adm": profile.is_admin,
+            "adm": self.effective_admin(profile),
             "kid": profile.kids,
             "ver": profile.token_version,
             "iat": now,
             "exp": now + ttl,
             "jti": secrets.token_hex(8),
+            "sid": session_id or secrets.token_hex(16),
         }
+        if owner_auth_time is not None:
+            payload["oat"] = owner_auth_time
         return jwt.encode(payload, self._key, algorithm=ALG)
 
-    def issue(self, profile: Profile) -> dict[str, str]:
+    def effective_admin(self, profile: Profile) -> bool:
+        return bool(
+            profile.is_admin and not (self.content_policy is not None and self.content_policy.is_restricted(profile))
+        )
+
+    @staticmethod
+    def owner_time(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return None
+        return float(value)
+
+    def issue(self, profile: Profile, session_id: str = "", owner_auth_time: float | None = None) -> dict[str, str]:
+        owner_auth_time = self.owner_time(
+            owner_auth_time if owner_auth_time is not None else getattr(profile, "_owner_auth_time", None)
+        )
+        session_id = session_id or secrets.token_hex(16)
         return {
-            "access_token": self._encode(profile, "access", self.access_ttl),
-            "refresh_token": self._encode(profile, "refresh", self.refresh_ttl),
+            "access_token": self._encode(profile, "access", self.access_ttl, session_id, owner_auth_time),
+            "refresh_token": self._encode(profile, "refresh", self.refresh_ttl, session_id, owner_auth_time),
         }
 
     def _decode(self, token: str, typ: str) -> dict[str, Any]:
@@ -108,7 +134,86 @@ class AuthService:
 
     def principal_from_access(self, token: str) -> Principal:
         p = self._decode(token, "access")
-        return Principal(profile_id=str(p["sub"]), is_admin=bool(p.get("adm")), kids=bool(p.get("kid")))
+        return Principal(
+            profile_id=str(p["sub"]),
+            is_admin=bool(p.get("adm")),
+            kids=bool(p.get("kid")),
+            token_version=int(p.get("ver", -1)),
+            session_id=str(p.get("sid") or ""),
+            owner_auth_time=self.owner_time(p.get("oat")),
+        )
+
+    async def session_valid(self, profile_id: str, version: int, session_id: str) -> Profile:
+        async with self._db.session() as session:
+            profile = await session.get(Profile, profile_id)
+            revoked = await session.get(RevokedSession, session_id) if session_id else None
+        if profile is None or profile.token_version != version or not session_id or revoked is not None:
+            raise Unauthorized("Session revoked; sign in again", code="session_revoked")
+        return profile
+
+    async def resolve_principal(self, token: str) -> Principal:
+        p = self.principal_from_access(token)
+        if self.content_policy is None or not self.content_policy.enabled:
+            return p
+        profile = await self.session_valid(p.profile_id, p.token_version, p.session_id)
+        return Principal(
+            profile.id,
+            self.effective_admin(profile),
+            profile.kids,
+            profile.token_version,
+            p.session_id,
+            p.owner_auth_time,
+        )
+
+    async def revoke_session(self, session_id: str) -> None:
+        if not session_id:
+            return
+
+        async with self._db.session() as session:
+            statement = insert(RevokedSession).values(
+                session_id=session_id, expires_at=utcnow() + timedelta(seconds=self.refresh_ttl)
+            )
+            await session.execute(statement.on_conflict_do_nothing())
+            await session.execute(delete(RevokedSession).where(RevokedSession.expires_at < utcnow()))
+            await session.commit()
+
+    async def consume_session(self, profile_id: str, version: int, session_id: str) -> None:
+        """Atomically claim a live session for one transition, across workers/processes."""
+        if not session_id:
+            raise Unauthorized("Session revoked; sign in again", code="session_revoked")
+        async with self._db.session() as session:
+            live = select(literal(session_id), literal(utcnow() + timedelta(seconds=self.refresh_ttl))).where(
+                select(Profile.id).where(Profile.id == profile_id, Profile.token_version == version).exists(),
+                ~select(RevokedSession.session_id).where(RevokedSession.session_id == session_id).exists(),
+            )
+            statement = insert(RevokedSession).from_select(["session_id", "expires_at"], live)
+            result = await session.execute(statement.on_conflict_do_nothing().returning(RevokedSession.session_id))
+            if result.scalar_one_or_none() is None:
+                raise Unauthorized("Session already consumed or revoked", code="session_revoked")
+            await session.commit()
+
+    async def switch_profile(
+        self, principal: Principal, target_id: str, pin: str | None, password: str | None
+    ) -> tuple[Profile, dict[str, str]]:
+        if self.content_policy is None or not self.content_policy.enabled:
+            raise Conflict("Content policy is disabled", code="content_policy_disabled")
+        current = await self.session_valid(principal.profile_id, principal.token_version, principal.session_id)
+        target = await self.get_profile(target_id)
+        if target_id != current.id:
+            if self.content_policy.is_restricted(current):
+                raise Forbidden(
+                    "Owner Google reauthentication is required to leave this profile", code="owner_reauth_required"
+                )
+            if not self.effective_admin(current):
+                if not target.pin_hash and not target.password_hash:
+                    raise Forbidden("Owner approval is required for this profile", code="profile_switch_locked")
+                if not pin and not password:
+                    raise Forbidden(
+                        "Enter this profile's existing credential", code="profile_switch_credential_required"
+                    )
+                target, _ = await self.login(target_id, pin, password)
+        await self.consume_session(principal.profile_id, principal.token_version, principal.session_id)
+        return target, self.issue(target)
 
     async def refresh(self, refresh_token: str) -> tuple[Profile, dict[str, str]]:
         p = self._decode(refresh_token, "refresh")
@@ -116,7 +221,9 @@ class AuthService:
             prof = await s.get(Profile, str(p["sub"]))
         if prof is None or prof.token_version != int(p.get("ver", -1)):
             raise Unauthorized("refresh token revoked")
-        return prof, self.issue(prof)
+        if self.content_policy is not None and self.content_policy.enabled:
+            await self.session_valid(prof.id, int(p.get("ver", -1)), str(p.get("sid") or ""))
+        return prof, self.issue(prof, str(p.get("sid") or ""), self.owner_time(p.get("oat")))
 
     # ------------------------------------------------------------------ login
     def _throttle(self, profile_id: str) -> None:
@@ -185,9 +292,50 @@ class AuthService:
             prof = await s.get(Profile, row.approved_profile_id)
             if prof is None:
                 raise NotFound("profile removed")
-            row.consumed = True
+            proof = None
+            if self.content_policy is not None and self.content_policy.enabled:
+                approver = await self.session_valid(
+                    row.approved_by_profile_id or "", row.approved_by_version or 0, row.approved_by_session_id or ""
+                )
+                if approver.id != prof.id and not self.effective_admin(approver):
+                    raise Forbidden("Pairing approval is no longer authorized")
+                if prof.is_admin or not self.content_policy.is_restricted(prof):
+                    proof = self.owner_time(row.owner_auth_time)
+                    self._require_pairing_proof(proof, row.expires_at.timestamp() - DEVICE_CODE_TTL)
+            guards = [
+                DeviceCode.device_code == device_code,
+                DeviceCode.consumed.is_(False),
+                DeviceCode.approved_profile_id == prof.id,
+                select(Profile.id).where(Profile.id == prof.id, Profile.token_version == prof.token_version).exists(),
+            ]
+            if self.content_policy is not None and self.content_policy.enabled:
+                guards.extend(
+                    [
+                        DeviceCode.approved_by_session_id == row.approved_by_session_id,
+                        select(Profile.id)
+                        .where(
+                            Profile.id == row.approved_by_profile_id, Profile.token_version == row.approved_by_version
+                        )
+                        .exists(),
+                        ~select(RevokedSession.session_id)
+                        .where(RevokedSession.session_id == row.approved_by_session_id)
+                        .exists(),
+                    ]
+                )
+            result = await s.execute(
+                update(DeviceCode).where(*guards).values(consumed=True).returning(DeviceCode.device_code)
+            )
+            if result.scalar_one_or_none() is None:
+                raise NotFound("device code already consumed")
             await s.commit()
-        return prof, self.issue(prof)
+        return prof, self.issue(prof, owner_auth_time=proof)
+
+    @staticmethod
+    def _require_pairing_proof(proof: float | None, created: float) -> None:
+        if proof is None or proof < created - 2 or proof > time.time() + 2:
+            raise Forbidden(
+                "Fresh owner Google authentication is required for this pairing", code="owner_reauth_required"
+            )
 
     async def approve_device(self, principal: Principal, user_code: str, profile_id: str | None) -> None:
         code = (user_code or "").strip().upper().replace("-", "").replace(" ", "")
@@ -200,8 +348,19 @@ class AuthService:
                 raise NotFound("unknown code")
             if row.expires_at < utcnow():
                 raise Gone("code expired")
-            if await s.get(Profile, target) is None:
+            destination = await s.get(Profile, target)
+            if destination is None:
                 raise NotFound("profile not found")
+            if self.content_policy is not None and self.content_policy.enabled:
+                approver = await self.session_valid(principal.profile_id, principal.token_version, principal.session_id)
+                if target != approver.id and not self.effective_admin(approver):
+                    raise Forbidden("Only an unrestricted owner can approve another profile")
+                if destination.is_admin or not self.content_policy.is_restricted(destination):
+                    self._require_pairing_proof(principal.owner_auth_time, row.expires_at.timestamp() - DEVICE_CODE_TTL)
+                row.owner_auth_time = principal.owner_auth_time
+                row.approved_by_profile_id = principal.profile_id
+                row.approved_by_version = principal.token_version
+                row.approved_by_session_id = principal.session_id
             row.approved_profile_id = target
             await s.commit()
 
@@ -255,7 +414,13 @@ class AuthService:
             if "kids" in data and data["kids"] is not None:
                 if not principal.is_admin:
                     raise Forbidden("only admin can change kids flag")
-                prof.kids = bool(data["kids"])
+                requested_kids = bool(data["kids"])
+                if self.content_policy is not None and self.content_policy.enabled:
+                    if prof.is_admin and requested_kids:
+                        raise ServiceError("The owner profile cannot be restricted", code="invalid_content_policy")
+                    if prof.kids != requested_kids:
+                        prof.token_version += 1
+                prof.kids = requested_kids
             if isinstance(data.get("prefs"), dict):
                 prefs = dict(prof.prefs or {})
                 prefs.update(data["prefs"])
@@ -281,6 +446,8 @@ class AuthService:
             await s.commit()
 
     async def set_pin(self, principal: Principal, profile_id: str, pin: str | None) -> None:
+        if self.content_policy is not None and self.content_policy.enabled and not principal.is_admin:
+            raise Forbidden("Only the owner can manage profile PINs")
         if profile_id != principal.profile_id and not principal.is_admin:
             raise Forbidden("cannot change another profile's PIN")
         async with self._db.session() as s:

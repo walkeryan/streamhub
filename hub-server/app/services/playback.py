@@ -34,7 +34,7 @@ from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
-from app.services.errors import BadGateway, Conflict, NotFound, ServiceError
+from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError
 from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
@@ -57,6 +57,11 @@ class StreamGrant:
     channel_key: str | None
     transcode: bool
     recovery_generation: int | None = None
+    content_ref: str | None = None
+    profile_version: int | None = None
+    session_id: str | None = None
+    policy_at: str | None = None
+    policy_until: str | None = None
 
 
 class StreamTokens:
@@ -72,6 +77,11 @@ class StreamTokens:
         return self._crypto.encrypt_json(
             {
                 "p": grant.profile_id,
+                "ref": grant.content_ref,
+                "ver": grant.profile_version,
+                "sid": grant.session_id,
+                "at": grant.policy_at,
+                "until": grant.policy_until,
                 "s": grant.source_id,
                 "u": grant.url,
                 "h": grant.headers,
@@ -90,6 +100,11 @@ class StreamTokens:
             return None
         return StreamGrant(
             profile_id=str(d["p"]),
+            content_ref=d.get("ref"),
+            profile_version=d.get("ver"),
+            session_id=d.get("sid"),
+            policy_at=d.get("at"),
+            policy_until=d.get("until"),
             source_id=str(d["s"]),
             url=str(d["u"]),
             headers=dict(d.get("h") or {}),
@@ -192,6 +207,13 @@ class PlaybackResolver:
         self.tokens = tokens
         self.active = active
 
+    content_policy: Any = None
+    auth: Any = None
+
+    async def _require_content(self, profile_id: str, ref: str, at: datetime | None = None) -> None:
+        if self.content_policy is not None and self.content_policy.enabled:
+            await self.content_policy.require(profile_id, ref, at=at)
+
     async def resolve(
         self,
         profile_id: str,
@@ -207,6 +229,18 @@ class PlaybackResolver:
     ) -> dict[str, Any]:
         if rewind_at is not None and (catchup_programme_id or not hub_id.startswith("ch:")):
             raise ServiceError("Rewind requires a channel and cannot be combined with programme catch-up.")
+        policy_at = rewind_at
+        if catchup_programme_id:
+            await self._require_content(profile_id, catchup_programme_id)
+            policy_at = (await self._channels.programme(catchup_programme_id)).start
+        await self._require_content(profile_id, hub_id.removeprefix("trailer:"), at=policy_at)
+        if (
+            hub_id.startswith("trailer:")
+            and self.content_policy is not None
+            and self.content_policy.enabled
+            and self.content_policy.is_restricted(await self.content_policy.profile(profile_id))
+        ):
+            raise Forbidden("External trailers require owner access", code="content_restricted")
         client = client if client in ("web", "web_hls", "android_tv") else "web"
         if hub_id.startswith("trailer:"):
             return await self._resolve_trailer(profile_id, hub_id)
@@ -310,6 +344,7 @@ class PlaybackResolver:
             )
 
     async def options(self, profile_id: str, hub_id: str, source_id: str | None = None) -> dict[str, Any]:
+        await self._require_content(profile_id, hub_id)
         try:
             h = ids.parse(hub_id)
         except ValueError as exc:
@@ -490,11 +525,18 @@ class PlaybackResolver:
         ch = await self._authorized_channel(profile_id, hub_id)
         return archive_window(ch)
 
-    async def _authorized_channel(self, profile_id: str, hub_id: str) -> Channel:
+    async def _authorized_channel(self, profile_id: str, hub_id: str, at: datetime | None = None) -> Channel:
         async with self._sources._db.session() as session:
             if await session.get(Profile, profile_id) is None:
                 raise NotFound("profile not found")
-        ch = await self._channels.channel_by_hub_id(hub_id)
+        await self._require_content(profile_id, hub_id, at=at)
+        from app.services.content_policy import active_policy
+
+        reset = active_policy.set(None)
+        try:
+            ch = await self._channels.channel_by_hub_id(hub_id)
+        finally:
+            active_policy.reset(reset)
         src = await self._sources.get(ch.source_id)
         if not src.enabled:
             raise NotFound("channel source is disabled")
@@ -510,7 +552,11 @@ class PlaybackResolver:
         https_site: bool,
         rewind_at: datetime | None = None,
     ) -> dict[str, Any]:
-        ch = await self._authorized_channel(profile_id, hub_id)
+        policy_at = rewind_at
+        if catchup_programme_id:
+            await self._require_content(profile_id, catchup_programme_id)
+            policy_at = (await self._channels.programme(catchup_programme_id)).start
+        ch = await self._authorized_channel(profile_id, hub_id, at=policy_at)
         src, prov = await self._sources.provider_for(ch.source_id)
         if not isinstance(prov, LiveProvider):
             raise ServiceError("source cannot play live channels")
@@ -524,11 +570,14 @@ class PlaybackResolver:
             pinfo = ProgrammeInfo(
                 channel=ch.epg_id or ch.ext_id, start=archive_start, stop=archive_end, title="Provider archive"
             )
+            if self.content_policy is not None and self.content_policy.enabled:
+                await self.content_policy.require_channel_interval(profile_id, hub_id, pinfo.start, pinfo.stop)
             target = await prov.catchup_for_channel(info, pinfo)
             if target is None:
                 raise ServiceError("Provider did not supply the advertised archive.", code="rewind_unavailable")
             subtitle = "Provider archive · " + archive_start.isoformat()
         elif catchup_programme_id:
+            await self._require_content(profile_id, catchup_programme_id)
             prog = await self._channels.programme(catchup_programme_id)
             now = datetime.now(UTC)
             if prog.feed != ch.source_id or prog.epg_channel != ch.epg_id:
@@ -537,6 +586,8 @@ class PlaybackResolver:
                 raise ServiceError("Programme is outside provider archive retention.", code="catchup_unavailable")
             archive_start, archive_end = prog.start, prog.stop
             pinfo = ProgrammeInfo(channel=prog.epg_channel, start=prog.start, stop=prog.stop, title=prog.title)
+            if self.content_policy is not None and self.content_policy.enabled:
+                await self.content_policy.require_channel_interval(profile_id, hub_id, pinfo.start, pinfo.stop)
             target = await prov.catchup_for_channel(info, pinfo)
             if target is None:
                 raise ServiceError("catch-up not available for this programme", code="catchup_unavailable")
@@ -560,6 +611,9 @@ class PlaybackResolver:
             title=title,
             subtitle=subtitle,
             poster=ch.logo,
+            policy_ref=hub_id,
+            policy_at=archive_start,
+            policy_until=archive_end,
         )
         desc["archive_start"] = archive_start
         desc["archive_end"] = archive_end
@@ -587,6 +641,7 @@ class PlaybackResolver:
         https_site: bool,
         progress_ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        await self._require_content(profile_id, ids.lib_id(row.source_id, row.ext_id))
         src, prov = await self._sources.provider_for(row.source_id)
         if not isinstance(prov, PlaybackProvider):
             raise ServiceError("source cannot play titles")
@@ -620,7 +675,7 @@ class PlaybackResolver:
             channel_key=None,
             title=row.title,
             subtitle=subtitle,
-            poster=image(src, row.poster),
+            poster=image(src, row.poster, ids.lib_id(row.source_id, row.ext_id)),
         )
 
     async def _resolve_tmdb(
@@ -662,6 +717,12 @@ class PlaybackResolver:
             chosen = badges[0]
         if chosen is None:
             raise NotFound("no source can play this title")
+        if (
+            self.content_policy is not None
+            and self.content_policy.enabled
+            and self.content_policy.is_restricted(await self.content_policy.profile(profile_id))
+        ):
+            raise Forbidden("External app playback requires owner access", code="content_restricted")
         # hand-off
         svc = sources[chosen["source_id"]]
         link = await self._deeplinks.link_for(
@@ -707,6 +768,9 @@ class PlaybackResolver:
         title: str,
         subtitle: str | None,
         poster: str | None,
+        policy_ref: str | None = None,
+        policy_at: datetime | None = None,
+        policy_until: datetime | None = None,
     ) -> dict[str, Any]:
         mode = decide_mode(
             client=client,
@@ -721,6 +785,11 @@ class PlaybackResolver:
             active_on_source=self.active.count(src.id),
             cors_ok=self._sources.decrypt_config(src).get("cors", True) is not False,
         )
+        if self.content_policy is not None and self.content_policy.enabled:
+            if target.live:
+                mode = PlaybackMode.HLS
+            elif mode == PlaybackMode.DIRECT:
+                mode = PlaybackMode.PROXY
         transcode = str(self._settings.get("transcode_hw") or "none") != "none" and bool(
             self._sources.decrypt_config(src).get("transcode")
         )
@@ -728,9 +797,17 @@ class PlaybackResolver:
         mime = target.mime
         headers = dict(target.headers)
         if mode in (PlaybackMode.PROXY, PlaybackMode.HLS):
+            from app.services.content_policy import active_principal
+
+            principal = active_principal.get()
             token = self.tokens.issue(
                 StreamGrant(
                     profile_id=profile_id,
+                    content_ref=policy_ref or hub_id,
+                    profile_version=principal.token_version if principal is not None else None,
+                    session_id=principal.session_id if principal is not None else None,
+                    policy_at=policy_at.isoformat() if policy_at else None,
+                    policy_until=policy_until.isoformat() if policy_until else None,
                     source_id=src.id,
                     url=target.url,
                     headers=target.headers,

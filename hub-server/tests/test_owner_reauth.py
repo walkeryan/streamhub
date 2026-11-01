@@ -62,6 +62,7 @@ async def test_binding_cancel_expiry_and_single_use(api: Api) -> None:
     assert result.id == profile.id and tokens["access_token"]
     with pytest.raises(Gone):
         await service.poll(p, cid, secret)
+    p.session_id = "replacement"
     challenge = await service.start(p, profile.id)
     cid, secret = challenge["challenge_id"], challenge["poll_token"]
     await service.cancel(p, cid, secret)

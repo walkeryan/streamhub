@@ -31,9 +31,11 @@ from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.classification import ClassificationStore
+from app.services.content_policy import ContentPolicy
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
+from app.services.owner_reauth import OwnerReauthService
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.registry import SourceRegistry
 from app.services.services_registry import ServiceRegistryService
@@ -68,6 +70,8 @@ class Container:
     tmdb: TmdbClient
     sources: SourceService
     availability: AvailabilityService
+    owner_reauth: OwnerReauthService
+    content_policy: ContentPolicy
     catalog: CatalogService
     channels: ChannelService
     favorites: FavoritesService
@@ -108,11 +112,14 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     app_settings = SettingsService(db, crypto, settings.tmdb_api_key)
     disclaimer = DisclaimerService(db)
     auth = AuthService(db, crypto, settings.access_token_ttl_s, settings.refresh_token_ttl_s)
+    content_policy = ContentPolicy(db, settings)
+    auth.content_policy = content_policy
     language = LanguageChain(ctx, settings.iptv_org_channels_url)
     tmdb = TmdbClient(ctx, app_settings.tmdb_key, ClassificationStore(db).record)
     sources = SourceService(db, crypto, registry, disclaimer, language)
     availability = AvailabilityService(db, tmdb)
     catalog = CatalogService(db, crypto, sources, availability, tmdb)
+    catalog.content_policy = content_policy
     channels = ChannelService(db, sources)
     favorites = FavoritesService(db)
     watchlist = WatchlistService(db)
@@ -141,6 +148,9 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         active=active,
     )
 
+    playback.content_policy = content_policy
+    playback.auth = auth
+
     def proxy_client(**kw: Any) -> httpx.AsyncClient:
         client: httpx.AsyncClient = http_factory(**kw)
         return client
@@ -154,6 +164,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         on_stop=active.dec,
         dvr=DvrManager(settings.dvr_dir, enabled=settings.dvr_enabled, reserve_root=settings.dvr_reserve_dir),
     )
+    google_auth = GoogleAuthService(settings, auth)
     return Container(
         settings=settings,
         db=db,
@@ -164,12 +175,14 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         app_settings=app_settings,
         disclaimer=disclaimer,
         auth=auth,
-        google_auth=GoogleAuthService(settings, auth),
+        google_auth=google_auth,
         language=language,
         tmdb=tmdb,
         sources=sources,
         availability=availability,
         catalog=catalog,
+        content_policy=content_policy,
+        owner_reauth=OwnerReauthService(auth, google_auth),
         channels=channels,
         favorites=favorites,
         watchlist=watchlist,

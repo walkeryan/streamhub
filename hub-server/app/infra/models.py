@@ -58,6 +58,7 @@ class Profile(Base):
     theme_id: Mapped[str] = mapped_column(String(64), default="midnight")
     languages: Mapped[list[Any]] = mapped_column(JSON, default=list)
     kids: Mapped[bool] = mapped_column(Boolean, default=False)
+    content_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
     pin_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
@@ -80,6 +81,10 @@ class DeviceCode(Base):
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
     approved_profile_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    owner_auth_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    approved_by_profile_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    approved_by_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approved_by_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class Source(Base):
@@ -213,6 +218,12 @@ class Programme(Base):
     category: Mapped[str | None] = mapped_column(String(128), nullable=True)
     icon: Mapped[str | None] = mapped_column(Text, nullable=True)
     age_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
+
+
+class RevokedSession(Base):
+    __tablename__ = "revoked_session"
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
 class AgeClassification(Base):

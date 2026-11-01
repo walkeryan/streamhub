@@ -56,9 +56,11 @@ class CatalogService:
         self.availability = availability
         self.meta = meta
 
+    content_policy: Any = None
+
     # ------------------------------------------------------------------ context
-    def image_fn(self, srcs: dict[str, Source]) -> Callable[[Source | None, str | None], str | None]:
-        def image(src: Source | None, url: str | None) -> str | None:
+    def image_fn(self, srcs: dict[str, Source]) -> Callable[[Source | None, str | None, str | None], str | None]:
+        def image(src: Source | None, url: str | None, ref: str | None = None) -> str | None:
             if not url or src is None:
                 return url
             try:
@@ -66,7 +68,12 @@ class CatalogService:
             except Exception:
                 return url
             if isinstance(prov, ImageAuthProvider) and prov.image_headers(url) is not None:
-                token = self._crypto.sign_json({"s": src.id, "u": url})
+                from app.services.image_grants import image_payload
+
+                payload = image_payload(src.id, url, ref, self.content_policy)
+                if payload is None:
+                    return None
+                token = self._crypto.sign_json(payload)
                 return absolute(f"/api/v1/images/{token}")
             return url
 

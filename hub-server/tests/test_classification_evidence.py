@@ -157,7 +157,8 @@ def test_additive_migration_preserves_existing_data(tmp_path):
     command.upgrade(cfg, "head")
     command.upgrade(cfg, "head")
     with sqlite3.connect(path) as conn:
-        assert conn.execute("SELECT * FROM profile").fetchall() == before
+        assert [row[: len(before[0])] for row in conn.execute("SELECT * FROM profile").fetchall()] == before
+        assert conn.execute("SELECT content_policy FROM profile").fetchone() == ("{}",)
         assert conn.execute("SELECT title,age_evidence FROM programme").fetchone() == ("Existing guide", "{}")
         assert conn.execute("SELECT count(*) FROM age_classification").fetchone() == (0,)
 

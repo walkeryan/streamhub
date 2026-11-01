@@ -35,7 +35,7 @@ class OwnerReauthService:
     async def start(self, p: Principal, target: str) -> dict[str, Any]:
         if not self.google.enabled or not p.session_id:
             raise Forbidden("Owner verification unavailable")
-        source = await self.auth.get_profile(p.profile_id)
+        source = await self.auth.session_valid(p.profile_id, p.token_version, p.session_id)
         dest = await self.auth.get_profile(target)
         if source.token_version != p.token_version:
             raise Forbidden("Initiating session revoked")
@@ -98,9 +98,7 @@ class OwnerReauthService:
             or item.version != p.token_version
         ):
             raise Forbidden("Owner verification belongs to another session")
-        source = await self.auth.get_profile(item.source)
-        if source.token_version != item.version:
-            raise Forbidden("Initiating session revoked")
+        await self.auth.session_valid(item.source, item.version, item.session)
         return item
 
     async def poll(self, p: Principal, challenge_id: str, secret: str) -> tuple[Profile, dict[str, str]]:
@@ -115,6 +113,7 @@ class OwnerReauthService:
         if item.status != "approved":
             raise Gone("Owner verification already consumed")
         item.status = "consumed"
+        await self.auth.consume_session(item.source, item.version, item.session)
         return target, self.auth.issue(target)
 
     async def cancel(self, p: Principal, challenge_id: str, secret: str) -> None:

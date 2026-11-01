@@ -28,6 +28,7 @@ class AppSettings(BaseSettings):
     google_allowed_emails: str = ""
     google_owner_profile_id: str = ""
     google_auth_required: bool = False
+    content_policy_enabled: bool = False
     tmdb_api_key: str | None = None
     web_dist: Path = Field(default=Path("/app/web-dist"))
     transcode_dir: Path | None = None

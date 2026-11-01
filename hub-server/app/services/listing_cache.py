@@ -22,9 +22,14 @@ async def listing_cached(
     load: Callable[[], Awaitable[Any]],
     ttl: float = 15,
 ) -> Any:
+    from app.services.content_policy import active_policy, active_principal
+
+    policy = active_policy.get()
+    principal = active_principal.get()
+    image_session = (principal.session_id, principal.token_version) if policy and principal else None
     for _ in range(2):
         revision = db.catalog_revisions.version(profile)
-        key = (operation, profile, revision, public_base.get(), params)
+        key = (operation, profile, image_session, revision, public_base.get(), params)
         valid = lambda revision=revision: revision == db.catalog_revisions.version(profile)  # noqa: E731
         result = await db.result_cache.get(key, load, ttl, valid)
         if valid():
