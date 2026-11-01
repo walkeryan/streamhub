@@ -24,6 +24,14 @@ class CatalogFiltersTest {
             assertEquals(saved, StreamHubJson.decodeFromString(NativeBrowseFilters.serializer(), StreamHubJson.encodeToString(NativeBrowseFilters.serializer(), saved)))
         }
     }
+    @Test fun livePreferencesKeepRegionIndependentOfAllAndUnknownLanguages() {
+        for (languages in listOf(null, setOf("und"), setOf("eng"))) {
+            val filters = LiveFilters(languages = languages, group = "HBO MAX SERIES", country = "all", favorites = true)
+            val restored = StreamHubJson.decodeFromJsonElement<LiveFilters>(StreamHubJson.encodeToJsonElement(filters))
+            assertEquals(filters, restored)
+            assertEquals("all", restored.country)
+        }
+    }
     @Test fun sportsWatchUsesActualChannelIdAndRetainsCoverage() {
         val page = StreamHubJson.decodeFromString(SportsPage.serializer(), """{"items":[{"id":"4:12","sport":"Tennis","title":"Final replay","channel_id":"ch:provider:44","channel_name":"Sports One","source_name":"Provider","start":"2026-11-01T10:00:00Z","stop":"2026-11-01T12:00:00Z","extra":"ignored"}],"total":81,"sports":[{"name":"Tennis","count":81}],"coverage":{"eligible_channels":1000,"channels_with_current_schedule":85}}""")
         assertEquals("ch:provider:44", page.items.single().channelId)
