@@ -159,6 +159,17 @@ class StreamHubApi @Inject constructor(
         language?.let { parameter("language", it) }
     }
 
+    suspend fun discover(
+        section: String,
+        filters: NativeDiscoveryFilters = NativeDiscoveryFilters(),
+        page: Int = 1,
+    ): DiscoveryPage {
+        require(section == "movies" || section == "shows")
+        return get("/discover/${id(section)}") {
+            discoveryParameters(filters, page).forEach { (key, value) -> parameter(key, value) }
+        }
+    }
+
     suspend fun browseGenres(section: String, sourceId: String? = null, language: String? = null): List<CatalogFacet> =
         get("/browse/${id(section)}/genres") {
             sourceId?.let { parameter("source_id", it) }
