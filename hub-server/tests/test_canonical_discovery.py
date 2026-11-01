@@ -118,3 +118,59 @@ async def test_metadata_failure_keeps_local_search_honest(api: Api):
     assert not result["metadata_available"]
     assert "temporarily unavailable" in result["discovery_note"]
     assert result["results"]
+
+
+async def test_metadata_discovery_212k_catalog_uses_bounded_indexed_matching(api: Api):
+    """Exercise cold discovery with 60 metadata identities, not a warm response cache."""
+    import time
+
+    from sqlalchemy import insert
+
+    await seed_catalog(api)
+    async with api.c.db.session() as session:
+        for start in range(0, 212000, 2000):
+            await session.execute(
+                insert(Title),
+                [
+                    dict(
+                        source_id="catalog",
+                        ext_id=str(i),
+                        kind="vod",
+                        title=f"Synthetic catalog movie {i}",
+                        norm_title=f"synthetic catalog movie {i}",
+                        year=2000 + i % 25,
+                        overview="Fixture description " * 5,
+                    )
+                    for i in range(start, start + 2000)
+                ],
+            )
+        await session.execute(
+            insert(Title),
+            [
+                dict(
+                    source_id="catalog",
+                    ext_id=f"match-{i}",
+                    kind="vod",
+                    title=f"EN-NETFLIX-Star Wars Fixture {i}",
+                    norm_title=f"en netflix star wars fixture {i}",
+                    tmdb_id=1000 + i,
+                    year=2000,
+                )
+                for i in range(20)
+            ],
+        )
+        await session.commit()
+    fake = AsyncMock()
+    fake.enabled = True
+    fake.search.return_value = [MetaTitle(i, "movie", f"Star Wars Discovery {i}", 2000) for i in range(40)]
+    fake.details.side_effect = lambda kind, tid: MetaTitle(tid, kind, f"Star Wars Fixture {tid - 1000}", 2000)
+    api.c.catalog.meta = fake
+    started = time.perf_counter()
+    response = await api.get("/search", params={"q": "Star Wars", "language": "all", "limit": 100})
+    elapsed = time.perf_counter() - started
+    print(f"canonical metadata60 catalog212020 cold={elapsed * 1000:.2f}ms")
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 60
+    assert len(response.json()["play_here"]) == 20
+    assert fake.details.await_count == 20
+    assert elapsed < 5, "Cold search should not scan the entire library once per metadata result"

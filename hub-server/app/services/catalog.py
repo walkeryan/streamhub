@@ -657,19 +657,18 @@ class CatalogService:
                 for detail in details:
                     if detail is not None and not isinstance(detail, BaseException):
                         by_id[ids.tmdb_id(detail.media_type, detail.tmdb_id)] = detail
+                matched = await self.availability.library_matches_many(list(by_id.values()), candidates=rows)
+                match_ids = {r.id for matches in matched.values() for r in matches if r.source_id in enabled}
+                eligible_ids: set[int] = set()
+                if match_ids:
+                    eligible_query = await self._filter_title_languages(
+                        select(Title).where(Title.id.in_(match_ids)), languages
+                    )
+                    async with self._db.session() as session:
+                        eligible_ids = {r.id for r in (await session.execute(eligible_query)).scalars()}
                 for hub, meta in by_id.items():
                     popularity[hub] = meta.popularity
-                    matches = await self.availability.library_matches(
-                        meta.media_type, tmdb_id=meta.tmdb_id, imdb_id=meta.imdb_id, title=meta.title, year=meta.year
-                    )
-                    match_ids = [r.id for r in matches if r.source_id in enabled]
-                    eligible = []
-                    if match_ids:
-                        eligible_query = await self._filter_title_languages(
-                            select(Title).where(Title.id.in_(match_ids)), languages
-                        )
-                        async with self._db.session() as session:
-                            eligible = list((await session.execute(eligible_query)).scalars())
+                    eligible = [r for r in matched[hub] if r.id in eligible_ids]
                     badges = [
                         badge_for_source(ctx.sources[r.source_id], in_app=ctx.is_in_app(ctx.sources[r.source_id].type))
                         for r in eligible
