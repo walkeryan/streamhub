@@ -36,6 +36,7 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
   })
   await signIn(page)
   await page.getByRole('link', { name: 'Sports', exact: true }).click()
+  await page.getByTestId('sports-filters').click()
   await page.getByRole('button', { name: 'All languages', exact: true }).click()
   await page.getByRole('button', { name: 'Tennis · 1', exact: true }).click()
   await expect.poll(() => docs.p2['sportsFilters.v1']).toEqual({ language: 'all', sport: 'Tennis' })
@@ -48,6 +49,7 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
   expect(queries.length).toBe(before)
   blockReads = false
   release()
+  await page.getByTestId('sports-filters').click()
   await expect(page.getByRole('button', { name: 'Tennis · 1', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('button', { name: 'All languages', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => queries.at(-1)).toEqual({ profile: 'Bearer mock-access-p2', language: 'all', sport: 'Tennis' })
@@ -58,6 +60,7 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
     const { profiles, DISCLAIMER } = await import(/* @vite-ignore */ fixtures)
     useSession.getState().setSession('mock-access-p1', 'mock-refresh-p1', { ...profiles[0], disclaimer_accepted_version: DISCLAIMER.version })
   })
+  await page.getByTestId('sports-filters').click()
   await expect(page.getByRole('button', { name: 'Basketball · 1', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => queries.at(-1)).toEqual({ profile: 'Bearer mock-access-p1', language: 'eng', sport: 'Basketball' })

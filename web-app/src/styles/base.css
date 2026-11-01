@@ -344,3 +344,5 @@ h1, h2, h3, p { margin: 0; }
 .sports-live-badge { background: #9b1232; color: white; }
 .sports-feed-option { padding: .8rem 0; border-bottom: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); display: flex; flex-direction: column; gap: .5rem; }
 @media (max-width: 540px) { .sports-event-item { flex-basis: min(17rem, 82vw); } }
+.sports-compact-toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: .75rem; }
+.sports-filter-summary { min-width: 0; overflow-wrap: anywhere; }

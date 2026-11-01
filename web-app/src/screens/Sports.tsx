@@ -43,6 +43,15 @@ function SportsEvents() {
   const [date, setDate] = useHistoryState('sports:date', today())
   const [status, setStatus] = useHistoryState<Status>('sports:status', 'all')
   const [page, setPage] = useHistoryState('sports:page', 0)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [interacted, setInteracted] = useState(false)
+  useEffect(() => {
+    const mark = () => setInteracted(true)
+    window.addEventListener('keydown', mark, true)
+    window.addEventListener('pointerdown', mark, true)
+    window.addEventListener('pointermove', mark, true)
+    return () => { window.removeEventListener('keydown', mark, true); window.removeEventListener('pointerdown', mark, true); window.removeEventListener('pointermove', mark, true) }
+  }, [])
   const [selected, setSelected] = useState<Event | null>(null)
   const term = useDebounced(search, 300)
   const now = useNow(1000)
@@ -63,35 +72,28 @@ function SportsEvents() {
   const go = useGo()
   const data = q.data
   const zone = data?.timezone ?? ZONE
-  useRestoreFocus(saved.ready && !!data, 'sports:search')
+  useEffect(() => {
+    if (!saved.ready || data || interacted) return
+    const frame = requestAnimationFrame(() => setFocus('sports:filters'))
+    return () => cancelAnimationFrame(frame)
+  }, [saved.ready, data, interacted])
+  const firstEvent = ['On now', 'Upcoming', 'Ended'].flatMap((section) => data?.events.filter((event) => stateOf(event, now) === section) ?? [])[0]
+  useRestoreFocus(saved.ready && !!data && !interacted, firstEvent ? `sports:event:${firstEvent.id}` : 'sports:filters')
   if (data && page > Math.max(0, Math.ceil(data.total / PAGE) - 1)) setPage(Math.max(0, Math.ceil(data.total / PAGE) - 1))
   const close = () => setSelected(null)
   if (!saved.ready) return <div className="page-pad" data-testid="sports"><h1 className="display">Sports</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="sports:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
   return <div className="page-pad" data-testid="sports">
     <h1 className="display mb-2">Sports</h1>
-    <p className="muted mb-4">Events from your programme guide, with matching channel feeds grouped together. Listings include games, replays, highlights and studio shows. On now means the broadcast is airing, not necessarily a live match.</p>
-    <div className="flex flex-col gap-3 mb-4">
-      <FocusableInput focusKey="sports:search" label="Search sports programmes or channels" value={search} onChange={setSearch} placeholder="Event, programme or channel" />
-      <LanguageFilter scope="sports" value={language} onChange={setLanguage} />
-      <FocusGroup focusKey="sports:dates" className="flex flex-wrap gap-2 items-center" label="Sports date">
-        <Button focusKey="sports:day:prev" onEnter={() => setDate(moveDate(date, -1))}>Previous day</Button>
-        <Button focusKey="sports:day:today" onEnter={() => setDate(today())}>Today</Button>
-        <Button focusKey="sports:day:next" onEnter={() => setDate(moveDate(date, 1))}>Next day</Button>
-        <span className="label" data-testid="sports-date">{date} · {zone}</span>
-      </FocusGroup>
+    <p className="label mb-3">Guide broadcasts · On now does not necessarily mean a live match.</p>
+    <div className="sports-compact-toolbar">
+      <Button focusKey="sports:filters" onEnter={() => setFiltersOpen(true)} testId="sports-filters">Filters</Button>
+      <p className="label sports-filter-summary" data-testid="sports-filter-summary">{language === 'mine' ? (profile?.languages.map((code) => LANG_NAMES[code] ?? code).join(', ') || 'All languages') : language === 'all' ? 'All languages' : LANG_NAMES[language] ?? language} · {sport || 'All sports'} · {date === today() ? 'Today' : date}{search ? ` · “${search}”` : ''}</p>
+    </div>
       <FocusGroup focusKey="sports:status" className="flex flex-wrap gap-2" label="Broadcast status">
         {([['all', 'All broadcasts'], ['current', 'On now'], ['upcoming', 'Upcoming'], ['replay', 'Replays']] as const).map(([value, label]) => <Chip key={value} focusKey={`sports:status:${value}`} pressed={status === value} onEnter={() => setStatus(value)}>{label}</Chip>)}
       </FocusGroup>
-      <FocusGroup focusKey="sports:types" className="flex flex-wrap gap-2" label="Sport type">
-        <Chip focusKey="sports:all" pressed={!sport} onEnter={() => setSport('')}>All sports</Chip>
-        <CatalogPicker scope="sports:sport-picker" label="Sport" value={sport} selectedLabel={sport || 'All sports'} options={[...new Set([...KNOWN_SPORTS, ...(data?.sports.map((entry) => entry.name) ?? [])])].map((name) => ({ id: name, label: name, count: data?.sports.find((entry) => entry.name === name)?.count }))} onChange={setSport} />
-        {(data?.sports ?? []).map((kind) => <Chip key={kind.name} focusKey={`sports:type:${kind.name}`} pressed={sport === kind.name} onEnter={() => setSport(kind.name)}>{kind.name} · {kind.count}</Chip>)}
-        {sport && !data?.sports.some((kind) => kind.name === sport) && <Chip focusKey="sports:selected" pressed onEnter={() => setSport('')}>{sport} · Clear</Chip>}
-      </FocusGroup>
-    </div>
-    <p className="label mb-3" role="status">{saved.error ?? (saved.saving ? 'Saving filters…' : 'Language and sport sync with this profile.')}</p>
+    {saved.error && <p role="alert">{saved.error}</p>}
     {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : q.isPending ? <Skeleton style={{ height: '16rem' }} /> : data && <>
-      <p className="muted mb-4" role="status">{data.coverage.channels_with_sports_schedule.toLocaleString()} of {data.coverage.eligible_channels.toLocaleString()} eligible channels have sports in the inspected guide window. Missing or unclassified guide data may omit events. Updated {clock(data.as_of, zone)}.</p>
       {data.truncated && <p role="status">Guide scan limit reached. Counts are a lower bound; narrow the date, sport or search for more precise results.</p>}
       {!data.events.length ? <Empty title="No matching sports listings" hint="Try All sports, another day or language. No listings does not mean no sport is airing." /> : ['On now', 'Upcoming', 'Ended'].map((section) => {
         const events = data.events.filter((event) => stateOf(event, now) === section)
@@ -114,7 +116,31 @@ function SportsEvents() {
         <span>{data.truncated ? 'At least ' : ''}{data.total.toLocaleString()} events · page {page + 1} of {Math.max(1, Math.ceil(data.total / PAGE))}</span>
         <Button focusKey="sports:next" disabled={(page + 1) * PAGE >= data.total} onEnter={() => setPage(page + 1)}>Next</Button>
       </div>
+      <p className="muted mb-4" role="status">{data.coverage.channels_with_sports_schedule.toLocaleString()} of {data.coverage.eligible_channels.toLocaleString()} eligible channels have sports in the inspected guide window. Missing or unclassified guide data may omit events. Updated {clock(data.as_of, zone)}.</p>
     </>}
+    <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Sports filters" firstFocusKey="sports:search" wide>
+      <div className="flex flex-col gap-4">
+      <FocusableInput focusKey="sports:search" label="Search sports programmes or channels" value={search} onChange={setSearch} placeholder="Event, programme or channel" />
+      <LanguageFilter scope="sports" value={language} onChange={setLanguage} />
+      <FocusGroup focusKey="sports:dates" className="flex flex-wrap gap-2 items-center" label="Sports date">
+        <Button focusKey="sports:day:prev" onEnter={() => setDate(moveDate(date, -1))}>Previous day</Button>
+        <Button focusKey="sports:day:today" onEnter={() => setDate(today())}>Today</Button>
+        <Button focusKey="sports:day:next" onEnter={() => setDate(moveDate(date, 1))}>Next day</Button>
+        <span className="label" data-testid="sports-date">{date} · {zone}</span>
+      </FocusGroup>
+
+      <FocusGroup focusKey="sports:types" className="flex flex-wrap gap-2" label="Sport type">
+        <Chip focusKey="sports:all" pressed={!sport} onEnter={() => setSport('')}>All sports</Chip>
+        <CatalogPicker scope="sports:sport-picker" label="Sport" value={sport} selectedLabel={sport || 'All sports'} options={[...new Set([...KNOWN_SPORTS, ...(data?.sports.map((entry) => entry.name) ?? [])])].map((name) => ({ id: name, label: name, count: data?.sports.find((entry) => entry.name === name)?.count }))} onChange={setSport} />
+        {(data?.sports ?? []).map((kind) => <Chip key={kind.name} focusKey={`sports:type:${kind.name}`} pressed={sport === kind.name} onEnter={() => setSport(kind.name)}>{kind.name} · {kind.count}</Chip>)}
+        {sport && !data?.sports.some((kind) => kind.name === sport) && <Chip focusKey="sports:selected" pressed onEnter={() => setSport('')}>{sport} · Clear</Chip>}
+      </FocusGroup>
+
+        <p className="label" role="status">{saved.error ?? (saved.saving ? 'Saving filters…' : 'Language and sport sync with this profile.')}</p>
+        <p className="label">Guide listings include games, replays, highlights and studio shows. Missing metadata may omit events. Channel language hints do not verify spoken audio.</p>
+        <Button focusKey="sports:filters:done" onEnter={() => setFiltersOpen(false)}>Show events</Button>
+      </div>
+    </Modal>
     <Modal open={!!selected} onClose={close} title={selected?.title ?? 'Channel feeds'} firstFocusKey="sports:feeds:cancel" wide>
       {selected && <>
         <p>{stateOf(selected, now)}{selected.replay ? ' · Replay' : ''} · {clock(selected.start, zone)}–{clock(selected.stop, zone)} · {zone}</p>
@@ -123,7 +149,7 @@ function SportsEvents() {
         {selected.feeds.map((feed) => <div key={`${feed.channel_id}:${feed.programme_id}`} className="sports-feed-option">
           <p><strong>{feed.channel_name}</strong> · {feed.source_name}</p>
           <p className="label">{feed.language_verified ? `Verified audio: ${LANG_NAMES[feed.language ?? ''] ?? feed.language ?? 'Unknown'}` : `Audio unverified${feed.language ? ` · Channel hint: ${LANG_NAMES[feed.language] ?? feed.language}` : ''}`}</p>
-          {airing(selected, now) && <Button focusKey={`sports:feed:${feed.channel_id}:${feed.programme_id}`} onEnter={() => { if (airing(selected, Date.now())) go(`/play/${encodeURIComponent(feed.channel_id)}`) }}>Watch {feed.channel_name}</Button>}
+          {airing(selected, now) && <Button focusKey={`sports:feed:${feed.channel_id}:${feed.programme_id}`} onEnter={() => { if (airing(selected, Date.now())) { setFocus(`sports:event:${selected.id}`); go(`/play/${encodeURIComponent(feed.channel_id)}`) } }}>Watch {feed.channel_name}</Button>}
         </div>)}
         {!selected.feeds.length && <p>No authorized channel feed is available for this listing.</p>}
       </>}
