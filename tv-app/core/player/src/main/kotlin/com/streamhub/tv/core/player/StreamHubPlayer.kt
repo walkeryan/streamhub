@@ -47,6 +47,7 @@ data class TrackOption(
 data class PlayerUiState(
     val isPlaying: Boolean = false,
     val buffering: Boolean = false,
+    val seekable: Boolean = false,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val error: String? = null,
@@ -159,6 +160,7 @@ class StreamHubPlayer(
         tickerJob = scope.launch {
             while (isActive) {
                 _state.value = _state.value.copy(
+                    seekable = exoPlayer.isCurrentMediaItemSeekable && exoPlayer.duration > 0,
                     positionMs = exoPlayer.currentPosition.coerceAtLeast(0),
                     durationMs = exoPlayer.duration.takeIf { it != C.TIME_UNSET } ?: 0,
                 )
@@ -267,7 +269,11 @@ class StreamHubPlayer(
     }
 
     fun togglePlayPause() { if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play() }
-    fun seekBy(ms: Long) { if (current?.live != true) exoPlayer.seekTo((exoPlayer.currentPosition + ms).coerceAtLeast(0)) }
+    fun seekBy(ms: Long) {
+        if (exoPlayer.isCurrentMediaItemSeekable && exoPlayer.duration > 0) {
+            exoPlayer.seekTo((exoPlayer.currentPosition + ms).coerceIn(0, exoPlayer.duration))
+        }
+    }
 
     fun stop() {
         report(PlaybackState.STOPPED)

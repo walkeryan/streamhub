@@ -4,7 +4,20 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.handoff.DeepLinkLauncher
+import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.auth.SessionStore
+import com.streamhub.tv.core.data.repo.catalogScope
+import com.streamhub.tv.core.data.repo.resolveArchiveSelection
+import com.streamhub.tv.core.data.repo.ExpiredArchiveSelection
+import com.streamhub.tv.core.data.model.RewindCapability
 import com.streamhub.tv.core.data.model.Channel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import java.time.Instant
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackMode
 import com.streamhub.tv.core.data.repo.ChannelListCache
@@ -24,10 +37,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class Overlay { None, Osd, MiniList, Menu }
+enum class Overlay { None, Osd, MiniList, Menu, Rewind }
 
 data class PlayerScreenState(
     val descriptor: PlaybackDescriptor? = null,
+    val rewind: RewindCapability? = null,
+    val rewindLoading: Boolean = false,
+    val rewindError: String? = null,
     val live: Boolean = false,
     val overlay: Overlay = Overlay.Osd,
     /** Channel shown in the OSD: the playing one, or the zap target while the user is still pressing Up/Down. */
@@ -56,6 +72,8 @@ class PlayerViewModel @Inject constructor(
     private val coordinator: PlaybackCoordinator,
     private val channelCache: ChannelListCache,
     private val launcher: DeepLinkLauncher,
+    private val api: StreamHubApi,
+    private val sessions: SessionStore,
     playerFactory: PlayerFactory,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState["key"])
@@ -72,6 +90,7 @@ class PlayerViewModel @Inject constructor(
     private var numberJob: Job? = null
     private var osdJob: Job? = null
     private var sleepJob: Job? = null
+    private var rewindJob: Job? = null
 
     init {
         val d = coordinator.take(key)
@@ -82,6 +101,11 @@ class PlayerViewModel @Inject constructor(
             if (d.live) viewModelScope.launch { loadChannelList(d) }
         }
         showOsd()
+        viewModelScope.launch {
+            sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
+                rewindJob?.cancel(); player.stop(); _exit.emit(Unit)
+            }
+        }
     }
 
     private fun start(d: PlaybackDescriptor) {
@@ -113,9 +137,47 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun hideOverlay() { _state.update { it.copy(overlay = Overlay.None) } }
+    fun hideOverlay() { rewindJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false) } }
     fun openMiniList() { if (_state.value.live && _state.value.channels.isNotEmpty()) _state.update { it.copy(overlay = Overlay.MiniList) } }
     fun openMenu() { _state.update { it.copy(overlay = Overlay.Menu) } }
+
+    fun openRewind() {
+        val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
+        rewindJob?.cancel()
+        _state.update { it.copy(overlay = Overlay.Rewind, rewind = null, rewindLoading = true, rewindError = null) }
+        rewindJob = viewModelScope.launch {
+            val owner = sessions.current().catalogScope()
+            try {
+                val capability = api.rewindCapability(id)
+                currentCoroutineContext().ensureActive()
+                if (sessions.current().catalogScope() != owner || _state.value.descriptor?.id != id) return@launch
+                _state.update { it.copy(rewind = capability, rewindLoading = false) }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { _state.update { it.copy(rewindLoading = false, rewindError = "Could not load provider archive. Retry or return to live.") } }
+        }
+    }
+
+    fun playArchive(at: Instant) = resolveChannelTime(at)
+    fun goLive() = resolveChannelTime(null)
+
+    private fun resolveChannelTime(at: Instant?) {
+        val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
+        rewindJob?.cancel()
+        _state.update { it.copy(rewindLoading = true, rewindError = null) }
+        rewindJob = viewModelScope.launch {
+            val owner = sessions.current().catalogScope()
+            try {
+                val descriptor = resolveArchiveSelection(id, at, owner.toString(), { sessions.current().catalogScope().toString() }, api::rewindCapability, api::resolve)
+                if (_state.value.descriptor?.id != id) return@launch
+                start(descriptor)
+                _state.update { it.copy(overlay = Overlay.Osd, rewindLoading = false) }
+                if (descriptor.live) loadChannelList(descriptor)
+                showOsd()
+            } catch (e: CancellationException) { throw e }
+            catch (_: ExpiredArchiveSelection) { _state.update { it.copy(rewindLoading = false, rewindError = "That selection expired. Refresh the advertised window.") } }
+            catch (_: Exception) { _state.update { it.copy(rewindLoading = false, rewindError = "Provider archive/live request failed. Your previous stream was kept. Retry or choose Go Live.") } }
+        }
+    }
 
     // ---- Zapping -------------------------------------------------------------------------------
 
@@ -135,6 +197,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun tuneTo(ch: Channel) {
+        rewindJob?.cancel()
         val s = _state.value
         val currentId = s.descriptor?.id
         if (ch.id == currentId) { _state.update { it.copy(osdChannel = ch) }; return }
@@ -205,6 +268,7 @@ class PlayerViewModel @Inject constructor(
     fun retry() { _state.value.descriptor?.let(::start) }
 
     override fun onCleared() {
+        rewindJob?.cancel()
         player.release()
         coordinator.release(key)
     }

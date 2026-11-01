@@ -7,6 +7,8 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -125,7 +127,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             .background(Color.Black)
             .focusRequester(rootFocus)
             .onPreviewKeyEvent { e ->
-                val overlayOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu
+                val overlayOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu || s.overlay == Overlay.Rewind
                 if (e.key == Key.Back) {
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                     when {
@@ -176,9 +178,9 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                 digitOf(e.key)?.let { vm.digit(it); return@onPreviewKeyEvent true }
                 when (e.key) {
                     Key.DirectionUp, Key.ChannelUp -> { if (s.live) vm.zap(+1) else vm.showOsd(); true }
-                    Key.DirectionDown, Key.ChannelDown -> { if (s.live) vm.zap(-1) else vm.showOsd(); true }
-                    Key.DirectionLeft -> { vm.player.seekBy(-10_000); vm.showOsd(); true }
-                    Key.DirectionRight -> { vm.player.seekBy(10_000); vm.showOsd(); true }
+                    Key.DirectionDown, Key.ChannelDown -> { if (s.live) vm.zap(-1) else if(s.descriptor?.archiveStart != null) vm.openMenu() else vm.showOsd(); true }
+                    Key.DirectionLeft -> { if(s.live) vm.openRewind() else { vm.player.seekBy(-10_000); vm.showOsd() }; true }
+                    Key.DirectionRight -> { if(s.live) vm.openMenu() else { vm.player.seekBy(10_000); vm.showOsd() }; true }
                     Key.MediaRewind -> { vm.player.seekBy(-30_000); vm.showOsd(); true }
                     Key.MediaFastForward -> { vm.player.seekBy(30_000); vm.showOsd(); true }
                     Key.MediaPlayPause -> { vm.player.togglePlayPause(); vm.showOsd(); true }
@@ -193,6 +195,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             .focusable(),
     ) {
         VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect)
+        if(s.overlay == Overlay.Rewind) ProviderRewindDialog(vm, s)
 
         if (ps.buffering || ps.error != null || s.message != null) {
             StatusBadge(ps.error ?: s.message ?: "Buffering…", Modifier.align(Alignment.Center))
@@ -268,7 +271,7 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
             }
         }
         Text(
-            if (s.live) "▲▼ zap · 0–9 channel · OK list · hold OK menu · Back×2 last channel" else "OK play/pause · ◀▶ seek · hold OK menu",
+            if (s.live) "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel" else if(s.descriptor?.archiveStart != null) "Provider archive · ${if(ps.seekable) "◀▶ seek" else "Not seekable yet"} · ▼ Go Live/menu" else "OK play/pause · ${if(ps.seekable) "◀▶ seek" else "Not seekable"} · hold OK menu",
             style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(top = 10.dp),
         )
         s.sleepEndsAt?.let {
@@ -334,16 +337,21 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(50); runCatching { first.requestFocus() } }
     Column(
-        Modifier.fillMaxHeight().width(420.dp).background(t.overlay).padding(horizontal = 24.dp, vertical = Tokens.Canvas.SafeMarginY),
+        Modifier.fillMaxHeight().width(420.dp).background(t.overlay).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = Tokens.Canvas.SafeMarginY),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        if(s.descriptor?.id?.startsWith("ch:") == true) {
+            ShButton("Provider archive · unverified", vm::openRewind, Modifier.focusRequester(first))
+            ShButton("Go Live", vm::goLive)
+            s.rewindError?.let { Text(it, color=t.danger) }
+        }
         Text("Audio", style = MaterialTheme.typography.titleSmall, color = t.text)
         if (ps.audioTracks.isEmpty()) Text("Default", color = t.textMuted, style = MaterialTheme.typography.bodySmall)
         ps.audioTracks.forEachIndexed { i, tr ->
-            ShChip(tr.label, tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_AUDIO) }, if (i == 0) Modifier.focusRequester(first) else Modifier)
+            ShChip(tr.label, tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_AUDIO) }, if (i == 0 && s.descriptor?.id?.startsWith("ch:") != true) Modifier.focusRequester(first) else Modifier)
         }
         Text("Subtitles", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
-        ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (ps.audioTracks.isEmpty()) Modifier.focusRequester(first) else Modifier)
+        ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (ps.audioTracks.isEmpty() && s.descriptor?.id?.startsWith("ch:") != true) Modifier.focusRequester(first) else Modifier)
         ps.textTracks.forEach { tr -> ShChip(tr.label, !ps.subtitlesOff && tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) }) }
         Text("Picture", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
         ShButton("Aspect: ${s.aspect.label}", vm::cycleAspect)

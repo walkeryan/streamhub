@@ -223,6 +223,8 @@ class StreamHubApi @Inject constructor(
 
     // ---- Playback ------------------------------------------------------------------------------
 
+    suspend fun rewindCapability(id: String): RewindCapability = get("/playback/rewind") { parameter("id", id) }
+
     suspend fun playbackOptions(id: String, sourceId: String? = null): PlaybackOptions = get("/playback/options") {
         parameter("id", id)
         sourceId?.let { parameter("source_id", it) }
