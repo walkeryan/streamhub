@@ -2,6 +2,7 @@ import { forwardRef, useImperativeHandle, useRef, type CSSProperties, type Keybo
 import { FocusContext, useFocusable } from '@noriginmedia/norigin-spatial-navigation-react'
 import type { FocusableComponentLayout } from '@noriginmedia/norigin-spatial-navigation-core'
 import { cn } from '../lib/util'
+import { setFocus } from './spatial'
 
 export interface FocusableProps {
   focusKey?: string
@@ -32,7 +33,9 @@ export interface FocusableHandle { focus: () => void; el: HTMLElement | null }
 export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Focusable(p, outer) {
   const onEnterRef = useRef(p.onEnter)
   onEnterRef.current = p.onEnter
-  const { ref, focused, focusSelf } = useFocusable({
+  const disabledRef = useRef(p.disabled)
+  disabledRef.current = p.disabled
+  const { ref, focused, focusSelf, focusKey } = useFocusable({
     focusKey: p.focusKey,
     focusable: !p.disabled,
     autoRestoreFocus: false,
@@ -68,7 +71,14 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       {...Object.fromEntries(Object.entries(p.data ?? {}).map(([k, v]) => [`data-${k}`, v]))}
       className={cn('fx', p.className)}
       style={p.style}
-      onClick={() => !p.disabled && onEnterRef.current?.()}
+      onClick={async () => {
+        if (disabledRef.current) return
+        // A click (including touch or assistive activation) is deliberate, unlike
+        // pointerenter caused by removing an overlay under a parked cursor.
+        // Establish its opener before a dialog captures focus for restoration.
+        await setFocus(focusKey)
+        if ((ref.current as HTMLElement | null)?.isConnected && !disabledRef.current) onEnterRef.current?.()
+      }}
       onPointerMove={(e) => e.pointerType === 'mouse' && (e.movementX !== 0 || e.movementY !== 0) && !p.disabled && focusSelf()}
     >
       {typeof p.children === 'function' ? p.children({ focused }) : p.children}
