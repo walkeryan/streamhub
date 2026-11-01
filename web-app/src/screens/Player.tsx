@@ -180,7 +180,7 @@ export function Player() {
   // zap never sees stale state.
   // zapping with the controls hidden keeps them hidden (poke() runs on every key)
   const hideIfHidden = useCallback((visible: boolean) => { if (!visible) hideChrome() }, [hideChrome])
-  const handlers = { live, isChannel, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
+  const handlers = { id, live, isChannel, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
   const apiRef = useRef(handlers)
   apiRef.current = handlers
   useEffect(() => {
@@ -191,6 +191,15 @@ export function Player() {
       if (isBackKey(e)) return
       const handled = () => { e.preventDefault(); e.stopImmediatePropagation() }
       if (chromeRef.current && document.activeElement?.closest('[data-testid="rewind-controls"], [data-testid="local-buffer-controls"]')) { a.poke(); return }
+      // A zap updates the URL before React commits the next player. Keep the
+      // keyboard last-channel shortcut out of the global Back stack in that gap.
+      // Real remote Back still follows isBackKey above; open overlays keep Back.
+      if (e.key === 'Backspace' && a.live && activeId.current !== a.id && overlayRef.current === null && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        handled()
+        const last = useUi.getState().lastChannelId
+        if (last) a.zapTo(last)
+        return
+      }
       if (overlayRef.current === 'bar' && e.key === 'ArrowUp') { handled(); setOverlay(null); a.poke(); return }
       const visible = chromeRef.current
       a.poke()

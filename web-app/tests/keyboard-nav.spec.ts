@@ -65,11 +65,39 @@ test('live TV: zap with digits and Backspace in the player', async ({ page }) =>
   const first = path()
   await page.keyboard.press('ArrowUp')
   await expect.poll(path).not.toBe(first)
+  await expect(page.getByTestId('player-title')).toHaveText('Metro Sports 1')
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('Backspace') // last-channel keyboard shortcut
   await expect.poll(path).toBe(first)
+  await expect(page.getByTestId('player-title')).toHaveText('Harbor News 24')
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('5')
   await expect(page.getByTestId('digits')).toHaveText('5')
   await expect.poll(path, { timeout: 5000 }).toContain('1005')
 })
+
+for (const key of ['Backspace', 'Escape', 'BrowserBack'] as const) {
+  test(`rapid zap followed by ${key} preserves its distinct keyboard or remote meaning`, async ({ page }) => {
+    await signIn(page)
+    await page.goto('/live')
+    await page.getByTestId('channel-row').first().click()
+    await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+    const first = new URL(page.url()).pathname
+    await page.evaluate((key) => {
+      // Same task deliberately prevents React committing between the two keys.
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+      window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    }, key)
+    await expect.poll(() => new URL(page.url()).pathname).toBe(key === 'Backspace' ? first : '/live')
+    if (key === 'Backspace') {
+      await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+      await page.keyboard.press('m')
+      await expect(page.getByTestId('player-menu')).toBeVisible()
+      await page.keyboard.press('Backspace')
+      await expect(page.getByTestId('player-menu')).toHaveCount(0)
+      expect(new URL(page.url()).pathname).toBe(first)
+    } else {
+      await expect(page.getByLabel('Search channels or number')).toBeFocused()
+    }
+  })
+}
