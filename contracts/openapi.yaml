@@ -361,6 +361,58 @@ components:
             eligible_channels: {type: integer}
             channels_with_current_schedule: {type: integer}
 
+    SportsEventFeed:
+      type: object
+      required: [channel_id, channel_name, source_id, source_name, programme_id, language_verified]
+      properties:
+        channel_id: {type: string}
+        channel_name: {type: string}
+        source_id: {type: string}
+        source_name: {type: string}
+        programme_id: {type: string}
+        language: {type: string, nullable: true}
+        language_verified: {type: boolean}
+    SportsEvent:
+      type: object
+      required: [id, title, sport, start, stop, status, replay, live_evidence, grouping_evidence, feeds]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        sport: {type: string}
+        start: {type: string, format: date-time}
+        stop: {type: string, format: date-time}
+        status: {type: string, enum: [current, upcoming, ended]}
+        replay: {type: boolean}
+        live_evidence: {type: boolean}
+        grouping_evidence: {type: string}
+        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}}
+    SportsEventsPage:
+      type: object
+      required: [as_of, date, timezone, events, total, limit, offset, sports, coverage, truncated]
+      properties:
+        as_of: {type: string, format: date-time}
+        date: {type: string}
+        timezone: {type: string}
+        events: {type: array, items: {$ref: '#/components/schemas/SportsEvent'}}
+        total: {type: integer}
+        limit: {type: integer}
+        offset: {type: integer}
+        truncated: {type: boolean}
+        sports:
+          type: array
+          items:
+            type: object
+            required: [name, count]
+            properties:
+              name: {type: string}
+              count: {type: integer}
+        coverage:
+          type: object
+          required: [eligible_channels, channels_with_sports_schedule]
+          properties:
+            eligible_channels: {type: integer}
+            channels_with_sports_schedule: {type: integer}
+
 paths:
   /auth/login:
     post:
@@ -509,6 +561,23 @@ paths:
     get: { summary: Languages present with counts, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { type: object, properties: { code: {type: string}, name: {type: string}, count: {type: integer} } } } } } } } }
   /channels/{id}:
     patch: { summary: User override (number, language, group, epg_id), parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Channel' } } } }, responses: { '200': { description: ok } } }
+  /sports/events:
+    get:
+      parameters:
+        - {in: query, name: date, schema: {type: string, format: date}}
+        - {in: query, name: timezone, schema: {type: string, default: America/New_York}}
+        - {in: query, name: status, schema: {type: string, enum: [all, current, upcoming, replay], default: all}}
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsEventsPage'}
   /sports:
     get:
       tags: [live]

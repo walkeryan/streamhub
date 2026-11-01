@@ -1479,6 +1479,50 @@ export interface paths {
         };
         trace?: never;
     };
+    "/sports/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    date?: string;
+                    timezone?: string;
+                    status?: "all" | "current" | "upcoming" | "replay";
+                    language?: string;
+                    sport?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsEventsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sports": {
         parameters: {
             query?: never;
@@ -2735,6 +2779,49 @@ export interface components {
             coverage: {
                 eligible_channels: number;
                 channels_with_current_schedule: number;
+            };
+        };
+        SportsEventFeed: {
+            channel_id: string;
+            channel_name: string;
+            source_id: string;
+            source_name: string;
+            programme_id: string;
+            language?: string | null;
+            language_verified: boolean;
+        };
+        SportsEvent: {
+            id: string;
+            title: string;
+            sport: string;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            stop: string;
+            /** @enum {string} */
+            status: "current" | "upcoming" | "ended";
+            replay: boolean;
+            live_evidence: boolean;
+            grouping_evidence: string;
+            feeds: components["schemas"]["SportsEventFeed"][];
+        };
+        SportsEventsPage: {
+            /** Format: date-time */
+            as_of: string;
+            date: string;
+            timezone: string;
+            events: components["schemas"]["SportsEvent"][];
+            total: number;
+            limit: number;
+            offset: number;
+            truncated: boolean;
+            sports: {
+                name: string;
+                count: number;
+            }[];
+            coverage: {
+                eligible_channels: number;
+                channels_with_sports_schedule: number;
             };
         };
     };

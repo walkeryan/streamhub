@@ -330,3 +330,17 @@ h1, h2, h3, p { margin: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .feature-card[data-focused='true'] { transform: none; } }
 .feature-copy > .badge { align-self: flex-start; }
+
+/* EPG event rails: one remote target per event, explicit feeds in a modal. */
+.sports-events-section { margin-block: 2rem; }
+.sports-event-rail { display: flex; gap: 1.4rem; overflow-x: auto; padding: .55rem .45rem 1rem; scroll-padding-inline: .5rem; }
+.sports-event-item { flex: 0 0 clamp(15rem, 22vw, 20rem); min-width: 0; }
+.sports-event-card { display: flex; flex-direction: column; min-height: 18rem; border-radius: 1.3rem; background: var(--t-surface); border: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); overflow: hidden; }
+.sports-event-card[data-focused='true'] { outline-width: .3rem; outline-offset: .15rem; }
+.sports-event-header { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 1rem; }
+.sports-event-title { padding: .8rem 1.2rem 1.5rem; font-size: 1.45rem; font-weight: 750; line-height: 1.3; flex: 1; overflow-wrap: anywhere; }
+.sports-event-footer { display: flex; gap: .5rem; justify-content: space-between; padding: 1rem 1.2rem; border-top: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); background: color-mix(in srgb, var(--t-surface) 86%, var(--t-text)); }
+.sports-event-caption { padding: .65rem .2rem 0; line-height: 1.6; }
+.sports-live-badge { background: #9b1232; color: white; }
+.sports-feed-option { padding: .8rem 0; border-bottom: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); display: flex; flex-direction: column; gap: .5rem; }
+@media (max-width: 540px) { .sports-event-item { flex-basis: min(17rem, 82vw); } }
