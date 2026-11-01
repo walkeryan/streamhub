@@ -135,11 +135,11 @@ async def test_expired_state_and_handoff_no_open_redirect(api: Api) -> None:
     url, browser = api.c.google_auth.start("https://evil.test")
     state = parse_qs(urlsplit(url).query)["state"][0]
     tx = api.c.google_auth.transactions[state]
-    assert tx[-1] == "/"
+    assert tx[4] == "/"
     api.c.google_auth.transactions[state] = (0, *tx[1:])
     with pytest.raises(Unauthorized):
         await api.c.google_auth.finish(state, browser, "code")
-    api.c.google_auth.handoffs["expired"] = (0, api.profile_id, "/")
+    api.c.google_auth.handoffs["expired"] = (0, api.profile_id, "/", None)
     with pytest.raises(Unauthorized):
         await api.c.google_auth.consume("expired", "https://streamhub.ryan-walker.dev")
     with pytest.raises(Forbidden):
@@ -199,4 +199,4 @@ async def test_pairing_code_survives_google_without_open_redirect(api: Api) -> N
     for destination in ("//evil.test", "/pair?code=ABC123&next=https://evil.test", "/pair?code=<script>"):
         url, _ = api.c.google_auth.start(destination)
         state = parse_qs(urlsplit(url).query)["state"][0]
-        assert api.c.google_auth.transactions[state][-1] == "/"
+        assert api.c.google_auth.transactions[state][4] == "/"

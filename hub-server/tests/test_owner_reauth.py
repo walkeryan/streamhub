@@ -70,3 +70,39 @@ async def test_binding_cancel_expiry_and_single_use(api: Api) -> None:
     service.challenges[cid].expires = time.time() - 1
     with pytest.raises(Gone):
         await service.poll(p, cid, secret)
+
+
+@pytest.mark.parametrize("auth_time", [None, 0, True, float("inf"), time.time() + 600])
+@respx.mock
+async def test_normal_owner_login_policy_requires_fresh_proof(api: Api, auth_time: Any) -> None:
+    configure(api)
+    object.__setattr__(api.c.settings, "content_policy_enabled", True)
+    # An unauthenticated browser after app storage clearing must still provide fresh Google proof.
+    api.client.cookies.clear()
+    g = api.c.google_auth
+    url, browser = g.start("/")
+    query = parse_qs(urlsplit(url).query)
+    assert len(query["claims"]) == 1 and "auth_time" in query["claims"][0]
+    assert query["max_age"] == ["0"]
+    mock_google(query["nonce"][0], auth_time=auth_time)
+    with pytest.raises(Forbidden):
+        await g.finish(query["state"][0], browser, "code")
+    assert not g.handoffs
+
+
+@respx.mock
+async def test_normal_owner_proof_survives_handoff(api: Api) -> None:
+    configure(api)
+    object.__setattr__(api.c.settings, "content_policy_enabled", True)
+    g = api.c.google_auth
+    url, browser = g.start("/")
+    query = parse_qs(urlsplit(url).query)
+    authenticated = int(time.time())
+    mock_google(query["nonce"][0], auth_time=authenticated)
+    handoff, destination = await g.finish(query["state"][0], browser, "code")
+    assert destination == "/"
+    profile = await g.consume(handoff, g.origin)
+    assert getattr(profile, "_owner_auth_time", None) == authenticated
+    assert getattr(await api.c.auth.get_profile(profile.id), "_owner_auth_time", None) is None
+    with pytest.raises(Unauthorized):
+        await g.consume(handoff, g.origin)
