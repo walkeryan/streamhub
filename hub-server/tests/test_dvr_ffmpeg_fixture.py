@@ -6,6 +6,7 @@ import asyncio
 import os
 import shutil
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 
@@ -106,7 +107,7 @@ async def test_real_ffmpeg_archive_window_and_seek(api, tmp_path, monkeypatch, p
         rows = [line.split(",") for line in frames.decode().splitlines() if line and not line.startswith("#")]
         assert len(rows) >= 2
         timestamps = [int(row[2]) for row in rows]
-        assert all(a < b for a, b in zip(timestamps, timestamps[1:]))
+        assert all(a < b for a, b in pairwise(timestamps))
         assert len({row[-1].strip() for row in rows}) >= 2
     assert (await api.post("/playback/buffer/release", json=body)).status_code == 204
     assert not api.c.proxy._hls and not list(root.iterdir())
