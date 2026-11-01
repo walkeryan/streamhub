@@ -243,3 +243,25 @@ async def test_expired_seek_does_not_restart_and_segments_bind_exact_grant(api, 
     assert processes[0].stopped
     assert (await api.client.get(seek_url)).status_code == 410
     assert len(processes) == 1 and not manager.leases
+
+
+async def test_cancel_racing_process_creation_reconciles_owned_child(dvr_harness, monkeypatch):
+    proxy, manager, _, processes, _, _ = dvr_harness
+    created, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed_spawn(*args, **kwargs):
+        process = Process()
+        processes.append(process)
+        created.set()
+        await release.wait()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+    task = asyncio.create_task(lease(proxy))
+    await created.wait()
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert processes[0].stopped and not proxy._hls and manager.key is None
+    assert not list(manager.root.iterdir())

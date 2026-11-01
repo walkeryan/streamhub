@@ -640,14 +640,34 @@ class StreamProxy:
                         vaapi_device=self.vaapi_device,
                         buffered=buffered,
                     )
-                    try:
-                        proc = await asyncio.create_subprocess_exec(
+                    spawn = asyncio.create_task(
+                        asyncio.create_subprocess_exec(
                             *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
                         )
+                    )
+                    try:
+                        proc = await asyncio.shield(spawn)
                     except BaseException:
-                        if buffered:
-                            self.dvr.stopped(key)
-                            shutil.rmtree(workdir)
+                        # Cancellation can race subprocess creation. Reconcile the owned
+                        # spawn before releasing its slot or removing its output directory.
+                        try:
+                            created = await spawn
+                        except Exception:
+                            if buffered:
+                                self.dvr.stopped(key)
+                                shutil.rmtree(workdir)
+                        else:
+                            abandoned = HlsSession(
+                                sid=sid,
+                                workdir=workdir,
+                                proc=created,
+                                source_id=source_id,
+                                last_access=self._clock(),
+                            )
+                            abandoned.stderr_task = asyncio.create_task(self._drain_hls_stderr(abandoned))
+                            self._hls[key] = abandoned
+                            # Failure to confirm termination retains the occupied slot.
+                            await self._stop_hls(key, expected=abandoned)
                         raise
                     sess = HlsSession(
                         sid=sid, workdir=workdir, proc=proc, source_id=source_id, last_access=self._clock()

@@ -163,6 +163,7 @@ async def test_concurrent_same_channel_waits_for_shared_startup(harness, monkeyp
     proxy, _, processes, _ = harness
     started = asyncio.Event()
     ready = asyncio.Event()
+    awaiting_playlist = asyncio.Event()
 
     async def spawn(*args, **kwargs):
         proc = Process()
@@ -171,6 +172,7 @@ async def test_concurrent_same_channel_waits_for_shared_startup(harness, monkeyp
         return proc
 
     async def wait_for_playlist(_):
+        awaiting_playlist.set()
         await ready.wait()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
@@ -178,7 +180,7 @@ async def test_concurrent_same_channel_waits_for_shared_startup(harness, monkeyp
     first = asyncio.create_task(start(proxy, "one"))
     await started.wait()
     second = asyncio.create_task(start(proxy, "one"))
-    await asyncio.sleep(0)
+    await awaiting_playlist.wait()
     assert not first.done() and not second.done() and len(processes) == 1
     (proxy._hls["one"].workdir / "index.m3u8").write_text("#EXTM3U\n#EXTINF:2,\nseg.ts\n")
     ready.set()
