@@ -73,7 +73,7 @@ async def test_single_owned_hls_upstream_shared_and_window_is_real(dvr_harness):
     second = await lease(proxy, "other")
     assert len(processes) == 1
     args = args_seen[0]
-    assert args[args.index("-hls_list_size") + 1] == "1800"
+    assert args[args.index("-hls_list_size") + 1] == "1862"
     assert "program_date_time" in args[args.index("-hls_flags") + 1]
     assert first["window"]["buffered_seconds"] == 2 and first["window"]["target_seconds"] == 3600
     key = manager.key

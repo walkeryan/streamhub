@@ -26,7 +26,7 @@ from urllib.parse import urljoin
 import httpx
 
 from app.infra.logging import redact_url
-from app.proxy.dvr import DvrManager
+from app.proxy.dvr import MAX_SEGMENTS, DvrManager
 from app.services.errors import Conflict, Forbidden, ServiceError
 
 log = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ def ffmpeg_args(
         "-hls_time",
         "2",
         "-hls_list_size",
-        "1800" if buffered else "6" if live else "0",
+        str(MAX_SEGMENTS) if buffered else "6" if live else "0",
         "-hls_flags",
         flags,
         "-hls_segment_filename",

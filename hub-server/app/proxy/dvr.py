@@ -24,6 +24,9 @@ from app.services.errors import Conflict, Forbidden, Gone, ServiceError
 MAX_VOLUME = 12 * GIB
 PARENT_RESERVE = 5 * GIB
 HEADROOM = 256 * 1024**2
+# A full sealed hour plus bounded segment/edge rounding, never a larger quota.
+RETENTION_SECONDS = 3660
+MAX_SEGMENTS = 1862
 
 
 @dataclass(frozen=True)
@@ -161,7 +164,6 @@ class DvrManager:
         duration = 0.0
         segments: list[DvrSegment] = []
         now = self.now()
-        cutoff = now - timedelta(hours=1)
         for line in playlist.read_text().splitlines():
             if line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
                 start = datetime.fromisoformat(line.split(":", 1)[1].replace("Z", "+00:00"))
@@ -178,9 +180,7 @@ class DvrManager:
                 path = self.directory / line
                 if path.is_symlink():
                     raise ServiceError("DVR segment cannot be a symbolic link.")
-                if start < cutoff:
-                    path.unlink(missing_ok=True)
-                elif path.is_file():
+                if path.is_file():
                     size = path.stat().st_size
                     if size > 64 * 1024**2:
                         raise ServiceError("DVR segment exceeds its bounds.")
@@ -188,9 +188,21 @@ class DvrManager:
                         raise ServiceError("DVR timeline reset requires a new session.")
                     segments.append(DvrSegment(int(match.group(1)), line, start, end, size))
                 start, duration = end, 0
+        past = [segment for segment in segments if segment.end <= now]
+        if past:
+            cutoff = past[-1].end - timedelta(seconds=RETENTION_SECONDS)
+            retained = []
+            for segment in segments:
+                if segment.end <= cutoff:
+                    (self.directory / segment.name).unlink(missing_ok=True)
+                else:
+                    retained.append(segment)
+            segments = retained
         used = sum(segment.size for segment in segments)
-        while segments and (used > proof.capacity - HEADROOM or len(segments) > 1800):
-            old = segments.pop(0)
+        while segments and (used > proof.capacity - HEADROOM or len(segments) > MAX_SEGMENTS):
+            # Startup bursts must not evict actual past history in favour of
+            # future media. Storage bounds remain authoritative in both cases.
+            old = segments.pop(-1 if segments[-1].end > now else 0)
             (self.directory / old.name).unlink(missing_ok=True)
             used -= old.size
         # A startup burst can seal media faster than wall time. Keep it bounded

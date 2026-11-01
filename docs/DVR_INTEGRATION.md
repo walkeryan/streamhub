@@ -69,3 +69,11 @@ verified before claiming the requested guarantee is complete.
 ## Approved defaults, release still held
 
 On November 1 the owner approved the bounded 12 GiB watched-channel buffer and cleanup after the last viewer leaves, with a 60-minute target and explicit high-bitrate capacity limits. This approves the proposed defaults; no storage has been created or recording enabled. Complete integration, verified quota/mount mapping, resource admission and actual acceptance remain release gates. The implementation remains disabled by default.
+
+Retention correction: retain the actual sealed live edge minus 60 minutes with up
+to 60 seconds plus one segment of rounding margin (under 62 minutes for accepted
+segments). Buffered HLS manifests allow 1,862 segments. The 12 GiB quota and producer
+headroom remain unchanged and override the time target. Future-dated burst output
+cannot define the retention cutoff or displace actual past history under the
+count/byte bound. Seek(end−3600) is the primary full-hour check; seek(now−3600) is
+reported separately. A stalled input cannot promise a current wall-clock live edge.
