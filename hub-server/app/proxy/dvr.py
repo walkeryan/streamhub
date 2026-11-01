@@ -160,7 +160,8 @@ class DvrManager:
         start: datetime | None = None
         duration = 0.0
         segments: list[DvrSegment] = []
-        cutoff = self.now() - timedelta(hours=1)
+        now = self.now()
+        cutoff = now - timedelta(hours=1)
         for line in playlist.read_text().splitlines():
             if line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
                 start = datetime.fromisoformat(line.split(":", 1)[1].replace("Z", "+00:00"))
@@ -181,7 +182,7 @@ class DvrManager:
                     path.unlink(missing_ok=True)
                 elif path.is_file():
                     size = path.stat().st_size
-                    if size > 64 * 1024**2 or end > self.now() + timedelta(seconds=2):
+                    if size > 64 * 1024**2:
                         raise ServiceError("DVR segment exceeds its bounds.")
                     if segments and start < segments[-1].end:
                         raise ServiceError("DVR timeline reset requires a new session.")
@@ -192,7 +193,9 @@ class DvrManager:
             old = segments.pop(0)
             (self.directory / old.name).unlink(missing_ok=True)
             used -= old.size
-        self.segments = segments
+        # A startup burst can seal media faster than wall time. Keep it bounded
+        # on disk, but expose only complete past segments; never invent history.
+        self.segments = [segment for segment in segments if segment.end <= now]
 
     def window(self, key: str) -> dict[str, Any]:
         self.refresh(key)
