@@ -80,3 +80,23 @@ def normalise_title(title: str) -> str:
     t = t.lower().replace("&", " and ")
     t = re.sub(r"^(the|a|an)\s+", "", t.strip())
     return _NON_ALNUM.sub(" ", t).strip()
+
+
+_DISPLAY_PREFIX = re.compile(
+    r"^\s*(?:4K|3D|UHD|FHD|HD|SD|EN|ENG|FR|FRA|DE|DEU|ES|ESP|IT|ITA|PT|NL|US|UK|"
+    r"NETFLIX|AMAZON|HBO|DISNEY|D\+)\s*[|:–-]\s*",
+    re.IGNORECASE,
+)
+
+
+def clean_display_title(title: str) -> str:
+    """Remove explicit provider decorations, without pretending to know canonical metadata."""
+    cleaned = title.strip()
+    for _ in range(6):
+        updated = _DISPLAY_PREFIX.sub("", cleaned, count=1)
+        if updated == cleaned:
+            break
+        cleaned = updated
+    cleaned = re.sub(r"\s*\[(?:4K|HD|FHD|UHD|1080p|2160p)\]\s*$", "", cleaned, flags=re.I)
+    cleaned = _YEAR_RE.sub("", cleaned).strip()
+    return cleaned or title

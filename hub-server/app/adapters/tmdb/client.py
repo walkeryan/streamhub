@@ -144,8 +144,10 @@ class TmdbClient:
 
     async def search(self, query: str, limit: int = 20) -> list[MetaTitle]:
         data = await self._get("/search/multi", TTL_SEARCH, query=query, include_adult="false")
+        if data is None:
+            raise RuntimeError("Metadata search unavailable")
         out: list[MetaTitle] = []
-        for r in (data or {}).get("results") or []:
+        for r in data.get("results") or []:
             m = to_meta(r)
             if m:
                 out.append(m)

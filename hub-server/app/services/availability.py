@@ -45,22 +45,43 @@ class AvailabilityService:
             conds.append(Title.tmdb_id == tmdb_id)
         if imdb_id:
             conds.append(Title.imdb_id == imdb_id)
-        if title:
-            norm = ids.normalise_title(title)
-            if norm:
-                yc = Title.year.is_(None) if year is None else or_(Title.year == year, Title.year.is_(None))
-                conds.append(and_(Title.tmdb_id.is_(None), Title.norm_title == norm, yc))
+        # Without an external ID, require the same known year and exact cleaned
+        # title. Fuzzy search is for discovery, never for selecting a playable source.
+        norm = ids.normalise_title(ids.clean_display_title(title or ""))
+        if norm and year is not None:
+            conds.append(
+                and_(
+                    Title.tmdb_id.is_(None),
+                    Title.imdb_id.is_(None),
+                    Title.year == year,
+                    Title.norm_title.like(f"%{norm.replace('%', '').replace('_', '')}%"),
+                )
+            )
         if not conds:
             return []
         async with self._db.session() as s:
-            rows = (
-                await s.execute(
-                    select(Title)
-                    .join(Source, Source.id == Title.source_id)
-                    .where(Title.kind.in_(kinds), or_(*conds), Source.enabled.is_(True))
-                )
-            ).scalars()
-            return list(rows)
+            rows = list(
+                (
+                    await s.execute(
+                        select(Title)
+                        .join(Source, Source.id == Title.source_id)
+                        .where(Title.kind.in_(kinds), or_(*conds), Source.enabled.is_(True))
+                    )
+                ).scalars()
+            )
+        return [
+            row
+            for row in rows
+            if (tmdb_id and row.tmdb_id == tmdb_id)
+            or (imdb_id and row.imdb_id == imdb_id and not (tmdb_id and row.tmdb_id and row.tmdb_id != tmdb_id))
+            or (
+                not row.tmdb_id
+                and not row.imdb_id
+                and year is not None
+                and row.year == year
+                and ids.normalise_title(ids.clean_display_title(row.title)) == norm
+            )
+        ]
 
     async def provider_offers(self, media_type: str, tmdb_id: int, region: str) -> list[Availability]:
         """Cached per (title, region) in the availability table; refreshed via the TMDB cache."""

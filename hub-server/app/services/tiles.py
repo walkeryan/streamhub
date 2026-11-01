@@ -107,8 +107,6 @@ def subtitle_for(row: Title) -> str | None:
         s = f"S{row.season_number or 0:02d}E{row.episode_number or 0:02d}"
         gp = (row.extra or {}).get("grandparent_title") or (row.extra or {}).get("series_name")
         return f"{gp} · {s}" if gp else s
-    if row.kind in ("vod", "series") and row.group_name:
-        return row.group_name
     return None
 
 
@@ -139,7 +137,7 @@ class TileContext:
         return {
             "id": hub,
             "kind": kind,
-            "title": row.title,
+            "title": ids.clean_display_title(row.title) if ids.tmdb_type_for_kind(row.kind) else row.title,
             "subtitle": subtitle_for(row),
             "year": row.year,
             "poster": self.image(src, row.poster),

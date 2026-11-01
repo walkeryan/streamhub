@@ -23,7 +23,7 @@ from app.services.context import absolute
 from app.services.errors import NotFound
 from app.services.search_match import CANDIDATE_LIMIT, anchors, search_tokens, token_match_rank
 from app.services.sources import LAZY_GEN, SourceService, item_row, upsert_titles
-from app.services.tiles import TileContext, hub_id_for_title, meta_tile, row_to_item
+from app.services.tiles import TileContext, badge_for_source, hub_id_for_title, meta_tile, row_to_item, sort_badges
 
 log = logging.getLogger(__name__)
 
@@ -626,41 +626,103 @@ class CatalogService:
                 if (rank := token_match_rank(tokens, row.norm_title)) is not None
             ]
             rows.extend(row for _, row in sorted(ranked, key=lambda pair: (pair[0], pair[1].norm_title, pair[1].id)))
-        play_here = ctx.merge(ctx.title_tile(r) for r in rows)
-        seen = {t["id"] for t in play_here}
-        open_in_app: list[dict[str, Any]] = []
-        if self.meta.enabled and not languages and not source_id and ({"movie", "show"} & want):
-            metas = await self.meta.search(q, limit=20)
-            results = await asyncio.gather(
-                *[
-                    self.availability.badges_for(
-                        m.media_type,
-                        tmdb_id=m.tmdb_id,
-                        imdb_id=m.imdb_id,
-                        title=m.title,
-                        year=m.year,
-                        sources=ctx.sources,
-                        is_in_app=ctx.is_in_app,
-                    )
+        local_tiles = ctx.merge(ctx.title_tile(r) for r in rows)
+        combined = {tile["id"]: tile for tile in local_tiles}
+        metadata_available = False
+        popularity: dict[str, float] = {}
+        note = "Metadata discovery is not configured; searching your sources only."
+        if self.meta.enabled and ({"movie", "show", "vod", "series"} & want):
+            try:
+                metas = await self.meta.search(q, limit=40)
+                metadata_available = True
+                note = "Metadata coverage varies. Language and source filters limit availability, not discovery."
+                metas = [
+                    m
                     for m in metas
+                    if (m.media_type == "movie" and {"movie", "vod"} & want)
+                    or (m.media_type == "tv" and {"show", "series"} & want)
                 ]
+                by_id = {ids.tmdb_id(m.media_type, m.tmdb_id): m for m in metas}
+                # Resolve IDs on the bounded local result page; translated provider
+                # labels must not replace the metadata title/artwork.
+                missing = [
+                    (ids.tmdb_type_for_kind(r.kind), r.tmdb_id)
+                    for r in rows
+                    if r.tmdb_id and ids.tmdb_type_for_kind(r.kind) and hub_id_for_title(r) not in by_id
+                ]
+                missing = list(dict.fromkeys(missing))[:20]
+                details = await asyncio.gather(
+                    *(self.meta.details(kind, tid) for kind, tid in missing if kind is not None), return_exceptions=True
+                )
+                for detail in details:
+                    if detail is not None and not isinstance(detail, BaseException):
+                        by_id[ids.tmdb_id(detail.media_type, detail.tmdb_id)] = detail
+                for hub, meta in by_id.items():
+                    popularity[hub] = meta.popularity
+                    matches = await self.availability.library_matches(
+                        meta.media_type, tmdb_id=meta.tmdb_id, imdb_id=meta.imdb_id, title=meta.title, year=meta.year
+                    )
+                    match_ids = [r.id for r in matches if r.source_id in enabled]
+                    eligible = []
+                    if match_ids:
+                        eligible_query = await self._filter_title_languages(
+                            select(Title).where(Title.id.in_(match_ids)), languages
+                        )
+                        async with self._db.session() as session:
+                            eligible = list((await session.execute(eligible_query)).scalars())
+                    badges = [
+                        badge_for_source(ctx.sources[r.source_id], in_app=ctx.is_in_app(ctx.sources[r.source_id].type))
+                        for r in eligible
+                    ]
+                    scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
+                    badges += await self.availability.handoff_badges(meta.media_type, meta.tmdb_id, scoped_sources)
+                    for row in eligible:
+                        combined.pop(hub_id_for_title(row), None)
+                    combined[hub] = meta_tile(
+                        meta, sort_badges(badges, ctx.sources), ctx.favorites, ctx.progress_pct(hub)
+                    )
+            except Exception:
+                log.warning("Metadata discovery unavailable", exc_info=False)
+                note = "Metadata discovery is temporarily unavailable; showing source matches."
+                metadata_available = False
+
+        def relevance(tile: dict[str, Any]) -> tuple[Any, ...]:
+            title_norm = ids.normalise_title(tile["title"])
+            token_rank = token_match_rank(tokens, title_norm) if tokens else None
+            rank = (
+                0
+                if title_norm == norm
+                else 1
+                if title_norm.startswith(norm + " ")
+                else 2
+                if norm in title_norm
+                else 3 + token_rank
+                if token_rank is not None
+                else 7
             )
-            for m, (badges, _) in zip(metas, results, strict=True):
-                hub = ids.tmdb_id(m.media_type, m.tmdb_id)
-                tile = meta_tile(m, badges, ctx.favorites, ctx.progress_pct(hub))
-                if hub in seen:
-                    continue
-                if any(b["playable_in_app"] for b in badges):
-                    play_here.append(tile)
-                    seen.add(hub)
-                elif badges:
-                    open_in_app.append(tile)
+            return (
+                rank,
+                0 if tile["id"].startswith("tmdb:") else 1,
+                -popularity.get(tile["id"], 0),
+                len(title_norm),
+                title_norm,
+                tile["id"],
+            )
+
+        ordered = sorted(combined.values(), key=relevance)[:limit]
+        play_here = [tile for tile in ordered if any(b["playable_in_app"] for b in tile["sources"])]
+        open_in_app = [
+            tile for tile in ordered if tile["sources"] and not any(b["playable_in_app"] for b in tile["sources"])
+        ]
         channels: list[dict[str, Any]] = []
         if "channel" in want:
             chsvc = ChannelService(self._db, self.sources)
             res = await chsvc.list_channels(profile_id, q=q, language=language, source_id=source_id, limit=limit)
             channels = res["channels"]
         return {
+            "results": ordered,
+            "metadata_available": metadata_available,
+            "discovery_note": note,
             "play_here": play_here[:limit],
             "open_in_app": open_in_app[:limit],
             "channels": channels[:limit],

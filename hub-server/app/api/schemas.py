@@ -280,6 +280,9 @@ class LanguageCount(_M):
 
 
 class SearchResults(_M):
+    results: list[Tile] = Field(default_factory=list)
+    metadata_available: bool = False
+    discovery_note: str = ""
     play_here: list[Tile]
     open_in_app: list[Tile]
     channels: list[Channel]
