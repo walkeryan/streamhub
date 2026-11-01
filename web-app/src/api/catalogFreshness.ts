@@ -4,7 +4,7 @@ import { api, unwrap } from './client'
 import type { Source } from './types'
 import { useSession } from '../store/session'
 
-const CATALOG_KEYS = new Set(['home', 'channels', 'channel-groups', 'channel-languages', 'browse', 'browse-categories', 'browse-languages', 'browse-genres', 'search', 'title', 'epg', 'sports'])
+const CATALOG_KEYS = new Set(['home', 'discover', 'channels', 'channel-groups', 'channel-languages', 'browse', 'browse-categories', 'browse-languages', 'browse-genres', 'search', 'title', 'playback-options', 'epg', 'sports'])
 function fingerprint(sources: Source[]) {
   return JSON.stringify([...sources].sort((a, b) => a.id.localeCompare(b.id)).map((source) => [
     source.id, source.enabled, source.status, source.last_sync, source.name, source.priority,

@@ -17,7 +17,7 @@ export class ApiError extends Error {
 const refreshes = new Map<string, Promise<boolean>>()
 
 async function refreshTokens(): Promise<boolean> {
-  const { refresh, setSession, clear } = useSession.getState()
+  const { refresh, refreshSession, clear, generation } = useSession.getState()
   if (!refresh) return false
   const existing = refreshes.get(refresh)
   if (existing) return existing
@@ -32,10 +32,10 @@ async function refreshTokens(): Promise<boolean> {
       const t = (await res.json()) as AuthTokens
       // A pending refresh must not restore a logged-out or replaced profile.
       if (useSession.getState().refresh !== refresh) return false
-      setSession(t.access_token, t.refresh_token, t.profile)
+      if (!refreshSession(t.access_token, t.refresh_token, t.profile, refresh, generation)) throw new Error('Refresh session changed')
       return true
     } catch {
-      if (useSession.getState().refresh === refresh) clear()
+      if (useSession.getState().refresh === refresh && useSession.getState().generation === generation) clear()
       return false
     } finally {
       window.setTimeout(() => refreshes.delete(refresh), 0)
@@ -54,7 +54,7 @@ function withAuth(req: Request): Request {
 }
 
 /** fetch wrapper: bearer auth + single refresh-and-retry on 401. */
-const authedFetch = async (input: Request): Promise<Response> => {
+export const authenticatedFetch = async (input: Request): Promise<Response> => {
   const initialProfile = useSession.getState().profile?.id
   const initialRefresh = useSession.getState().refresh
   const retry = input.clone()
@@ -65,7 +65,7 @@ const authedFetch = async (input: Request): Promise<Response> => {
   return res
 }
 
-export const api = createClient<paths>({ baseUrl: API_BASE, fetch: authedFetch })
+export const api = createClient<paths>({ baseUrl: API_BASE, fetch: authenticatedFetch })
 
 /** Unwraps an openapi-fetch result, throwing ApiError on failure. */
 export async function unwrap<T>(p: Promise<{ data?: unknown; error?: unknown; response: Response }>): Promise<T> {

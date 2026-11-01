@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import ColumnElement, Select, case, func, literal, or_, select, true
+from sqlalchemy import ColumnElement, Select, String, case, cast, func, literal, or_, select, text, true
 
 from app.adapters.language.inferrer import lang_from_flag, lang_from_group, normalise_code
 from app.domain.entities import CatalogItem, MediaKind
@@ -20,10 +20,10 @@ from app.infra.models import Channel, Favorite, Profile, Progress, Source, Title
 from app.services import ids
 from app.services.availability import ATTRIBUTION, AvailabilityService
 from app.services.context import absolute
-from app.services.errors import NotFound
+from app.services.errors import BadGateway, Forbidden, NotFound
 from app.services.search_match import CANDIDATE_LIMIT, anchors, search_tokens, token_match_rank
 from app.services.sources import LAZY_GEN, SourceService, item_row, upsert_titles
-from app.services.tiles import TileContext, hub_id_for_title, meta_tile, row_to_item
+from app.services.tiles import TileContext, badge_for_source, hub_id_for_title, meta_tile, row_to_item, sort_badges
 
 log = logging.getLogger(__name__)
 
@@ -55,10 +55,13 @@ class CatalogService:
         self.sources = sources
         self.availability = availability
         self.meta = meta
+        self._metadata_slots = asyncio.Semaphore(6)
+
+    content_policy: Any = None
 
     # ------------------------------------------------------------------ context
-    def image_fn(self, srcs: dict[str, Source]) -> Callable[[Source | None, str | None], str | None]:
-        def image(src: Source | None, url: str | None) -> str | None:
+    def image_fn(self, srcs: dict[str, Source]) -> Callable[[Source | None, str | None, str | None], str | None]:
+        def image(src: Source | None, url: str | None, ref: str | None = None) -> str | None:
             if not url or src is None:
                 return url
             try:
@@ -66,7 +69,12 @@ class CatalogService:
             except Exception:
                 return url
             if isinstance(prov, ImageAuthProvider) and prov.image_headers(url) is not None:
-                token = self._crypto.sign_json({"s": src.id, "u": url})
+                from app.services.image_grants import image_payload
+
+                payload = image_payload(src.id, url, ref, self.content_policy)
+                if payload is None:
+                    return None
+                token = self._crypto.sign_json(payload)
                 return absolute(f"/api/v1/images/{token}")
             return url
 
@@ -291,7 +299,7 @@ class CatalogService:
                 if merged:
                     return merged
             return await self._lib_detail(row, ctx)
-        if h.scheme == "tmdb" and h.b.isdigit():
+        if h.scheme == "tmdb" and h.a in {"movie", "tv"} and h.b.isdigit():
             d = await self._tmdb_detail(h.a, int(h.b), ctx)
             if d:
                 return d
@@ -324,7 +332,13 @@ class CatalogService:
         self, media_type: str, tmdb_id: int, ctx: TileContext, preferred: Title | None = None
     ) -> dict[str, Any] | None:
         hub = ids.tmdb_id(media_type, tmdb_id)
-        meta = await self.meta.details(media_type, tmdb_id) if self.meta.enabled else None
+        try:
+            async with asyncio.timeout(8):
+                meta = await self.meta.details(media_type, tmdb_id) if self.meta.enabled else None
+        except Exception:
+            meta = None
+        if meta and (meta.media_type != media_type or meta.tmdb_id != tmdb_id):
+            meta = None
         badges, matches = await self.availability.badges_for(
             media_type,
             tmdb_id=tmdb_id,
@@ -342,7 +356,9 @@ class CatalogService:
         if meta is None and not matches:
             return None
         if meta is not None:
-            tile = meta_tile(meta, badges, ctx.favorites, ctx.progress_pct(hub))
+            refs = [ids.lib_id(m.source_id, m.ext_id) for m in matches]
+            tile = meta_tile(meta, badges, ctx.favorites, ctx.progress_pct(hub, *refs))
+            tile["is_favorite"] = hub in ctx.favorites or any(ref in ctx.favorites for ref in refs)
             detail = {
                 **tile,
                 "overview": meta.overview or "",
@@ -357,6 +373,9 @@ class CatalogService:
             primary = matches[0]
             tile = ctx.title_tile(primary)
             tile["sources"] = badges
+            refs = [ids.lib_id(m.source_id, m.ext_id) for m in matches]
+            tile["is_favorite"] = hub in ctx.favorites or any(ref in ctx.favorites for ref in refs)
+            tile["progress_pct"] = ctx.progress_pct(hub, *refs)
             detail = await self._lib_detail(primary, ctx, base=tile)
             detail["id"] = hub
             return detail
@@ -369,6 +388,90 @@ class CatalogService:
         if not detail.get("poster") and matches:
             detail["poster"] = ctx.title_tile(matches[0])["poster"]
         return detail
+
+    async def discover(
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        page: int = 1,
+        sort: str = "popular",
+        year: int | None = None,
+        language: str | None = None,
+        source_id: str | None = None,
+    ) -> dict[str, Any]:
+        media_type = {"movies": "movie", "shows": "tv"}.get(section)
+        if media_type is None:
+            raise NotFound("Unknown discovery section")
+        if not self.meta.enabled:
+            raise BadGateway(
+                "Connect metadata in Settings to discover movies and series. Your library remains available."
+            )
+        policy = self.content_policy
+        if policy is None:
+            raise Forbidden("Content policy service is unavailable.", code="content_policy_unavailable")
+        restricted = policy.is_restricted(await policy.profile(profile_id))
+        ctx = await self.tile_context(profile_id)
+        enabled = self._enabled(ctx)
+        if source_id:
+            enabled = [sid for sid in enabled if sid == source_id]
+        languages = await self.preferred_languages(profile_id, language)
+        try:
+            async with asyncio.timeout(12):
+                async with self._metadata_slots:
+                    metas, total = await self.meta.discover(media_type, page, sort, year)
+                by_id = {
+                    ids.tmdb_id(meta.media_type, meta.tmdb_id): meta
+                    for meta in metas[:20]
+                    if meta.media_type == media_type
+                }
+                # Restricted discovery uses verified classification only. Provider
+                # counts are not counts of permitted titles and must not be shown.
+                if restricted:
+                    allowed = await policy.allowed_refs(profile_id, list(by_id))
+                    by_id = {hub: meta for hub, meta in by_id.items() if hub in allowed}
+                matches = await self.availability.library_matches_many(list(by_id.values()))
+                match_ids = {row.id for rows in matches.values() for row in rows if row.source_id in enabled}
+                eligible_ids: set[int] = set()
+                if match_ids:
+                    query = await self._filter_title_languages(select(Title).where(Title.id.in_(match_ids)), languages)
+                    async with self._db.session() as session:
+                        eligible_ids = {row.id for row in (await session.execute(query)).scalars()}
+                scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
+
+                async def tile(hub: str, meta: Any) -> dict[str, Any]:
+                    badges = [
+                        badge_for_source(
+                            ctx.sources[row.source_id], in_app=ctx.is_in_app(ctx.sources[row.source_id].type)
+                        )
+                        for row in matches[hub]
+                        if row.id in eligible_ids
+                    ]
+                    async with self._metadata_slots:
+                        badges += await self.availability.handoff_badges(media_type, meta.tmdb_id, scoped_sources)
+                    return meta_tile(meta, sort_badges(badges, ctx.sources), ctx.favorites, ctx.progress_pct(hub))
+
+                tiles = await asyncio.gather(*(tile(hub, meta) for hub, meta in by_id.items()))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise BadGateway("Metadata discovery is temporarily unavailable. Your library remains available.") from exc
+        return {
+            "tiles": tiles,
+            "page": page,
+            "page_size": 20,
+            "total": None if restricted else total,
+            "has_more": page < min(500, (total + 19) // 20),
+            "coverage_note": (
+                "Only titles with permitted, verified classifications are shown. "
+                "Pages may be sparse; a permitted total is unavailable."
+            )
+            if restricted
+            else (
+                "Metadata catalog; coverage varies. Source and language filters affect availability, "
+                "not which titles are discovered."
+            ),
+        }
 
     # ------------------------------------------------------------------ browse
     def _browse_query(
@@ -432,7 +535,7 @@ class CatalogService:
         async with self._db.session() as s:
             rows = (
                 await s.execute(
-                    query.with_only_columns(Title.group_name, func.count(Title.id))
+                    query.with_only_columns(Title.group_name, func.count(func.distinct(self._canonical_key())))
                     .group_by(Title.group_name)
                     .order_by(Title.group_name)
                 )
@@ -447,20 +550,64 @@ class CatalogService:
             raise NotFound("unknown section")
         ctx = await self.tile_context(profile_id)
         query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
-        async with self._db.session() as s:
+        async with self._db.session() as session:
+            groups = list((await session.execute(query.with_only_columns(Title.group_name).distinct())).scalars())
+            by_language: dict[str, list[str]] = {}
+            for group in groups:
+                if group is not None:
+                    by_language.setdefault(self.category_language(group), []).append(group)
+            code = (
+                case(*[(Title.group_name.in_(names), lang) for lang, names in by_language.items()], else_="und")
+                if by_language
+                else literal("und")
+            )
             rows = (
-                await s.execute(
-                    query.with_only_columns(Title.group_name, func.count(Title.id)).group_by(Title.group_name)
+                await session.execute(
+                    query.with_only_columns(code, func.count(func.distinct(self._canonical_key()))).group_by(code)
                 )
             ).all()
-        counts: dict[str, int] = {}
-        for group, count in rows:
-            code = self.category_language(group)
-            counts[code] = counts.get(code, 0) + int(count)
+        counts = {code: int(count) for code, count in rows}
         return [
             {"code": code, "name": self.sources.language.language_name(code), "count": count}
             for code, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
         ]
+
+    @staticmethod
+    def _canonical_key() -> ColumnElement[str]:
+        media_type = case((Title.kind.in_(ids.MOVIE_KINDS), "movie"), else_="tv")
+        return case(
+            (Title.tmdb_id != 0, literal("tmdb:") + media_type + ":" + cast(Title.tmdb_id, String)),
+            else_=literal("lib:") + Title.source_id + ":" + Title.ext_id,
+        )
+
+    async def _enrich_page(self, tiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Only this bounded page; existing TMDB detail cache serves repeated IDs."""
+        if not self.meta.enabled:
+            return tiles
+        semaphore = asyncio.Semaphore(6)
+
+        async def enrich(tile: dict[str, Any]) -> dict[str, Any]:
+            if not tile["id"].startswith("tmdb:"):
+                return tile
+            parsed = ids.parse(tile["id"])
+            try:
+                # Includes semaphore wait, so upstream outages cannot turn a page
+                # into 60 sequential retry windows.
+                async with asyncio.timeout(8):
+                    async with semaphore:
+                        meta = await self.meta.details(parsed.a, int(parsed.b))
+            except Exception:
+                return tile
+            if meta is None or meta.media_type != parsed.a or meta.tmdb_id != int(parsed.b):
+                return tile
+            enriched = meta_tile(meta, tile["sources"], set(), tile.get("progress_pct"))
+            enriched["is_favorite"] = tile["is_favorite"]
+            for field in ("poster", "backdrop", "logo", "rating"):
+                if enriched.get(field) is None:
+                    enriched[field] = tile.get(field)
+            return enriched
+
+        return list(await asyncio.gather(*(enrich(tile) for tile in tiles)))
 
     async def browse(
         self,
@@ -490,21 +637,75 @@ class CatalogService:
                 Title.norm_title.like("%" + _escape_like(ids.normalise_title(text_query)) + "%", escape="\\")
             )
         query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        # Count and page identities before loading variants. Merging raw pages
+        # allowed the same TMDB film to recur on later pages and inflated totals.
+        key = self._canonical_key()
+        grouped = (
+            query.with_only_columns(
+                key.label("hub"),
+                func.min(Title.norm_title).label("title_sort"),
+                func.max(Title.year).label("year_sort"),
+                func.max(Title.rating).label("rating_sort"),
+                func.max(Title.added_at).label("added_sort"),
+                func.max(Title.id).label("id_sort"),
+            )
+            .group_by(key)
+            .subquery()
+        )
         orders: dict[str, list[Any]] = {
-            "title": [Title.norm_title.asc()],
-            "year": [Title.year.desc().nulls_last(), Title.norm_title],
-            "rating": [Title.rating.desc().nulls_last(), Title.norm_title],
+            "title": [grouped.c.title_sort],
+            "year": [grouped.c.year_sort.desc().nulls_last(), grouped.c.title_sort],
+            "rating": [grouped.c.rating_sort.desc().nulls_last(), grouped.c.title_sort],
         }
-        order = orders.get(sort or "added", [Title.added_at.desc().nulls_last(), Title.id.desc()])
-        async with self._db.session() as s:
-            total = (await s.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-            rows = list(
+        order = orders.get(sort or "added", [grouped.c.added_sort.desc().nulls_last(), grouped.c.id_sort.desc()])
+        tracked = ctx.favorites | set(ctx.progress)
+        lib_key = literal("lib:") + Title.source_id + ":" + Title.ext_id
+        async with self._db.session() as session:
+            total = int((await session.execute(select(func.count()).select_from(grouped))).scalar_one())
+            hubs = list(
                 (
-                    await s.execute(query.order_by(*order, Title.id).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE))
+                    await session.execute(
+                        select(grouped.c.hub)
+                        .order_by(*order, grouped.c.hub)
+                        .offset((page - 1) * PAGE_SIZE)
+                        .limit(PAGE_SIZE)
+                    )
                 ).scalars()
             )
-        tiles = ctx.merge(ctx.title_tile(r) for r in rows)
-        return {"tiles": tiles, "page": page, "total": int(total), "has_more": page * PAGE_SIZE < int(total)}
+            if not hubs:
+                return {"tiles": [], "page": page, "total": total, "has_more": False}
+            page_query = query.where(key.in_(hubs))
+            representatives = page_query.with_only_columns(func.min(Title.id)).group_by(key, Title.source_id)
+            rows = list(
+                (
+                    await session.execute(
+                        select(Title).where(Title.id.in_(representatives)).order_by(Title.source_id, Title.id)
+                    )
+                ).scalars()
+            )
+            refs = (
+                list(
+                    (
+                        await session.execute(
+                            select(key, lib_key).where(
+                                key.in_(hubs), Title.source_id.in_(enabled), lib_key.in_(tracked)
+                            )
+                        )
+                    ).all()
+                )
+                if tracked
+                else []
+            )
+        merged = {tile["id"]: tile for tile in ctx.merge(ctx.title_tile(row) for row in rows)}
+        references: dict[str, list[str]] = {}
+        for hub, ref in refs:
+            references.setdefault(hub, []).append(ref)
+        for hub, tile in merged.items():
+            matched_refs = sorted(references.get(hub, []))
+            tile["is_favorite"] = hub in ctx.favorites or any(ref in ctx.favorites for ref in matched_refs)
+            tile["progress_pct"] = ctx.progress_pct(hub, *matched_refs)
+        tiles = await self._enrich_page([merged[hub] for hub in hubs])
+        return {"tiles": tiles, "page": page, "total": total, "has_more": page * PAGE_SIZE < total}
 
     async def genre_facets(
         self,
@@ -526,11 +727,11 @@ class CatalogService:
         if q and q.strip():
             query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
         query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
-        scoped = query.with_only_columns(Title.id, Title.genres).subquery()
+        scoped = query.with_only_columns(self._canonical_key().label("hub"), Title.genres).subquery()
         values = func.json_each(scoped.c.genres).table_valued("value", "type")
         name = func.lower(func.trim(values.c.value))
         statement = (
-            select(name.label("name"), func.count(func.distinct(scoped.c.id)))
+            select(name.label("name"), func.count(func.distinct(scoped.c.hub)))
             .select_from(scoped.join(values, true()))
             .where(values.c.type == "text", name != "")
             .group_by(name)
@@ -576,91 +777,190 @@ class CatalogService:
         if source_id:
             enabled = [sid for sid in enabled if sid == source_id]
         want = kinds or {"movie", "show", "vod", "series", "episode", "channel"}
-        lib_kinds = [k for k in ("movie", "show", "vod", "series", "episode") if k in want]
+        lib_kinds = set(want) & {"movie", "show", "vod", "series", "episode"}
+        if lib_kinds & {"movie", "vod"}:
+            lib_kinds.update(("movie", "vod"))
+        if lib_kinds & {"show", "series"}:
+            lib_kinds.update(("show", "series"))
+        tokens = search_tokens(norm)
+        words = anchors(tokens) or norm.split()[:8]
         rows: list[Title] = []
-        if norm and lib_kinds:
-            like = f"%{_escape_like(norm)}%"
+        if norm and lib_kinds and words and enabled:
+            # FTS supplies candidate IDs only. The ORM scope below still enforces
+            # enabled sources, profile classifications, kinds and language filters.
+            match = " OR ".join('"' + word.replace('"', '""') + '"*' for word in words)
+            matching_ids = text("SELECT rowid FROM title_search WHERE title_search MATCH :match").bindparams(
+                match=match
+            )
             query = select(Title).where(
-                Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.norm_title.like(like, escape="\\")
+                Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.id.in_(matching_ids)
             )
             query = await self._filter_title_languages(query, languages)
-            async with self._db.session() as s:
-                rows = list(
-                    (
-                        await s.execute(
-                            query.order_by(
-                                (Title.norm_title == norm).desc(),
-                                Title.norm_title.like(f"{_escape_like(norm)}%", escape="\\").desc(),
-                                Title.added_at.desc().nulls_last(),
-                                Title.id,
-                            ).limit(limit * 3)
-                        )
-                    ).scalars()
-                )
-        # Keep exact phrase results first. Only inspect a bounded SQL-ranked candidate
-        # set for omitted/reordered terms or one misspelled word, in the same scope.
-        tokens = search_tokens(norm)
-        anchor_words = anchors(tokens)
-        if len(rows) < limit and anchor_words and lib_kinds:
-            terms = [Title.norm_title.like(f"%{_escape_like(word)}%", escape="\\") for word in anchor_words]
-            candidates_query = select(Title).where(
-                Title.source_id.in_(enabled),
-                Title.kind.in_(lib_kinds),
-                or_(*terms),
+            normalized = func.canonical_title_key(Title.title)
+            phrase_rank = case(
+                (normalized == norm, 0),
+                (normalized.like(_escape_like(norm) + " %", escape="\\"), 1),
+                (normalized.like("%" + _escape_like(norm) + "%", escape="\\"), 2),
+                else_=3,
             )
-            candidates_query = await self._filter_title_languages(candidates_query, languages)
             score: ColumnElement[int] = literal(0)
-            for term in terms:
-                score = score + case((term, 1), else_=0)
-            async with self._db.session() as session:
-                candidates = list(
-                    (
-                        await session.execute(candidates_query.order_by(score.desc(), Title.id).limit(CANDIDATE_LIMIT))
-                    ).scalars()
-                )
-            existing = {row.id for row in rows}
-            ranked = [
-                (rank, row)
-                for row in candidates
-                if row.id not in existing
-                if (rank := token_match_rank(tokens, row.norm_title)) is not None
-            ]
-            rows.extend(row for _, row in sorted(ranked, key=lambda pair: (pair[0], pair[1].norm_title, pair[1].id)))
-        play_here = ctx.merge(ctx.title_tile(r) for r in rows)
-        seen = {t["id"] for t in play_here}
-        open_in_app: list[dict[str, Any]] = []
-        if self.meta.enabled and not languages and not source_id and ({"movie", "show"} & want):
-            metas = await self.meta.search(q, limit=20)
-            results = await asyncio.gather(
-                *[
-                    self.availability.badges_for(
-                        m.media_type,
-                        tmdb_id=m.tmdb_id,
-                        imdb_id=m.imdb_id,
-                        title=m.title,
-                        year=m.year,
-                        sources=ctx.sources,
-                        is_in_app=ctx.is_in_app,
-                    )
-                    for m in metas
-                ]
+            for word in words:
+                score = score + case((Title.norm_title.like("%" + _escape_like(word) + "%", escape="\\"), 1), else_=0)
+            work = case(
+                ((Title.tmdb_id > 0) & Title.kind.in_(("movie", "vod", "show", "series")), self._canonical_key()),
+                else_=literal("lib:") + Title.source_id + ":" + Title.ext_id,
             )
-            for m, (badges, _) in zip(metas, results, strict=True):
-                hub = ids.tmdb_id(m.media_type, m.tmdb_id)
-                tile = meta_tile(m, badges, ctx.favorites, ctx.progress_pct(hub))
-                if hub in seen:
-                    continue
-                if any(b["playable_in_app"] for b in badges):
-                    play_here.append(tile)
-                    seen.add(hub)
-                elif badges:
-                    open_in_app.append(tile)
+            # Bound expensive canonical-title UDF work after a cheap SQL pass.
+            # Budget distinct works so duplicate editions cannot crowd them out.
+            cheap_phrase = case(
+                (Title.norm_title == norm, 0),
+                (Title.norm_title.like("% " + _escape_like(norm), escape="\\"), 1),
+                (Title.norm_title.like("% " + _escape_like(norm) + " " + cast(Title.year, String), escape="\\"), 1),
+                (Title.norm_title.like("%" + _escape_like(norm) + "%", escape="\\"), 2),
+                else_=3,
+            )
+            cheap_order = (cheap_phrase, score.desc(), func.length(Title.norm_title), Title.id)
+            preliminary = query.with_only_columns(
+                Title.id.label("id"),
+                cheap_phrase.label("phrase"),
+                score.label("score"),
+                func.length(Title.norm_title).label("length"),
+                func.row_number().over(partition_by=work, order_by=cheap_order).label("edition"),
+            ).subquery()
+            candidate_ids = (
+                select(preliminary.c.id)
+                .where(preliminary.c.edition == 1)
+                .order_by(preliminary.c.phrase, preliminary.c.score.desc(), preliminary.c.length, preliminary.c.id)
+                .limit(CANDIDATE_LIMIT * 4)
+            )
+            query = select(Title).where(Title.id.in_(candidate_ids))
+            ranked = query.with_only_columns(
+                Title.id.label("id"),
+                phrase_rank.label("phrase_rank"),
+                score.label("score"),
+                func.length(normalized).label("title_length"),
+                func.row_number()
+                .over(partition_by=work, order_by=(phrase_rank, score.desc(), func.length(normalized), Title.id))
+                .label("edition_rank"),
+            ).subquery()
+            representatives = (
+                select(ranked.c.id)
+                .where(ranked.c.edition_rank == 1)
+                .order_by(
+                    ranked.c.phrase_rank,
+                    ranked.c.score.desc(),
+                    ranked.c.title_length,
+                    ranked.c.id,
+                )
+                .limit(CANDIDATE_LIMIT)
+            )
+            async with self._db.session() as session:
+                rows = list((await session.execute(select(Title).where(Title.id.in_(representatives)))).scalars())
+            rows = [
+                row
+                for row in rows
+                if norm in ids.normalise_title(ids.clean_display_title(row.title))
+                or token_match_rank(tokens, ids.normalise_title(ids.clean_display_title(row.title))) is not None
+            ]
+        local_tiles = ctx.merge(ctx.title_tile(r) for r in rows)
+        combined = {tile["id"]: tile for tile in local_tiles}
+        metadata_available = False
+        metadata_incomplete = False
+        popularity: dict[str, float] = {}
+        note = "Metadata discovery is not configured; searching your sources only."
+        if self.meta.enabled and ({"movie", "show", "vod", "series"} & want):
+            try:
+                metas = await self.meta.search(q, limit=40)
+                metadata_available = True
+                note = "Metadata coverage varies. Language and source filters limit availability, not discovery."
+                metas = [
+                    m
+                    for m in metas
+                    if (m.media_type == "movie" and {"movie", "vod"} & want)
+                    or (m.media_type == "tv" and {"show", "series"} & want)
+                ]
+                by_id = {ids.tmdb_id(m.media_type, m.tmdb_id): m for m in metas}
+                # Resolve IDs on the bounded local result page; translated provider
+                # labels must not replace the metadata title/artwork.
+                missing = [
+                    (ids.tmdb_type_for_kind(r.kind), r.tmdb_id)
+                    for r in rows
+                    if r.tmdb_id and ids.tmdb_type_for_kind(r.kind) and hub_id_for_title(r) not in by_id
+                ]
+                missing = list(dict.fromkeys(missing))[:20]
+                details = await asyncio.gather(
+                    *(self.meta.details(kind, tid) for kind, tid in missing if kind is not None), return_exceptions=True
+                )
+                for detail in details:
+                    if detail is not None and not isinstance(detail, BaseException):
+                        by_id[ids.tmdb_id(detail.media_type, detail.tmdb_id)] = detail
+                matched = await self.availability.library_matches_many(list(by_id.values()), candidates=rows)
+                match_ids = {r.id for matches in matched.values() for r in matches if r.source_id in enabled}
+                eligible_ids: set[int] = set()
+                if match_ids:
+                    eligible_query = await self._filter_title_languages(
+                        select(Title).where(Title.id.in_(match_ids)), languages
+                    )
+                    async with self._db.session() as session:
+                        eligible_ids = {r.id for r in (await session.execute(eligible_query)).scalars()}
+                for hub, meta in by_id.items():
+                    popularity[hub] = meta.popularity
+                    eligible = [r for r in matched[hub] if r.id in eligible_ids]
+                    badges = [
+                        badge_for_source(ctx.sources[r.source_id], in_app=ctx.is_in_app(ctx.sources[r.source_id].type))
+                        for r in eligible
+                    ]
+                    scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
+                    badges += await self.availability.handoff_badges(meta.media_type, meta.tmdb_id, scoped_sources)
+                    for row in eligible:
+                        combined.pop(hub_id_for_title(row), None)
+                    combined[hub] = meta_tile(
+                        meta, sort_badges(badges, ctx.sources), ctx.favorites, ctx.progress_pct(hub)
+                    )
+            except Exception:
+                log.warning("Metadata discovery unavailable", exc_info=False)
+                note = "Metadata discovery is temporarily unavailable; showing source matches."
+                metadata_available = False
+                metadata_incomplete = True
+
+        def relevance(tile: dict[str, Any]) -> tuple[Any, ...]:
+            title_norm = ids.normalise_title(tile["title"])
+            token_rank = token_match_rank(tokens, title_norm) if tokens else None
+            rank = (
+                0
+                if title_norm == norm
+                else 1
+                if title_norm.startswith(norm + " ")
+                else 2
+                if norm in title_norm
+                else 3 + token_rank
+                if token_rank is not None
+                else 7
+            )
+            return (
+                rank,
+                0 if tile["id"].startswith("tmdb:") else 1,
+                -popularity.get(tile["id"], 0),
+                len(title_norm),
+                title_norm,
+                tile["id"],
+            )
+
+        ordered = sorted(combined.values(), key=relevance)[:limit]
+        play_here = [tile for tile in ordered if any(b["playable_in_app"] for b in tile["sources"])]
+        open_in_app = [
+            tile for tile in ordered if tile["sources"] and not any(b["playable_in_app"] for b in tile["sources"])
+        ]
         channels: list[dict[str, Any]] = []
         if "channel" in want:
             chsvc = ChannelService(self._db, self.sources)
             res = await chsvc.list_channels(profile_id, q=q, language=language, source_id=source_id, limit=limit)
             channels = res["channels"]
         return {
+            "results": ordered,
+            "metadata_available": metadata_available,
+            "metadata_incomplete": metadata_incomplete,
+            "discovery_note": note,
             "play_here": play_here[:limit],
             "open_in_app": open_in_app[:limit],
             "channels": channels[:limit],

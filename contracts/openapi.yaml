@@ -20,6 +20,57 @@ components:
         access_token: {type: string}
         refresh_token: {type: string}
         profile: { $ref: '#/components/schemas/Profile' }
+    PendingOwnerLogin:
+      type: object
+      required: [owner_pin_required, pending_token, profile]
+      properties:
+        owner_pin_required: {type: boolean, enum: [true]}
+        pending_token: {type: string, description: Memory-only pending Google capability; not an owner JWT}
+        profile: {$ref: '#/components/schemas/Profile'}
+        setup_required: {type: boolean}
+    OwnerPinChallenge:
+      type: object
+      required: [challenge_id, poll_token, expires_in]
+      properties:
+        challenge_id: {type: string}
+        poll_token: {type: string, description: Keep only in memory}
+        expires_in: {type: integer}
+    OwnerActionProof:
+      type: object
+      required: [owner_action_token, profile_id, action, expires_in]
+      properties:
+        owner_action_token: {type: string, description: One-use proof; send only as X-Owner-Action for the bound target}
+        profile_id: {type: string}
+        action: {type: string, enum: [content_policy]}
+        expires_in: {type: integer}
+    OwnerPinSetupStatus:
+      type: object
+      required: [configured, local_approval_required, setup_authorized]
+      properties:
+        configured: {type: boolean}
+        local_approval_required: {type: boolean}
+        setup_authorized: {type: boolean}
+        setup_request_id: {type: string, description: Nonsecret local approval request identifier}
+        grant_id: {type: string}
+        grant_secret: {type: string, description: Keep only in memory; never display or persist}
+    ContentPolicy:
+      type: object
+      required: [profile_id, feature_enabled, restricted, allowed_movie_codes, allowed_tv_codes, allow_unknown]
+      properties:
+        profile_id: {type: string}
+        feature_enabled: {type: boolean}
+        restricted: {type: boolean}
+        allowed_movie_codes: {type: array, items: {type: string}}
+        allowed_tv_codes: {type: array, items: {type: string}}
+        allow_unknown: {type: boolean, default: false}
+    ContentPolicyInput:
+      type: object
+      required: [restricted, allowed_movie_codes, allowed_tv_codes, allow_unknown]
+      properties:
+        restricted: {type: boolean}
+        allowed_movie_codes: {type: array, items: {type: string}}
+        allowed_tv_codes: {type: array, items: {type: string}}
+        allow_unknown: {type: boolean, default: false}
     DeviceCode:
       type: object
       required: [device_code, user_code, expires_in, interval]
@@ -40,6 +91,8 @@ components:
         theme_id: {type: string}
         languages: {type: array, items: {type: string}, description: "ISO 639-3 filter for live TV; empty = all"}
         has_pin: {type: boolean}
+        has_password: {type: boolean, description: Existing password credential available. Missing means unavailable.}
+        content_restricted: {type: boolean, description: Server policy currently restricts this profile.}
         kids: {type: boolean}
         disclaimer_accepted_version: {type: string, nullable: true}
 
@@ -130,6 +183,17 @@ components:
             episodes: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             attribution: {type: string, description: "e.g. 'Availability data by JustWatch'"}
 
+    DiscoveryPage:
+      type: object
+      required: [tiles, page, page_size, total, has_more, coverage_note]
+      properties:
+        tiles: {type: array, items: {$ref: '#/components/schemas/Tile'}}
+        page: {type: integer}
+        page_size: {type: integer, default: 20}
+        total: {type: [integer, 'null'], description: "Metadata-provider total; null for restricted profiles, never a count of playable sources."}
+        has_more: {type: boolean}
+        coverage_note: {type: string}
+
     Channel:
       type: object
       required: [id, source_id, name, number, language, group]
@@ -177,6 +241,7 @@ components:
         shared_upstreams: {type: integer, minimum: 0}
         hls_sessions: {type: integer, minimum: 0}
         http_sessions: {type: integer, minimum: 0}
+        pair_reservations: {type: integer, minimum: 0, description: Active or pending atomic multiview leases; each reserves two producers.}
         external_sessions_tracked: {type: boolean, const: false}
     PlaybackRecoveryResult:
       allOf:
@@ -192,26 +257,136 @@ components:
       required: [confirm]
       properties:
         confirm: {type: boolean, const: true}
+    PlaybackOption:
+      type: object
+      required: [variant_id, source_id, source_name, provider_label, audio_languages, audio_verified, audio_evidence, preferred_audio_available]
+      properties:
+        variant_id: {type: string}
+        source_id: {type: string}
+        source_name: {type: string}
+        provider_label: {type: string}
+        kind: {type: string}
+        year: {type: integer, nullable: true}
+        audio_languages: {type: array, items: {type: string}}
+        default_audio_language: {type: string, nullable: true, description: Verified default audio track language when known; track availability alone is not the default.}
+        audio_verified: {type: boolean}
+        audio_evidence: {type: string}
+        language_hint: {type: string, nullable: true}
+        preferred_audio_available: {type: boolean}
+    PlaybackOptions:
+      type: object
+      required: [id, preferred_languages, options, selection_required]
+      properties:
+        id: {type: string}
+        preferred_languages: {type: array, items: {type: string}}
+        options: {type: array, items: {$ref: '#/components/schemas/PlaybackOption'}}
+        automatic_variant_id: {type: string, nullable: true}
+        selection_required: {type: boolean}
     PlaybackRequest:
       type: object
       required: [id]
       properties:
         id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false)"}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
+        variant_id: {type: string, nullable: true}
+        allow_unverified_audio: {type: boolean, default: false}
+        multiview: {type: boolean, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
+        companion_id: {type: string, nullable: true, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         catchup_programme_id: {type: string, nullable: true}
+        rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
+    MultiviewRequest:
+      type: object
+      required: [panes, recovery_generation]
+      properties:
+        panes: {type: array, minItems: 2, maxItems: 2, items: {$ref: '#/components/schemas/PlaybackRequest'}}
+        recovery_generation: {type: string, maxLength: 64, description: Generation captured once for this deliberate two-pane intent.}
+    MultiviewRelease:
+      type: object
+      required: [lease_id]
+      properties:
+        lease_id: {type: string, minLength: 1, maxLength: 64}
+    MultiviewDescriptor:
+      type: object
+      required: [lease_id, panes]
+      properties:
+        lease_id: {type: string}
+        expires_in_seconds: {type: integer, default: 60, description: Inactivity expiry; valid pane requests renew the lease.}
+        panes: {type: array, items: {$ref: '#/components/schemas/PlaybackDescriptor'}}
+    BufferWindow:
+      type: object
+      required: [mode, buffered_seconds, target_seconds, recording_enabled]
+      properties:
+        mode: {type: string, enum: [local_buffer]}
+        start: {type: string, format: date-time, nullable: true}
+        end: {type: string, format: date-time, nullable: true}
+        buffered_seconds: {type: number}
+        target_seconds: {type: integer}
+        recording_enabled: {type: boolean}
+    BufferLeaseRequest:
+      type: object
+      required: [stream_token]
+      properties:
+        stream_token: {type: string, maxLength: 16384}
+    BufferViewerRequest:
+      allOf:
+        - {$ref: '#/components/schemas/BufferLeaseRequest'}
+        - type: object
+          required: [lease_id]
+          properties:
+            lease_id: {type: string, maxLength: 128}
+            paused: {type: boolean, default: false}
+    BufferSeekRequest:
+      allOf:
+        - {$ref: '#/components/schemas/BufferViewerRequest'}
+        - type: object
+          properties:
+            at: {type: string, format: date-time, nullable: true}
+    BufferLeaseResponse:
+      type: object
+      required: [lease_id, session_id, window]
+      properties:
+        lease_id: {type: string}
+        session_id: {type: string}
+        window: {$ref: '#/components/schemas/BufferWindow'}
+    BufferSeekResponse:
+      type: object
+      required: [url, window]
+      properties:
+        url: {type: string}
+        window: {$ref: '#/components/schemas/BufferWindow'}
+    RewindCapability:
+      type: object
+      required: [mode, verified, recording_enabled, granularity_seconds, reason]
+      properties:
+        mode: {type: string, enum: [provider_archive, unavailable]}
+        advertised_start: {type: string, format: date-time, nullable: true}
+        advertised_end: {type: string, format: date-time, nullable: true}
+        verified: {type: boolean}
+        recording_enabled: {type: boolean}
+        granularity_seconds: {type: integer}
+        reason: {type: string}
     PlaybackDescriptor:
       type: object
       required: [mode, id]
       properties:
+        preferred_audio_languages: {type: array, items: {type: string}, description: Profile preferences retained even after exact-variant consent.}
+        audio_language_required: {type: boolean, description: False only for All Languages or current server-validated exact-variant consent; exposed contradictory runtime tracks still require a current track choice.}
+        audio_languages: {type: array, items: {type: string}, description: Verified selected-variant track languages; provider title prefixes are never evidence.}
+        audio_verified: {type: boolean}
+        audio_evidence: {type: string, enum: [unknown, audio_track_metadata, media_probe]}
+        default_audio_language: {type: string, nullable: true}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
         mime: {type: string, nullable: true, description: "video/mp2t, application/x-mpegURL, video/mp4, application/dash+xml"}
         headers: { type: object, additionalProperties: {type: string} }
         live: {type: boolean, default: false}
+        buffer_available: {type: boolean, default: false}
+        archive_start: {type: string, format: date-time, nullable: true}
+        archive_end: {type: string, format: date-time, nullable: true}
         resume_position_ms: {type: integer, default: 0}
         duration_ms: {type: integer, nullable: true}
         title: {type: string}
@@ -241,6 +416,7 @@ components:
         position >= 95% of duration also counts as watched.
       required: [id, position_ms, state]
       properties:
+        expected_profile_id: {type: string, nullable: true, maxLength: 128, description: Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes.}
         id: {type: string}
         source_id: {type: string, nullable: true}
         position_ms: {type: integer}
@@ -335,7 +511,127 @@ components:
             eligible_channels: {type: integer}
             channels_with_current_schedule: {type: integer}
 
+    SportsEventFeed:
+      type: object
+      required: [channel_id, channel_name, source_id, source_name, programme_id, language_verified]
+      properties:
+        channel_id: {type: string}
+        channel_name: {type: string}
+        source_id: {type: string}
+        source_name: {type: string}
+        programme_id: {type: string}
+        language: {type: string, nullable: true}
+        language_verified: {type: boolean}
+    SportsEvent:
+      type: object
+      required: [id, title, sport, start, stop, status, replay, live_evidence, grouping_evidence, feeds]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        sport: {type: string}
+        start: {type: string, format: date-time}
+        stop: {type: string, format: date-time}
+        status: {type: string, enum: [current, upcoming, ended]}
+        replay: {type: boolean}
+        live_evidence: {type: boolean}
+        grouping_evidence: {type: string}
+        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}}
+    SportsRecording:
+      type: object
+      required: [title_id, title, source_id, source_name, sport, originally_available_at, duration_ms, audio_languages, audio_verified, language_hint, kind, live]
+      properties:
+        title_id: {type: string, description: Exact source-scoped library ID; open title/audio chooser}
+        title: {type: string}
+        source_id: {type: string}
+        source_name: {type: string}
+        sport: {type: string}
+        originally_available_at: {type: string, nullable: true, description: Original release date, never broadcast or recording time}
+        duration_ms: {type: integer, nullable: true}
+        audio_languages: {type: array, items: {type: string}}
+        audio_verified: {type: boolean}
+        language_hint: {type: string, nullable: true}
+        kind: {type: string, enum: [library_video]}
+        live: {type: boolean, enum: [false]}
+    SportsRecordingsPage:
+      type: object
+      required: [items, total, limit, offset, truncated]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/SportsRecording'}}
+        total: {type: integer, description: Matching entries within the bounded scan; consult truncated}
+        limit: {type: integer}
+        offset: {type: integer}
+        truncated: {type: boolean}
+    SportsEventsPage:
+      type: object
+      required: [as_of, date, timezone, events, total, limit, offset, sports, coverage, truncated]
+      properties:
+        as_of: {type: string, format: date-time}
+        date: {type: string}
+        timezone: {type: string}
+        events: {type: array, items: {$ref: '#/components/schemas/SportsEvent'}}
+        total: {type: integer}
+        limit: {type: integer}
+        offset: {type: integer}
+        truncated: {type: boolean}
+        sports:
+          type: array
+          items:
+            type: object
+            required: [name, count]
+            properties:
+              name: {type: string}
+              count: {type: integer}
+        coverage:
+          type: object
+          required: [eligible_channels, channels_with_sports_schedule]
+          properties:
+            eligible_channels: {type: integer}
+            channels_with_sports_schedule: {type: integer}
+
 paths:
+  /auth/google/complete:
+    post:
+      security: []
+      responses: { '200': { description: Google identity handoff; owner PIN required before owner tokens when enabled, content: { application/json: { schema: { oneOf: [{$ref: '#/components/schemas/AuthTokens'}, {$ref: '#/components/schemas/PendingOwnerLogin'}] } } } } }
+  /auth/owner-pin/start:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile_id, action], properties: { profile_id: {type: string}, action: {type: string, enum: [login, profile_switch, admin]} } } } } }
+      responses: { '200': { description: Session and target bound one-use challenge, content: { application/json: { schema: {$ref: '#/components/schemas/OwnerPinChallenge'} } } } }
+  /auth/owner-pin/verify:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token, pin], properties: { challenge_id: {type: string}, poll_token: {type: string, writeOnly: true}, pin: {type: string, writeOnly: true, minLength: 6, maxLength: 12} } } } } }
+      responses: { '200': { description: Authorized login/switch or one-use target policy action, content: { application/json: { schema: {oneOf: [{$ref: '#/components/schemas/AuthTokens'}, {$ref: '#/components/schemas/OwnerActionProof'}]} } } }, '429': {description: Attempt limit; respect Retry-After} }
+  /auth/owner-pin/cancel:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [challenge_id, poll_token], properties: { challenge_id: {type: string}, poll_token: {type: string, writeOnly: true} } } } } }
+      responses: { '204': {description: Challenge canceled} }
+  /auth/owner-pin/setup-status:
+    get:
+      responses: { '200': { description: Setup grant available only after exact local VM approval, content: { application/json: { schema: {$ref: '#/components/schemas/OwnerPinSetupStatus'} } } } }
+  /auth/owner-pin/setup:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [grant_id, grant_secret, pin], properties: { grant_id: {type: string}, grant_secret: {type: string, writeOnly: true}, pin: {type: string, writeOnly: true, minLength: 6, maxLength: 12} } } } } }
+      responses: { '200': { description: Consumes local approval, replaces PIN and invalidates older sessions, content: { application/json: { schema: {$ref: '#/components/schemas/AuthTokens'} } } } }
+  /auth/owner-pin/recovery-status:
+    get:
+      responses: { '200': {description: Local VM approval required for replacement; old PIN remains valid, content: {application/json: {schema: {type: object, required: [configured, recovery_authorized, local_approval_required], properties: {configured: {type: boolean}, recovery_authorized: {type: boolean}, local_approval_required: {type: boolean}, recovery_request_id: {type: string}, grant_id: {type: string}, grant_secret: {type: string, description: Memory-only secret}, expires_in: {type: integer}}}}} } }
+  /auth/owner-pin/recover:
+    post:
+      requestBody: { content: { application/json: { schema: { type: object, required: [grant_id, grant_secret, pin], properties: { grant_id: {type: string}, grant_secret: {type: string, writeOnly: true}, pin: {type: string, writeOnly: true, minLength: 6, maxLength: 12} } } } } }
+      responses: { '200': { description: Consumes local recovery approval and revokes older sessions, content: { application/json: { schema: {$ref: '#/components/schemas/AuthTokens'} } } } }
+  /auth/profile-switch:
+    post:
+      summary: Authenticated profile switch using existing credentials and server policy
+      requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string}, pin: {type: string}, password: {type: string} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
+  /profiles/{id}/content-policy:
+    get:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: Admin-only content policy, content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
+    put:
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: X-Owner-Action, in: header, required: true, schema: {type: string}, description: One-use proof bound to current owner session and this target profile}]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicyInput' } } } }
+      responses: { '200': { description: Saved policy; target sessions invalidated, content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
   /auth/login:
     post:
       security: []
@@ -406,9 +702,50 @@ paths:
         - { name: limit, in: query, schema: {type: integer, default: 40} }
         - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
         - { name: source_id, in: query, schema: {type: string} }
-      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { results: {type: array, items: {$ref: '#/components/schemas/Tile'}}, metadata_available: {type: boolean}, discovery_note: {type: string}, play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+  /playback/buffer/lease:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferLeaseRequest'}}}}
+      responses: {'200': {description: Owned viewer lease and actual window, content: {application/json: {schema: {$ref: '#/components/schemas/BufferLeaseResponse'}}}}}
+  /playback/buffer/heartbeat:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferViewerRequest'}}}}
+      responses: {'200': {description: Renewed viewer lease and actual window, content: {application/json: {schema: {$ref: '#/components/schemas/BufferWindow'}}}}}
+  /playback/buffer/seek:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferSeekRequest'}}}}
+      responses: {'200': {description: Authorized seek playlist and actual window, content: {application/json: {schema: {$ref: '#/components/schemas/BufferSeekResponse'}}}}}
+  /playback/buffer/release:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferViewerRequest'}}}}
+      responses: {'204': {description: Viewer released; final viewer stops the owned producer}}
+  /playback/rewind:
+    get:
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string}}
+      responses: {'200': {description: Advertised provider archive window, content: {application/json: {schema: {$ref: '#/components/schemas/RewindCapability'}}}}}
+  /playback/options:
+    get:
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string}}
+        - {name: source_id, in: query, schema: {type: string}}
+      responses: {'200': {description: Available source variants and audio evidence, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackOptions'}}}}}
   /titles/{id}:
     get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }
+  /discover/{section}:
+    get:
+      summary: Paged metadata discovery independent of available sources
+      parameters:
+        - {name: section, in: path, required: true, schema: {type: string, enum: [movies, shows]}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 1}}
+        - {name: sort, in: query, schema: {type: string, enum: [popular, rating, newest], default: popular}}
+        - {name: year, in: query, schema: {type: integer, minimum: 1888, maximum: 2100}}
+        - {name: language, in: query, schema: {type: string, description: "Availability only; omitted = profile languages; all = all languages."}}
+        - {name: source_id, in: query, schema: {type: string, description: "Availability only; never suppresses metadata identities."}}
+      responses:
+        '200': {description: Metadata page with independently matched availability, content: {application/json: {schema: {$ref: '#/components/schemas/DiscoveryPage'}}}}
+        '502': {description: Metadata unavailable or not configured; existing library remains available}
+
   /browse/{section}:
     get:
       summary: movies | shows | vod | series — paged grid with filters
@@ -477,6 +814,38 @@ paths:
     get: { summary: Languages present with counts, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { type: object, properties: { code: {type: string}, name: {type: string}, count: {type: integer} } } } } } } } }
   /channels/{id}:
     patch: { summary: User override (number, language, group, epg_id), parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Channel' } } } }, responses: { '200': { description: ok } } }
+  /sports/recordings:
+    get:
+      summary: Explicit sports library videos from Plex; not live or equivalent to IPTV events
+      parameters:
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: Library metadata with normal audio choice required; unknown audio remains honest
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsRecordingsPage'}
+  /sports/events:
+    get:
+      parameters:
+        - {in: query, name: date, schema: {type: string, format: date}}
+        - {in: query, name: timezone, schema: {type: string, default: America/New_York}}
+        - {in: query, name: status, schema: {type: string, enum: [all, current, upcoming, replay], default: all}}
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsEventsPage'}
   /sports:
     get:
       tags: [live]
@@ -528,10 +897,28 @@ paths:
         '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryStatus'}}}}
         '403': {description: Admin required}
         '409': {description: Owned stop failures remain}
+  /playback/multiview:
+    post:
+      summary: Atomically reserve two distinct new live codec-copy HLS producers before either pane starts
+      description: Known provider capacity is required. Capacity one on a shared source rejects both panes. Direct/external, archive, transcoded and DVR playback are unsupported. Grants bind profile, session, source, policy, audio preferences and recovery generation.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultiviewRequest'}}}}
+      responses:
+        '200': {description: Both slots reserved; clients may now start the returned panes, content: {application/json: {schema: {$ref: '#/components/schemas/MultiviewDescriptor'}}}}
+        '401': {description: Authentication required}
+        '403': {description: Authorization or recovery generation changed}
+        '409': {description: Capacity unavailable, unsupported mode, or audio selection required}
+  /playback/multiview/release:
+    post:
+      summary: Idempotently release both panes owned by the authenticated profile and session
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultiviewRelease'}}}}
+      responses:
+        '204': {description: Both producer slots released after confirmed stop}
+        '401': {description: Authentication required}
+        '403': {description: Lease belongs to another profile or session}
   /playback/resolve:
     post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } } } }
   /playback/progress:
-    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok } } }
+    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok }, '403': {description: Captured profile mismatch or content access denied} } }
   /stream/{token}:
     get: { security: [], summary: Proxied/remuxed stream (token is short-lived and profile-bound), parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: stream } } }
   /stream/{token}/index.m3u8:

@@ -56,7 +56,13 @@ async def begin(api: Api) -> tuple[str, str]:
 
 async def test_missing_configuration_fails_closed(api: Api) -> None:
     api.c.settings.google_auth_required = True
-    assert (await api.get("/auth/config")).json() == {"google_enabled": False, "google_required": True}
+    assert (await api.get("/auth/config")).json() == {
+        "google_enabled": False,
+        "google_required": True,
+        "content_policy_enabled": False,
+        "owner_pin_configured": False,
+        "owner_pin_setup_required": True,
+    }
     assert (await api.get("/auth/google/start")).status_code == 403
     assert (
         await api.post("/auth/login", json={"profile_id": api.profile_id, "password": "test-admin-pw"})
@@ -135,11 +141,11 @@ async def test_expired_state_and_handoff_no_open_redirect(api: Api) -> None:
     url, browser = api.c.google_auth.start("https://evil.test")
     state = parse_qs(urlsplit(url).query)["state"][0]
     tx = api.c.google_auth.transactions[state]
-    assert tx[-1] == "/"
+    assert tx[4] == "/"
     api.c.google_auth.transactions[state] = (0, *tx[1:])
     with pytest.raises(Unauthorized):
         await api.c.google_auth.finish(state, browser, "code")
-    api.c.google_auth.handoffs["expired"] = (0, api.profile_id, "/")
+    api.c.google_auth.handoffs["expired"] = (0, api.profile_id, "/", None)
     with pytest.raises(Unauthorized):
         await api.c.google_auth.consume("expired", "https://streamhub.ryan-walker.dev")
     with pytest.raises(Forbidden):
@@ -199,4 +205,4 @@ async def test_pairing_code_survives_google_without_open_redirect(api: Api) -> N
     for destination in ("//evil.test", "/pair?code=ABC123&next=https://evil.test", "/pair?code=<script>"):
         url, _ = api.c.google_auth.start(destination)
         state = parse_qs(urlsplit(url).query)["state"][0]
-        assert api.c.google_auth.transactions[state][-1] == "/"
+        assert api.c.google_auth.transactions[state][4] == "/"

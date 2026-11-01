@@ -16,6 +16,7 @@ import { LoginGate } from './screens/GoogleLogin'
 import { Home } from './screens/Home'
 import { Search } from './screens/Search'
 import { TitleScreen } from './screens/Title'
+import { Discover } from './screens/Discover'
 import { Browse } from './screens/Browse'
 import { LiveTV } from './screens/LiveTV'
 import { Favorites } from './screens/Favorites'
@@ -80,6 +81,7 @@ export function App() {
             <Route index element={<Home />} />
             <Route path="search" element={<Search />} />
             <Route path="title/:id" element={<TitleScreen />} />
+            <Route path="discover/:section" element={<Discover />} />
             <Route path="browse/:section" element={<Browse />} />
             <Route path="live" element={<LiveTV />} />
             <Route path="guide" element={<Navigate to="/live?view=guide" replace />} />

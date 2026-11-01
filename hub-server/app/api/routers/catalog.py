@@ -9,10 +9,13 @@ from fastapi import APIRouter, Query, Response
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
-from app.services.errors import ServiceError
-from app.services.sports import sports_on_now
+from app.api.policy_route import PolicyCatalogRoute
+from app.services.errors import Forbidden, ServiceError
+from app.services.listing_cache import listing_cached, normalized_query
+from app.services.sports import sports_events, sports_on_now
+from app.services.sports_recordings import sports_recordings
 
-router = APIRouter()
+router = APIRouter(route_class=PolicyCatalogRoute)
 
 
 @router.get("/home", response_model=S.Home, tags=["catalog"])
@@ -35,18 +38,83 @@ async def sports(
     )
 
 
+@router.get("/sports/recordings", response_model=S.SportsRecordingsPage, tags=["catalog"])
+async def sports_recording_list(
+    c: C,
+    p: P,
+    response: Response,
+    language: str | None = None,
+    sport: str | None = None,
+    q: str | None = Query(None, max_length=200),
+    limit: int = Query(40, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    # New library surface must not bypass centrally enforced profile policy.
+    # Fail closed during partial integrations where the service is unavailable.
+    policy = getattr(c, "content_policy", None)
+    if policy is None:
+        raise Forbidden("Content policy service unavailable.", code="content_policy_unavailable")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await sports_recordings(
+        c.catalog,
+        p.profile_id,
+        allowed_refs=policy.allowed_refs,
+        language=language,
+        sport=sport,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/sports/events", response_model=S.SportsEventsPage, tags=["live"])
+async def sports_event_list(
+    c: C,
+    p: P,
+    date: str | None = Query(None, max_length=10),
+    timezone: str = Query("America/New_York", max_length=64),
+    language: str | None = None,
+    sport: str | None = None,
+    status: str = Query("all", pattern="^(all|current|upcoming|replay)$"),
+    q: str | None = Query(None, max_length=200),
+    limit: int = Query(40, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    return await sports_events(
+        c.channels,
+        p.profile_id,
+        date=date,
+        timezone=timezone,
+        language=language,
+        sport=sport,
+        status=status,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("/search", response_model=S.SearchResults, tags=["catalog"])
 async def search(
     c: C,
     p: P,
+    response: Response,
     q: str = Query(..., min_length=1, max_length=200),
     kinds: str | None = None,
     limit: int = Query(40, ge=1, le=100),
     language: str | None = None,
     source_id: str | None = None,
 ) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
     kind_set = {k.strip() for k in kinds.split(",") if k.strip()} if kinds else None
-    return await c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id)
+    q = normalized_query(q) or ""
+    return await listing_cached(
+        c.db,
+        p.profile_id,
+        "search",
+        (q, tuple(sorted(kind_set or [])), limit, language, source_id),
+        lambda: c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id),
+    )
 
 
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
@@ -54,11 +122,37 @@ async def title(id: str, c: C, p: P) -> dict[str, Any]:
     return await c.catalog.detail(id, p.profile_id)
 
 
+@router.get("/discover/{section}", response_model=S.DiscoveryPage, tags=["catalog"])
+async def discover(
+    section: str,
+    c: C,
+    p: P,
+    response: Response,
+    page: int = Query(1, ge=1, le=500),
+    sort: str = Query("popular", pattern="^(popular|rating|newest)$"),
+    year: int | None = Query(None, ge=1888, le=2100),
+    language: str | None = None,
+    source_id: str | None = None,
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
+    return await listing_cached(
+        c.db,
+        p.profile_id,
+        "discover",
+        (section, page, sort, year, language, source_id),
+        lambda: c.catalog.discover(
+            section, p.profile_id, page=page, sort=sort, year=year, language=language, source_id=source_id
+        ),
+        ttl=30,
+    )
+
+
 @router.get("/browse/{section}", response_model=S.BrowsePage, tags=["catalog"])
 async def browse(
     section: str,
     c: C,
     p: P,
+    response: Response,
     source_id: str | None = None,
     genre: str | None = None,
     category: str | None = None,
@@ -67,16 +161,25 @@ async def browse(
     sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
     page: int = Query(1, ge=1),
 ) -> dict[str, Any]:
-    return await c.catalog.browse(
-        section,
+    response.headers["Cache-Control"] = "private, no-store"
+    q = normalized_query(q)
+    return await listing_cached(
+        c.db,
         p.profile_id,
-        source_id=source_id,
-        genre=genre,
-        category=category,
-        sort=sort,
-        page=page,
-        language=language,
-        q=q,
+        "browse",
+        (section, source_id, genre, category, language, q, sort, page),
+        lambda: c.catalog.browse(
+            section,
+            p.profile_id,
+            source_id=source_id,
+            genre=genre,
+            category=category,
+            sort=sort,
+            page=page,
+            language=language,
+            q=q,
+        ),
+        ttl=60,
     )
 
 

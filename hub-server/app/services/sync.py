@@ -180,6 +180,15 @@ class SyncService:
                                             "description": p.description,
                                             "category": (p.category or None) and p.category[:128],
                                             "icon": p.icon,
+                                            "age_evidence": {
+                                                **p.age_evidence,
+                                                "subject": {
+                                                    "source_id": source_id,
+                                                    "epg_channel": p.channel,
+                                                    "start": p.start.isoformat(),
+                                                    "stop": p.stop.isoformat(),
+                                                },
+                                            },
                                         }
                                     )
                                     + "\n"

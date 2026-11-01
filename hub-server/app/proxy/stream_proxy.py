@@ -26,7 +26,8 @@ from urllib.parse import urljoin
 import httpx
 
 from app.infra.logging import redact_url
-from app.services.errors import Forbidden
+from app.proxy.dvr import MAX_SEGMENTS, DvrManager
+from app.services.errors import Conflict, Forbidden, ServiceError
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ HLS_READY_TIMEOUT = 20.0
 HLS_SWITCH_GRACE_S = 5.0
 HLS_ADMISSION_WAIT_S = 5.0
 HLS_STOP_TIMEOUT_S = 0.5
+PAIR_TTL_S = 60.0
+MAX_PAIR_LEASES = 16
 
 
 class HlsSourceBusy(Exception):
@@ -50,6 +53,41 @@ HOP_HEADERS = {"content-type", "content-length", "accept-ranges", "content-range
 
 def _backoff(attempt: int) -> float:
     return float(min(MAX_BACKOFF, 0.5 * (2**attempt)))
+
+
+class OwnedStream(AsyncIterator[bytes]):
+    """An acquired upstream has a lifetime even before its body is iterated."""
+
+    def __init__(self, stream: AsyncIterator[bytes], close: Callable[[], Awaitable[None]]) -> None:
+        self._stream = stream
+        self._close = close
+        self._closed = False
+        self._close_lock = asyncio.Lock()
+
+    def __aiter__(self) -> OwnedStream:
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._closed:
+            raise StopAsyncIteration
+        try:
+            return await anext(self._stream)
+        except BaseException:
+            # A second caller cancellation cannot abandon the owned cleanup.
+            await asyncio.shield(self.aclose())
+            raise
+
+    async def aclose(self) -> None:
+        async with self._close_lock:
+            if self._closed:
+                return
+            try:
+                close_body = getattr(self._stream, "aclose", None)
+                if close_body is not None:
+                    await close_body()
+            finally:
+                await self._close()
+            self._closed = True
 
 
 class SharedUpstream:
@@ -75,6 +113,7 @@ class SharedUpstream:
         self._ready = asyncio.Event()
         self.failed: str | None = None
         self.closed = False
+        self.source_id: str | None = None
 
     @property
     def subscribers(self) -> int:
@@ -102,9 +141,13 @@ class SharedUpstream:
         self._linger = None
         if self._subs:
             return
+        self.closed = True
         if self._task is not None:
             self._task.cancel()
-        self._on_close(self.key)
+        if self._task is None or self._task.done():
+            self._on_close(self.key)
+        else:
+            self._task.add_done_callback(lambda _: self._on_close(self.key))
 
     async def wait_ready(self, timeout: float = 15.0) -> None:
         with contextlib.suppress(TimeoutError):
@@ -173,6 +216,16 @@ class HlsSession:
     stderr_task: asyncio.Task[None] | None = None
 
 
+@dataclass
+class PairLease:
+    profile_id: str
+    session_id: str | None
+    generation: int
+    members: dict[str, str]  # producer key -> source id
+    expires: float
+    closing: bool = False
+
+
 @dataclass(eq=False)
 class HttpSession:
     client: Any
@@ -192,6 +245,7 @@ def ffmpeg_args(
     live: bool,
     transcode: str,
     vaapi_device: str,
+    buffered: bool = False,
 ) -> list[str]:
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
     if transcode == "vaapi":
@@ -211,6 +265,10 @@ def ffmpeg_args(
         args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
         if live:
             args += ["-reconnect_at_eof", "1"]
+    if buffered:
+        # Bound DVR startup bursts to media time before the finite HLS writer
+        # can roll away retained history. Ordinary live/VOD keeps its input policy.
+        args += ["-re"]
     args += ["-fflags", "+genpts", "-i", url, "-map", "0:v:0?", "-map", "0:a?"]
     if transcode == "none" or not transcode:
         args += ["-c", "copy"]
@@ -223,13 +281,17 @@ def ffmpeg_args(
     else:  # software
         args += ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-c:a", "aac", "-b:a", "160k"]
     flags = "delete_segments+independent_segments" if live else "independent_segments"
+    if live:
+        flags += "+program_date_time"
+    if buffered:
+        flags += "+temp_file"
     args += [
         "-f",
         "hls",
         "-hls_time",
         "2",
         "-hls_list_size",
-        "6" if live else "0",
+        str(MAX_SEGMENTS) if buffered else "6" if live else "0",
         "-hls_flags",
         flags,
         "-hls_segment_filename",
@@ -251,13 +313,16 @@ class StreamProxy:
         on_stop: Callable[[str], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        dvr: DvrManager | None = None,
     ) -> None:
         self._client_factory = client_factory
+        self.dvr = dvr or DvrManager()
         self._clock = clock
         self._sleep = sleep
         self._shared: dict[str, SharedUpstream] = {}
         self._hls: dict[str, HlsSession] = {}
         self._hls_lock = asyncio.Lock()
+        self._pairs: dict[str, PairLease] = {}
         self.transcode_dir = transcode_dir
         self.ffmpeg = ffmpeg
         self.vaapi_device = vaapi_device
@@ -286,6 +351,7 @@ class StreamProxy:
             "hls_sessions": len(self._hls),
             "http_sessions": len(self._http),
             "external_sessions_tracked": False,
+            "pair_reservations": len(self._pairs),
         }
 
     def pause(self) -> None:
@@ -300,6 +366,8 @@ class StreamProxy:
 
     async def _close_http(self, sess: HttpSession) -> None:
         async with sess.close_lock:
+            if sess not in self._http:
+                return
             try:
                 if sess.response is not None:
                     await sess.response.aclose()
@@ -355,6 +423,10 @@ class StreamProxy:
                 continue
             else:
                 self._cleanup_pending.discard(path)
+        async with self._hls_lock:
+            for lease_id in list(self._pairs):
+                with contextlib.suppress(Exception):
+                    await self._release_pair_locked(lease_id)
         status = self.recovery_status()
         return {
             **status,
@@ -387,8 +459,28 @@ class StreamProxy:
             await asyncio.sleep(10)
             async with self._hls_lock:
                 now = self._clock()
+                for lease_id, lease in list(self._pairs.items()):
+                    failed = any(
+                        key in self._hls and self._hls[key].proc.returncode is not None for key in lease.members
+                    )
+                    if lease.closing or lease.expires <= now or failed:
+                        with contextlib.suppress(Exception):
+                            await self._release_pair_locked(lease_id)
                 for key, sess in list(self._hls.items()):
-                    if now - sess.last_access > HLS_IDLE_S or sess.proc.returncode is not None:
+                    buffered = self.dvr.key == key
+                    held = self.dvr.held(key) if buffered else False
+                    if buffered:
+                        try:
+                            self.dvr.refresh(key)
+                        except (ServiceError, OSError, ValueError):
+                            await self._stop_hls(key, expected=sess)
+                            continue
+                    abandoned = buffered and self.dvr.ever_leased and not held
+                    if (
+                        abandoned
+                        or (not held and now - sess.last_access > HLS_IDLE_S)
+                        or sess.proc.returncode is not None
+                    ):
                         await self._stop_hls(key, expected=sess)
 
     @property
@@ -398,22 +490,135 @@ class StreamProxy:
             "hls_sessions": len(self._hls),
         }
 
+    def _source_use(self, source_id: str | None) -> int:
+        if source_id is None:
+            return 0
+        return (
+            sum(s.source_id == source_id for s in self._hls.values())
+            + sum(s.source_id == source_id for s in self._http)
+            + sum(s.source_id == source_id for s in self._shared.values())
+            + sum(
+                source == source_id and key not in self._hls
+                for lease in self._pairs.values()
+                for key, source in lease.members.items()
+            )
+        )
+
+    async def reserve_pair(
+        self,
+        profile_id: str,
+        session_id: str | None,
+        members: dict[str, tuple[str, int | None]],
+        *,
+        generation: int,
+    ) -> str:
+        """Atomically reserve both new HLS producers, without opening either upstream."""
+        async with self._hls_lock:
+            self.ensure_running(generation)
+            for lease_id, lease in list(self._pairs.items()):
+                if lease.closing or lease.expires <= self._clock():
+                    await self._release_pair_locked(lease_id)
+            if len(members) != 2:
+                raise Conflict("Choose two different channels.", code="multiview_same_channel")
+            if len(self._pairs) >= MAX_PAIR_LEASES:
+                raise Conflict("Multiview reservation limit reached.", code="source_busy")
+            demands: dict[str, int] = {}
+            limits: dict[str, int] = {}
+            for key, (source, limit) in members.items():
+                if not limit or limit < 1:
+                    raise Conflict("Multiview requires a known provider capacity.", code="multiview_capacity")
+                if key in self._hls or any(key in lease.members for lease in self._pairs.values()):
+                    raise Conflict("Stop existing playback before creating a pair.", code="source_busy")
+                demands[source] = demands.get(source, 0) + 1
+                limits[source] = min(limits.get(source, limit), limit)
+            for source, demand in demands.items():
+                if self._source_use(source) + demand > limits[source]:
+                    raise Conflict("Provider capacity cannot admit both panes.", code="multiview_capacity")
+            lease_id = secrets.token_urlsafe(24)
+            self._pairs[lease_id] = PairLease(
+                profile_id,
+                session_id,
+                generation,
+                {key: source for key, (source, _) in members.items()},
+                self._clock() + PAIR_TTL_S,
+            )
+            return lease_id
+
+    def _check_pair(
+        self, lease_id: str, key: str, profile_id: str | None = None, session_id: str | None = None
+    ) -> PairLease:
+        lease = self._pairs.get(lease_id)
+        if (
+            lease is None
+            or lease.closing
+            or lease.expires <= self._clock()
+            or lease.generation != self.generation
+            or key not in lease.members
+            or (profile_id is not None and (lease.profile_id != profile_id or lease.session_id != session_id))
+        ):
+            raise Forbidden("Multiview lease expired or belongs to another session.", code="multiview_expired")
+        return lease
+
+    async def validate_pair(self, lease_id: str, key: str, profile_id: str, session_id: str | None) -> None:
+        async with self._hls_lock:
+            lease = self._check_pair(lease_id, key, profile_id, session_id)
+            lease.expires = self._clock() + PAIR_TTL_S
+
+    async def _release_pair_locked(self, lease_id: str) -> None:
+        lease = self._pairs.get(lease_id)
+        if lease is None:
+            return
+        lease.closing = True
+        for key in lease.members:
+            await self._stop_hls(key)
+        self._pairs.pop(lease_id, None)
+
+    async def release_pair(self, lease_id: str, profile_id: str, session_id: str | None) -> None:
+        async with self._hls_lock:
+            lease = self._pairs.get(lease_id)
+            if lease is None:
+                return
+            if lease.profile_id != profile_id or lease.session_id != session_id:
+                raise Forbidden("Multiview lease belongs to another session.")
+            await self._release_pair_locked(lease_id)
+
+    def _admit_source(self, source_id: str | None, maximum: int | None) -> None:
+        if maximum and maximum > 0 and self._source_use(source_id) >= maximum:
+            raise Conflict("Source connection limit is occupied.", code="source_busy")
+
     # ------------------------------------------------------------------ passthrough
     def _drop_shared(self, key: str) -> None:
         self._shared.pop(key, None)
 
     async def live_shared(
-        self, key: str, url: str, headers: dict[str, str], source_id: str, *, generation: int | None = None
+        self,
+        key: str,
+        url: str,
+        headers: dict[str, str],
+        source_id: str,
+        *,
+        generation: int | None = None,
+        max_connections: int | None = None,
     ) -> tuple[str, AsyncIterator[bytes]]:
         self.ensure_running(generation)
         generation = self.generation
-        up = self._shared.get(key)
-        if up is None:
-            up = SharedUpstream(key, url, headers, self._client_factory, self._drop_shared)
-            self._shared[key] = up
-        q = up.subscribe()
-        await up.wait_ready()
-        self.ensure_running(generation)
+        async with self._hls_lock:
+            self.ensure_running(generation)
+            up = self._shared.get(key)
+            if up is None:
+                self._admit_source(source_id, max_connections)
+                up = SharedUpstream(key, url, headers, self._client_factory, self._drop_shared)
+                up.source_id = source_id
+                self._shared[key] = up
+            if up.closed:
+                raise Conflict("Previous source connection is still closing.", code="source_busy")
+            q = up.subscribe()
+        try:
+            await up.wait_ready()
+            self.ensure_running(generation)
+        except BaseException:
+            up.unsubscribe(q)
+            raise
         if up.failed:
             up.unsubscribe(q)
             raise ConnectionError(up.failed)
@@ -432,7 +637,11 @@ class StreamProxy:
                 up.unsubscribe(q)
                 self._finish_viewer(q)
 
-        return up.content_type, gen()
+        async def close_viewer() -> None:
+            up.unsubscribe(q)
+            self._finish_viewer(q)
+
+        return up.content_type, OwnedStream(gen(), close_viewer)
 
     async def passthrough(
         self,
@@ -443,6 +652,7 @@ class StreamProxy:
         *,
         live: bool = False,
         generation: int | None = None,
+        max_connections: int | None = None,
     ) -> tuple[int, dict[str, str], AsyncIterator[bytes]]:
         """Single-client passthrough (VOD with Range support; live with reconnect)."""
         self.ensure_running(generation)
@@ -450,9 +660,12 @@ class StreamProxy:
         req_headers = dict(headers)
         if range_header:
             req_headers["Range"] = range_header
-        client = self._client_factory(timeout=httpx.Timeout(30.0, connect=10.0, read=None), headers=req_headers)
-        sess = HttpSession(client, asyncio.current_task(), source_id=source_id)
-        self._http.add(sess)
+        async with self._hls_lock:
+            self.ensure_running(generation)
+            self._admit_source(source_id, max_connections)
+            client = self._client_factory(timeout=httpx.Timeout(30.0, connect=10.0, read=None), headers=req_headers)
+            sess = HttpSession(client, asyncio.current_task(), source_id=source_id)
+            self._http.add(sess)
         try:
             req = client.build_request("GET", url)
             resp = await client.send(req, stream=True)
@@ -499,14 +712,25 @@ class StreamProxy:
             finally:
                 await self._close_http(sess)
 
-        return status, out_headers, gen()
+        return status, out_headers, OwnedStream(gen(), lambda: self._close_http(sess))
 
-    async def fetch_text(self, url: str, headers: dict[str, str], *, generation: int | None = None) -> tuple[str, str]:
+    async def fetch_text(
+        self,
+        url: str,
+        headers: dict[str, str],
+        *,
+        generation: int | None = None,
+        source_id: str | None = None,
+        max_connections: int | None = None,
+    ) -> tuple[str, str]:
         self.ensure_running(generation)
         generation = self.generation
-        client = self._client_factory(timeout=20.0, headers=headers)
-        sess = HttpSession(client, asyncio.current_task())
-        self._http.add(sess)
+        async with self._hls_lock:
+            self.ensure_running(generation)
+            self._admit_source(source_id, max_connections)
+            client = self._client_factory(timeout=20.0, headers=headers)
+            sess = HttpSession(client, asyncio.current_task(), source_id=source_id)
+            self._http.add(sess)
         try:
             resp = await client.get(url)
             sess.response = resp
@@ -555,6 +779,8 @@ class StreamProxy:
         source_id: str | None = None,
         max_connections: int | None = None,
         generation: int | None = None,
+        buffered: bool = False,
+        pair_lease_id: str | None = None,
     ) -> HlsSession:
         self.ensure_running(generation)
         generation = self.generation
@@ -564,8 +790,19 @@ class StreamProxy:
             async with self._hls_lock:
                 self.ensure_running(generation)
                 now = self._clock()
+                if pair_lease_id:
+                    lease = self._check_pair(pair_lease_id, key)
+                    if lease.members[key] != source_id or capacity < 1 or self._source_use(source_id) > capacity:
+                        raise Conflict("Provider capacity changed before startup.", code="multiview_capacity")
+                elif any(key in lease.members for lease in self._pairs.values()):
+                    raise Conflict("Channel is reserved by a multiview session.", code="source_busy")
                 sess = self._hls.get(key)
                 if sess is not None and sess.proc.returncode is None:
+                    if buffered and self.dvr.key != key:
+                        raise Conflict(
+                            "Live session already started without a buffer; restart it explicitly.",
+                            code="buffer_session_active",
+                        )
                     sess.last_access = now
                     break  # Same channel shares its process, including during startup.
                 if sess is not None:
@@ -575,7 +812,7 @@ class StreamProxy:
                     if peer.proc.returncode is not None:
                         await self._stop_hls(peer_key, expected=peer)
                 peers = [(k, s) for k, s in self._hls.items() if source_id and s.source_id == source_id]
-                full = capacity > 0 and len(peers) >= capacity
+                full = not pair_lease_id and capacity > 0 and self._source_use(source_id) >= capacity
                 if full:
                     # A long target duration can mean legitimately slow playlist polling.
                     # Protect it rather than assuming every five-second gap is abandonment.
@@ -588,16 +825,24 @@ class StreamProxy:
                                     with contextlib.suppress(ValueError):
                                         grace = max(grace, float(line.split(":", 1)[1]) + 2)
                                     break
-                        if now - peer.last_access >= grace:
+                        reserved = any(peer_key in lease.members for lease in self._pairs.values())
+                        if not reserved and not self.dvr.held(peer_key) and now - peer.last_access >= grace:
                             await self._stop_hls(peer_key, expected=peer)
-                            full = len([s for s in self._hls.values() if s.source_id == source_id]) >= capacity
+                            full = self._source_use(source_id) >= capacity
                             if not full:
                                 break
                 if not full:
                     sid = self.session_id(key)
-                    workdir = self.transcode_dir / sid
-                    shutil.rmtree(workdir, ignore_errors=True)
-                    workdir.mkdir(parents=True, exist_ok=True)
+                    if buffered:
+                        if not live or transcode != "none":
+                            raise Conflict(
+                                "DVR requires an existing live codec-copy HLS grant.", code="buffer_unsupported"
+                            )
+                        workdir = self.dvr.reserve(key, sid)
+                    else:
+                        workdir = self.transcode_dir / sid
+                        shutil.rmtree(workdir, ignore_errors=True)
+                        workdir.mkdir(parents=True, exist_ok=True)
                     args = ffmpeg_args(
                         self.ffmpeg,
                         url,
@@ -606,10 +851,37 @@ class StreamProxy:
                         live=live,
                         transcode=transcode,
                         vaapi_device=self.vaapi_device,
+                        buffered=buffered,
                     )
-                    proc = await asyncio.create_subprocess_exec(
-                        *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+                    spawn = asyncio.create_task(
+                        asyncio.create_subprocess_exec(
+                            *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+                        )
                     )
+                    try:
+                        proc = await asyncio.shield(spawn)
+                    except BaseException:
+                        # Cancellation can race subprocess creation. Reconcile the owned
+                        # spawn before releasing its slot or removing its output directory.
+                        try:
+                            created = await spawn
+                        except Exception:
+                            if buffered:
+                                self.dvr.stopped(key)
+                                shutil.rmtree(workdir)
+                        else:
+                            abandoned = HlsSession(
+                                sid=sid,
+                                workdir=workdir,
+                                proc=created,
+                                source_id=source_id,
+                                last_access=self._clock(),
+                            )
+                            abandoned.stderr_task = asyncio.create_task(self._drain_hls_stderr(abandoned))
+                            self._hls[key] = abandoned
+                            # Failure to confirm termination retains the occupied slot.
+                            await self._stop_hls(key, expected=abandoned)
+                        raise
                     sess = HlsSession(
                         sid=sid, workdir=workdir, proc=proc, source_id=source_id, last_access=self._clock()
                     )
@@ -673,3 +945,75 @@ class StreamProxy:
             pass
         except OSError:
             self._cleanup_pending.add(sess.workdir)
+        finally:
+            self.dvr.stopped(key)
+
+    async def buffer_lease(
+        self,
+        key: str,
+        profile: str,
+        url: str,
+        headers: dict[str, str],
+        *,
+        source_id: str,
+        max_connections: int | None,
+        generation: int | None,
+    ) -> dict[str, Any]:
+        if not self.dvr.enabled:
+            raise Conflict("Local recording is disabled.", code="recording_disabled")
+        if self.dvr.pending >= 16:
+            raise Conflict("DVR admission limit reached.", code="buffer_busy")
+        self.dvr.pending += 1
+        acquired = False
+        lease = None
+        try:
+            sess = await self.hls_session(
+                key,
+                url,
+                headers,
+                live=True,
+                transcode="none",
+                source_id=source_id,
+                max_connections=max_connections,
+                generation=generation,
+                buffered=True,
+            )
+            lease = self.dvr.join(key, profile)
+            window = self.dvr.window(key)
+            acquired = True
+            return {"lease_id": lease, "session_id": sess.sid, "window": window}
+        except BaseException:
+            if lease is not None:
+                self.dvr.leave(key, profile, lease)
+            raise
+        finally:
+            self.dvr.pending -= 1
+            if not acquired and not self.dvr.pending and not self.dvr.leases and self.dvr.key == key:
+                async with self._hls_lock:
+                    await self._stop_hls(key)
+
+    async def buffer_release(self, key: str, profile: str, lease: str) -> None:
+        async with self._hls_lock:
+            self.dvr.leave(key, profile, lease)
+            if self.dvr.key == key and not self.dvr.held(key):
+                await self._stop_hls(key)
+
+    async def buffer_window(self, key: str) -> dict[str, Any]:
+        async with self._hls_lock:
+            try:
+                return self.dvr.window(key)
+            except (ServiceError, OSError, ValueError):
+                await self._stop_hls(key)
+                raise
+
+    async def buffer_manifest(self, key: str, at: Any = None) -> str:
+        async with self._hls_lock:
+            try:
+                return self.dvr.manifest(key, at)
+            except ServiceError as exc:
+                if exc.code != "buffer_expired":
+                    await self._stop_hls(key)
+                raise
+            except (OSError, ValueError):
+                await self._stop_hls(key)
+                raise

@@ -51,7 +51,7 @@ export const MediaTile = memo(function MediaTile(p: {
         <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className="tile" style={{ position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
           <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} fallback={<Fallback title={p.tile.title} />} />
           <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
-          <div className="tile-badges"><SourceChips sources={p.tile.sources} max={1} /></div>
+          <div className="tile-badges">{p.tile.sources.length ? <SourceChips sources={p.tile.sources} max={1} /> : <span className="badge">Not available here</span>}</div>
           {p.tile.is_favorite && <span style={{ position: 'absolute', top: 6, left: 6, color: 'var(--t-accent)' }}><Icon name="heart" size={16} filled /></span>}
           {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && (
             <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}><ProgressBar pct={p.tile.progress_pct} /></div>

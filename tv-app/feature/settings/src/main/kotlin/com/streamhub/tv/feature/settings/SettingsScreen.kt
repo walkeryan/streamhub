@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,8 +61,23 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
     val t = LocalThemeTokens.current
     val rail = LocalRailController.current
     val first = remember { FocusRequester() }
+    var switchOpener by remember { mutableStateOf<FocusRequester?>(null) }
+    var restoreSwitchFocus by remember { mutableStateOf(false) }
+    var hadOwnerPinPrompt by remember { mutableStateOf(false) }
+    LaunchedEffect(s.ownerPin) {
+        if(hadOwnerPinPrompt && s.ownerPin==null) restoreSwitchFocus=true
+        hadOwnerPinPrompt=s.ownerPin!=null
+    }
+    val cancelSwitch: () -> Unit = { restoreSwitchFocus=true; vm.cancelPin() }
+    LaunchedEffect(restoreSwitchFocus,s.switching) {
+        if(restoreSwitchFocus && !s.switching) {
+            withFrameNanos { }
+            runCatching { (switchOpener ?: first).requestFocus() }
+            restoreSwitchFocus=false
+        }
+    }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
-    DisposableEffect(Unit) { onDispose { vm.previewTheme(null) } }
+    DisposableEffect(Unit) { onDispose { vm.previewTheme(null); vm.cancelPin() } }
 
     Row(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
         Column(Modifier.width(260.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX).focusRestorer(first), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -82,7 +98,7 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
         Box(Modifier.weight(1f).fillMaxHeight().padding(start = 32.dp, end = Tokens.Canvas.SafeMarginX)) {
             s.message?.let { Text(it, color = t.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.align(Alignment.TopEnd)) }
             when (s.section) {
-                SettingsSection.Profiles -> ProfilesPane(s, vm)
+                SettingsSection.Profiles -> ProfilesPane(s, vm) { switchOpener=it }
                 SettingsSection.Theme -> ThemePane(vm)
                 SettingsSection.Languages -> LanguagesPane(s, vm)
                 SettingsSection.Rows -> RowsPane(s, vm)
@@ -92,7 +108,25 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
             }
         }
     }
-    s.pinPromptFor?.let { p -> PinDialog("Enter PIN for ${p.name}", onSubmit = { vm.switchProfile(p, it) }, onDismiss = vm::cancelPin) }
+    s.ownerPin?.let { challenge ->
+        OwnerPinDialog(challenge.challengeId,s.switchTargetName ?: "selected profile",s.ownerPinBusy,s.authorizationFinishing,s.ownerPinError,vm::submitOwnerPin,cancelSwitch)
+    }
+    if(s.authorizationFinishing && s.ownerPin==null) Dialog(onDismissRequest={}) {
+        Column(Modifier.background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp).width(480.dp)) {
+            Text("Finishing authorization…",color=t.text,style=MaterialTheme.typography.titleLarge)
+            Text("Please wait. Back is unavailable while the server completes this one-use request (up to 20 seconds).",color=t.textMuted)
+        }
+    }
+    if(s.authorizationUncertain) Dialog(onDismissRequest={}) {
+        val recovery=remember {FocusRequester()}
+        Column(Modifier.background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp).width(520.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text("Authorization outcome uncertain",color=t.text,style=MaterialTheme.typography.titleLarge)
+            Text("The request may have completed and replaced the old session. Sign in again to recover. Your PIN will not be retried automatically.",color=t.textMuted)
+            ShButton("Sign in again",vm::recoverAuthorization,Modifier.focusRequester(recovery))
+        }
+        LaunchedEffect(Unit){withFrameNanos{};runCatching{recovery.requestFocus()}}
+    }
+    s.pinPromptFor?.let { p -> PinDialog("Enter PIN for ${p.name}", onSubmit = { vm.switchProfile(p, it) }, onDismiss = cancelSwitch) }
 }
 
 @Composable
@@ -107,15 +141,19 @@ private fun Pane(title: String, content: androidx.compose.foundation.lazy.LazyLi
 }
 
 @Composable
-private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel) = Pane("Profiles") {
+private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel, onOpen: (FocusRequester) -> Unit) = Pane("Profiles") {
     items(s.profiles, key = { it.id }) { p ->
         val current = p.id == s.current?.id
+        val opener=remember(p.id){FocusRequester()}
         ShButton(
             (if (current) "✓ " else "") + p.name + (if (p.kids) " · Kids" else "") + (if (p.hasPin) " · 🔒" else ""),
-            { vm.switchProfile(p) },
+            { onOpen(opener); vm.switchProfile(p) },
+            modifier=Modifier.focusRequester(opener),
             style = if (current) ButtonStyle.Primary else ButtonStyle.Secondary,
+            enabled = !s.switching && !s.authorizationUncertain && s.authConfig != null,
         )
     }
+    item { Text(if(s.current?.contentRestricted==true) "Leaving this restricted profile requires the existing owner PIN. A target profile PIN or Google sign-in alone cannot approve it." else if(s.switching) "Checking profile authorization…" else "Profile changes keep each user's saved history and preferences separate.", color=LocalThemeTokensText()) }
     item { Text("Create and edit profiles from the web app (admin).", color = LocalThemeTokensText(), style = MaterialTheme.typography.bodySmall) }
 }
 
@@ -264,4 +302,35 @@ private fun PinDialog(title: String, onSubmit: (String) -> Unit, onDismiss: () -
         }
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+}
+
+/** On-screen keypad works with D-pad/Select only; plaintext is never rendered or saved. */
+@Composable
+private fun OwnerPinDialog(challengeId:String,target:String,busy:Boolean,finishing:Boolean,error:String?,onSubmit:(String)->Unit,onCancel:()->Unit) {
+    val t=LocalThemeTokens.current
+    var pin by remember(challengeId) {mutableStateOf("")}
+    val first=remember {FocusRequester()}
+    val cancel:()->Unit={if(!finishing){pin="";onCancel()}}
+    DisposableEffect(challengeId){onDispose{pin=""}}
+    Dialog(onDismissRequest=cancel) {
+        Column(Modifier.width(520.dp).background(t.surface,RoundedCornerShape(Tokens.Radius.Lg)).padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Owner PIN · $target",style=MaterialTheme.typography.titleLarge,color=t.text)
+            Text("Enter the existing 6–12 digit owner PIN. Playback is stopped; Cancel keeps this profile and you can choose Play again. Setup/reset requires your phone and local VM approval.",color=t.textMuted)
+            Text(if(pin.isEmpty()) "PIN not entered" else "•".repeat(pin.length),color=t.text,style=MaterialTheme.typography.titleLarge)
+            if(finishing) Text("Finishing authorization… Please wait up to 20 seconds. Back is temporarily unavailable.",color=t.accent)
+            error?.let {Text(it,color=t.danger)}
+            listOf(listOf("1","2","3"),listOf("4","5","6"),listOf("7","8","9"),listOf("Clear","0","Delete")).forEach {row ->
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    row.forEach {key -> ShButton(key,{
+                        if(!busy && !finishing) pin=when(key){"Clear"->"";"Delete"->pin.dropLast(1);else->(pin+key).take(12)}
+                    },modifier=Modifier.weight(1f).then(if(key=="1")Modifier.focusRequester(first) else Modifier),enabled=!busy && !finishing)}
+                }
+            }
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                ShButton(if(busy) "Checking / waiting…" else "Unlock profile",{val entered=pin;pin="";onSubmit(entered)},enabled=!busy && !finishing && com.streamhub.tv.core.data.repo.validOwnerPin(pin))
+                ShButton("Cancel",cancel,enabled=!finishing)
+            }
+        }
+    }
+    LaunchedEffect(challengeId,busy){if(!busy){withFrameNanos{};runCatching{first.requestFocus()}}}
 }

@@ -14,6 +14,8 @@ class ChannelListCache @Inject constructor(private val api: StreamHubApi, privat
     private val lists = LinkedHashMap<Pair<String, String>, List<Channel>>()
     private var lastKey: Pair<String, String>? = null
 
+    fun clear() = synchronized(lists) { lists.clear(); lastKey=null }
+
     private suspend fun scope(): String {
         val s = session.current()
         return "${s.apiBase}|${s.profile?.id}"
@@ -39,10 +41,11 @@ class ChannelListCache @Inject constructor(private val api: StreamHubApi, privat
         hasEpg: Boolean? = null,
         limit: Int? = null,
         offset: Int? = null,
+        country: String? = null,
     ): ChannelList {
         val owner = scope()
         return put(api.channels(group = group, languages = languages, favorites = favorites,
-            q = q, hasEpg = hasEpg, limit = limit, offset = offset), owner)
+            q = q, hasEpg = hasEpg, limit = limit, offset = offset, country = country), owner)
     }
 
     suspend fun resolve(listId: String?, currentChannelId: String): List<Channel> {

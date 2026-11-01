@@ -38,7 +38,7 @@ fun SourceBadges(sources: List<SourceBadge>, modifier: Modifier = Modifier, max:
         }
         val inApp = sorted.first().playableInApp
         Text(
-            if (inApp) "▶ Play" else "↗ Open",
+            if (inApp) "Available" else "↗ Open",
             style = MaterialTheme.typography.labelSmall,
             color = if (inApp) t.accentText else t.text,
             modifier = Modifier

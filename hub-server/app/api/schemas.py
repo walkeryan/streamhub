@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
@@ -34,6 +34,9 @@ class Profile(_M):
     has_pin: bool
     kids: bool
     disclaimer_accepted_version: str | None = None
+
+    has_password: bool = False
+    content_restricted: bool = False
 
 
 class ProfileWrite(_M):
@@ -223,6 +226,15 @@ class BrowsePage(_M):
     page_size: int = 60
 
 
+class DiscoveryPage(_M):
+    tiles: list[Tile]
+    page: int
+    page_size: int = 20
+    total: int | None = None
+    has_more: bool = False
+    coverage_note: str
+
+
 class Channel(_M):
     id: str
     source_id: str
@@ -280,6 +292,9 @@ class LanguageCount(_M):
 
 
 class SearchResults(_M):
+    results: list[Tile] = Field(default_factory=list)
+    metadata_available: bool = False
+    discovery_note: str = ""
     play_here: list[Tile]
     open_in_app: list[Tile]
     channels: list[Channel]
@@ -288,11 +303,25 @@ class SearchResults(_M):
 
 class PlaybackRequest(_M):
     id: str
+    variant_id: str | None = Field(default=None, max_length=512)
+    allow_unverified_audio: bool = False
     source_id: str | None = None
     client: Literal["android_tv", "web"] = "web"
+    multiview: bool = False
+    companion_id: str | None = None
     prefer_hls: bool = False
     recovery_generation: str | None = Field(default=None, max_length=64)
     catchup_programme_id: str | None = None
+    rewind_at: AwareDatetime | None = None
+
+
+class MultiviewRequest(_M):
+    panes: list[PlaybackRequest] = Field(min_length=2, max_length=2)
+    recovery_generation: str = Field(max_length=64)
+
+
+class MultiviewRelease(_M):
+    lease_id: str = Field(min_length=1, max_length=64)
 
 
 class ChannelContext(_M):
@@ -311,13 +340,65 @@ class Handoff(_M):
     supports_title_link: bool
 
 
+class BufferWindow(_M):
+    mode: Literal["local_buffer"] = "local_buffer"
+    start: datetime | None = None
+    end: datetime | None = None
+    buffered_seconds: float = 0
+    target_seconds: int = 3600
+    recording_enabled: bool = True
+
+
+class BufferLeaseResponse(_M):
+    lease_id: str
+    session_id: str
+    window: BufferWindow
+
+
+class BufferSeekResponse(_M):
+    url: str
+    window: BufferWindow
+
+
+class BufferLeaseRequest(_M):
+    stream_token: str = Field(min_length=1, max_length=16384)
+
+
+class BufferViewerRequest(BufferLeaseRequest):
+    lease_id: str = Field(min_length=1, max_length=128)
+    paused: bool = False
+
+
+class BufferSeekRequest(BufferViewerRequest):
+    at: AwareDatetime | None = None
+
+
+class RewindCapability(_M):
+    mode: Literal["provider_archive", "unavailable"]
+    advertised_start: datetime | None = None
+    advertised_end: datetime | None = None
+    verified: bool = False
+    recording_enabled: bool = False
+    granularity_seconds: int = 60
+    reason: str
+
+
 class PlaybackDescriptor(_M):
+    preferred_audio_languages: list[str] = Field(default_factory=list)
+    audio_language_required: bool = True
+    audio_languages: list[str] = Field(default_factory=list)
+    audio_verified: bool = False
+    audio_evidence: Literal["unknown", "audio_track_metadata", "media_probe"] = "unknown"
+    default_audio_language: str | None = None
     id: str
     mode: Literal["direct", "proxy", "hls", "handoff"]
     url: str | None = None
     mime: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     live: bool = False
+    buffer_available: bool = False
+    archive_start: datetime | None = None
+    archive_end: datetime | None = None
     resume_position_ms: int = 0
     duration_ms: int | None = None
     title: str
@@ -328,7 +409,14 @@ class PlaybackDescriptor(_M):
     drm: None = None
 
 
+class MultiviewDescriptor(_M):
+    lease_id: str
+    expires_in_seconds: int = 60
+    panes: list[PlaybackDescriptor]
+
+
 class ProgressReport(_M):
+    expected_profile_id: str | None = Field(default=None, max_length=128)
     id: str
     source_id: str | None = None
     position_ms: int
@@ -422,3 +510,80 @@ class SportsPage(_M):
     offset: int
     sports: list[SportCount]
     coverage: SportsCoverage
+
+
+class SportsRecording(_M):
+    title_id: str
+    title: str
+    source_id: str
+    source_name: str
+    sport: str
+    originally_available_at: str | None = None
+    duration_ms: int | None = None
+    audio_languages: list[str]
+    audio_verified: bool
+    language_hint: str | None = None
+    kind: Literal["library_video"] = "library_video"
+    live: Literal[False] = False
+
+
+class SportsRecordingsPage(_M):
+    items: list[SportsRecording]
+    total: int
+    limit: int
+    offset: int
+    truncated: bool
+
+
+class SportsFeed(_M):
+    programme_id: str
+    channel_id: str
+    channel_name: str
+    source_id: str
+    source_name: str
+    language: str | None = None
+    language_verified: bool = False
+
+
+class SportsEvent(_M):
+    id: str
+    title: str
+    sport: str
+    start: datetime
+    stop: datetime
+    status: Literal["current", "upcoming", "ended"]
+    replay: bool
+    live_evidence: bool
+    grouping_evidence: Literal["matching_title_and_time", "same_source_programme"]
+    feeds: list[SportsFeed]
+
+
+class SportsEventsCoverage(_M):
+    eligible_channels: int
+    channels_with_sports_schedule: int
+
+
+class SportsEventsPage(_M):
+    as_of: datetime
+    date: str
+    timezone: str
+    events: list[SportsEvent]
+    total: int
+    limit: int
+    offset: int
+    sports: list[SportCount]
+    coverage: SportsEventsCoverage
+    truncated: bool
+
+
+class ContentPolicyWrite(_M):
+    restricted: bool = False
+    allowed_movie_codes: list[str] = Field(default_factory=list, max_length=5)
+    allowed_tv_codes: list[str] = Field(default_factory=list, max_length=6)
+    allow_unknown: bool = False
+
+
+class ProfileSwitch(_M):
+    profile_id: str
+    pin: str | None = None
+    password: str | None = None

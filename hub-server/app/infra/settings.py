@@ -28,9 +28,13 @@ class AppSettings(BaseSettings):
     google_allowed_emails: str = ""
     google_owner_profile_id: str = ""
     google_auth_required: bool = False
+    content_policy_enabled: bool = False
     tmdb_api_key: str | None = None
     web_dist: Path = Field(default=Path("/app/web-dist"))
     transcode_dir: Path | None = None
+    dvr_enabled: bool = False
+    dvr_dir: Path | None = None
+    dvr_reserve_dir: Path | None = None
     database_url: str | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     log_level: str = "INFO"

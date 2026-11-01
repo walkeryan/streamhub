@@ -1,4 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useBackHandler } from '../nav/back'
+import { useNavigate } from 'react-router'
+import { OwnerPin } from '../components/OwnerPin'
+import { OwnerPinSetup } from '../components/OwnerPinSetup'
+import { isAuthTokens, type PendingOwnerLogin, type OwnerPinResult } from '../api/ownerPin'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, ErrorState } from '../components/ui'
 import { FocusGroup } from '../nav/Focusable'
@@ -8,7 +13,7 @@ import type { AuthTokens } from '../api/types'
 import { ProfilePicker } from './Gate'
 
 // React StrictMode remounts effects: consume the one-time handoff only once per page load.
-let completion: Promise<AuthTokens> | undefined
+let completion: Promise<AuthTokens | PendingOwnerLogin> | undefined
 function clearOAuthMarkers() {
   const url = new URL(window.location.href)
   url.searchParams.delete('google_complete')
@@ -19,7 +24,7 @@ function completeLogin() {
   completion ??= fetch('/api/v1/auth/google/complete', { method: 'POST', credentials: 'same-origin' })
     .then(async (r) => {
       if (!r.ok) throw new Error('Sign-in expired or unauthorized. Please try again.')
-      return await r.json() as AuthTokens
+      return await r.json() as AuthTokens | PendingOwnerLogin
     })
   return completion
 }
@@ -27,7 +32,13 @@ function completeLogin() {
 export function LoginGate() {
   const setSession = useSession((s) => s.setSession)
   const qc = useQueryClient()
-  const [error, setError] = useState<string | null>(null)
+  const navigate = useNavigate()
+  const [pending,setPending]=useState<PendingOwnerLogin|null>(null)
+  const [setup,setSetup]=useState(false)
+  const origin=useRef(0)
+  const committing=useRef(false)
+  const [finishing,setFinishing]=useState(false)
+  const [error, setError] = useState<string | null>(()=>new URLSearchParams(window.location.search).has('owner_pin_uncertain')?'Authorization outcome is unknown. Sign in with Google and your owner PIN again. The previous submission will not be retried.':null)
   const [busy, setBusy] = useState(false)
   const config = useQuery({ queryKey: ['auth-config'], queryFn: async () => {
     const r = await fetch('/api/v1/auth/config')
@@ -43,19 +54,45 @@ export function LoginGate() {
     if (!params.has('google_complete')) return
     setBusy(true)
     void completeLogin().then((t) => {
-      clearOAuthMarkers()
-      setSession(t.access_token, t.refresh_token, t.profile)
-      qc.clear()
+      if ('owner_pin_required' in t && t.owner_pin_required && typeof t.pending_token === 'string' && t.profile?.id) {
+        origin.current=useSession.getState().generation;setSetup(!!t.setup_required);setPending(t)
+      } else if (isAuthTokens(t as OwnerPinResult)) {
+        const tokens=t as AuthTokens;clearOAuthMarkers();setSession(tokens.access_token,tokens.refresh_token,tokens.profile);qc.clear()
+      } else throw new Error('Sign-in did not return a valid owner authorization.')
     }).catch((e: unknown) => {
       clearOAuthMarkers()
       setError(e instanceof Error ? e.message : 'Sign-in failed.')
     }).finally(() => setBusy(false))
   }, [qc, setSession])
   useEffect(() => {
-    if (!config.data?.google_enabled) return
+    if (!config.data?.google_enabled || pending) return
     const timer = window.setTimeout(() => void setFocus('google:signin'), 50)
     return () => window.clearTimeout(timer)
-  }, [config.data])
+  }, [config.data,pending])
+  useEffect(()=>{if(!pending)return;const timer=window.setTimeout(()=>setFocus('owner-login:cancel'),20);return()=>window.clearTimeout(timer)},[pending])
+  const finishOwner = async(result:OwnerPinResult,signal:AbortSignal) => {
+    if(signal.aborted)return
+    if(!pending || useSession.getState().generation!==origin.current)throw new Error('Sign-in changed. Cancel and sign in again.')
+    if(!isAuthTokens(result)||result.profile.id!==pending.profile.id)throw new Error('Owner authorization returned a different profile or action.')
+    await qc.cancelQueries()
+    if(signal.aborted || useSession.getState().generation!==origin.current)return
+    clearOAuthMarkers();qc.clear();setSession(result.access_token,result.refresh_token,result.profile);setPending(null)
+  }
+  const cancelOwner = () => {if(committing.current)return;setPending(null);completion=undefined;clearOAuthMarkers();navigate(window.location.pathname+window.location.search,{replace:true})}
+  const critical = (value:boolean) => {committing.current=value;setFinishing(value)}
+  const uncertain = () => {
+    if(useSession.getState().generation===origin.current){useSession.getState().clear();qc.clear()}
+    committing.current=false;setFinishing(false);setPending(null);completion=undefined;clearOAuthMarkers();setError('Authorization outcome is unknown. Sign in with Google and your owner PIN again. The previous submission will not be retried.');navigate('/?owner_pin_uncertain=1',{replace:true})
+  }
+  useBackHandler(()=>{cancelOwner();return true},!!pending)
+  if(pending)return <main className="page-pad flex flex-col gap-5" style={{maxWidth:'48rem',margin:'auto'}} data-testid="pending-owner-login">
+    <h1 className="display">Finish owner sign-in</h1>
+    <FocusGroup focusKey="owner-login" className="flex flex-col gap-4">
+      {setup?<OwnerPinSetup recovery={!pending.setup_required} key={pending.profile.id} pendingToken={pending.pending_token} onCommitting={critical} onUncertain={uncertain} onApproved={finishOwner}/>:<OwnerPin targetId={pending.profile.id} targetName={pending.profile.name} action="login" pendingToken={pending.pending_token} onCommitting={critical} onUncertain={uncertain} onApproved={finishOwner}/>}
+      {!pending.setup_required&&<Button focusKey="owner-login:mode" disabled={finishing} onEnter={()=>setSetup(value=>!value)}>{setup?"Back to PIN entry":"Owner PIN setup or recovery"}</Button>}
+      <Button focusKey="owner-login:cancel" disabled={finishing} onEnter={cancelOwner}>Cancel owner sign-in</Button>
+    </FocusGroup>
+  </main>
   if (config.isPending) return <main className="p-8"><p>Loading sign-in…</p></main>
   if (config.error) return <main className="p-8"><ErrorState error={config.error} onRetry={() => void config.refetch()} /></main>
   if (!config.data.google_required && !config.data.google_enabled) return <ProfilePicker />

@@ -23,6 +23,7 @@ test('UAT P1-2: live player control bar is reachable and usable with the D-pad',
   const first = path()
   await page.keyboard.press('ArrowDown')
   await expect.poll(path).not.toBe(first)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await expect(ui).toHaveAttribute('data-show', 'false')
 
   // Right reveals the controls, Down moves focus into the bar (Play/Pause first)
@@ -49,6 +50,7 @@ test('UAT P1-2: live player control bar is reachable and usable with the D-pad',
   await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(false)
   await page.keyboard.press('ArrowUp')
   await expect.poll(path).not.toBe(before)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
 
   // OK with controls visible enters the bar; Back leaves the bar and hides the controls in one press
   await page.keyboard.press('ArrowRight')
@@ -66,12 +68,17 @@ test('UAT P2-8: Back twice returns to the last channel; Back once leaves the pla
   await page.keyboard.press('ArrowUp')
   await expect.poll(path).not.toBe(first)
   const second = path()
+  await expect(page.getByTestId('player-title')).toHaveText('Metro Sports 1')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('back-hint')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect.poll(path).toBe(first)
   await expect(page.getByTestId('back-hint')).toBeHidden()
   expect(second).not.toBe(first)
+  // Wait for the returned channel, not the previous render's playing state.
+  await expect(page.getByTestId('player-title')).toHaveText('Harbor News 24')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   // single Back: the hint shows, then the player closes and Live TV is back
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(/\/live/, { timeout: 3000 })
@@ -119,11 +126,11 @@ test('UAT P1-4: Search keeps the query, results and focused result on Back', asy
   await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
   await expect(page.getByTestId('group-play')).toBeVisible()
   await expect.poll(() => focusedLabel(page)).toBe(label)
-  // opening Search fresh from the rail starts empty
+  // Returning from the rail preserves this profile's latest search.
   await page.goto('/')
   await expect(page.getByTestId('home')).toBeVisible()
   await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter')
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('')
+  await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
 })
 
 test('UAT P1-7: failed artwork never shows a broken-image glyph', async ({ page }) => {
@@ -180,4 +187,40 @@ test.describe('TV width', () => {
     await page.keyboard.press('ArrowLeft')
     await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
   })
+})
+
+test('Back during an uncommitted zap cancels pending playback instead of starting another stream', async ({ page }) => {
+  await openLiveChannel(page)
+  await page.evaluate(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+  await expect(page).toHaveURL(/\/live/)
+  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+})
+
+test('approved live playback retains the exact750ms double-Back behavior', async ({ page }) => {
+  await openLiveChannel(page)
+  const first = new URL(page.url()).pathname
+  await page.keyboard.press('ArrowUp')
+  await expect.poll(() => new URL(page.url()).pathname).not.toBe(first)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  // Freeze at a known future instant: host/browser wall clocks can differ.
+  await page.clock.install({ time: new Date("2026-11-01T12:00:00Z") })
+  await page.clock.pauseAt(new Date("2026-11-01T12:01:00Z"))
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('back-hint')).toBeVisible()
+  await page.clock.runFor(749)
+  await expect(page).toHaveURL(/\/play\/ch/)
+  await page.keyboard.press('Escape')
+  await expect.poll(() => new URL(page.url()).pathname).toBe(first)
+  await expect(page.getByTestId('back-hint')).toBeHidden()
+  await page.clock.runFor(500)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('back-hint')).toBeVisible()
+  await page.clock.runFor(749)
+  await expect(page).toHaveURL(/\/play\/ch/)
+  await page.clock.runFor(1)
+  await expect(page).toHaveURL(/\/live/)
 })

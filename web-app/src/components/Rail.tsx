@@ -12,8 +12,8 @@ export const NAV = [
   { to: '/search', label: 'Search', icon: 'search' },
   { to: '/live', label: 'Live TV', icon: 'tv' },
   { to: '/sports', label: 'Sports', icon: 'tv' },
-  { to: '/browse/movies', label: 'Movies', icon: 'film' },
-  { to: '/browse/shows', label: 'Shows', icon: 'shows' },
+  { to: '/discover/movies', label: 'Movies', icon: 'film' },
+  { to: '/discover/shows', label: 'Series', icon: 'shows' },
   { to: '/favorites', label: 'Favorites', icon: 'heart' },
   { to: '/sources', label: 'Sources', icon: 'source' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
@@ -33,13 +33,13 @@ export function Rail() {
     setPinned(false)
     void setFocus('MAIN')
   }, hasFocus || pinned)
-  const active = (to: string) => (to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(to))
+  const active = (to: string) => (to === '/' ? loc.pathname === '/' : (loc.pathname.startsWith(to) || (to.startsWith('/discover/') && loc.pathname.startsWith(to.replace('/discover/', '/browse/')))))
   return (
     <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember onFocusChange={setHasFocus}
       data-testid="rail" data={{ expanded }}>
       {NAV.map((n) => (
         <Focusable key={n.to} focusKey={`rail:${n.to}`} className="rail-item fx-flat" role="link" label={n.label}
-          aria-current={active(n.to) ? 'page' : undefined} data-testid={`nav-${n.label.toLowerCase().replace(' ', '-')}`}
+          aria-current={active(n.to) ? 'page' : undefined} data-testid={`nav-${n.label==='Series'?'shows':n.label.toLowerCase().replace(' ', '-')}`}
           onEnter={() => { setPinned(false); go(n.to) }}>
           <Icon name={n.icon} />
           <span className="lbl">{n.label}</span>

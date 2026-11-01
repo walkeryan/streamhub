@@ -1,0 +1,170 @@
+import { expect, test } from '@playwright/test'
+import { signIn } from './helpers'
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init), url = new URL(request.url)
+      if (url.pathname !== '/api/v1/sports/events') return original(request)
+      const state = window as unknown as { holdSports?: boolean; sportsPending?: boolean; releaseSports?: () => void }
+      if (state.holdSports) { state.holdSports = false; state.sportsPending = true; await new Promise<void>((resolve) => { state.releaseSports = resolve }) }
+      const now = Date.now(), iso = (offset: number) => new Date(now + offset).toISOString()
+      const feed = (id: string, language: string) => ({ channel_id: `ch:fixture:${id}`, channel_name: `Channel ${id}`, source_id: 'provider', source_name: 'My feed', programme_id: `p:${id}`, language, language_verified: false })
+      let events = [
+        { id: 'current', title: 'Blue Club vs Gold Club', sport: 'Soccer', start: iso(-600000), stop: iso(3600000), status: 'current', replay: false, live_evidence: false, grouping_evidence: 'matching_title_and_time', feeds: [feed('A', 'eng'), feed('B', 'fra')] },
+        { id: 'upcoming', title: 'Upcoming matchup from guide', sport: 'Football', start: iso(7200000), stop: iso(10800000), status: 'upcoming', replay: false, live_evidence: false, grouping_evidence: 'same_source_programme', feeds: [feed('C', 'eng')] },
+        { id: 'replay', title: 'Championship Replay', sport: 'Tennis', start: iso(-600000), stop: iso(3600000), status: 'current', replay: true, live_evidence: false, grouping_evidence: 'same_source_programme', feeds: [feed('D', 'eng')] },
+        { id: 'ended', title: 'Earlier guide event', sport: 'Soccer', start: iso(-7200000), stop: iso(-3600000), status: 'ended', replay: false, live_evidence: false, grouping_evidence: 'same_source_programme', feeds: [feed('E', 'eng')] },
+      ]
+      const guideDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now))
+      if (url.searchParams.get('date') !== guideDate) events = []
+      const status = url.searchParams.get('status')
+      if (status === 'replay') events = events.filter((event) => event.replay)
+      else if (status !== 'all') events = events.filter((event) => event.status === status)
+      const sport = url.searchParams.get('sport')
+      if (sport) events = events.filter((event) => event.sport === sport)
+      sessionStorage.setItem('sports.query', url.search)
+      return Response.json({ as_of: iso(0), date: url.searchParams.get('date'), timezone: 'America/New_York', events, total: events.length, offset: 0, limit: 40, sports: [{ name: 'Soccer', count: 2 }, { name: 'Football', count: 1 }, { name: 'Tennis', count: 1 }], coverage: { eligible_channels: 50, channels_with_sports_schedule: 5 }, truncated: false })
+    }
+  })
+})
+
+test('EPG events use honest states and explicit multiple-feed choice with remote focus restoration', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/sports')
+  await expect(page.getByTestId('sports-listing')).toHaveCount(4)
+  const event = page.getByRole('button', { name: 'View feeds for Blue Club vs Gold Club', exact: true })
+  await expect(event).toContainText('2 feeds')
+  await expect(event).toContainText('On now')
+  await expect(event).not.toContainText('LIVE')
+  await expect(page.locator('.sports-event-card img')).toHaveCount(0)
+  await expect(event).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Enter')
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText('Audio unverified · Channel hint: English')
+  await expect(dialog).toContainText('Audio unverified · Channel hint: French')
+  await expect(dialog.getByRole('button', { name: 'Watch Channel A' })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Watch Channel B' })).toBeVisible()
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  await expect(event).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('button', { name: 'Back to events', exact: true })).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('ArrowUp')
+  await expect(page.getByRole('button', { name: 'Watch Channel B' })).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/play\/ch%3Afixture%3AA(?:\?|$)/)
+})
+
+test('upcoming/ended listings never offer unverified catch-up; date/status controls are explicit', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/sports')
+  await page.getByRole('button', { name: 'View feeds for Upcoming matchup from guide', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('Scheduled for later')
+  await expect(page.getByRole('dialog').getByRole('button', { name: /^Watch / })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'View feeds for Earlier guide event', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('Replay playback availability is not verified')
+  await expect(page.getByRole('dialog').getByRole('button', { name: /^Watch / })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Replays', exact: true }).click()
+  await expect(page.getByTestId('sports-listing')).toHaveCount(1)
+  await expect(page.getByTestId('sports-listing')).toContainText('Replay')
+  await page.getByTestId('sports-filters').click()
+  const date = await page.getByTestId('sports-date').textContent()
+  await page.getByRole('button', { name: 'Next day', exact: true }).click()
+  await expect(page.getByTestId('sports-date')).not.toHaveText(date!)
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('sports.query'))).toContain('status=replay')
+  await expect(page.getByTestId('sports-listing')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Today', exact: true }).click()
+  await expect(page.getByTestId('sports-listing')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Show events', exact: true }).click()
+  await page.getByRole('button', { name: 'All broadcasts', exact: true }).click()
+  await expect(page.getByTestId('sports-listing')).toHaveCount(4)
+  await page.getByRole('button', { name: 'View feeds for Blue Club vs Gold Club', exact: true }).hover()
+  await page.waitForTimeout(250)
+  await page.screenshot({ path: '/tmp/streamhub-events-desktop.png' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: 'View feeds for Blue Club vs Gold Club', exact: true }).hover()
+  await page.waitForTimeout(250)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.mouse.move(385, 10)
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.waitForTimeout(250)
+  await page.screenshot({ path: '/tmp/streamhub-events-mobile.png' })
+})
+
+
+test('sport picker retains alternatives without fabricated counts after narrowing', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/sports')
+  await page.getByTestId('sports-filters').click()
+  await page.getByRole('button', { name: 'Sport: All sports', exact: true }).click()
+  await page.getByRole('button', { name: 'Rugby', exact: true }).click()
+  await expect(page.getByText('No matching sports listings', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sport: Rugby', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'All sports', exact: true }).click()
+  await expect(page.getByTestId('sports-listing')).toHaveCount(4)
+})
+
+test('an event ending while its feed chooser is open removes Watch and restores safe focus', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/sports')
+  await page.getByRole('button', { name: 'View feeds for Blue Club vs Gold Club', exact: true }).click()
+  await page.getByRole('button', { name: 'Watch Channel A', exact: true }).hover()
+  await page.clock.install()
+  await page.clock.fastForward(3601000)
+  await expect(page.getByRole('dialog').getByRole('button', { name: /^Watch / })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Back to events', exact: true })).toHaveAttribute('data-focused', 'true')
+  await expect(page.getByRole('dialog')).toContainText('Replay playback availability is not verified')
+})
+
+
+test('event-first layout fits the first card and Filters is remote accessible', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/sports')
+  const first = page.getByRole('button', { name: 'View feeds for Blue Club vs Gold Club', exact: true })
+  await expect(first).toHaveAttribute('data-focused', 'true')
+  await expect(page.getByLabel('Search sports programmes or channels')).toHaveCount(0)
+  for (let step = 0; step < 5 && await page.getByTestId('sports-filters').getAttribute('data-focused') !== 'true'; step++) await page.keyboard.press('ArrowUp')
+  await expect(page.getByTestId('sports-filters')).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Enter')
+  await expect(page.getByLabel('Search sports programmes or channels')).toBeFocused()
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('sports-filters')).toHaveAttribute('data-focused', 'true')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await first.hover()
+  await page.evaluate(() => window.scrollTo(0, 0))
+  const box = await first.boundingBox()
+  expect(box!.y).toBeGreaterThanOrEqual(0)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(844 - 64)
+})
+
+test('finishing the initial event request does not steal focus from an opened filter panel', async ({ page }) => {
+  await signIn(page)
+  await page.evaluate(() => { (window as unknown as { holdSports: boolean }).holdSports = true })
+  await page.getByRole('link', { name: 'Sports', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as unknown as { sportsPending?: boolean }).sportsPending)).toBe(true)
+  await page.getByTestId('sports-filters').click()
+  const search = page.getByLabel('Search sports programmes or channels')
+  await expect(search).toBeFocused()
+  await page.evaluate(() => (window as unknown as { releaseSports: () => void }).releaseSports())
+  await expect(page.getByTestId('sports-listing')).toHaveCount(4)
+  await expect(search).toBeFocused()
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveCount(1)
+})
+
+
+test('Back from a chosen feed restores its event rather than the first card', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/sports')
+  const replay = page.getByRole('button', { name: 'View feeds for Championship Replay', exact: true })
+  await replay.click()
+  await page.getByRole('button', { name: 'Watch Channel D', exact: true }).click()
+  await expect(page).toHaveURL(/\/play\/ch%3Afixture%3AD(?:\?|$)/)
+  await page.goBack()
+  await expect(replay).toHaveAttribute('data-focused', 'true')
+})

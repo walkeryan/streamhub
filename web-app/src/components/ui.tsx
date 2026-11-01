@@ -58,7 +58,7 @@ export function SourceChips({ sources, max = 2 }: { sources: SourceBadge[]; max?
     <>
       {shown.map((s) => (
         <span key={s.source_id + s.name} className={cn('badge', s.playable_in_app && 'badge-play')}>
-          {s.playable_in_app ? 'Play' : 'Open'} · {s.name}
+          {s.playable_in_app ? 'Available' : 'Open'} · {s.name}
         </span>
       ))}
     </>

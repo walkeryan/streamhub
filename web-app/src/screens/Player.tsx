@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useChannels } from '../api/hooks'
 import { Button, Chip, ProgressBar } from '../components/ui'
 import { ChannelRow } from '../components/ChannelRow'
 import { FocusGroup, Focusable } from '../nav/Focusable'
-import { useBackHandler, useOverlayFocus } from '../nav/back'
+import { hasPlaybackEntry, useBackHandler, useOverlayFocus } from '../nav/back'
 import { setFocus } from '../nav/spatial'
+import { ChannelAudioPrompt, useChannelAudio } from '../player/channelAudio'
+import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
+import { LocalBufferControls } from '../player/LocalBufferControls'
+import { RewindControls } from '../player/RewindControls'
+import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
 
@@ -19,15 +24,33 @@ export function Player() {
   const id = decodeURIComponent(useParams().id ?? '')
   const [sp] = useSearchParams()
   const sourceId = sp.get('source')
+  const variantId = sp.get('variant') ?? undefined
+  const profileId = useSession((s) => s.profile?.id)
+  const audioChoice = sp.get('audio_choice')
   const catchup = sp.get('catchup')
+  const rewindAt = sp.get('rewind')
+  const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId, { sourceId, catchupProgrammeId: catchup, rewindAt }), [profileId, audioChoice, id, variantId, sourceId, catchup, rewindAt])
+  const location = useLocation()
+  const locationKey = location.key
+  const selectionKey = `${profileId}|${id}|${sp.toString()}|${locationKey}`
+  const [manualChoice, setManualChoice] = useState<string | null>(null)
   const navigate = useNavigate()
+  const cancelPending = () => {
+    if (activeId.current === id && hasPlaybackEntry(location.state, location.pathname + location.search)) navigate(-1)
+    else navigate('/live', {replace:true})
+  }
   const videoRef = useRef<HTMLVideoElement>(null)
   const isChannel = id.startsWith('ch:')
+  // Router URL updates can precede the next React commit. Remote events in
+  // that gap must use the selected channel, not the previous render's id.
+  const activeId = useRef(id)
+  useLayoutEffect(() => { activeId.current = id }, [id])
 
-  const req = useMemo(() => ({ id, sourceId, catchupProgrammeId: catchup }), [id, sourceId, catchup])
-  const pb = usePlayback(videoRef, req)
+  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt])
+  const audio = useChannelAudio(req, manualChoice === selectionKey)
+  const pb = usePlayback(videoRef, audio.request, { buffer: true })
   const { desc, state } = pb
-  const live = !!desc?.live || isChannel
+  const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
 
   const toast = useUi((s) => s.toast)
   const stored = useUi((s) => s.channelList)
@@ -65,14 +88,14 @@ export function Player() {
   const [ui, setUi] = useState(() => !isChannel)
   const [osd, setOsd] = useState(true)
   const [paused, setPaused] = useState(true)
-  const [time, setTime] = useState({ cur: 0, dur: 0 })
+  const [time, setTime] = useState({ cur: 0, dur: 0, seekable: false })
   const [aspect, setAspect] = useState<Aspect>('contain')
   const [digits, setDigits] = useState('')
   const digitsRef = useRef('')
   const now = useNow(15_000)
-  const blocking = overlay !== null || state === 'error' || state === 'handoff'
+  const blocking = audio.blocked || overlay !== null || state === 'error' || state === 'handoff'
   const blockingRef = useRef(false)
-  blockingRef.current = blocking
+  blockingRef.current = blocking || activeId.current !== id
   const [backHint, setBackHint] = useState(false)
 
   // ---- activity-driven chrome ----
@@ -98,15 +121,25 @@ export function Player() {
   useEffect(() => {
     const v = videoRef.current
     if (!v) return
-    const t = () => setTime({ cur: v.currentTime, dur: Number.isFinite(v.duration) ? v.duration : 0 })
+    const t = () => setTime({ cur: v.currentTime, dur: Number.isFinite(v.duration) ? v.duration : 0, seekable: v.seekable.length > 0 })
     const p = () => { setPaused(v.paused); if (v.paused) setUi(true) }
     v.addEventListener('timeupdate', t); v.addEventListener('pause', p); v.addEventListener('play', p); v.addEventListener('loadedmetadata', t)
     return () => { v.removeEventListener('timeupdate', t); v.removeEventListener('pause', p); v.removeEventListener('play', p); v.removeEventListener('loadedmetadata', t) }
   }, [])
 
   const exit = useCallback(() => navigate(-1), [navigate])
-  const togglePlay = useCallback(() => { const v = videoRef.current; if (!v) return; if (v.paused) void v.play(); else v.pause() }, [])
-  const seekBy = useCallback((s: number) => { const v = videoRef.current; if (v && Number.isFinite(v.duration)) v.currentTime = Math.min(v.duration, Math.max(0, v.currentTime + s)) }, [])
+  const togglePlay = () => { const v = videoRef.current; if (!v) return; if (v.paused) pb.resume(); else pb.pause() }
+  const seekBy = useCallback((s: number) => {
+    const v = videoRef.current
+    if (!v || !v.seekable.length) return
+    const wanted = v.currentTime + s
+    let closest = v.currentTime, distance = Infinity
+    for (let i = 0; i < v.seekable.length; i++) {
+      const candidate = Math.max(v.seekable.start(i), Math.min(v.seekable.end(i), wanted))
+      if (Math.abs(candidate - wanted) < distance) { closest = candidate; distance = Math.abs(candidate - wanted) }
+    }
+    v.currentTime = closest
+  }, [])
   const pip = useCallback(async () => {
     const v = videoRef.current
     if (!v) return
@@ -122,16 +155,20 @@ export function Player() {
   }, [])
 
   const zapTo = useCallback((cid: string) => {
-    if (cid === id) return
-    setLast(id)
+    const previous = activeId.current
+    if (cid === previous) return
+    activeId.current = cid
+    blockingRef.current = true
+    setLast(previous)
     navigate(`/play/${encodeURIComponent(cid)}`, { replace: true })
-  }, [id, navigate, setLast])
+  }, [navigate, setLast])
   const zap = useCallback((d: number) => {
     if (!list.length) return
-    const i = idx < 0 ? 0 : (idx + d + list.length) % list.length
+    const currentIndex = list.findIndex((c) => c.id === activeId.current)
+    const i = currentIndex < 0 ? 0 : (currentIndex + d + list.length) % list.length
     const c = list[i]
     if (c) zapTo(c.id)
-  }, [list, idx, zapTo])
+  }, [list, zapTo])
 
   const showChrome = ui || paused || overlay === 'bar'
   const chromeRef = useRef(false)
@@ -148,7 +185,7 @@ export function Player() {
   // zap never sees stale state.
   // zapping with the controls hidden keeps them hidden (poke() runs on every key)
   const hideIfHidden = useCallback((visible: boolean) => { if (!visible) hideChrome() }, [hideChrome])
-  const handlers = { live, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
+  const handlers = { id, live, isChannel, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
   const apiRef = useRef(handlers)
   apiRef.current = handlers
   useEffect(() => {
@@ -158,6 +195,16 @@ export function Player() {
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
       const handled = () => { e.preventDefault(); e.stopImmediatePropagation() }
+      if (chromeRef.current && document.activeElement?.closest('[data-testid="rewind-controls"], [data-testid="local-buffer-controls"]')) { a.poke(); return }
+      // A zap updates the URL before React commits the next player. Keep the
+      // keyboard last-channel shortcut out of the global Back stack in that gap.
+      // Real remote Back still follows isBackKey above; open overlays keep Back.
+      if (e.key === 'Backspace' && a.live && activeId.current !== a.id && overlayRef.current === null && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        handled()
+        const last = useUi.getState().lastChannelId
+        if (last) a.zapTo(last)
+        return
+      }
       if (overlayRef.current === 'bar' && e.key === 'ArrowUp') { handled(); setOverlay(null); a.poke(); return }
       const visible = chromeRef.current
       a.poke()
@@ -205,11 +252,12 @@ export function Player() {
   const backTimer = useRef(0)
   useEffect(() => () => window.clearTimeout(backTimer.current), [])
   useBackHandler(() => {
+    if (audio.blocked || activeId.current !== id) { cancelPending(); return true }
     const o = overlayRef.current
     if (o) { closeOverlay(); if (o === 'bar') hideChrome(); return true }
     if (chromeRef.current && !pausedRef.current) { hideChrome(); return true }
     const last = useUi.getState().lastChannelId
-    if (!live || !last || last === id) return false
+    if (!live || !last || last === activeId.current) return false
     if (backTimer.current) {
       window.clearTimeout(backTimer.current); backTimer.current = 0; setBackHint(false)
       zapTo(last); showOsd()
@@ -221,6 +269,8 @@ export function Player() {
   })
   // menu and list remember and restore the focused control; the bar moves focus itself (setOverlay)
   useOverlayFocus(overlay === 'menu' || overlay === 'list', overlay === 'list' ? 'pl:current' : 'pm:first')
+
+  useEffect(() => { if (pb.audioBlocked) setOverlay('menu') }, [pb.audioBlocked, setOverlay])
 
   // ---- sleep timer ----
   const [sleepAt, setSleepAt] = useState<number | null>(null)
@@ -237,7 +287,7 @@ export function Player() {
   const title = desc?.title ?? channel?.name ?? 'Loading…'
   const pct = live ? (channel?.now ? progressOf(channel.now.start, channel.now.stop, now) : 0) : time.dur ? (time.cur / time.dur) * 100 : 0
 
-  if (state === 'handoff' && desc?.handoff) {
+  if (!audio.blocked && state === 'handoff' && desc?.handoff) {
     const h = desc.handoff
     return (
       <div className="player grid place-items-center p-6" data-testid="handoff" role="main">
@@ -255,23 +305,24 @@ export function Player() {
   }
 
   return (
-    <div className="player" data-testid="player" data-state={state} role="main" onPointerMove={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
+    <div className="player" data-testid="player" data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} role="main" onPointerMove={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
       {/* focus target for "the video itself": Up from the control bar lands here, so no hidden button keeps focus */}
       <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>
       <video ref={videoRef} playsInline loop={live && desc?.mime === 'video/webm'} style={{ objectFit: aspect }} data-testid="video" aria-label={title} onDoubleClick={fullscreen} onClick={togglePlay} />
 
-      {(state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && (
+      {!audio.blocked && (state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }} role="status">
           <div className="flex flex-col items-center gap-3"><span className="skel" style={{ width: 48, height: 48, borderRadius: 999 }} /><span>{state === 'reconnecting' ? 'Connection lost. Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Starting stream…'}</span></div>
         </div>
       )}
 
-      {state === 'error' && (
+      {!audio.blocked && state === 'error' && (
         <div className="grid place-items-center p-6" style={{ position: 'absolute', inset: 0, zIndex: 8, background: 'rgba(0,0,0,.8)' }} role="alert" data-testid="player-error">
           <FocusGroup focusKey="perr" className="flex flex-col gap-4 items-start" style={{ maxWidth: '34rem' }}>
             <h1 className="title-xl">Playback stopped</h1>
             <p>{pb.error ?? 'The stream could not be played.'}</p>
             <div className="flex gap-3">
+              <Button focusKey="perr:source" onEnter={() => { if (audio.enabled) { setManualChoice(selectionKey); void audio.query.refetch() } else navigate(`/title/${encodeURIComponent(id)}?choose=1`) }}>Choose audio / source</Button>
               <Button focusKey="perr:retry" primary icon="refresh" onEnter={pb.retryNow}>Try again</Button>
               <Button focusKey="perr:back" onEnter={exit}>Back</Button>
             </div>
@@ -296,27 +347,46 @@ export function Player() {
           {!live && (
             <div className="flex items-center gap-3">
               <span className="label" style={{ color: '#fff' }}>{fmtDuration(time.cur)}</span>
-              <ProgressBar pct={pct} className="flex-1" />
+              <Focusable focusKey="pb:scrub" role="slider" className="flex-1" disabled={!time.seekable}
+                label={time.seekable ? `Seek ${fmtDuration(time.cur)} of ${fmtDuration(time.dur)}. Left and right move ten seconds.` : 'This stream has not supplied a seekable range.'}
+                onArrow={(direction) => { if (direction === 'left' || direction === 'right') { seekBy(direction === 'left' ? -10 : 10); return false } return true }}
+                onEnter={togglePlay}><ProgressBar pct={pct} /></Focusable>
               <span className="label" style={{ color: '#fff' }}>{fmtDuration(time.dur)}</span>
             </div>
           )}
+
           <FocusGroup focusKey="pb" className="flex gap-2 flex-wrap items-center" data-testid="player-bar">
             <Button focusKey="pb:play" primary iconOnly icon={paused ? 'play' : 'pause'} label={paused ? 'Play' : 'Pause'} onEnter={togglePlay} />
-            {!live && <Button focusKey="pb:back10" ghost onEnter={() => seekBy(-10)}>−10 s</Button>}
-            {!live && <Button focusKey="pb:fwd10" ghost onEnter={() => seekBy(10)}>+10 s</Button>}
-            {live && <Button focusKey="pb:ch-" ghost icon="down" label="Channel down" onEnter={() => zap(-1)} />}
-            {live && <Button focusKey="pb:ch+" ghost icon="up" label="Channel up" onEnter={() => zap(1)} />}
-            {live && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn">Channels</Button>}
+            {!live && <Button focusKey="pb:back10" disabled={!time.seekable} ghost onEnter={() => seekBy(-10)}>−10 s</Button>}
+            {!live && <Button focusKey="pb:fwd10" disabled={!time.seekable} ghost onEnter={() => seekBy(10)}>+10 s</Button>}
+            {isChannel && <Button focusKey="pb:ch-" ghost icon="down" label="Channel down" onEnter={() => zap(-1)} />}
+            {isChannel && <Button focusKey="pb:ch+" ghost icon="up" label="Channel up" onEnter={() => zap(1)} />}
+            {isChannel && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn">Channels</Button>}
             <Button focusKey="pb:menu" ghost icon="cc" onEnter={() => setOverlay('menu')} testId="player-menu-btn">Audio and subtitles</Button>
             <Button focusKey="pb:pip" ghost icon="pip" label="Picture in picture" onEnter={() => void pip()} testId="player-pip">PiP</Button>
             <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" onEnter={fullscreen} />
+          {pb.bufferWindow && <LocalBufferControls window={pb.bufferWindow} issue={pb.bufferIssue} onSeek={pb.seekBuffer} />}
+          {pb.bufferIssue && !pb.bufferWindow && <span role="status">{pb.bufferIssue}</span>}
+          {isChannel && !pb.bufferWindow && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
+            const next = new URLSearchParams(sp); next.delete("catchup");
+            if (at) next.set("rewind", at); else next.delete("rewind");
+            navigate(`/play/${encodeURIComponent(id)}?${next}`, { replace: true });
+          }} />}
           </FocusGroup>
         </div>
       </div>
 
+      <ChannelAudioPrompt audio={audio} onCancel={cancelPending} onChoose={(option, explicit) => {
+        const next = new URLSearchParams(sp)
+        next.set('variant', option.variant_id)
+        if (explicit) next.set('audio_choice', grantAudioConsent(id, option.variant_id, { sourceId, catchupProgrammeId: catchup, rewindAt }))
+        else next.delete('audio_choice')
+        navigate(`/play/${encodeURIComponent(id)}?${next}`, { replace: true })
+      }} />
+
       {/* channel OSD */}
       {live && (
-        <div className="osd" data-show={osd || ui} data-testid="osd">
+        <div className="osd" data-show={(osd || ui) && !(pb.bufferWindow && showChrome)} data-testid="osd">
           <div className="flex items-center gap-4">
             <span className="osd-num">{channel?.number ?? ''}</span>
             <div className="min-w-0 flex-1">
@@ -336,8 +406,10 @@ export function Player() {
           <FocusGroup focusKey="pm" boundary className="dialog" role="dialog" label="Playback options" data-testid="player-menu" style={{ borderRadius: 0, width: 'min(26rem, 100%)', maxHeight: '100dvh', background: 'var(--t-surface)', color: 'var(--t-text)' }}>
             <div className="flex items-center justify-between"><h2 className="title-xl">Playback</h2><Button focusKey="pm:close" ghost iconOnly icon="x" label="Close" onEnter={closeOverlay} /></div>
             <MenuSection title="Audio">
-              {tr.audio.length === 0 ? <span className="muted label" style={{ flexBasis: '100%' }}>Only one audio track.</span> : tr.audio.map((t, i) => (
-                <Chip key={t.id} focusKey={i === 0 ? 'pm:first' : `pm:a${t.id}`} pressed={t.active} onEnter={() => pb.setAudio(t.id)}>{t.label}</Chip>
+              {pb.audioBlocked && <p role="alert" data-testid="runtime-audio-blocked">Playback paused: the selected audio language is unknown or does not match your preferences. Choose an audio track, or explicitly continue with the current audio.</p>}
+              {pb.audioBlocked && <Button focusKey="pm:consent" onEnter={pb.consentToCurrentAudio}>Continue with current audio</Button>}
+              {tr.audio.length === 0 ? <span className="muted label" style={{ flexBasis: '100%' }}>Audio track language is not exposed by this player.</span> : tr.audio.map((t, i) => (
+                <Chip key={t.id} focusKey={i === 0 ? 'pm:first' : `pm:a${t.id}`} pressed={t.active} onEnter={() => pb.setAudio(t.id)}>{t.label}{!t.language || t.language === 'und' ? ' · language unknown' : ` · ${t.language}`}</Chip>
               ))}
             </MenuSection>
             <MenuSection title="Subtitles">

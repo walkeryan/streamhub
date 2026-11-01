@@ -13,9 +13,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import ColumnElement, and_, delete, or_, select
 
-from app.domain.entities import SourceType
+from app.domain.entities import MetaTitle, SourceType
 from app.domain.ports import MetadataProvider
 from app.infra.db import Database
 from app.infra.models import Availability, ServiceRegistry, Source, Title, utcnow
@@ -45,22 +45,95 @@ class AvailabilityService:
             conds.append(Title.tmdb_id == tmdb_id)
         if imdb_id:
             conds.append(Title.imdb_id == imdb_id)
-        if title:
-            norm = ids.normalise_title(title)
-            if norm:
-                yc = Title.year.is_(None) if year is None else or_(Title.year == year, Title.year.is_(None))
-                conds.append(and_(Title.tmdb_id.is_(None), Title.norm_title == norm, yc))
+        # Without an external ID, require the same known year and exact cleaned
+        # title. Fuzzy search is for discovery, never for selecting a playable source.
+        norm = ids.normalise_title(ids.clean_display_title(title or ""))
+        if norm and year is not None:
+            conds.append(
+                and_(
+                    Title.tmdb_id.is_(None),
+                    Title.imdb_id.is_(None),
+                    Title.year == year,
+                    Title.norm_title.like(f"%{norm.replace('%', '').replace('_', '')}%"),
+                )
+            )
         if not conds:
             return []
         async with self._db.session() as s:
-            rows = (
-                await s.execute(
-                    select(Title)
-                    .join(Source, Source.id == Title.source_id)
-                    .where(Title.kind.in_(kinds), or_(*conds), Source.enabled.is_(True))
+            rows = list(
+                (
+                    await s.execute(
+                        select(Title)
+                        .join(Source, Source.id == Title.source_id)
+                        .where(Title.kind.in_(kinds), or_(*conds), Source.enabled.is_(True))
+                    )
+                ).scalars()
+            )
+        return [
+            row
+            for row in rows
+            if (tmdb_id and row.tmdb_id == tmdb_id)
+            or (imdb_id and row.imdb_id == imdb_id and not (tmdb_id and row.tmdb_id and row.tmdb_id != tmdb_id))
+            or (
+                not row.tmdb_id
+                and not row.imdb_id
+                and year is not None
+                and row.year == year
+                and ids.normalise_title(ids.clean_display_title(row.title)) == norm
+            )
+        ]
+
+    async def library_matches_many(
+        self, metas: list[MetaTitle], *, candidates: list[Title] | None = None
+    ) -> dict[str, list[Title]]:
+        """Three indexed lookups for a discovery page, never a LIKE scan per title.
+
+        Already bounded search candidates additionally support dirty provider prefixes.
+        Unidentified titles outside that candidate set require exact stored normalized
+        names; do not scan or fuzzy-join the whole catalog to invent availability.
+        """
+        if not metas:
+            return {}
+        tmdb_ids = {m.tmdb_id for m in metas}
+        imdb_ids = {m.imdb_id for m in metas if m.imdb_id}
+        norms = {ids.normalise_title(ids.clean_display_title(m.title)) for m in metas if m.year is not None}
+        queries: list[ColumnElement[bool]] = [Title.tmdb_id.in_(tmdb_ids)]
+        if imdb_ids:
+            queries.append(Title.imdb_id.in_(imdb_ids))
+        if norms:
+            queries.append(and_(Title.norm_title.in_(norms), Title.tmdb_id.is_(None), Title.imdb_id.is_(None)))
+        rows = {r.id: r for r in candidates or []}
+        async with self._db.session() as session:
+            for condition in queries:
+                found = (
+                    await session.execute(
+                        select(Title)
+                        .join(Source, Source.id == Title.source_id)
+                        .where(condition, Source.enabled.is_(True))
+                    )
+                ).scalars()
+                rows.update((r.id, r) for r in found)
+        out: dict[str, list[Title]] = {}
+        for meta in metas:
+            norm = ids.normalise_title(ids.clean_display_title(meta.title))
+            kinds = ids.MOVIE_KINDS if meta.media_type == "movie" else ids.SHOW_KINDS
+            out[ids.tmdb_id(meta.media_type, meta.tmdb_id)] = [
+                r
+                for r in rows.values()
+                if r.kind in kinds
+                and (
+                    r.tmdb_id == meta.tmdb_id
+                    or (meta.imdb_id and r.imdb_id == meta.imdb_id and not r.tmdb_id)
+                    or (
+                        not r.tmdb_id
+                        and not r.imdb_id
+                        and meta.year is not None
+                        and r.year == meta.year
+                        and ids.normalise_title(ids.clean_display_title(r.title)) == norm
+                    )
                 )
-            ).scalars()
-            return list(rows)
+            ]
+        return out
 
     async def provider_offers(self, media_type: str, tmdb_id: int, region: str) -> list[Availability]:
         """Cached per (title, region) in the availability table; refreshed via the TMDB cache."""

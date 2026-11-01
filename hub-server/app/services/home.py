@@ -11,6 +11,7 @@ from app.services import ids
 from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService, programme_dict
+from app.services.recommendations import recommendations
 from app.services.sources import SourceService
 from app.services.tiles import TileContext, meta_tile
 from app.services.user_state import HOME_ROWS, HomeLayoutService, ProgressService
@@ -102,6 +103,8 @@ class HomeService:
             title = ROW_TITLES.get(rid, rid)
             if rid == "continue_watching":
                 tiles = cw
+            elif rid == "recommendations":
+                tiles, title = await recommendations(self._catalog, profile_id, ctx)
             elif rid == "on_now":
                 tiles, title = await self.on_now(profile_id, ctx)
             elif rid == "seasonal_halloween":

@@ -127,6 +127,8 @@ class ProgrammeInfo:
     category: str | None = None
     icon: str | None = None
 
+    age_evidence: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass(slots=True)
 class EpgSourceSpec:
@@ -192,6 +194,8 @@ class MetaTitle:
     cast: list[dict[str, Any]] = field(default_factory=list)
     logo: str | None = None
     popularity: float = 0.0
+
+    age_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

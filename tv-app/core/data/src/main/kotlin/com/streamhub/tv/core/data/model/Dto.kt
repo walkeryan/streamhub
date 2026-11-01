@@ -56,6 +56,8 @@ data class Profile(
     @SerialName("has_pin") val hasPin: Boolean = false,
     val kids: Boolean = false,
     @SerialName("disclaimer_accepted_version") val disclaimerAcceptedVersion: String? = null,
+    @SerialName("has_password") val hasPassword: Boolean = false,
+    @SerialName("content_restricted") val contentRestricted: Boolean = false,
 )
 
 @Serializable
@@ -237,6 +239,8 @@ data class TitleDetail(
 
 @Serializable
 data class SearchResponse(
+    val results: List<Tile>? = null,
+    @SerialName("discovery_note") val discoveryNote: String? = null,
     @SerialName("play_here") val playHere: List<Tile> = emptyList(),
     @SerialName("open_in_app") val openInApp: List<Tile> = emptyList(),
     val channels: List<Channel> = emptyList(),
@@ -317,6 +321,9 @@ data class PlaybackRequest(
     @SerialName("source_id") val sourceId: String? = null,
     val client: String = "android_tv",
     @SerialName("catchup_programme_id") val catchupProgrammeId: String? = null,
+    @SerialName("variant_id") val variantId: String? = null,
+    @SerialName("allow_unverified_audio") val allowUnverifiedAudio: Boolean = false,
+    @SerialName("rewind_at") val rewindAt: String? = null,
 )
 
 @Serializable
@@ -361,6 +368,11 @@ data class PlaybackDescriptor(
     val poster: String? = null,
     @SerialName("channel_context") val channelContext: ChannelContext? = null,
     val handoff: Handoff? = null,
+    @SerialName("archive_start") val archiveStart: String? = null,
+    @SerialName("archive_end") val archiveEnd: String? = null,
+    @SerialName("buffer_available") val bufferAvailable: Boolean = false,
+    @SerialName("preferred_audio_languages") val preferredAudioLanguages: List<String> = emptyList(),
+    @SerialName("audio_language_required") val audioLanguageRequired: Boolean = false,
 )
 
 @Serializable
@@ -373,6 +385,7 @@ enum class PlaybackState {
 @Serializable
 data class ProgressReport(
     val id: String,
+    @SerialName("expected_profile_id") val expectedProfileId: String? = null,
     @SerialName("source_id") val sourceId: String? = null,
     @SerialName("position_ms") val positionMs: Long,
     @SerialName("duration_ms") val durationMs: Long? = null,
@@ -399,3 +412,82 @@ data class Settings(
     @SerialName("transcode_hw") val transcodeHw: String? = null,
     @SerialName("proxy_mode") val proxyMode: String? = null,
 )
+
+@Serializable
+data class PlaybackOption(
+    @SerialName("variant_id") val variantId: String,
+    @SerialName("source_id") val sourceId: String,
+    @SerialName("source_name") val sourceName: String,
+    @SerialName("provider_label") val providerLabel: String,
+    @SerialName("audio_languages") val audioLanguages: List<String> = emptyList(),
+    @SerialName("audio_verified") val audioVerified: Boolean = false,
+    @SerialName("default_audio_language") val defaultAudioLanguage: String? = null,
+    @SerialName("language_hint") val languageHint: String? = null,
+    @SerialName("preferred_audio_available") val preferredAudioAvailable: Boolean = false,
+)
+
+@Serializable
+data class PlaybackOptions(
+    val id: String,
+    val options: List<PlaybackOption> = emptyList(),
+    @SerialName("automatic_variant_id") val automaticVariantId: String? = null,
+    @SerialName("preferred_languages") val preferredLanguages: List<String> = emptyList(),
+)
+
+@Serializable data class RewindCapability(
+    val mode: String = "unavailable",
+    @SerialName("advertised_start") val advertisedStart: String? = null,
+    @SerialName("advertised_end") val advertisedEnd: String? = null,
+    val verified: Boolean = false,
+    @SerialName("recording_enabled") val recordingEnabled: Boolean = false,
+    @SerialName("granularity_seconds") val granularitySeconds: Int = 60,
+    val reason: String = "No provider archive advertised",
+)
+
+@Serializable data class BufferWindow(
+    val mode: String = "local_buffer", val start: String? = null, val end: String? = null,
+    @SerialName("buffered_seconds") val bufferedSeconds: Double = 0.0,
+    @SerialName("target_seconds") val targetSeconds: Int = 3600,
+    @SerialName("recording_enabled") val recordingEnabled: Boolean = false,
+)
+@Serializable data class BufferLease(
+    @SerialName("lease_id") val leaseId: String,
+    @SerialName("session_id") val sessionId: String,
+    val window: BufferWindow,
+)
+@Serializable data class BufferLeaseRequest(@SerialName("stream_token") val streamToken: String)
+@Serializable data class BufferLeaseAction(
+    @SerialName("stream_token") val streamToken: String,
+    @SerialName("lease_id") val leaseId: String,
+    val paused: Boolean = false,
+    val at: String? = null,
+)
+@Serializable data class BufferSeekResult(val url: String, val window: BufferWindow)
+
+@Serializable data class AuthConfig(
+    @SerialName("google_enabled") val googleEnabled: Boolean = false,
+    @SerialName("google_required") val googleRequired: Boolean = true,
+    @SerialName("content_policy_enabled") val contentPolicyEnabled: Boolean = false,
+    @SerialName("owner_pin_configured") val ownerPinConfigured: Boolean = false,
+)
+@Serializable data class OwnerPinStart(@SerialName("profile_id") val profileId: String, val action: String = "profile_switch")
+@Serializable data class OwnerPinChallenge(
+    @SerialName("challenge_id") val challengeId: String,
+    @SerialName("poll_token") val pollToken: String,
+    @SerialName("expires_in") val expiresIn: Int,
+) {
+    override fun toString(): String = "OwnerPinChallenge(challengeId=[REDACTED], pollToken=[REDACTED], expiresIn=$expiresIn)"
+}
+@Serializable data class OwnerPinCancel(
+    @SerialName("challenge_id") val challengeId: String,
+    @SerialName("poll_token") val pollToken: String,
+) {
+    override fun toString(): String = "OwnerPinCancel(challengeId=[REDACTED], pollToken=[REDACTED])"
+}
+@Serializable data class OwnerPinVerify(
+    @SerialName("challenge_id") val challengeId: String,
+    @SerialName("poll_token") val pollToken: String,
+    val pin: String,
+) {
+    override fun toString(): String = "OwnerPinVerify(challengeId=[REDACTED], pollToken=[REDACTED], pin=[REDACTED])"
+}

@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -8,7 +9,21 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+// Private signing credentials are read only from an explicitly supplied local file.
+// CI and unconfigured developer builds stay unsigned; no ephemeral debug identity.
+val privateSigning = providers.environmentVariable("STREAMHUB_SIGNING_PROPERTIES").orNull?.let { path ->
+    Properties().apply { file(path).inputStream().use { load(it) } }
+}
+
 android {
+    val durableSigning = privateSigning?.let { props ->
+        signingConfigs.create("streamhub") {
+            storeFile = file(requireNotNull(props.getProperty("storeFile")))
+            storePassword = requireNotNull(props.getProperty("storePassword"))
+            keyAlias = requireNotNull(props.getProperty("keyAlias"))
+            keyPassword = requireNotNull(props.getProperty("keyPassword"))
+        }
+    }
     namespace = "com.streamhub.tv"
     compileSdk = libs.versions.compileSdk.get().toInt()
 
@@ -16,8 +31,8 @@ android {
         applicationId = "com.streamhub.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 4
+        versionName = "1.1.2"
     }
 
     buildTypes {
@@ -25,10 +40,10 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Sideload builds: sign with the debug key unless a release keystore is configured.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = durableSigning
         }
         debug {
+            signingConfig = durableSigning
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }

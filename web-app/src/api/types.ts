@@ -27,3 +27,6 @@ export type BrowsePage = paths['/browse/{section}']['get']['responses']['200']['
 export type ChannelsResult = paths['/channels']['get']['responses']['200']['content']['application/json']
 export type EpgData = paths['/epg']['get']['responses']['200']['content']['application/json']
 export type LanguageCount = { code: string; name: string; count: number }
+
+export type PlaybackOption = S['PlaybackOption']
+export type PlaybackOptions = S['PlaybackOptions']

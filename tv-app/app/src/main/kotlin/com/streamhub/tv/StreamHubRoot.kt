@@ -6,13 +6,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarViewWeek
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.Composable
@@ -54,14 +54,16 @@ import com.streamhub.tv.core.ui.components.PlayLauncher
 import com.streamhub.tv.core.ui.components.RailItem
 import com.streamhub.tv.core.ui.components.RailMetrics
 import com.streamhub.tv.core.ui.components.ScreenBackground
+import com.streamhub.tv.core.ui.components.AudioSourceDialog
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.RailController
 import com.streamhub.tv.feature.details.DetailsScreen
 import com.streamhub.tv.feature.favorites.FavoritesScreen
-import com.streamhub.tv.feature.guide.GuideScreen
+import com.streamhub.tv.feature.home.DiscoveryScreen
+import com.streamhub.tv.feature.player.MultiviewScreen
 import com.streamhub.tv.feature.home.BrowseScreen
 import com.streamhub.tv.feature.home.HomeScreen
-import com.streamhub.tv.feature.livetv.LiveTvScreen
+import com.streamhub.tv.feature.home.SportsScreen
 import com.streamhub.tv.feature.onboarding.OnboardingScreen
 import com.streamhub.tv.feature.player.PlayerScreen
 import com.streamhub.tv.feature.search.SearchScreen
@@ -81,6 +83,10 @@ object Routes {
     const val SEARCH = "search"
     const val LIVE = "live"
     const val GUIDE = "guide"
+    const val SPORTS = "sports"
+    const val DISCOVER = "discover/{section}"
+    const val MULTIVIEW = "multiview"
+    fun discover(section:String="movies") = "discover/$section"
     const val MOVIES = "browse/movies"
     const val SHOWS = "browse/shows"
     const val FAVORITES = "favorites"
@@ -96,7 +102,8 @@ private val RAIL = listOf(
     RailItem(Routes.HOME, "Home", Icons.Filled.Home),
     RailItem(Routes.SEARCH, "Search", Icons.Filled.Search),
     RailItem(Routes.LIVE, "Live TV", Icons.Filled.LiveTv),
-    RailItem(Routes.GUIDE, "Guide", Icons.Filled.CalendarViewWeek),
+    RailItem(Routes.SPORTS, "Sports", Icons.Filled.SportsSoccer),
+    RailItem(Routes.discover(), "Discover", Icons.Filled.Search),
     RailItem(Routes.MOVIES, "Movies", Icons.Filled.Movie),
     RailItem(Routes.SHOWS, "Shows", Icons.Filled.Tv),
     RailItem(Routes.FAVORITES, "Favorites", Icons.Filled.Favorite),
@@ -128,12 +135,28 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     val localAccepted = accepted ?: return ScreenBackground {}
     val nav = rememberNavController()
     val context = LocalContext.current
+    var audioChoice by remember { mutableStateOf<PlayEvent.ChooseAudio?>(null) }
     var qr by remember { mutableStateOf<HandoffResult.ShowQr?>(null) }
+
+    LaunchedEffect(s.serverUrl, s.profile?.id, s.profile?.languages) { audioChoice = null; vm.coordinator.cancelPending() }
+    var previousProfile by remember { mutableStateOf(s.profile?.id) }
+    var previousServer by remember { mutableStateOf(s.serverUrl) }
+    LaunchedEffect(s.serverUrl,s.profile?.id) {
+        val oldProfile=previousProfile
+        val oldServer=previousServer
+        previousProfile=s.profile?.id; previousServer=s.serverUrl
+        if(oldProfile!=null && s.profile?.id!=null && (oldProfile!=s.profile?.id || oldServer!=s.serverUrl)) {
+            // Remove old Details/Search/Settings back-stack state; persisted per-profile data stays intact.
+            nav.navigate(if(oldServer==s.serverUrl) Routes.HOME else Routes.ONBOARDING) { popUpTo(nav.graph.id) {inclusive=true}; launchSingleTop=true }
+        }
+    }
+
 
     // Play events → player route (no intermediate screen) or hand-off.
     LaunchedEffect(Unit) {
         vm.coordinator.events.collect { e ->
             when (e) {
+                is PlayEvent.ChooseAudio -> { audioChoice = e }
                 is PlayEvent.StartPlayer -> nav.navigate(Routes.player(e.key)) { launchSingleTop = true }
                 is PlayEvent.Handoff -> if (e.result is HandoffResult.ShowQr) qr = e.result as HandoffResult.ShowQr
                 is PlayEvent.Error -> Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
@@ -142,6 +165,8 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     }
     LaunchedEffect(Unit) {
         vm.sessionEvents.expired.collect {
+            audioChoice = null
+            vm.coordinator.cancelPending()
             nav.navigate(Routes.ONBOARDING) { popUpTo(0) { inclusive = true } }
         }
     }
@@ -163,6 +188,12 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     CompositionLocalProvider(LocalPlayLauncher provides launcher) {
         ScreenBackground {
             AppShell(nav, start, profileName = s.profile?.name)
+            audioChoice?.let { choice ->
+                AudioSourceDialog(choice.options, onDismiss = { audioChoice = null; vm.coordinator.cancelPending() }) { variant, confirmed ->
+                    audioChoice = null
+                    vm.coordinator.chooseAudio(choice.request, variant, confirmed)
+                }
+            }
             qr?.let { HandoffQrDialog(it.webUrl, it.serviceName) { qr = null } }
         }
     }
@@ -172,12 +203,12 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
 private fun AppShell(nav: NavHostController, start: String, profileName: String?) {
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
-    val showRail = route != null && route != Routes.ONBOARDING && route != Routes.PLAYER
+    val showRail = route != null && route != Routes.ONBOARDING && route != Routes.PLAYER && route != Routes.MULTIVIEW
     var railExpanded by remember { mutableStateOf(false) }
     val railFocus = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
     val railController = remember { RailController { runCatching { railFocus.requestFocus() } } }
-    val topLevel = RAIL.any { it.route == route }
+    val topLevel = RAIL.any { it.route == route } || route == Routes.GUIDE || route == Routes.DISCOVER
 
     // Back on a top-level screen (other than Home) opens the rail first, then Home; never a dead end.
     BackHandler(enabled = showRail && topLevel && !railExpanded && route != Routes.HOME) { railController.openRail() }
@@ -198,8 +229,13 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
                     }
                     composable(Routes.HOME) { HomeScreen() }
                     composable(Routes.SEARCH) { SearchScreen() }
-                    composable(Routes.LIVE) { LiveTvScreen() }
-                    composable(Routes.GUIDE) { GuideScreen() }
+                    composable(Routes.LIVE) { LiveDestination() }
+                    composable(Routes.SPORTS) { SportsScreen(onMultiview={nav.navigate(Routes.MULTIVIEW)}) }
+                    composable(Routes.MULTIVIEW) { MultiviewScreen(onExit={nav.popBackStack()}) }
+                    composable(Routes.DISCOVER, arguments=listOf(navArgument("section"){type=NavType.StringType})) { entry ->
+                        DiscoveryScreen(onSearch={nav.navigate(Routes.SEARCH)},onLibrary={nav.navigate(if(entry.arguments?.getString("section")=="shows")Routes.SHOWS else Routes.MOVIES)},onSection={section->nav.navigate(Routes.discover(section)){popUpTo(Routes.DISCOVER){inclusive=true};launchSingleTop=true}})
+                    }
+                    composable(Routes.GUIDE) { LiveDestination(startInGuide = true) }
                     composable("browse/{section}", arguments = listOf(navArgument("section") { type = NavType.StringType })) { e ->
                         BrowseScreen(title = if (e.arguments?.getString("section") == "shows") "Shows" else "Movies")
                     }
@@ -215,7 +251,7 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
             if (showRail) {
                 LeftRail(
                     items = RAIL,
-                    selectedRoute = RAIL.firstOrNull { route?.startsWith(it.route) == true }?.route
+                    selectedRoute = if(route==Routes.DISCOVER) Routes.discover() else if (route == Routes.GUIDE) Routes.LIVE else RAIL.firstOrNull { route?.startsWith(it.route) == true }?.route
                         ?: if (route?.startsWith("details") == true) null else route,
                     expanded = railExpanded,
                     onExpandedChange = { railExpanded = it },

@@ -1,32 +1,51 @@
-import { useMemo, useState } from 'react'
-import { useParams } from 'react-router'
-import { useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
-import { reportProgress } from '../api/client'
-import type { SourceBadge } from '../api/types'
+import { useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useParams, useSearchParams } from 'react-router'
+import { usePlaybackOptions, useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
+import { api, ok } from '../api/client'
+import type { PlaybackOption, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Meta, Modal, Skeleton } from '../components/ui'
 import { SafeImg } from '../components/SafeImg'
 import { MediaTile } from '../components/Tile'
 import { FocusGroup, Focusable } from '../nav/Focusable'
+import { setFocus } from '../nav/spatial'
 import { useRestoreFocus } from '../nav/back'
 import { usePlayAction } from '../components/playAction'
 import { useAdaptiveAccent } from '../lib/theme'
+import { useSession } from '../store/session'
+import { audioDescription } from '../player/channelAudio'
+import { LANG_NAMES } from '../lib/util'
 import { useUi } from '../store/ui'
 
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', series: 'Series', vod: 'Movie', episode: 'Episode', season: 'Season' }
 
 export function TitleScreen() {
   const id = decodeURIComponent(useParams().id ?? '')
+  const profileId = useSession((s) => s.profile?.id)
+  return <TitleDetails key={`${profileId}:${id}`} id={id} />
+}
+
+function TitleDetails({ id }: { id: string }) {
   const { data: t, error, refetch } = useTitle(id)
+  const [params] = useSearchParams()
+  const audio = usePlaybackOptions(t?.kind !== 'channel' && t?.sources.some((s) => s.playable_in_app) ? id : undefined)
+  const [confirmation, setConfirmation] = useState<PlaybackOption | null>(null)
+  const qc = useQueryClient()
   const watchlist = useWatchlist()
   const toggleFav = useToggleFavorite()
   const toggleWatch = useToggleWatchlist()
   const play = usePlayAction()
   const toast = useUi((s) => s.toast)
   const [season, setSeason] = useState<string | null>(null)
-  const [picker, setPicker] = useState<null | 'play'>(null)
+  const [picker, setPicker] = useState<null | 'play'>(params.get('choose') ? 'play' : null)
+  useEffect(() => {
+    if (!picker) return
+    const frame = requestAnimationFrame(() => setFocus(confirmation ? 'audio:cancel' : 'pick:cancel'))
+    return () => cancelAnimationFrame(frame)
+  }, [picker, confirmation])
   const seasonQ = useTitle(season ?? undefined)
   useAdaptiveAccent(t?.backdrop ?? t?.poster)
-  useRestoreFocus(!!t, 'title:play')
+  useRestoreFocus(!!t, t?.sources.length ? 'title:play' : 'title:watchlist')
 
   const { inApp, handoff } = useMemo(() => {
     const seen = new Set<string>()
@@ -45,15 +64,22 @@ export function TitleScreen() {
   const seasons = t.seasons ?? []
 
   const primary = () => {
-    if (canPlay) return void play(t)
+    if (canPlay) { if (t.kind === 'channel') return void play(t); if (audio.data?.automatic_variant_id) return void play(t, null, { variantId: audio.data.automatic_variant_id }); setPicker('play'); return }
     if (handoff.length === 1) return void play(t, handoff[0])
     setPicker('play')
   }
+  const chooseVariant = (option: PlaybackOption) => {
+    if (audio.data?.automatic_variant_id !== option.variant_id) { setConfirmation(option); return }
+    setPicker(null); void play(t, null, { variantId: option.variant_id })
+  }
   const choose = (s: SourceBadge) => { setPicker(null); void play(t, s) }
-  const markWatched = () => {
+  const markWatched = async () => {
     const dur = (t.runtime_min ?? 0) * 60_000
-    reportProgress({ id: t.id, position_ms: dur, duration_ms: dur || null, state: 'stopped' })
-    toast('Marked as watched.', 'success')
+    try {
+      await ok(api.POST('/playback/progress', { body: { id: t.id, position_ms: dur, duration_ms: dur || null, state: 'stopped' } }))
+      for (const key of ['home', 'search', 'browse', 'title']) void qc.invalidateQueries({ queryKey: [key] })
+      toast('Marked as watched.', 'success')
+    } catch { toast('Could not save watched status. Try again.', 'error') }
   }
 
   return (
@@ -72,8 +98,8 @@ export function TitleScreen() {
             <Meta items={[KIND_LABEL[t.kind], t.year, t.runtime_min ? `${t.runtime_min} min` : null, t.genres?.join(', '), t.rating ? `★ ${t.rating.toFixed(1)}` : null]} />
             {t.overview && <p style={{ lineHeight: 1.55 }}>{t.overview}</p>}
             <FocusGroup focusKey="title:actions" className="flex gap-3 flex-wrap items-center" preferred="title:play">
-              <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{playLabel}</Button>
-              {inApp.length > 1 && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
+              {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id ? 'Choose audio / source' : playLabel}</Button>}
+              {t.kind !== 'channel' && inApp.length > 0 && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
               <Button focusKey="title:watchlist" icon={onWatchlist ? 'check' : 'bookmark'} pressed={onWatchlist} onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })}>
                 {onWatchlist ? 'On watchlist' : 'Watchlist'}
               </Button>
@@ -106,9 +132,9 @@ export function TitleScreen() {
           <h2 className="heading">Available on</h2>
           <FocusGroup focusKey="title:avail" className="flex gap-2 flex-wrap">
             {[...inApp, ...handoff].map((s) => (
-              <Focusable key={s.source_id + s.kind} focusKey={`avail:${s.source_id}:${s.kind}`} className="chip fx-flat" onEnter={() => void play(t, s)}
-                label={`${s.playable_in_app ? 'Play' : 'Open in app'}: ${s.name}`}>
-                <span className={s.playable_in_app ? 'badge badge-play' : 'badge'}>{s.playable_in_app ? 'Play' : 'Open in app'}</span>
+              <Focusable key={s.source_id + s.kind} focusKey={`avail:${s.source_id}:${s.kind}`} className="chip fx-flat" onEnter={() => s.playable_in_app && t.kind !== 'channel' ? setPicker('play') : void play(t, s)}
+                label={`${s.playable_in_app ? (t.kind === 'channel' ? 'Play' : 'Choose audio') : 'Open in app'}: ${s.name}`}>
+                <span className={s.playable_in_app ? 'badge badge-play' : 'badge'}>{s.playable_in_app ? (t.kind === 'channel' ? 'Play' : 'Choose audio') : 'Open in app'}</span>
                 {s.name}{s.quality ? ` ${s.quality}` : ''}{s.kind && !s.playable_in_app ? ` · ${s.kind}` : ''}
               </Focusable>
             ))}
@@ -118,14 +144,23 @@ export function TitleScreen() {
         </section>
       </div>
 
-      <Modal open={picker !== null} onClose={() => setPicker(null)} title={canPlay ? 'Play from' : 'Open in'} firstFocusKey="pick:0">
+      <Modal open={picker !== null} onClose={() => { setPicker(null); setConfirmation(null) }} title={confirmation ? 'Confirm audio choice' : canPlay ? 'Choose audio and source' : 'Open in'} firstFocusKey="pick:cancel">
         <div className="flex flex-col gap-2">
-          {(canPlay ? inApp : handoff).map((s, i) => (
-            <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>
-              {s.name}{s.quality ? ` · ${s.quality}` : ''}
-            </Button>
-          ))}
-          <Button focusKey="pick:cancel" ghost onEnter={() => setPicker(null)}>Cancel</Button>
+          {confirmation ? <>
+            <p>{confirmation.audio_verified ? audioDescription(confirmation) : 'Audio language is unverified.'} This source is not automatically selected for your language preferences.</p>
+            <p className="label">{confirmation.provider_label}</p>
+            <Button focusKey="audio:cancel" onEnter={() => setConfirmation(null)}>Back to sources</Button>
+            <Button focusKey="audio:confirm" onEnter={() => { const selected = confirmation; setConfirmation(null); setPicker(null); void play(t, null, { variantId: selected.variant_id, allowUnverifiedAudio: true }) }}>Play this source anyway</Button>
+          </> : canPlay ? <>
+            <p className="label">Provider title labels are hints, not proof of spoken audio. Unverified or other-language sources require confirmation.</p>
+            {audio.isPending && <p role="status">Checking available sources…</p>}
+            {audio.error && <ErrorState error={audio.error} onRetry={() => void audio.refetch()} />}
+            {audio.data?.options.map((option, i) => <Button key={option.variant_id} focusKey={`pick:${i}`} onEnter={() => chooseVariant(option)}>
+              <span>{option.source_name} · {audioDescription(option)}{option.language_hint ? ` · Provider hint: ${LANG_NAMES[option.language_hint] ?? option.language_hint}` : ''}<br /><span className="label">{option.provider_label}</span></span>
+            </Button>)}
+            {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}
+          </> : handoff.map((s, i) => <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>{s.name}</Button>)}
+          <Button focusKey="pick:cancel" ghost onEnter={() => { setPicker(null); setConfirmation(null) }}>Cancel</Button>
         </div>
       </Modal>
     </div>

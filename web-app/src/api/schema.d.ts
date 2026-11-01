@@ -4,6 +4,448 @@
  */
 
 export interface paths {
+    "/auth/google/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Google identity handoff; owner PIN required before owner tokens when enabled */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"] | components["schemas"]["PendingOwnerLogin"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        profile_id: string;
+                        /** @enum {string} */
+                        action: "login" | "profile_switch" | "admin";
+                    };
+                };
+            };
+            responses: {
+                /** @description Session and target bound one-use challenge */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OwnerPinChallenge"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        challenge_id: string;
+                        poll_token: string;
+                        pin: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Authorized login/switch or one-use target policy action */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"] | components["schemas"]["OwnerActionProof"];
+                    };
+                };
+                /** @description Attempt limit; respect Retry-After */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        challenge_id: string;
+                        poll_token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Challenge canceled */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/setup-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Setup grant available only after exact local VM approval */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OwnerPinSetupStatus"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        grant_id: string;
+                        grant_secret: string;
+                        pin: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Consumes local approval */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/recovery-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Local VM approval required for replacement; old PIN remains valid */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            configured: boolean;
+                            recovery_authorized: boolean;
+                            local_approval_required: boolean;
+                            recovery_request_id?: string;
+                            grant_id?: string;
+                            /** @description Memory-only secret */
+                            grant_secret?: string;
+                            expires_in?: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/owner-pin/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        grant_id: string;
+                        grant_secret: string;
+                        pin: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Consumes local recovery approval and revokes older sessions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/profile-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authenticated profile switch using existing credentials and server policy */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        profile_id: string;
+                        pin?: string;
+                        password?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/profiles/{id}/content-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Admin-only content policy */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ContentPolicy"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description One-use proof bound to current owner session and this target profile */
+                    "X-Owner-Action": string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ContentPolicyInput"];
+                };
+            };
+            responses: {
+                /** @description Saved policy; target sessions invalidated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ContentPolicy"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -982,11 +1424,243 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            results?: components["schemas"]["Tile"][];
+                            metadata_available?: boolean;
+                            discovery_note?: string;
                             play_here?: components["schemas"]["Tile"][];
                             open_in_app?: components["schemas"]["Tile"][];
                             channels?: components["schemas"]["Channel"][];
                             attribution?: string;
                         };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/buffer/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferLeaseRequest"];
+                };
+            };
+            responses: {
+                /** @description Owned viewer lease and actual window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BufferLeaseResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/buffer/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferViewerRequest"];
+                };
+            };
+            responses: {
+                /** @description Renewed viewer lease and actual window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BufferWindow"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/buffer/seek": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferSeekRequest"];
+                };
+            };
+            responses: {
+                /** @description Authorized seek playlist and actual window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BufferSeekResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/buffer/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BufferViewerRequest"];
+                };
+            };
+            responses: {
+                /** @description Viewer released; final viewer stops the owned producer */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/rewind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Advertised provider archive window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RewindCapability"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    id: string;
+                    source_id?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Available source variants and audio evidence */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackOptions"];
                     };
                 };
             };
@@ -1025,6 +1699,57 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["TitleDetail"];
                     };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/discover/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Paged metadata discovery independent of available sources */
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    sort?: "popular" | "rating" | "newest";
+                    year?: number;
+                    language?: string;
+                    source_id?: string;
+                };
+                header?: never;
+                path: {
+                    section: "movies" | "shows";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Metadata page with independently matched availability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DiscoveryPage"];
+                    };
+                };
+                /** @description Metadata unavailable or not configured; existing library remains available */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -1438,6 +2163,92 @@ export interface paths {
         };
         trace?: never;
     };
+    "/sports/recordings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Explicit sports library videos from Plex; not live or equivalent to IPTV events */
+        get: {
+            parameters: {
+                query?: {
+                    language?: string;
+                    sport?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Library metadata with normal audio choice required; unknown audio remains honest */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsRecordingsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sports/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    date?: string;
+                    timezone?: string;
+                    status?: "all" | "current" | "upcoming" | "replay";
+                    language?: string;
+                    sport?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsEventsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sports": {
         parameters: {
             query?: never;
@@ -1704,6 +2515,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playback/multiview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Atomically reserve two distinct new live codec-copy HLS producers before either pane starts
+         * @description Known provider capacity is required. Capacity one on a shared source rejects both panes. Direct/external, archive, transcoded and DVR playback are unsupported. Grants bind profile, session, source, policy, audio preferences and recovery generation.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MultiviewRequest"];
+                };
+            };
+            responses: {
+                /** @description Both slots reserved; clients may now start the returned panes */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MultiviewDescriptor"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Authorization or recovery generation changed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Capacity unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/multiview/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Idempotently release both panes owned by the authenticated profile and session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MultiviewRelease"];
+                };
+            };
+            responses: {
+                /** @description Both producer slots released after confirmed stop */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Lease belongs to another profile or session */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/resolve": {
         parameters: {
             query?: never;
@@ -1767,6 +2694,13 @@ export interface paths {
             responses: {
                 /** @description ok */
                 204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Captured profile mismatch or content access denied */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2346,6 +3280,54 @@ export interface components {
             refresh_token: string;
             profile: components["schemas"]["Profile"];
         };
+        PendingOwnerLogin: {
+            /** @enum {boolean} */
+            owner_pin_required: true;
+            /** @description Memory-only pending Google capability; not an owner JWT */
+            pending_token: string;
+            profile: components["schemas"]["Profile"];
+            setup_required?: boolean;
+        };
+        OwnerPinChallenge: {
+            challenge_id: string;
+            /** @description Keep only in memory */
+            poll_token: string;
+            expires_in: number;
+        };
+        OwnerActionProof: {
+            /** @description One-use proof; send only as X-Owner-Action for the bound target */
+            owner_action_token: string;
+            profile_id: string;
+            /** @enum {string} */
+            action: "content_policy";
+            expires_in: number;
+        };
+        OwnerPinSetupStatus: {
+            configured: boolean;
+            local_approval_required: boolean;
+            setup_authorized: boolean;
+            /** @description Nonsecret local approval request identifier */
+            setup_request_id?: string;
+            grant_id?: string;
+            /** @description Keep only in memory; never display or persist */
+            grant_secret?: string;
+        };
+        ContentPolicy: {
+            profile_id: string;
+            feature_enabled: boolean;
+            restricted: boolean;
+            allowed_movie_codes: string[];
+            allowed_tv_codes: string[];
+            /** @default false */
+            allow_unknown: boolean;
+        };
+        ContentPolicyInput: {
+            restricted: boolean;
+            allowed_movie_codes: string[];
+            allowed_tv_codes: string[];
+            /** @default false */
+            allow_unknown: boolean;
+        };
         DeviceCode: {
             device_code: string;
             /** @description 6-char code shown on TV */
@@ -2362,6 +3344,10 @@ export interface components {
             /** @description ISO 639-3 filter for live TV; empty = all */
             languages: string[];
             has_pin: boolean;
+            /** @description Existing password credential available. Missing means unavailable. */
+            has_password?: boolean;
+            /** @description Server policy currently restricts this profile. */
+            content_restricted?: boolean;
             kids: boolean;
             disclaimer_accepted_version?: string | null;
         };
@@ -2459,6 +3445,16 @@ export interface components {
             /** @description e.g. 'Availability data by JustWatch' */
             attribution?: string;
         };
+        DiscoveryPage: {
+            tiles: components["schemas"]["Tile"][];
+            page: number;
+            /** @default 20 */
+            page_size: number;
+            /** @description Metadata-provider total; null for restricted profiles, never a count of playable sources. */
+            total: number | null;
+            has_more: boolean;
+            coverage_note: string;
+        };
         Channel: {
             id: string;
             source_id: string;
@@ -2513,6 +3509,8 @@ export interface components {
             shared_upstreams: number;
             hls_sessions: number;
             http_sessions: number;
+            /** @description Active or pending atomic multiview leases; each reserves two producers. */
+            pair_reservations?: number;
             /** @constant */
             external_sessions_tracked: false;
         };
@@ -2525,11 +3523,46 @@ export interface components {
             /** @constant */
             confirm: true;
         };
+        PlaybackOption: {
+            variant_id: string;
+            source_id: string;
+            source_name: string;
+            provider_label: string;
+            kind?: string;
+            year?: number | null;
+            audio_languages: string[];
+            /** @description Verified default audio track language when known; track availability alone is not the default. */
+            default_audio_language?: string | null;
+            audio_verified: boolean;
+            audio_evidence: string;
+            language_hint?: string | null;
+            preferred_audio_available: boolean;
+        };
+        PlaybackOptions: {
+            id: string;
+            preferred_languages: string[];
+            options: components["schemas"]["PlaybackOption"][];
+            automatic_variant_id?: string | null;
+            selection_required: boolean;
+        };
         PlaybackRequest: {
             /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false) */
             id: string;
             /** @description pick a specific source when a title has several */
             source_id?: string | null;
+            variant_id?: string | null;
+            /** @default false */
+            allow_unverified_audio: boolean;
+            /**
+             * @deprecated
+             * @description Legacy sequential admission is rejected; use /playback/multiview.
+             */
+            multiview?: boolean;
+            /**
+             * @deprecated
+             * @description Legacy sequential admission is rejected; use /playback/multiview.
+             */
+            companion_id?: string | null;
             /**
              * @default web
              * @enum {string}
@@ -2541,10 +3574,86 @@ export interface components {
              */
             prefer_hls: boolean;
             catchup_programme_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id.
+             */
+            rewind_at?: string | null;
             /** @description Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients. */
             recovery_generation?: string | null;
         };
+        MultiviewRequest: {
+            panes: components["schemas"]["PlaybackRequest"][];
+            /** @description Generation captured once for this deliberate two-pane intent. */
+            recovery_generation: string;
+        };
+        MultiviewRelease: {
+            lease_id: string;
+        };
+        MultiviewDescriptor: {
+            lease_id: string;
+            /**
+             * @description Inactivity expiry; valid pane requests renew the lease.
+             * @default 60
+             */
+            expires_in_seconds: number;
+            panes: components["schemas"]["PlaybackDescriptor"][];
+        };
+        BufferWindow: {
+            /** @enum {string} */
+            mode: "local_buffer";
+            /** Format: date-time */
+            start?: string | null;
+            /** Format: date-time */
+            end?: string | null;
+            buffered_seconds: number;
+            target_seconds: number;
+            recording_enabled: boolean;
+        };
+        BufferLeaseRequest: {
+            stream_token: string;
+        };
+        BufferViewerRequest: components["schemas"]["BufferLeaseRequest"] & {
+            lease_id: string;
+            /** @default false */
+            paused: boolean;
+        };
+        BufferSeekRequest: components["schemas"]["BufferViewerRequest"] & {
+            /** Format: date-time */
+            at?: string | null;
+        };
+        BufferLeaseResponse: {
+            lease_id: string;
+            session_id: string;
+            window: components["schemas"]["BufferWindow"];
+        };
+        BufferSeekResponse: {
+            url: string;
+            window: components["schemas"]["BufferWindow"];
+        };
+        RewindCapability: {
+            /** @enum {string} */
+            mode: "provider_archive" | "unavailable";
+            /** Format: date-time */
+            advertised_start?: string | null;
+            /** Format: date-time */
+            advertised_end?: string | null;
+            verified: boolean;
+            recording_enabled: boolean;
+            granularity_seconds: number;
+            reason: string;
+        };
         PlaybackDescriptor: {
+            /** @description Profile preferences retained even after exact-variant consent. */
+            preferred_audio_languages?: string[];
+            /** @description False only for All Languages or current server-validated exact-variant consent; exposed contradictory runtime tracks still require a current track choice. */
+            audio_language_required?: boolean;
+            /** @description Verified selected-variant track languages; provider title prefixes are never evidence. */
+            audio_languages?: string[];
+            audio_verified?: boolean;
+            /** @enum {string} */
+            audio_evidence?: "unknown" | "audio_track_metadata" | "media_probe";
+            default_audio_language?: string | null;
             id: string;
             /** @enum {string} */
             mode: "direct" | "proxy" | "hls" | "handoff";
@@ -2556,6 +3665,12 @@ export interface components {
             };
             /** @default false */
             live: boolean;
+            /** @default false */
+            buffer_available: boolean;
+            /** Format: date-time */
+            archive_start?: string | null;
+            /** Format: date-time */
+            archive_end?: string | null;
             /** @default 0 */
             resume_position_ms: number;
             duration_ms?: number | null;
@@ -2583,6 +3698,8 @@ export interface components {
         };
         /** @description Sent every 10 s while playing and on pause/stop (ordinary bearer-auth POST). state=stopped with position_ms >= duration_ms marks the item watched (resume resets to 0); position >= 95% of duration also counts as watched. */
         ProgressReport: {
+            /** @description Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes. */
+            expected_profile_id?: string | null;
             id: string;
             source_id?: string | null;
             position_ms: number;
@@ -2671,6 +3788,75 @@ export interface components {
             coverage: {
                 eligible_channels: number;
                 channels_with_current_schedule: number;
+            };
+        };
+        SportsEventFeed: {
+            channel_id: string;
+            channel_name: string;
+            source_id: string;
+            source_name: string;
+            programme_id: string;
+            language?: string | null;
+            language_verified: boolean;
+        };
+        SportsEvent: {
+            id: string;
+            title: string;
+            sport: string;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            stop: string;
+            /** @enum {string} */
+            status: "current" | "upcoming" | "ended";
+            replay: boolean;
+            live_evidence: boolean;
+            grouping_evidence: string;
+            feeds: components["schemas"]["SportsEventFeed"][];
+        };
+        SportsRecording: {
+            /** @description Exact source-scoped library ID; open title/audio chooser */
+            title_id: string;
+            title: string;
+            source_id: string;
+            source_name: string;
+            sport: string;
+            /** @description Original release date */
+            originally_available_at: string | null;
+            duration_ms: number | null;
+            audio_languages: string[];
+            audio_verified: boolean;
+            language_hint: string | null;
+            /** @enum {string} */
+            kind: "library_video";
+            /** @enum {boolean} */
+            live: false;
+        };
+        SportsRecordingsPage: {
+            items: components["schemas"]["SportsRecording"][];
+            /** @description Matching entries within the bounded scan; consult truncated */
+            total: number;
+            limit: number;
+            offset: number;
+            truncated: boolean;
+        };
+        SportsEventsPage: {
+            /** Format: date-time */
+            as_of: string;
+            date: string;
+            timezone: string;
+            events: components["schemas"]["SportsEvent"][];
+            total: number;
+            limit: number;
+            offset: number;
+            truncated: boolean;
+            sports: {
+                name: string;
+                count: number;
+            }[];
+            coverage: {
+                eligible_channels: number;
+                channels_with_sports_schedule: number;
             };
         };
     };

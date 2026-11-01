@@ -81,6 +81,8 @@ test('211k library titles render only one server page and remain searchable', as
     for (let i = 1; i <= 211613; i++) titles.push({ ...base, id: `catalog:${i}`, title: `Catalog Movie ${i}` })
   })
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
+  await expect(page.getByTestId('discover')).toBeVisible()
+  await page.getByRole('button', { name: 'My library', exact: true }).click()
   const browse = page.getByTestId('browse')
   await expect(browse.getByTestId('tile')).toHaveCount(60)
   await browse.getByRole('button', { name: 'Next page', exact: true }).click()

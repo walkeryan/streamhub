@@ -74,24 +74,26 @@ fun createStreamHubHttpClient(
                 if (s.accessToken != null && s.refreshToken != null) BearerTokens(s.accessToken, s.refreshToken) else null
             }
             refreshTokens {
-                val refresh = oldTokens?.refreshToken ?: sessionStore.current().refreshToken
+                val original=sessionStore.current()
+                val refresh = original.refreshToken
+                if(oldTokens?.refreshToken!=null && oldTokens?.refreshToken!=refresh) {
+                    return@refreshTokens original.accessToken?.let { access -> refresh?.let { BearerTokens(access,it) } }
+                }
                 if (refresh == null) {
                     onSessionExpired(); return@refreshTokens null
                 }
-                val base = sessionStore.current().apiBase ?: return@refreshTokens null
+                val base = original.apiBase ?: return@refreshTokens null
                 val resp = client.post("$base/auth/refresh") {
                     markAsRefreshTokenRequest()
                     contentType(ContentType.Application.Json)
                     setBody(RefreshRequest(refresh))
                 }
                 if (!resp.status.isSuccess()) {
-                    sessionStore.clearTokens()
-                    onSessionExpired()
+                    if(sessionStore.clearExpiredSession(original)) onSessionExpired()
                     return@refreshTokens null
                 }
                 val tokens = resp.body<AuthTokens>()
-                sessionStore.saveTokens(tokens)
-                BearerTokens(tokens.accessToken, tokens.refreshToken)
+                if(sessionStore.saveRefreshedTokens(original,tokens)) BearerTokens(tokens.accessToken, tokens.refreshToken) else null
             }
             sendWithoutRequest { request ->
                 val path = request.url.buildString().substringBefore("?")

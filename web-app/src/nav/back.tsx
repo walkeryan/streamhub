@@ -57,8 +57,19 @@ export function useGlobalBack(): void {
 
 /* ---------------- Focus memory: Back restores the element that opened the screen ---------------- */
 const memory = new Map<string, string>()
+// Ephemeral navigation provenance, not a credential or a return URL. Reloads,
+// profile/session changes and player replacements cannot reuse an entry.
+const playbackEntries = new Map<number, {profile:string;generation:number;url:string;index:number}>()
+let playbackEntrySequence = 0
+export function hasPlaybackEntry(state: unknown, url: string): boolean {
+  const token = state && typeof state === 'object' ? (state as {playbackEntry?:unknown}).playbackEntry : undefined
+  const entry = typeof token === 'number' ? playbackEntries.get(token) : undefined
+  const session = useSession.getState()
+  return !!entry && entry.profile === session.profile?.id && entry.generation === session.generation && entry.url === url && window.history.state?.idx === entry.index + 1
+}
 useSession.subscribe((session, previous) => {
   if (session.profile?.id !== previous.profile?.id) memory.clear()
+  if (session.profile?.id !== previous.profile?.id || session.generation !== previous.generation) playbackEntries.clear()
 })
 
 export function useGo() {
@@ -66,7 +77,14 @@ export function useGo() {
   const loc = useLocation()
   return (to: string, opts?: { replace?: boolean }) => {
     memory.set(loc.key, getCurrentFocusKey())
-    navigate(to, opts)
+    const session = useSession.getState()
+    const index = window.history.state?.idx
+    if (to.startsWith('/play/') && !loc.pathname.startsWith('/play/') && !opts?.replace && session.profile && Number.isInteger(index)) {
+      const token = ++playbackEntrySequence
+      playbackEntries.set(token, {profile:session.profile.id,generation:session.generation,url:to,index})
+      if (playbackEntries.size > 100) playbackEntries.delete(playbackEntries.keys().next().value!)
+      navigate(to, {...opts,state:{playbackEntry:token}})
+    } else navigate(to, opts)
   }
 }
 

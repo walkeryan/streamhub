@@ -22,6 +22,8 @@ test('active category and genre remain named when a search empties their facets'
   })
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
+  await expect(page.getByTestId('discover')).toBeVisible()
+  await page.getByRole('button', { name: 'My library', exact: true }).click()
   await page.getByRole('button', { name: 'Category: All categories', exact: true }).click()
   await page.getByRole('button', { name: 'EN-ACTION (1,024)', exact: true }).click()
   await page.getByRole('button', { name: 'Genre: All genres', exact: true }).click()

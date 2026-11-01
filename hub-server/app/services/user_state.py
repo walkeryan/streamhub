@@ -23,6 +23,7 @@ COMPLETE_RATIO = 0.95
 HOME_ROWS: list[tuple[str, str]] = [
     ("continue_watching", "Continue Watching"),
     ("on_now", "On Now"),
+    ("recommendations", "Suggestions from your library"),
     ("seasonal_halloween", "Halloween · Seasonal movies"),
     ("recently_added", "Recently Added"),
     ("watchlist", "Watchlist"),

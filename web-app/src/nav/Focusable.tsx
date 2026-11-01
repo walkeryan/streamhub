@@ -2,6 +2,7 @@ import { forwardRef, useImperativeHandle, useRef, type CSSProperties, type Keybo
 import { FocusContext, useFocusable } from '@noriginmedia/norigin-spatial-navigation-react'
 import type { FocusableComponentLayout } from '@noriginmedia/norigin-spatial-navigation-core'
 import { cn } from '../lib/util'
+import { setFocus } from './spatial'
 
 export interface FocusableProps {
   focusKey?: string
@@ -27,11 +28,15 @@ export interface FocusableProps {
 
 export interface FocusableHandle { focus: () => void; el: HTMLElement | null }
 
-/** A single focusable control. Click, Enter and D-pad OK all route to onEnter. Mouse hover moves focus too. */
+/** Click, Enter and D-pad OK route to onEnter. Actual mouse movement changes focus;
+ * overlay removal beneath a stationary cursor must not steal restored D-pad focus. */
 export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Focusable(p, outer) {
   const onEnterRef = useRef(p.onEnter)
   onEnterRef.current = p.onEnter
-  const { ref, focused, focusSelf } = useFocusable({
+  const pointerPosition = useRef<{x:number;y:number}|null>(null)
+  const disabledRef = useRef(p.disabled)
+  disabledRef.current = p.disabled
+  const { ref, focused, focusSelf, focusKey } = useFocusable({
     focusKey: p.focusKey,
     focusable: !p.disabled,
     autoRestoreFocus: false,
@@ -67,8 +72,22 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       {...Object.fromEntries(Object.entries(p.data ?? {}).map(([k, v]) => [`data-${k}`, v]))}
       className={cn('fx', p.className)}
       style={p.style}
-      onClick={() => !p.disabled && onEnterRef.current?.()}
-      onPointerEnter={(e) => e.pointerType === 'mouse' && !p.disabled && focusSelf()}
+      onClick={async () => {
+        if (disabledRef.current) return
+        // A click (including touch or assistive activation) is deliberate, unlike
+        // pointerenter caused by removing an overlay under a parked cursor.
+        // Establish its opener before a dialog captures focus for restoration.
+        await setFocus(focusKey)
+        if ((ref.current as HTMLElement | null)?.isConnected && !disabledRef.current) onEnterRef.current?.()
+      }}
+      onPointerMove={(e) => {
+        if (e.pointerType !== 'mouse') return
+        const previous = pointerPosition.current
+        pointerPosition.current = {x:e.clientX,y:e.clientY}
+        // Absolute moves may report movementX/Y=0 (including the first hover).
+        // Coordinate comparison still rejects repeated stationary events.
+        if ((!previous || previous.x !== e.clientX || previous.y !== e.clientY) && !p.disabled) focusSelf()
+      }}
     >
       {typeof p.children === 'function' ? p.children({ focused }) : p.children}
     </div>
@@ -133,6 +152,8 @@ export function FocusableInput(p: {
   inputMode?: 'text' | 'numeric' | 'search' | 'url'
   maxLength?: number
   autoCapitalize?: string
+  autoComplete?: string
+  readOnly?: boolean
   inputRef?: React.RefObject<HTMLInputElement | null>
   onFocused?: () => void
 }) {
@@ -168,7 +189,8 @@ export function FocusableInput(p: {
         inputMode={p.inputMode}
         maxLength={p.maxLength}
         autoCapitalize={p.autoCapitalize}
-        autoComplete="off"
+        autoComplete={p.autoComplete ?? "off"}
+        readOnly={p.readOnly}
         spellCheck={false}
         placeholder={p.placeholder}
         value={p.value}

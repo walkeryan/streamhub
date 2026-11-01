@@ -10,17 +10,20 @@ import com.streamhub.tv.core.data.model.Favorite
 import com.streamhub.tv.core.data.model.LanguageCount
 import com.streamhub.tv.core.data.model.MediaKind
 import com.streamhub.tv.core.data.repo.ChannelListCache
-import com.streamhub.tv.core.data.repo.PlaybackCoordinator
-import com.streamhub.tv.core.player.PlayerFactory
-import com.streamhub.tv.core.player.StreamHubPlayer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import com.streamhub.tv.core.data.model.LiveFilters
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import com.streamhub.tv.core.data.repo.ProfileFilterStore
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -28,6 +31,9 @@ import javax.inject.Inject
 /** null language set = "All" (explicitly no filter). */
 data class LiveTvState(
     val loading: Boolean = true,
+    val ready: Boolean = false,
+    val profileScope: String = "",
+    val notice: String? = null,
     val error: String? = null,
     val languages: List<LanguageCount> = emptyList(),
     val profileLanguages: List<String> = emptyList(),
@@ -36,9 +42,12 @@ data class LiveTvState(
     val groupsLoading: Boolean = true,
     val groupsError: String? = null,
     val selectedGroup: String? = null,
+    val country: String = "US",
     val favoritesOnly: Boolean = false,
     val channels: List<Channel> = emptyList(),
     val listId: String = "",
+    val offset: Int = 0,
+    val total: Int = 0,
     val previewChannelId: String? = null,
 )
 
@@ -47,25 +56,46 @@ class LiveTvViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val cache: ChannelListCache,
     private val session: SessionStore,
-    private val playback: PlaybackCoordinator,
-    playerFactory: PlayerFactory,
+    private val prefs: ProfileFilterStore,
 ) : ViewModel() {
     private val _state = MutableStateFlow(LiveTvState())
     val state: StateFlow<LiveTvState> = _state.asStateFlow()
 
-    /** Muted-by-default preview player (no progress reporting). */
-    val preview: StreamHubPlayer = playerFactory.create(reportProgress = false)
-    private var previewJob: Job? = null
     private var loadJob: Job? = null
     private var groupsJob: Job? = null
 
+    private var profileId: String? = null
     init {
         viewModelScope.launch {
-            val profileLangs = session.session.first().profile?.languages.orEmpty()
-            _state.update { it.copy(profileLanguages = profileLangs, selectedLanguages = profileLangs.toSet().ifEmpty { null }) }
-            launch { runCatching { api.channelLanguages() }.onSuccess { l -> _state.update { it.copy(languages = l.sortedByDescending { x -> x.count }) } } }
-            refreshGroups()
-            load()
+            session.session.map { it.apiBase to it.profile }.distinctUntilChanged().collectLatest { (server, profile) ->
+                loadJob?.cancel(); groupsJob?.cancel()
+                profileId = profile?.id
+                _state.value = LiveTvState()
+                if (profile != null) {
+                    val langs = profile.languages.orEmpty()
+                    val defaults = LiveFilters(languages = langs.toSet().ifEmpty { null })
+                    val filters = try {
+                        prefs.read(profile.id, "native_live")?.let { Json.decodeFromJsonElement<LiveFilters>(it) } ?: defaults
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { _state.update { it.copy(notice = "Saved filters unavailable. Using defaults.") }; defaults }
+                    _state.update { it.copy(ready = true, profileScope = "$server|${profile.id}", profileLanguages = langs, selectedLanguages = filters.languages,
+                        selectedGroup = filters.group, country = filters.country, favoritesOnly = filters.favorites) }
+                    refreshGroups(); load()
+                    try { val languages = api.channelLanguages(); _state.update { it.copy(languages = languages.sortedByDescending { l -> l.count }) } }
+                    catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                }
+            }
+        }
+    }
+
+    private fun saveFilters() {
+        val id = profileId ?: return
+        val s = _state.value
+        val value = LiveFilters(s.selectedLanguages, s.selectedGroup, s.country, s.favoritesOnly)
+        viewModelScope.launch {
+            try { prefs.write(id, "native_live", Json.encodeToJsonElement(value)) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (profileId == id) _state.update { it.copy(notice = "Filters apply now but could not be saved.") } }
         }
     }
 
@@ -75,22 +105,22 @@ class LiveTvViewModel @Inject constructor(
         groupsJob = viewModelScope.launch {
             val s = _state.value
             try {
-                val groups = api.channelGroups(languages = s.selectedLanguages?.toList() ?: emptyList(), favorites = s.favoritesOnly)
+                val groups = api.channelGroups(languages = s.selectedLanguages?.toList() ?: emptyList(), favorites = s.favoritesOnly, country = s.country)
                 _state.update { it.copy(groups = groups.filterNot { g -> g.hidden }, groupsLoading = false) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { _state.update { it.copy(groupsLoading = false, groupsError = e.message ?: "Couldn't load groups") } }
         }
     }
 
-    fun load() {
+    fun load(offset: Int = 0) {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             val s = _state.value
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update { it.copy(loading = true, error = null, channels = emptyList(), previewChannelId = null, offset = offset) }
             // "All" must send something so the server does not apply profile defaults: empty csv = all.
             val langs = s.selectedLanguages?.toList() ?: emptyList()
-            runCatching { cache.fetch(group = s.selectedGroup, languages = langs, favorites = s.favoritesOnly.takeIf { it }) }
-                .onSuccess { l -> _state.update { it.copy(loading = false, channels = l.channels, listId = l.listId) } }
+            runCatching { cache.fetch(group = s.selectedGroup, languages = langs, favorites = s.favoritesOnly.takeIf { it }, country = s.country, limit = 60, offset = offset) }
+                .onSuccess { l -> _state.update { it.copy(loading = false, channels = l.channels, listId = l.listId, total = l.total ?: l.channels.size) } }
                 .onFailure { e ->
                     if (e is CancellationException) throw e
                     _state.update { it.copy(loading = false, error = e.message) }
@@ -98,7 +128,11 @@ class LiveTvViewModel @Inject constructor(
         }
     }
 
+    fun nextPage() { val s = _state.value; if (!s.loading && s.offset + 60 < s.total) load(s.offset + 60) }
+    fun previousPage() { val s = _state.value; if (!s.loading && s.offset > 0) load((s.offset - 60).coerceAtLeast(0)) }
+
     fun toggleLanguage(code: String?) {
+        if (!_state.value.ready) return
         _state.update {
             if (code == null) it.copy(selectedLanguages = null)
             else {
@@ -107,27 +141,25 @@ class LiveTvViewModel @Inject constructor(
                 it.copy(selectedLanguages = next.ifEmpty { null })
             }
         }
+        saveFilters()
         refreshGroups()
         load()
     }
 
-    fun selectGroup(name: String?) { _state.update { it.copy(selectedGroup = name) }; load() }
-    fun toggleFavoritesOnly() { _state.update { it.copy(favoritesOnly = !it.favoritesOnly) }; refreshGroups(); load() }
+    fun selectGroup(name: String?) { if (!_state.value.ready) return; _state.update { it.copy(selectedGroup = name) }; saveFilters(); load() }
+    fun toggleFavoritesOnly() { if (!_state.value.ready) return; _state.update { it.copy(favoritesOnly = !it.favoritesOnly) }; saveFilters(); refreshGroups(); load() }
 
-    /** BRIEF: preview plays the focused channel after 600 ms dwell. */
+    /** Focus only updates metadata; browsing must never consume a provider stream. */
     fun onChannelFocused(ch: Channel) {
-        previewJob?.cancel()
-        previewJob = viewModelScope.launch {
-            delay(600)
-            if (_state.value.previewChannelId == ch.id) return@launch
-            runCatching { playback.resolveDirect(ch.id) }.onSuccess { d ->
-                if (d.url != null) {
-                    preview.play(d)
-                    preview.exoPlayer.volume = 0.6f
-                    _state.update { it.copy(previewChannelId = ch.id) }
-                }
-            }
-        }
+        _state.update { it.copy(previewChannelId = ch.id) }
+    }
+
+    fun selectCountry(value: String) {
+        if (!_state.value.ready || value == _state.value.country) return
+        _state.update { it.copy(country = value, selectedGroup = null) }
+        saveFilters()
+        refreshGroups()
+        load()
     }
 
     fun toggleFavorite(ch: Channel) {
@@ -141,7 +173,5 @@ class LiveTvViewModel @Inject constructor(
         }
     }
 
-    fun stopPreview() { previewJob?.cancel(); preview.stop(); _state.update { it.copy(previewChannelId = null) } }
-
-    override fun onCleared() { preview.release() }
+    fun stopPreview() { _state.update { it.copy(previewChannelId = null) } }
 }

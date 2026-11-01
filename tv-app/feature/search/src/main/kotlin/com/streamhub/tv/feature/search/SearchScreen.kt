@@ -31,6 +31,7 @@ import com.streamhub.tv.core.ui.components.ChannelTile
 import com.streamhub.tv.core.ui.components.FocusRow
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.PosterTile
+import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShTextField
 import com.streamhub.tv.core.ui.focus.InitialFocusOnce
@@ -49,6 +50,7 @@ import com.streamhub.tv.core.ui.theme.Tokens
 fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
     val t = LocalThemeTokens.current
     val q by vm.query.collectAsStateWithLifecycle()
+    val language by vm.language.collectAsStateWithLifecycle()
     val ui by vm.ui.collectAsStateWithLifecycle()
     val recent by vm.recent.collectAsStateWithLifecycle()
     val launcher = LocalPlayLauncher.current
@@ -78,6 +80,12 @@ fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
                 onImeAction = vm::commit,
                 modifier = Modifier.fillMaxWidth().focusRequester(fieldFocus).leftOpensRail(rail),
             )
+            Text("Language", style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(null to "My languages", "all" to "All languages", "und" to "Unknown").forEach { (value, label) ->
+                    ShChip(label, language == value, { vm.onLanguage(value) }, modifier = Modifier.leftOpensRail(rail))
+                }
+            }
             if (recent.isNotEmpty()) {
                 Text("Recent", style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
                 LazyColumn(Modifier.focusRestorer(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -93,20 +101,19 @@ fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
                 ui.loading -> Text("Searching…", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
                 ui.error != null -> Text("Search failed: ${ui.error}", color = t.danger, style = MaterialTheme.typography.bodyLarge)
                 res == null -> Text(if (q.isBlank()) "Start typing to search all your sources." else "", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
-                res.playHere.isEmpty() && res.openInApp.isEmpty() && res.channels.isEmpty() ->
-                    Text("No results for “$q”.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
+                (res.results ?: (res.playHere + res.openInApp)).isEmpty() && res.channels.isEmpty() ->
+                    Text("No results for “$q”. Try All languages or Unknown.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
                 else -> PivotScroll(0.dp) {
                     LazyColumn(Modifier.fillMaxSize().focusRestorer(), contentPadding = PaddingValues(bottom = 48.dp)) {
-                        if (res.playHere.isNotEmpty()) item("play") {
-                            FocusRow(res.playHere, key = { it.id }, title = "Play here", contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)) { _, tile, _ ->
-                                PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) }, onLongClick = { launcher.play(tile.id) })
-                            }
-                        }
-                        if (res.openInApp.isNotEmpty()) item("open") {
-                            FocusRow(res.openInApp, key = { it.id }, title = "Open in app", contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)) { _, tile, _ ->
+                        val ranked = res.results ?: (res.playHere + res.openInApp)
+                        if (ranked.isNotEmpty()) item("results") {
+                            FocusRow(ranked, key = { it.id }, title = "Titles · relevance", contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)) { _, tile, _ ->
                                 PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) })
                             }
                         }
+                        res.discoveryNote?.let { note -> item("discovery") {
+                            Text(note, color = t.textMuted, modifier = Modifier.padding(8.dp))
+                        } }
                         if (res.channels.isNotEmpty()) item("ch") {
                             FocusRow(res.channels, key = { it.id }, title = "Channels", contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)) { _, ch, _ ->
                                 ChannelTile(ch, onClick = { vm.commit(); launcher.play(ch.id) })

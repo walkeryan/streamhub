@@ -1,3 +1,4 @@
+import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
 import type { PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
@@ -29,6 +30,23 @@ const countryMatches = (value: string | null | undefined, country: string | null
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
 export const handlers = [
+  http.get(`${B}/sports/recordings`, ({ request }) => {
+    const params = new URL(request.url).searchParams
+    return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])
+  }),
+  http.get(`${B}/playback/rewind`, () => HttpResponse.json({ mode: 'unavailable', advertised_start: null, advertised_end: null, verified: false, recording_enabled: false, granularity_seconds: 60, reason: 'Fixture has no archive.' })),
+  http.get(`${B}/playback/options`, ({ request }) => {
+    const id = new URL(request.url).searchParams.get('id') ?? ''
+    // Explicit verified-audio fixtures, never a production inference from a name.
+    if (id.startsWith('ch:') || id.startsWith('prog:')) {
+      const variant = id.startsWith('ch:') ? id : 'ch:fixture:programme'
+      const option = { variant_id: variant, source_id: variant.split(':')[1], source_name: 'Verified fixture', provider_label: id, kind: 'channel', audio_languages: ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }
+      return HttpResponse.json({ id, preferred_languages: ['eng'], options: [option], automatic_variant_id: variant, selection_required: false })
+    }
+    const tile = tileById(id)
+    const options = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }))
+    return HttpResponse.json({ id, preferred_languages: ['eng'], options, automatic_variant_id: options[0]?.variant_id ?? null, selection_required: false })
+  }),
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),
   http.get(`${B}/health`, () => HttpResponse.json({ ok: true })),
   http.get(`${B}/profiles/:id/prefs`, ({ params }) => HttpResponse.json(JSON.parse(sessionStorage.getItem(`mock.prefs.${params.id}`) ?? '{}'))),
@@ -131,6 +149,7 @@ export const handlers = [
     }
     const seed = seedFor(id)
     const t = tileById(id)
+    if (t?.kind === 'channel') return HttpResponse.json({ ...t, attribution: 'Provider guide metadata' })
     if (!seed || !t) return HttpResponse.json({ code: 'not_found', message: 'Title not found' }, { status: 404 })
     const show = seed.kind === 'show'
     return HttpResponse.json({
@@ -140,6 +159,29 @@ export const handlers = [
       sources: [...seed.sources, ...(seed.sources.some((s) => !s.playable_in_app) ? [] : [])],
       attribution: 'Availability data by JustWatch',
     })
+  }),
+  // Fixture metadata catalog; source/language scope changes availability only.
+  // Audio evidence here is the explicit English fixture used by playback/options.
+  http.get(`${B}/discover/:section`, async ({ params, request }) => {
+    const u = new URL(request.url)
+    const page = Math.max(1, Math.min(500, Number(u.searchParams.get('page') ?? 1)))
+    const source = u.searchParams.get('source_id'), language = u.searchParams.get('language')
+    const year = u.searchParams.get('year'), sort = u.searchParams.get('sort')
+    const kind = params.section === 'shows' ? 'show' : 'movie'
+    const profile = profiles.find((p) => p.id === currentProfileId(request))
+    const allowedAudio = !language || language === 'all' || language.split(',').includes('eng')
+    let list = titles.filter((t) => t.kind === kind && (!year || t.year === Number(year)))
+    if (sort === 'rating') list = [...list].sort((a,b) => (b.rating ?? 0) - (a.rating ?? 0))
+    if (sort === 'newest') list = [...list].sort((a,b) => (b.year ?? 0) - (a.year ?? 0))
+    // Unclassified fixtures are not a parental-policy bypass.
+    if (profile?.content_restricted) list = []
+    const size = 20
+    await delay(60)
+    return HttpResponse.json({
+      tiles: list.slice((page-1)*size,page*size).map((tile) => ({ ...tile, sources: allowedAudio ? tile.sources.filter((s) => !source || s.source_id === source) : [] })),
+      page, page_size:size, total:profile?.content_restricted ? null : list.length,
+      has_more:page*size<list.length, coverage_note:'Synthetic metadata fixture catalog. Availability is checked separately; this is not exhaustive coverage.',
+    } satisfies components['schemas']['DiscoveryPage'])
   }),
   http.get(`${B}/browse/:section/categories`, () => HttpResponse.json([])),
   http.get(`${B}/browse/:section/languages`, () => HttpResponse.json([{ code: 'eng', name: 'English', count: titles.length }])),
@@ -211,7 +253,7 @@ export const handlers = [
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
-    const base = { id: b.id, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
+    const base = { id: b.id, buffer_available: false, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
     if (handoffOnly || b.source_id === 's_nf') {
       const d: PlaybackDescriptor = {
         ...base, mode: 'handoff', url: null, live: false, resume_position_ms: 0,
