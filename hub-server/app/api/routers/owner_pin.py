@@ -106,3 +106,19 @@ async def setup(body: Setup, c: C, p: PP, response: Response) -> dict[str, Any]:
     return await tokens_out(
         c, target, c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject)
     )
+
+
+@router.get("/auth/owner-pin/recovery-status")
+async def recovery_status(c: C, p: PP, response: Response) -> dict[str, Any]:
+    no_store(response)
+    return await c.owner_pin.recovery_status(p)
+
+
+@router.post("/auth/owner-pin/recover")
+async def recover(body: Setup, c: C, p: PP, response: Response) -> dict[str, Any]:
+    no_store(response)
+    proof = await c.owner_pin.recover(p, body.grant_id, body.grant_secret, body.pin, p.google_subject)
+    target = await c.auth.get_profile(proof.target_profile_id)
+    return await tokens_out(
+        c, target, c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject)
+    )

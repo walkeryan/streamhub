@@ -112,3 +112,35 @@ async def test_invalid_pin_privacy_and_persistent_http_limit(api, caplog):
     r = await api.post("/auth/owner-pin/verify", headers=owner, json={**challenge, "pin": FIXTURE_PIN})
     assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
     assert FIXTURE_PIN not in r.text and FIXTURE_PIN not in caplog.text
+
+
+@respx.mock
+async def test_recovery_requires_local_approval_and_revokes_old_sessions_only_on_commit(api):
+    owner = await setup(api, await pending(api))
+    browser = await pending(api)
+    status = await api.get("/auth/owner-pin/recovery-status", headers=browser)
+    assert status.status_code == 200, status.text
+    body = status.json()
+    assert body["local_approval_required"] and not body["recovery_authorized"]
+    assert "grant_secret" not in body
+    denied = await api.post(
+        "/auth/owner-pin/recover",
+        headers=browser,
+        json={"grant_id": body["recovery_request_id"], "grant_secret": "unknown", "pin": "847293"},
+    )
+    assert denied.status_code in {403, 410}
+    assert (await api.get("/home", headers=owner)).status_code == 200
+    await api.c.owner_pin.approve_recovery_request(body["recovery_request_id"])
+    grant = (await api.get("/auth/owner-pin/recovery-status", headers=browser)).json()
+    assert grant["recovery_authorized"]
+    assert (await api.get("/home", headers=owner)).status_code == 200
+    r = await api.post(
+        "/auth/owner-pin/recover",
+        headers=browser,
+        json={"grant_id": grant["grant_id"], "grant_secret": grant["grant_secret"], "pin": "847293"},
+    )
+    assert r.status_code == 200, r.text
+    new = {"Authorization": "Bearer " + r.json()["access_token"]}
+    assert (await api.get("/home", headers=new)).status_code == 200
+    assert (await api.get("/home", headers=owner)).status_code == 401
+    assert (await api.get("/auth/owner-pin/recovery-status", headers=browser)).status_code == 401
