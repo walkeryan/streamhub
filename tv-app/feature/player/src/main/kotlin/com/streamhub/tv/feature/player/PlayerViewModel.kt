@@ -213,8 +213,7 @@ class PlayerViewModel @Inject constructor(
         bufferSeekJob?.cancel()
         val lease=buffer.leaseId
         bufferSeekJob=viewModelScope.launch {
-            val reportOwner=sessions.current()
-            val owner=reportOwner.catalogScope()
+            val owner=sessions.current().catalogScope()
             try {
                 val window=buffer.heartbeat(paused=!player.exoPlayer.playWhenReady)
                 currentCoroutineContext().ensureActive()
@@ -231,7 +230,8 @@ class PlayerViewModel @Inject constructor(
         val lease=buffer.leaseId
         _state.update { it.copy(bufferBusy=true,bufferError=null) }
         bufferSeekJob=viewModelScope.launch {
-            val owner=sessions.current().catalogScope()
+            val reportOwner=sessions.current()
+            val owner=reportOwner.catalogScope()
             try {
                 val result=buffer.seek(at)
                 currentCoroutineContext().ensureActive()
