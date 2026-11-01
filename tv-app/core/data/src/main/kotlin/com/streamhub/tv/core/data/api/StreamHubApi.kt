@@ -1,5 +1,8 @@
 package com.streamhub.tv.core.data.api
 
+import com.streamhub.tv.core.data.auth.Session
+import com.streamhub.tv.core.data.repo.boundProgressRequest
+import com.streamhub.tv.core.data.repo.bindProgressSession
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.*
 import io.ktor.client.HttpClient
@@ -250,8 +253,13 @@ class StreamHubApi @Inject constructor(
     suspend fun resolve(req: PlaybackRequest): PlaybackDescriptor =
         client.post(url("/playback/resolve")) { setBody(req) }.ok()
 
-    suspend fun reportProgress(report: ProgressReport) =
-        client.post(url("/playback/progress")) { setBody(report) }.unit()
+    suspend fun reportProgress(report: ProgressReport, owner:Session):Boolean {
+        val request=boundProgressRequest(owner,session.current(),report) ?: return false
+        client.post(request.url) {
+            bindProgressSession(request)
+        }.unit()
+        return true
+    }
 
     // ---- Favorites / watchlist / history -------------------------------------------------------
 

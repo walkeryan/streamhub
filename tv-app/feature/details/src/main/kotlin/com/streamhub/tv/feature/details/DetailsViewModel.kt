@@ -3,6 +3,9 @@ package com.streamhub.tv.feature.details
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.streamhub.tv.core.data.auth.Session
+import com.streamhub.tv.core.data.auth.SessionStore
+import com.streamhub.tv.core.data.auth.sameSwitchSession
 import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.model.Favorite
 import com.streamhub.tv.core.data.model.PlaybackState
@@ -29,19 +32,25 @@ data class DetailsState(
 @HiltViewModel
 class DetailsViewModel @Inject constructor(
     private val api: StreamHubApi,
+    private val sessions: SessionStore,
     savedState: SavedStateHandle,
 ) : ViewModel() {
     val titleId: String = checkNotNull(savedState["id"])
     private val _state = MutableStateFlow(DetailsState())
     val state: StateFlow<DetailsState> = _state.asStateFlow()
 
+    private var detailOwner:Session?=null
+
     init { load() }
 
     fun load() {
         viewModelScope.launch {
+            val owner=sessions.current()
             _state.update { it.copy(loading = true, error = null) }
             runCatching { api.title(titleId) }
                 .onSuccess { d ->
+                    if(!sameSwitchSession(owner,sessions.current())) return@onSuccess
+                    detailOwner=owner
                     _state.update { it.copy(loading = false, detail = d, seasonEpisodes = d.episodes, selectedSeason = d.seasons.firstOrNull()?.id) }
                     runCatching { api.watchlist() }.onSuccess { wl -> _state.update { it.copy(inWatchlist = wl.any { t -> t.id == titleId }) } }
                 }
@@ -76,9 +85,10 @@ class DetailsViewModel @Inject constructor(
     fun markWatched() {
         val d = _state.value.detail ?: return
         val dur = (d.runtimeMin ?: 1) * 60_000L
+        val owner=detailOwner ?: return
         viewModelScope.launch {
-            runCatching { api.reportProgress(ProgressReport(id = d.id, positionMs = dur, durationMs = dur, state = PlaybackState.STOPPED)) }
-                .onSuccess { _state.update { it.copy(detail = d.copy(progressPct = 100.0), toast = "Marked as watched") } }
+            runCatching { api.reportProgress(ProgressReport(id=d.id,expectedProfileId=owner.profile?.id,positionMs=dur,durationMs=dur,state=PlaybackState.STOPPED),owner) }
+                .onSuccess { saved -> if(saved && sameSwitchSession(owner,sessions.current())) _state.update { it.copy(detail = d.copy(progressPct = 100.0), toast = "Marked as watched") } }
         }
     }
 

@@ -19,6 +19,11 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
+import com.streamhub.tv.core.data.auth.Session
+import com.streamhub.tv.core.data.auth.SessionStore
+import com.streamhub.tv.core.data.auth.sameSwitchSession
+import kotlinx.coroutines.CoroutineStart
+import com.streamhub.tv.core.data.repo.OwnedProgressJobs
 import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackState
@@ -29,6 +34,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -73,10 +79,13 @@ data class PlayerUiState(
 class StreamHubPlayer(
     private val context: Context,
     private val api: StreamHubApi,
+    private val sessions: SessionStore,
     private val reportProgress: Boolean = true,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var progressJob: Job? = null
+    private var progressOwner: Session? = null
+    private val reportJobs=OwnedProgressJobs()
     private var tickerJob: Job? = null
     private var reconnectJob: Job? = null
     private var current: PlaybackDescriptor? = null
@@ -167,6 +176,10 @@ class StreamHubPlayer(
     }
 
     init {
+        scope.launch {sessions.session.collect {latest ->
+            reportJobs.retainFor(latest)
+            if(progressOwner?.let {!sameSwitchSession(it,latest)}==true) progressOwner=null
+        }}
         exoPlayer.addListener(listener)
         // Subtitles off by default; user enables from the Menu overlay.
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
@@ -185,11 +198,13 @@ class StreamHubPlayer(
     }
 
     /** Start playing a descriptor (replaces whatever was playing). */
-    fun play(d: PlaybackDescriptor, startPositionMs: Long = d.resumePositionMs) {
+    fun play(d: PlaybackDescriptor, owner:Session?=null, startPositionMs: Long = d.resumePositionMs) {
+        reportJobs.retainFor(owner)
         if (current != null && current?.id != d.id) report(PlaybackState.STOPPED)
         updatingMedia=true
         exoPlayer.playWhenReady=false
         current = d
+        progressOwner=owner
         mediaEpoch++;trackRevision++;audioApproval.clear()
         wantsPlayback=true;waitingForAudio=d.audioLanguageRequired
         exoPlayer.playWhenReady=false
@@ -269,14 +284,20 @@ class StreamHubPlayer(
         }
     }
 
+    private fun cancelReports() {reportJobs.cancelAll()}
+
     private fun report(state: PlaybackState) {
+        if(updatingMedia) return
+        val owner=progressOwner ?: return
         val d = current ?: return
         if (!reportProgress || d.live) return
         val pos = exoPlayer.currentPosition
         val dur = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: d.durationMs
-        scope.launch {
-            runCatching { api.reportProgress(ProgressReport(id = d.id, positionMs = pos, durationMs = dur, state = state)) }
+        val job=scope.launch(start=CoroutineStart.LAZY) {
+            runCatching {api.reportProgress(ProgressReport(id=d.id,expectedProfileId=owner.profile?.id,positionMs=pos,durationMs=dur,state=state),owner)}
         }
+        reportJobs.track(job,owner)
+        job.start()
     }
 
     // ---- Track selection --------------------------------------------------------------------
@@ -342,7 +363,9 @@ class StreamHubPlayer(
     }
 
     fun stop() {
+        cancelReports()
         report(PlaybackState.STOPPED)
+        progressOwner=null
         current=null;wantsPlayback=false;waitingForAudio=false;audioApproval.clear();mediaEpoch++;trackRevision++
         exoPlayer.stop()
         _state.value=_state.value.copy(audioBlocked=false,audioNotice=null,audioTracks=emptyList())
@@ -351,7 +374,7 @@ class StreamHubPlayer(
     }
 
     fun release() {
-        report(PlaybackState.STOPPED)
+        cancelReports();progressOwner=null
         exoPlayer.removeListener(listener)
         exoPlayer.release()
         scope.cancel()

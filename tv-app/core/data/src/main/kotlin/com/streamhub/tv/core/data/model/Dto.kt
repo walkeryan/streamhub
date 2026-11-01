@@ -385,6 +385,7 @@ enum class PlaybackState {
 @Serializable
 data class ProgressReport(
     val id: String,
+    @SerialName("expected_profile_id") val expectedProfileId: String? = null,
     @SerialName("source_id") val sourceId: String? = null,
     @SerialName("position_ms") val positionMs: Long,
     @SerialName("duration_ms") val durationMs: Long? = null,

@@ -160,7 +160,8 @@ class PlayerViewModel @Inject constructor(
         if (d.mode == PlaybackMode.HANDOFF) {
             d.handoff?.let { launcher.launch(it) }; _exit.tryEmit(Unit); return
         }
-        val owner=sessions.current().catalogScope()
+        val reportOwner=sessions.current()
+        val owner=reportOwner.catalogScope()
         _state.update { it.copy(descriptor=d, live=d.live, message=null, bufferError=null, bufferBusy=d.bufferAvailable) }
         var acquiredLeaseId: String? = null
         try {
@@ -169,7 +170,7 @@ class PlayerViewModel @Inject constructor(
             currentCoroutineContext().ensureActive()
             if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
             currentStopped=false
-            player.play(d)
+            player.play(d,reportOwner)
             _state.update { it.copy(bufferWindow=lease?.window,bufferBusy=false) }
             if(lease != null) bufferHeartbeat=viewModelScope.launch {
                 try {
@@ -212,7 +213,8 @@ class PlayerViewModel @Inject constructor(
         bufferSeekJob?.cancel()
         val lease=buffer.leaseId
         bufferSeekJob=viewModelScope.launch {
-            val owner=sessions.current().catalogScope()
+            val reportOwner=sessions.current()
+            val owner=reportOwner.catalogScope()
             try {
                 val window=buffer.heartbeat(paused=!player.exoPlayer.playWhenReady)
                 currentCoroutineContext().ensureActive()
@@ -234,7 +236,7 @@ class PlayerViewModel @Inject constructor(
                 val result=buffer.seek(at)
                 currentCoroutineContext().ensureActive()
                 if(buffer.leaseId!=lease || sessions.current().catalogScope()!=owner) return@launch
-                player.play(descriptor.copy(url=result.url))
+                player.play(descriptor.copy(url=result.url),reportOwner)
                 _state.update { it.copy(bufferWindow=result.window,bufferBusy=false,bufferTimeshift=at!=null,overlay=Overlay.Osd) }
                 showOsd()
             } catch(e:CancellationException) { throw e }
