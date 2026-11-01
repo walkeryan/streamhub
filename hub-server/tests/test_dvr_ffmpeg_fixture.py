@@ -18,7 +18,7 @@ FFMPEG = os.environ.get("STREAMHUB_TEST_FFMPEG") or shutil.which("ffmpeg")
 pytestmark = pytest.mark.skipif(not FFMPEG, reason="explicit local ffmpeg fixture tool is unavailable")
 
 
-@pytest.mark.parametrize("paced", [True, False], ids=["paced", "startup-burst"])
+@pytest.mark.parametrize("paced", [True, False], ids=["production-paced", "unpaced-fault-injection"])
 async def test_real_ffmpeg_archive_window_and_seek(api, tmp_path, monkeypatch, paced):
     clip = tmp_path / "synthetic.ts"
     real_spawn = asyncio.create_subprocess_exec
@@ -55,9 +55,10 @@ async def test_real_ffmpeg_archive_window_and_seek(api, tmp_path, monkeypatch, p
     api.c.proxy.ffmpeg = FFMPEG
 
     async def fixture_spawn(*args, **kwargs):
-        # Fixture-only pacing; production input flags remain unchanged.
-        if paced and args[0] == FFMPEG:
-            args = (*args[: args.index("-i")], "-re", *args[args.index("-i") :])
+        # Normal case uses exact production DVR pacing. Only the fault case
+        # removes pacing to verify manager defense against future timestamps.
+        if not paced and args[0] == FFMPEG:
+            args = tuple(arg for arg in args if arg != "-re")
         return await real_spawn(*args, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fixture_spawn)
