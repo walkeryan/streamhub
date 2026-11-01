@@ -54,7 +54,9 @@ async def test_production_dvr_paces_and_stop_cleans_blocked_input(tmp_path, http
     try:
         started = asyncio.get_running_loop().time()
         await proxy.buffer_lease('fixture', 'profile', url, {}, source_id='source', max_connections=1, generation=0)
-        await asyncio.sleep(3)
+        # HTTP announces more bytes but stalls after 12 seconds of media.
+        # Wait beyond that input before testing bounded producer termination.
+        await asyncio.sleep(14 if http_input else 3)
         elapsed = asyncio.get_running_loop().time() - started
         window = await proxy.buffer_window('fixture')
         assert 0 < window['buffered_seconds'] <= elapsed + 2
