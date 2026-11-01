@@ -67,7 +67,7 @@ class LiveTvViewModel @Inject constructor(
     private var profileId: String? = null
     init {
         viewModelScope.launch {
-            session.session.map { it.profile }.distinctUntilChanged().collectLatest { profile ->
+            session.session.map { it.apiBase to it.profile }.distinctUntilChanged().collectLatest { (server, profile) ->
                 loadJob?.cancel(); groupsJob?.cancel()
                 profileId = profile?.id
                 _state.value = LiveTvState()
@@ -78,7 +78,7 @@ class LiveTvViewModel @Inject constructor(
                         prefs.read(profile.id, "native_live")?.let { Json.decodeFromJsonElement<LiveFilters>(it) } ?: defaults
                     } catch (e: CancellationException) { throw e }
                     catch (_: Exception) { _state.update { it.copy(notice = "Saved filters unavailable. Using defaults.") }; defaults }
-                    _state.update { it.copy(ready = true, profileScope = profile.id, profileLanguages = langs, selectedLanguages = filters.languages,
+                    _state.update { it.copy(ready = true, profileScope = "$server|${profile.id}", profileLanguages = langs, selectedLanguages = filters.languages,
                         selectedGroup = filters.group, country = filters.country, favoritesOnly = filters.favorites) }
                     refreshGroups(); load()
                     try { val languages = api.channelLanguages(); _state.update { it.copy(languages = languages.sortedByDescending { l -> l.count }) } }
