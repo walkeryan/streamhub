@@ -6,6 +6,8 @@ import com.streamhub.tv.core.data.handoff.HandoffResult
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackMode
 import com.streamhub.tv.core.data.model.PlaybackRequest
+import com.streamhub.tv.core.data.model.PlaybackOptions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,6 +24,7 @@ sealed interface PlayEvent {
     /** Navigate straight to the full-screen player; descriptor is cached under [key]. */
     data class StartPlayer(val key: String) : PlayEvent
     data class Handoff(val result: HandoffResult) : PlayEvent
+    data class ChooseAudio(val request: PlaybackRequest, val options: PlaybackOptions) : PlayEvent
     data class Error(val message: String) : PlayEvent
 }
 
@@ -43,11 +46,28 @@ class PlaybackCoordinator @Inject constructor(
     val events: SharedFlow<PlayEvent> = _events
 
     fun play(id: String, sourceId: String? = null, catchupProgrammeId: String? = null) {
+        submit(PlaybackRequest(id = id, sourceId = sourceId, catchupProgrammeId = catchupProgrammeId))
+    }
+
+    fun chooseAudio(request: PlaybackRequest, variantId: String, confirmed: Boolean) {
+        submit(request.copy(variantId = variantId, allowUnverifiedAudio = confirmed), preflight = false)
+    }
+
+    fun cancelPending() { inFlight?.cancel() }
+
+    private fun submit(request: PlaybackRequest, preflight: Boolean = true) {
         inFlight?.cancel()
         inFlight = scope.launch {
-            runCatching { api.resolve(PlaybackRequest(id = id, sourceId = sourceId, catchupProgrammeId = catchupProgrammeId)) }
-                .onSuccess { d -> dispatch(d) }
-                .onFailure { _events.emit(PlayEvent.Error(it.message ?: "Playback failed")) }
+            try {
+                when (val result = audioPlaybackAttempt(request, preflight, api::playbackOptions, api::resolve)) {
+                    is AudioPlaybackAttempt.Choice -> _events.emit(PlayEvent.ChooseAudio(result.request, result.options))
+                    is AudioPlaybackAttempt.Ready -> dispatch(result.descriptor)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.emit(PlayEvent.Error(e.message ?: "Playback failed"))
+            }
         }
     }
 

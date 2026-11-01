@@ -213,6 +213,11 @@ class StreamHubApi @Inject constructor(
 
     // ---- Playback ------------------------------------------------------------------------------
 
+    suspend fun playbackOptions(id: String, sourceId: String? = null): PlaybackOptions = get("/playback/options") {
+        parameter("id", id)
+        sourceId?.let { parameter("source_id", it) }
+    }
+
     suspend fun resolve(req: PlaybackRequest): PlaybackDescriptor =
         client.post(url("/playback/resolve")) { setBody(req) }.ok()
 

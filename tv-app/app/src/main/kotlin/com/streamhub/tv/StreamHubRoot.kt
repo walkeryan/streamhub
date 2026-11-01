@@ -54,6 +54,7 @@ import com.streamhub.tv.core.ui.components.PlayLauncher
 import com.streamhub.tv.core.ui.components.RailItem
 import com.streamhub.tv.core.ui.components.RailMetrics
 import com.streamhub.tv.core.ui.components.ScreenBackground
+import com.streamhub.tv.core.ui.components.AudioSourceDialog
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.RailController
 import com.streamhub.tv.feature.details.DetailsScreen
@@ -128,12 +129,16 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     val localAccepted = accepted ?: return ScreenBackground {}
     val nav = rememberNavController()
     val context = LocalContext.current
+    var audioChoice by remember { mutableStateOf<PlayEvent.ChooseAudio?>(null) }
     var qr by remember { mutableStateOf<HandoffResult.ShowQr?>(null) }
+
+    LaunchedEffect(s.serverUrl, s.profile?.id, s.profile?.languages) { audioChoice = null; vm.coordinator.cancelPending() }
 
     // Play events → player route (no intermediate screen) or hand-off.
     LaunchedEffect(Unit) {
         vm.coordinator.events.collect { e ->
             when (e) {
+                is PlayEvent.ChooseAudio -> { audioChoice = e }
                 is PlayEvent.StartPlayer -> nav.navigate(Routes.player(e.key)) { launchSingleTop = true }
                 is PlayEvent.Handoff -> if (e.result is HandoffResult.ShowQr) qr = e.result as HandoffResult.ShowQr
                 is PlayEvent.Error -> Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
@@ -142,6 +147,8 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     }
     LaunchedEffect(Unit) {
         vm.sessionEvents.expired.collect {
+            audioChoice = null
+            vm.coordinator.cancelPending()
             nav.navigate(Routes.ONBOARDING) { popUpTo(0) { inclusive = true } }
         }
     }
@@ -163,6 +170,12 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     CompositionLocalProvider(LocalPlayLauncher provides launcher) {
         ScreenBackground {
             AppShell(nav, start, profileName = s.profile?.name)
+            audioChoice?.let { choice ->
+                AudioSourceDialog(choice.options, onDismiss = { audioChoice = null; vm.coordinator.cancelPending() }) { variant, confirmed ->
+                    audioChoice = null
+                    vm.coordinator.chooseAudio(choice.request, variant, confirmed)
+                }
+            }
             qr?.let { HandoffQrDialog(it.webUrl, it.serviceName) { qr = null } }
         }
     }
