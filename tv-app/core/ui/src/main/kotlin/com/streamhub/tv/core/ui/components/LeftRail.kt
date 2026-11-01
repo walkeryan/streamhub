@@ -6,6 +6,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -116,6 +118,8 @@ fun LeftRail(
             },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // Keep every destination reachable at TV logical heights as the menu grows.
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement=Arrangement.spacedBy(6.dp)) {
         items.forEachIndexed { i, item ->
             val req = if (i == selectedIndex) firstItemRequester else requesters[i]
             RailButton(
@@ -126,7 +130,7 @@ fun LeftRail(
                 onClick = { onSelect(item) },
             )
         }
-        Spacer(Modifier.weight(1f))
+        }
         FocusSurface(onClick = onProfile, modifier = Modifier.fillMaxWidth().height(48.dp), containerColor = androidx.compose.ui.graphics.Color.Transparent, focusedContainerColor = t.surfaceAlt, scaleOnFocus = false, glow = false) {
             Row(Modifier.align(Alignment.CenterStart).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(36.dp).background(t.accent, CircleShape), contentAlignment = Alignment.Center) {
