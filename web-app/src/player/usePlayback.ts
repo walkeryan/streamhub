@@ -33,6 +33,7 @@ const MAX_RETRIES = 6
 export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: { muted?: boolean; report?: boolean; buffer?: boolean } = {}) {
   const profile = useSession((s) => s.profile)
   const profileId = profile?.id
+  const sessionGeneration = useSession((s) => s.generation)
   const preferences = JSON.stringify(profile?.languages ?? ['en'])
   const [audioBlocked, setAudioBlocked] = useState(false)
   const checkAudio = useRef<() => boolean>(() => false)
@@ -52,6 +53,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const [tracksVersion, setTracksVersion] = useState(0)
   const handle = useRef<PlayerHandle | null>(null)
   const descRef = useRef<PlaybackDescriptor | null>(null)
+  const descriptorOwner = useRef<{ key: string; profileId: string | undefined; generation: number } | null>(null)
   const retry = useRef(0)
   const retryTimer = useRef<number | null>(null)
   const waitingTimer = useRef<number | null>(null)
@@ -66,7 +68,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
     retryTimer.current = null
   }, [])
-  const key = req ? `${profileId}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
+  const key = req ? `${profileId}|${sessionGeneration}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
 
   const reconnect = useCallback((_reason: string) => {
     if (terminal.current) return
@@ -109,6 +111,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     wantsPlayback.current = true
     setAudioBlocked(false)
     let cancelled = false
+    const ownsSession = () => { const session = useSession.getState(); return session.profile?.id === profileId && session.generation === sessionGeneration }
     const controller = new AbortController()
     hasPlayed.current = false
     clearWaiting()
@@ -134,9 +137,10 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           intent.current.generation = generation
         }
         const d = await resolve(req, intent.current.generation)
-        if (cancelled) return
+        if (cancelled || !ownsSession()) return
         setDesc(d)
         descRef.current = d
+        descriptorOwner.current = { key, profileId, generation: sessionGeneration }
         if (d.mode === 'handoff') { setState('handoff'); return }
         if (!video) return
         const attach = async (descriptor: PlaybackDescriptor) => {
@@ -157,7 +161,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           // blanket exemption for later track changes.
           const preferred = (descriptor as PlaybackDescriptor & { preferred_audio_languages?: string[] }).preferred_audio_languages ?? JSON.parse(preferences) as string[]
           checkAudio.current = () => {
-            if (cancelled || sequence !== attachSequence || !owned || terminal.current) return false
+            const session = useSession.getState()
+            if (cancelled || sequence !== attachSequence || !owned || terminal.current || session.profile?.id !== profileId || session.generation !== sessionGeneration) return false
             if (owned.audioReady?.() === false) { video.muted = true; video.pause(); return false }
             const tracks = owned.audioTracks()
             const selection = audioSelection(tracks)
@@ -189,7 +194,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
               setTracksVersion((v) => v + 1); checkAudio.current()
             } },
           })
-          if (cancelled || sequence !== attachSequence) { next.destroy(); return }
+          if (cancelled || !ownsSession() || sequence !== attachSequence) { next.destroy(); return }
           owned = next
           handle.current = next
           checkAudio.current()
@@ -321,13 +326,17 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     const v = videoRef.current
     if (!v) return
     const send = (state: 'playing' | 'paused' | 'stopped', unloading = false) => {
+      const session = useSession.getState()
+      const owner = descriptorOwner.current
+      if (!profileId || session.profile?.id !== profileId || session.generation !== sessionGeneration || owner?.key !== key || owner.profileId !== profileId || owner.generation !== sessionGeneration) return
       const d = descRef.current
       if (!d || d.mode === 'handoff') return
-      reportProgress({
-        id: req.id, source_id: req.sourceId ?? null, state,
+      const progress = {
+        id: req.id, source_id: req.sourceId ?? null, state, expected_profile_id: profileId,
         position_ms: Math.floor((v.currentTime || 0) * 1000),
         duration_ms: Number.isFinite(v.duration) && !d.live ? Math.floor(v.duration * 1000) : (d.duration_ms ?? null),
-      }, unloading)
+      }
+      reportProgress(progress, unloading)
     }
     const tick = window.setInterval(() => { if (!v.paused && !v.ended) send('playing') }, 10_000)
     const onPause = () => !v.ended && send('paused')
@@ -341,7 +350,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       v.removeEventListener('pause', onPause); v.removeEventListener('ended', onEnded); window.removeEventListener('pagehide', onHide)
       send('stopped', true)
     }
-  }, [videoRef, req, opts.report, key])
+  }, [videoRef, req, opts.report, key, profileId, sessionGeneration])
 
   const tracks = useCallback(() => {
     void tracksVersion
