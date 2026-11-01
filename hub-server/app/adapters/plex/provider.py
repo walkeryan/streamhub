@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, date, datetime
 from typing import Any
@@ -17,6 +18,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from app.adapters.plex.guide import GuideSnapshot, read_guide
 from app.domain.entities import (
     CatalogItem,
     MediaKind,
@@ -189,6 +191,33 @@ class PlexSource:
             return TestResult(False, "Plex token rejected")
         except httpx.HTTPError as exc:
             return TestResult(False, f"Plex unreachable: {type(exc).__name__}")
+
+    async def read_guide(self, day: date) -> GuideSnapshot:
+        """Explicit metadata-only reader; not wired into playable-channel sync."""
+        if not self.server or not self.token:
+            raise PermissionError("A linked Plex server is required for guide metadata")
+
+        async def get(path: str, **params: Any) -> dict[str, Any]:
+            # No redirects: an advertised provider cannot forward our token elsewhere.
+            async with (
+                self._ctx.http_factory(headers=self._h(), timeout=10.0) as client,
+                client.stream("GET", self.server + path, params=params or None, follow_redirects=False) as resp,
+            ):
+                if resp.status_code in (401, 403):
+                    raise PermissionError("Plex guide access was not granted")
+                resp.raise_for_status()
+                body = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    if len(body) + len(chunk) > 2 * 1024 * 1024:
+                        raise ValueError("Plex guide response exceeded the metadata limit")
+                    body.extend(chunk)
+            data = json.loads(body)
+            container = data.get("MediaContainer") if isinstance(data, dict) else None
+            if not isinstance(container, dict):
+                raise ValueError("Plex guide response has no MediaContainer")
+            return container
+
+        return await read_guide(self.ref.id, day, get)
 
     # ---- mapping
     def _img(self, path: str | None) -> str | None:
