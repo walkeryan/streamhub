@@ -1670,6 +1670,48 @@ export interface paths {
         };
         trace?: never;
     };
+    "/sports/recordings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Explicit sports library videos from Plex; not live or equivalent to IPTV events */
+        get: {
+            parameters: {
+                query?: {
+                    language?: string;
+                    sport?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Library metadata with normal audio choice required; unknown audio remains honest */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsRecordingsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sports/events": {
         parameters: {
             query?: never;
@@ -3052,6 +3094,32 @@ export interface components {
             live_evidence: boolean;
             grouping_evidence: string;
             feeds: components["schemas"]["SportsEventFeed"][];
+        };
+        SportsRecording: {
+            /** @description Exact source-scoped library ID; open title/audio chooser */
+            title_id: string;
+            title: string;
+            source_id: string;
+            source_name: string;
+            sport: string;
+            /** @description Original release date */
+            originally_available_at: string | null;
+            duration_ms: number | null;
+            audio_languages: string[];
+            audio_verified: boolean;
+            language_hint: string | null;
+            /** @enum {string} */
+            kind: "library_video";
+            /** @enum {boolean} */
+            live: false;
+        };
+        SportsRecordingsPage: {
+            items: components["schemas"]["SportsRecording"][];
+            /** @description Matching entries within the bounded scan; consult truncated */
+            total: number;
+            limit: number;
+            offset: number;
+            truncated: boolean;
         };
         SportsEventsPage: {
             /** Format: date-time */

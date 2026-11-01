@@ -444,6 +444,31 @@ components:
         live_evidence: {type: boolean}
         grouping_evidence: {type: string}
         feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}}
+    SportsRecording:
+      type: object
+      required: [title_id, title, source_id, source_name, sport, originally_available_at, duration_ms, audio_languages, audio_verified, language_hint, kind, live]
+      properties:
+        title_id: {type: string, description: Exact source-scoped library ID; open title/audio chooser}
+        title: {type: string}
+        source_id: {type: string}
+        source_name: {type: string}
+        sport: {type: string}
+        originally_available_at: {type: string, nullable: true, description: Original release date, never broadcast or recording time}
+        duration_ms: {type: integer, nullable: true}
+        audio_languages: {type: array, items: {type: string}}
+        audio_verified: {type: boolean}
+        language_hint: {type: string, nullable: true}
+        kind: {type: string, enum: [library_video]}
+        live: {type: boolean, enum: [false]}
+    SportsRecordingsPage:
+      type: object
+      required: [items, total, limit, offset, truncated]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/SportsRecording'}}
+        total: {type: integer, description: Matching entries within the bounded scan; consult truncated}
+        limit: {type: integer}
+        offset: {type: integer}
+        truncated: {type: boolean}
     SportsEventsPage:
       type: object
       required: [as_of, date, timezone, events, total, limit, offset, sports, coverage, truncated]
@@ -640,6 +665,21 @@ paths:
     get: { summary: Languages present with counts, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { type: object, properties: { code: {type: string}, name: {type: string}, count: {type: integer} } } } } } } } }
   /channels/{id}:
     patch: { summary: User override (number, language, group, epg_id), parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Channel' } } } }, responses: { '200': { description: ok } } }
+  /sports/recordings:
+    get:
+      summary: Explicit sports library videos from Plex; not live or equivalent to IPTV events
+      parameters:
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: Library metadata with normal audio choice required; unknown audio remains honest
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsRecordingsPage'}
   /sports/events:
     get:
       parameters:

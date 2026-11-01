@@ -9,9 +9,10 @@ from fastapi import APIRouter, Query, Response
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
-from app.services.errors import ServiceError
+from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
 from app.services.sports import sports_events, sports_on_now
+from app.services.sports_recordings import sports_recordings
 
 router = APIRouter()
 
@@ -33,6 +34,35 @@ async def sports(
 ) -> dict[str, Any]:
     return await sports_on_now(
         c.channels, p.profile_id, language=language, sport=sport, q=q, limit=limit, offset=offset
+    )
+
+
+@router.get("/sports/recordings", response_model=S.SportsRecordingsPage, tags=["catalog"])
+async def sports_recording_list(
+    c: C,
+    p: P,
+    response: Response,
+    language: str | None = None,
+    sport: str | None = None,
+    q: str | None = Query(None, max_length=200),
+    limit: int = Query(40, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    # New library surface must not bypass centrally enforced profile policy.
+    # Fail closed during partial integrations where the service is unavailable.
+    policy = getattr(c, "content_policy", None)
+    if policy is None:
+        raise Forbidden("Content policy service unavailable.", code="content_policy_unavailable")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await sports_recordings(
+        c.catalog,
+        p.profile_id,
+        allowed_refs=policy.allowed_refs,
+        language=language,
+        sport=sport,
+        q=q,
+        limit=limit,
+        offset=offset,
     )
 
 

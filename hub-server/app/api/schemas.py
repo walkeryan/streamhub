@@ -476,6 +476,29 @@ class SportsPage(_M):
     coverage: SportsCoverage
 
 
+class SportsRecording(_M):
+    title_id: str
+    title: str
+    source_id: str
+    source_name: str
+    sport: str
+    originally_available_at: str | None = None
+    duration_ms: int | None = None
+    audio_languages: list[str]
+    audio_verified: bool
+    language_hint: str | None = None
+    kind: Literal["library_video"] = "library_video"
+    live: Literal[False] = False
+
+
+class SportsRecordingsPage(_M):
+    items: list[SportsRecording]
+    total: int
+    limit: int
+    offset: int
+    truncated: bool
+
+
 class SportsFeed(_M):
     programme_id: str
     channel_id: str

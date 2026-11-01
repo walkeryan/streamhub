@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import urlencode
 
@@ -211,11 +211,19 @@ class PlexSource:
         if kind == MediaKind.SEASON or kind == MediaKind.EPISODE:
             parent = m.get("parentRatingKey")
         part_key = None
+        part_available: bool | None = None
+        original_date = None
+        try:
+            original_date = date.fromisoformat(str(m.get("originallyAvailableAt"))).isoformat()
+        except ValueError:
+            pass
         audio_extra: dict[str, Any] = {}
         container = None
         for media in m.get("Media") or []:
             for part in media.get("Part") or []:
                 part_key = part.get("key")
+                if any(part.get(flag) in (False, 0, "0", "false") for flag in ("exists", "accessible")):
+                    part_available = False
                 audio_extra = provider_audio_extra(
                     [
                         stream
@@ -249,6 +257,8 @@ class PlexSource:
             extra={
                 **audio_extra,
                 "part_key": part_key,
+                "part_available": part_available,
+                "originally_available_at": original_date,
                 "container": container,
                 "view_offset": m.get("viewOffset"),
                 "grandparent_title": m.get("grandparentTitle"),
