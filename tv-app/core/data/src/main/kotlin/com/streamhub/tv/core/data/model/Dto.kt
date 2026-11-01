@@ -472,13 +472,19 @@ data class PlaybackOptions(
     @SerialName("challenge_id") val challengeId: String,
     @SerialName("poll_token") val pollToken: String,
     @SerialName("expires_in") val expiresIn: Int,
-)
+) {
+    override fun toString(): String = "OwnerPinChallenge(challengeId=[REDACTED], pollToken=[REDACTED], expiresIn=$expiresIn)"
+}
 @Serializable data class OwnerPinCancel(
     @SerialName("challenge_id") val challengeId: String,
     @SerialName("poll_token") val pollToken: String,
-)
+) {
+    override fun toString(): String = "OwnerPinCancel(challengeId=[REDACTED], pollToken=[REDACTED])"
+}
 @Serializable data class OwnerPinVerify(
     @SerialName("challenge_id") val challengeId: String,
     @SerialName("poll_token") val pollToken: String,
     val pin: String,
-)
+) {
+    override fun toString(): String = "OwnerPinVerify(challengeId=[REDACTED], pollToken=[REDACTED], pin=[REDACTED])"
+}
