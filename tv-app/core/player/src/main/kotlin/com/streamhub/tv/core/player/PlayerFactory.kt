@@ -14,5 +14,5 @@ class PlayerFactory @Inject constructor(
     private val api: StreamHubApi,
     private val sessions: SessionStore,
 ) {
-    fun create(reportProgress: Boolean = true) = StreamHubPlayer(context, api, sessions, reportProgress)
+    fun create(reportProgress: Boolean = true, handleAudioFocus:Boolean=true, allowLiveReconnect:Boolean=true) = StreamHubPlayer(context, api, sessions, reportProgress,handleAudioFocus,allowLiveReconnect)
 }

@@ -1,6 +1,11 @@
 package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.auth.Session
+import com.streamhub.tv.core.data.auth.sameSwitchSession
+import io.ktor.client.plugins.auth.AuthCircuitBreaker
+import io.ktor.client.request.header
+import io.ktor.http.HttpHeaders
+import kotlinx.coroutines.CancellationException
 import com.streamhub.tv.core.data.repo.boundProgressRequest
 import com.streamhub.tv.core.data.repo.bindProgressSession
 import com.streamhub.tv.core.data.auth.SessionStore
@@ -263,6 +268,29 @@ class StreamHubApi @Inject constructor(
 
     suspend fun resolve(req: PlaybackRequest): PlaybackDescriptor =
         client.post(url("/playback/resolve")) { setBody(req) }.ok()
+
+    suspend fun playbackGeneration():PlaybackGeneration=get("/playback/generation")
+    suspend fun reserveMultiview(request:MultiviewRequest,owner:Session):MultiviewDescriptor {
+        val current=session.current()
+        if(!sameSwitchSession(owner,current)) throw CancellationException("Playback session changed")
+        val base=owner.apiBase ?: throw CancellationException("Playback server unavailable")
+        val token=current.accessToken ?: throw CancellationException("Playback sign-in required")
+        return client.post("$base/playback/multiview") {
+            attributes.put(AuthCircuitBreaker,Unit)
+            header(HttpHeaders.Authorization,"Bearer $token")
+            setBody(request)
+        }.ok()
+    }
+    suspend fun releaseMultiview(leaseId:String,owner:Session) {
+        val current=session.current()
+        val token=(if(sameSwitchSession(owner,current))current else owner).accessToken ?: return
+        val base=owner.apiBase ?: return
+        client.post("$base/playback/multiview/release") {
+            attributes.put(AuthCircuitBreaker,Unit)
+            header(HttpHeaders.Authorization,"Bearer $token")
+            setBody(MultiviewRelease(leaseId))
+        }.unit()
+    }
 
     suspend fun reportProgress(report: ProgressReport, owner:Session):Boolean {
         val request=boundProgressRequest(owner,session.current(),report) ?: return false

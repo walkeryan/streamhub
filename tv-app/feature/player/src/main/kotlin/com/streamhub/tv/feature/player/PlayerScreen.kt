@@ -202,7 +202,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
         VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect)
         if(s.overlay == Overlay.Rewind && s.audioChoice == null) ProviderRewindDialog(vm, s)
         if(s.overlay == Overlay.Buffer && s.audioChoice == null) BufferPlaybackDialog(vm,s,ps)
-        s.audioChoice?.let { choice -> AudioSourceDialog(choice.options, vm::cancelAudioChoice, vm::confirmAudioChoice) }
+        s.audioChoice?.let { choice -> AudioSourceDialog(choice.options, vm::cancelAudioChoice, onChoose=vm::confirmAudioChoice) }
 
         if (ps.buffering || ps.error != null || s.message != null || s.bufferBusy) {
             StatusBadge(ps.error ?: s.message ?: if(s.bufferBusy) "Preparing buffer…" else "Buffering…", Modifier.align(Alignment.Center))

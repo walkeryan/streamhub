@@ -19,7 +19,7 @@ import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 
 /** Every action is reachable with four-way D-pad, Select and Back. Consent is per playback only. */
 @Composable
-fun AudioSourceDialog(options: PlaybackOptions, onDismiss: () -> Unit, onChoose: (String, Boolean) -> Unit) {
+fun AudioSourceDialog(options: PlaybackOptions, onDismiss: () -> Unit, confirmLabel:String="Play this source once", onChoose: (String, Boolean) -> Unit) {
     val t = LocalThemeTokens.current
     var pending by remember(options) { mutableStateOf<PlaybackOption?>(null) }
     val cancelFocus = remember { FocusRequester() }
@@ -31,7 +31,7 @@ fun AudioSourceDialog(options: PlaybackOptions, onDismiss: () -> Unit, onChoose:
             if (selected != null) {
                 Text("This source has unverified or nonpreferred default audio. Provider labels are hints, not proof of English audio.", color = t.text)
                 Text(selected.providerLabel, color = t.textMuted)
-                ShButton("Play this source once", { onChoose(selected.variantId, true) })
+                ShButton(confirmLabel, { onChoose(selected.variantId, true) })
             } else {
                 Text("Preferred: ${options.preferredLanguages.joinToString().ifEmpty { "All languages" }}", color = t.textMuted)
                 LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(10.dp)) {

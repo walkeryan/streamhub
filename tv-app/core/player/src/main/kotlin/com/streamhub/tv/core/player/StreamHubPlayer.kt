@@ -81,6 +81,8 @@ class StreamHubPlayer(
     private val api: StreamHubApi,
     private val sessions: SessionStore,
     private val reportProgress: Boolean = true,
+    private val handleAudioFocus:Boolean=true,
+    private val allowLiveReconnect:Boolean=true,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var progressJob: Job? = null
@@ -127,7 +129,7 @@ class StreamHubPlayer(
                 .setBufferDurationsMs(15_000, 50_000, 1_500, 3_000)
                 .build(),
         )
-        .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+        .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), handleAudioFocus)
         .setHandleAudioBecomingNoisy(true)
         .build()
 
@@ -146,7 +148,7 @@ class StreamHubPlayer(
             }
             if (playbackState == Player.STATE_ENDED) {
                 if(current?.bufferAvailable == true) _state.value = _state.value.copy(error="Buffered playback ended. Choose Go Live or retry.")
-                else if (current?.live == true) scheduleReconnect("Stream ended") else report(PlaybackState.STOPPED)
+                else if (current?.live == true && allowLiveReconnect) scheduleReconnect("Stream ended") else if(current?.live==true) _state.value=_state.value.copy(error="Stream ended. Start a new pair.") else report(PlaybackState.STOPPED)
             }
         }
 
@@ -154,8 +156,10 @@ class StreamHubPlayer(
             val d = current
             if(d?.bufferAvailable == true) {
                 _state.value = _state.value.copy(error="Buffered playback interrupted. Choose Go Live or retry.")
-            } else if (d?.live == true) {
+            } else if (d?.live == true && allowLiveReconnect) {
                 scheduleReconnect(error.errorCodeName)
+            } else if (!allowLiveReconnect) {
+                _state.value = _state.value.copy(error="A pane failed. Start a new pair to retry.")
             } else if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                 exoPlayer.seekToDefaultPosition(); exoPlayer.prepare()
             } else {

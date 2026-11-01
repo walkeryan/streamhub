@@ -134,7 +134,7 @@ private val knownSports = listOf("American football", "Basketball", "Baseball", 
 private data class EventChoice(val event: SportsEvent, val opener: FocusRequester)
 
 @Composable
-fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
+fun SportsScreen(onMultiview:()->Unit = {}, vm: SportsViewModel = hiltViewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val t = LocalThemeTokens.current
     val rail = LocalRailController.current
@@ -177,6 +177,7 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
             ShButton(s.languages.find { it.code == s.filters.language }?.name ?: when(s.filters.language) { null -> "My languages"; "all" -> "All languages"; "und" -> "Unknown"; else -> s.filters.language!! }, { picker = "language" }, Modifier.focusRequester(controls.getValue("language")), enabled = s.ready)
         }
         if(!s.library) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ShButton("Two-pane TV", onMultiview)
             ShButton("Reset", { vm.filters(NativeSportsFilters()) }, Modifier.leftOpensRail(rail), enabled = s.ready)
             ShButton(if (s.loading) "Refreshing…" else "Refresh", { if (!s.loading) vm.refresh() }, enabled = s.ready)
             ShButton("Previous", { if (!s.loading && s.page > 0) vm.refresh(s.page - 1) }, enabled = s.ready)

@@ -59,6 +59,8 @@ import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.RailController
 import com.streamhub.tv.feature.details.DetailsScreen
 import com.streamhub.tv.feature.favorites.FavoritesScreen
+import com.streamhub.tv.feature.home.DiscoveryScreen
+import com.streamhub.tv.feature.player.MultiviewScreen
 import com.streamhub.tv.feature.home.BrowseScreen
 import com.streamhub.tv.feature.home.HomeScreen
 import com.streamhub.tv.feature.home.SportsScreen
@@ -82,6 +84,9 @@ object Routes {
     const val LIVE = "live"
     const val GUIDE = "guide"
     const val SPORTS = "sports"
+    const val DISCOVER = "discover/{section}"
+    const val MULTIVIEW = "multiview"
+    fun discover(section:String="movies") = "discover/$section"
     const val MOVIES = "browse/movies"
     const val SHOWS = "browse/shows"
     const val FAVORITES = "favorites"
@@ -98,6 +103,7 @@ private val RAIL = listOf(
     RailItem(Routes.SEARCH, "Search", Icons.Filled.Search),
     RailItem(Routes.LIVE, "Live TV", Icons.Filled.LiveTv),
     RailItem(Routes.SPORTS, "Sports", Icons.Filled.SportsSoccer),
+    RailItem(Routes.discover(), "Discover", Icons.Filled.Search),
     RailItem(Routes.MOVIES, "Movies", Icons.Filled.Movie),
     RailItem(Routes.SHOWS, "Shows", Icons.Filled.Tv),
     RailItem(Routes.FAVORITES, "Favorites", Icons.Filled.Favorite),
@@ -197,12 +203,12 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
 private fun AppShell(nav: NavHostController, start: String, profileName: String?) {
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
-    val showRail = route != null && route != Routes.ONBOARDING && route != Routes.PLAYER
+    val showRail = route != null && route != Routes.ONBOARDING && route != Routes.PLAYER && route != Routes.MULTIVIEW
     var railExpanded by remember { mutableStateOf(false) }
     val railFocus = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
     val railController = remember { RailController { runCatching { railFocus.requestFocus() } } }
-    val topLevel = RAIL.any { it.route == route } || route == Routes.GUIDE
+    val topLevel = RAIL.any { it.route == route } || route == Routes.GUIDE || route == Routes.DISCOVER
 
     // Back on a top-level screen (other than Home) opens the rail first, then Home; never a dead end.
     BackHandler(enabled = showRail && topLevel && !railExpanded && route != Routes.HOME) { railController.openRail() }
@@ -224,7 +230,11 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
                     composable(Routes.HOME) { HomeScreen() }
                     composable(Routes.SEARCH) { SearchScreen() }
                     composable(Routes.LIVE) { LiveDestination() }
-                    composable(Routes.SPORTS) { SportsScreen() }
+                    composable(Routes.SPORTS) { SportsScreen(onMultiview={nav.navigate(Routes.MULTIVIEW)}) }
+                    composable(Routes.MULTIVIEW) { MultiviewScreen(onExit={nav.popBackStack()}) }
+                    composable(Routes.DISCOVER, arguments=listOf(navArgument("section"){type=NavType.StringType})) { entry ->
+                        DiscoveryScreen(onSearch={nav.navigate(Routes.SEARCH)},onLibrary={nav.navigate(if(entry.arguments?.getString("section")=="shows")Routes.SHOWS else Routes.MOVIES)},onSection={section->nav.navigate(Routes.discover(section)){popUpTo(Routes.DISCOVER){inclusive=true};launchSingleTop=true}})
+                    }
                     composable(Routes.GUIDE) { LiveDestination(startInGuide = true) }
                     composable("browse/{section}", arguments = listOf(navArgument("section") { type = NavType.StringType })) { e ->
                         BrowseScreen(title = if (e.arguments?.getString("section") == "shows") "Shows" else "Movies")
@@ -241,7 +251,7 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
             if (showRail) {
                 LeftRail(
                     items = RAIL,
-                    selectedRoute = if (route == Routes.GUIDE) Routes.LIVE else RAIL.firstOrNull { route?.startsWith(it.route) == true }?.route
+                    selectedRoute = if(route==Routes.DISCOVER) Routes.discover() else if (route == Routes.GUIDE) Routes.LIVE else RAIL.firstOrNull { route?.startsWith(it.route) == true }?.route
                         ?: if (route?.startsWith("details") == true) null else route,
                     expanded = railExpanded,
                     onExpandedChange = { railExpanded = it },
