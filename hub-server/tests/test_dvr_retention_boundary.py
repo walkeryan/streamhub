@@ -49,3 +49,15 @@ def test_quota_wins_over_hour_target(tmp_path):
     manager.verify = lambda _: VolumeProof(HEADROOM + 70, MAX_VOLUME, PARENT_RESERVE * 2)
     assert manager.window('fixture')['buffered_seconds'] < 3600
     assert sum(p.stat().st_size for p in manager.directory.glob('seg_*.ts')) <= 70
+
+
+def test_only_dvr_input_is_paced_before_input(tmp_path):
+    from app.proxy.stream_proxy import ffmpeg_args
+    for live, buffered in [(True, True), (True, False), (False, False)]:
+        args = ffmpeg_args("ffmpeg", "https://fixture.invalid/live", {}, tmp_path,
+                           live=live, buffered=buffered, transcode="none", vaapi_device="")
+        assert ("-re" in args) is buffered
+        assert args[args.index("-c") + 1] == "copy"
+        if buffered:
+            assert args.index("-re") < args.index("-i")
+            assert args[args.index("-hls_list_size") + 1] == "1862"

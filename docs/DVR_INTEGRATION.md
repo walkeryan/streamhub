@@ -59,8 +59,13 @@ substitute a shorter local window for the requested hour. Creating the proposed
 and this admission policy remain production activation decisions; no such filesystem
 is created by this implementation or its tests.
 
-A reliable <=25 Mbit/s total mux ceiling consumes about 10.48 GiB/hour, leaving
-margin below 12 GiB. Automatic bitrate detection/enforcement or transcoding is not
+A 25 Mbit/s total mux ceiling consumes about 10.48 GiB per exact hour; with
+62 minutes of segment/edge margin it consumes about 10.83 GiB. This example fits
+only the full 12 GiB volume, not every accepted 11–12 GiB filesystem: 11 GiB less
+256 MiB working headroom leaves only 10.75 GiB before filesystem/playlist overhead.
+Admission must derive its ceiling from the actual verified capacity, subtract
+working headroom and explicit overhead, and divide by the full retained horizon
+(at least 3,720 seconds for this bound), converting bytes to bits. Automatic bitrate detection/enforcement or transcoding is not
 implemented here. Until admission can prove that ceiling (or a separately verified
 larger resource plan), unknown-rate feeds remain archive-only under the proposed
 activation policy. A full retained hour and provider/device behavior must also be
@@ -80,3 +85,11 @@ startup burst beyond its bounded playlist and deleting older segments before the
 manager sees them. The real-hour fixture uses paced input; unpaced/provider bursts
 remain an explicit production acceptance and admission limitation. Seek(end−3600) is the primary full-hour check; seek(now−3600) is
 reported separately. A stalled input cannot promise a current wall-clock live edge.
+
+DVR-only FFmpeg input pacing (`-re`, documented by the installed FFmpeg help as
+`-readrate 1`) now limits reads to native media rate before the bounded HLS writer.
+No initial burst is configured. Ordinary live/VOD input flags and codec-copy output
+are unchanged. Input stalls cannot create history; source timestamp anomalies and
+provider backpressure still require actual source acceptance. The earlier long-run
+fixtures injected equivalent pacing and are not relabelled as exact final-argument
+runs; the separate real-producer pacing regression uses production arguments.

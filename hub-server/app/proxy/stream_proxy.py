@@ -265,6 +265,10 @@ def ffmpeg_args(
         args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
         if live:
             args += ["-reconnect_at_eof", "1"]
+    if buffered:
+        # Bound DVR startup bursts to media time before the finite HLS writer
+        # can roll away retained history. Ordinary live/VOD keeps its input policy.
+        args += ["-re"]
     args += ["-fflags", "+genpts", "-i", url, "-map", "0:v:0?", "-map", "0:a?"]
     if transcode == "none" or not transcode:
         args += ["-c", "copy"]
