@@ -29,6 +29,14 @@ class Database:
 
             @event.listens_for(self.engine.sync_engine, "connect")
             def _pragmas(dbapi_conn: Any, _rec: Any) -> None:
+                from app.services.ids import clean_display_title, normalise_title
+
+                dbapi_conn.create_function(
+                    "canonical_title_key",
+                    1,
+                    lambda value: normalise_title(clean_display_title(value or "")),
+                    deterministic=True,
+                )
                 cur = dbapi_conn.cursor()
                 cur.execute("PRAGMA journal_mode=WAL")
                 cur.execute("PRAGMA synchronous=NORMAL")

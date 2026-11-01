@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import ColumnElement, Select, String, case, cast, func, literal, or_, select, true
+from sqlalchemy import ColumnElement, Select, String, case, cast, func, literal, or_, select, text, true
 
 from app.adapters.language.inferrer import lang_from_flag, lang_from_group, normalise_code
 from app.domain.entities import CatalogItem, MediaKind
@@ -692,56 +692,67 @@ class CatalogService:
         if source_id:
             enabled = [sid for sid in enabled if sid == source_id]
         want = kinds or {"movie", "show", "vod", "series", "episode", "channel"}
-        lib_kinds = [k for k in ("movie", "show", "vod", "series", "episode") if k in want]
+        lib_kinds = set(want) & {"movie", "show", "vod", "series", "episode"}
+        if lib_kinds & {"movie", "vod"}:
+            lib_kinds.update(("movie", "vod"))
+        if lib_kinds & {"show", "series"}:
+            lib_kinds.update(("show", "series"))
+        tokens = search_tokens(norm)
+        words = anchors(tokens) or norm.split()[:8]
         rows: list[Title] = []
-        if norm and lib_kinds:
-            like = f"%{_escape_like(norm)}%"
+        if norm and lib_kinds and words and enabled:
+            # FTS supplies candidate IDs only. The ORM scope below still enforces
+            # enabled sources, profile classifications, kinds and language filters.
+            match = " OR ".join('"' + word.replace('"', '""') + '"*' for word in words)
+            matching_ids = text("SELECT rowid FROM title_search WHERE title_search MATCH :match").bindparams(
+                match=match
+            )
             query = select(Title).where(
-                Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.norm_title.like(like, escape="\\")
+                Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.id.in_(matching_ids)
             )
             query = await self._filter_title_languages(query, languages)
-            async with self._db.session() as s:
-                rows = list(
-                    (
-                        await s.execute(
-                            query.order_by(
-                                (Title.norm_title == norm).desc(),
-                                Title.norm_title.like(f"{_escape_like(norm)}%", escape="\\").desc(),
-                                Title.added_at.desc().nulls_last(),
-                                Title.id,
-                            ).limit(limit * 3)
-                        )
-                    ).scalars()
-                )
-        # Keep exact phrase results first. Only inspect a bounded SQL-ranked candidate
-        # set for omitted/reordered terms or one misspelled word, in the same scope.
-        tokens = search_tokens(norm)
-        anchor_words = anchors(tokens)
-        if len(rows) < limit and anchor_words and lib_kinds:
-            terms = [Title.norm_title.like(f"%{_escape_like(word)}%", escape="\\") for word in anchor_words]
-            candidates_query = select(Title).where(
-                Title.source_id.in_(enabled),
-                Title.kind.in_(lib_kinds),
-                or_(*terms),
+            normalized = func.canonical_title_key(Title.title)
+            phrase_rank = case(
+                (normalized == norm, 0),
+                (normalized.like(_escape_like(norm) + " %", escape="\\"), 1),
+                (normalized.like("%" + _escape_like(norm) + "%", escape="\\"), 2),
+                else_=3,
             )
-            candidates_query = await self._filter_title_languages(candidates_query, languages)
             score: ColumnElement[int] = literal(0)
-            for term in terms:
-                score = score + case((term, 1), else_=0)
-            async with self._db.session() as session:
-                candidates = list(
-                    (
-                        await session.execute(candidates_query.order_by(score.desc(), Title.id).limit(CANDIDATE_LIMIT))
-                    ).scalars()
+            for word in words:
+                score = score + case((Title.norm_title.like("%" + _escape_like(word) + "%", escape="\\"), 1), else_=0)
+            work = case(
+                ((Title.tmdb_id > 0) & Title.kind.in_(("movie", "vod", "show", "series")), self._canonical_key()),
+                else_=literal("lib:") + Title.source_id + ":" + Title.ext_id,
+            )
+            ranked = query.with_only_columns(
+                Title.id.label("id"),
+                phrase_rank.label("phrase_rank"),
+                score.label("score"),
+                func.length(normalized).label("title_length"),
+                func.row_number()
+                .over(partition_by=work, order_by=(phrase_rank, score.desc(), func.length(normalized), Title.id))
+                .label("edition_rank"),
+            ).subquery()
+            representatives = (
+                select(ranked.c.id)
+                .where(ranked.c.edition_rank == 1)
+                .order_by(
+                    ranked.c.phrase_rank,
+                    ranked.c.score.desc(),
+                    ranked.c.title_length,
+                    ranked.c.id,
                 )
-            existing = {row.id for row in rows}
-            ranked = [
-                (rank, row)
-                for row in candidates
-                if row.id not in existing
-                if (rank := token_match_rank(tokens, row.norm_title)) is not None
+                .limit(CANDIDATE_LIMIT)
+            )
+            async with self._db.session() as session:
+                rows = list((await session.execute(select(Title).where(Title.id.in_(representatives)))).scalars())
+            rows = [
+                row
+                for row in rows
+                if norm in ids.normalise_title(ids.clean_display_title(row.title))
+                or token_match_rank(tokens, ids.normalise_title(ids.clean_display_title(row.title))) is not None
             ]
-            rows.extend(row for _, row in sorted(ranked, key=lambda pair: (pair[0], pair[1].norm_title, pair[1].id)))
         local_tiles = ctx.merge(ctx.title_tile(r) for r in rows)
         combined = {tile["id"]: tile for tile in local_tiles}
         metadata_available = False
