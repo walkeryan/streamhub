@@ -91,17 +91,22 @@ test('delayed previous-profile preferences never appear after switching profiles
 
 test('switching profiles cancels a queued preference write before PUT', async ({ page }) => {
   const documents: Record<string, Document> = { p2: { [namespace]: defaults }, p1: { [namespace]: defaults } }
-  let reads = 0, blocked = false
-  let release: () => void = () => undefined
+  let armed = false, blocked = false
+  const releases: Array<() => void> = []
   await backend(page, documents, async (id) => {
-    if (id === 'p2' && ++reads === 2) { blocked = true; await new Promise<void>((resolve) => { release = resolve }) }
+    if (id === 'p2' && armed) { blocked = true; await new Promise<void>((resolve) => { releases.push(resolve) }) }
   })
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
   await expect(page.getByTestId('discover')).toBeVisible()
   await page.getByRole('button', { name: 'My library', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Recently added', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  // Discover and library hydration can each read preferences. Gate the save's
+  // fresh read explicitly instead of assuming it is the second overall GET.
+  armed = true
   await page.getByRole('button', { name: 'Year', exact: true }).click()
   await expect.poll(() => blocked).toBe(true)
+  expect(documents.p2[namespace]).toEqual(defaults)
   await page.evaluate(async () => {
     await fetch('/api/v1/disclaimer/accept', { method: 'POST', headers: { authorization: 'Bearer mock-access-p1' } })
     const path = '/src/store/session.ts', fixtures = '/src/mocks/fixtures.ts'
@@ -110,7 +115,8 @@ test('switching profiles cancels a queued preference write before PUT', async ({
     useSession.getState().setSession('mock-access-p1', 'mock-refresh-p1', { ...profiles[0], disclaimer_accepted_version: DISCLAIMER.version })
   })
   await expect(page.getByRole('button', { name: 'Recently added', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  release()
+  armed = false
+  for (const release of releases) release()
   await page.getByRole('button', { name: 'Title', exact: true }).click()
   await expect.poll(() => documents.p1[namespace]).toEqual({ ...defaults, sort: 'title' })
   expect(documents.p2[namespace]).toEqual(defaults)
