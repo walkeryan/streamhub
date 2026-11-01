@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import math
 import re
 import secrets
 import time
@@ -29,6 +31,7 @@ class GoogleAuthService:
         self.settings = settings
         self.auth = auth
         self.transactions: dict[str, tuple[float, str, str, str, str]] = {}
+        self.owner_transactions: dict[str, tuple[float, str, str, str, str, float]] = {}
         self.handoffs: dict[str, tuple[float, str, str]] = {}
 
     @property
@@ -59,8 +62,9 @@ class GoogleAuthService:
     def _prune(self) -> None:
         now = time.time()
         self.transactions = {k: v for k, v in self.transactions.items() if v[0] > now}
+        self.owner_transactions = {k: v for k, v in self.owner_transactions.items() if v[0] > now}
         self.handoffs = {k: v for k, v in self.handoffs.items() if v[0] > now}
-        if len(self.transactions) + len(self.handoffs) >= 1000:
+        if len(self.transactions) + len(self.handoffs) + len(self.owner_transactions) >= 1000:
             raise Unauthorized("Sign-in temporarily busy; try again later")
 
     def start(self, return_to: str) -> tuple[str, str]:
@@ -86,6 +90,56 @@ class GoogleAuthService:
             }
         )
         return f"https://accounts.google.com/o/oauth2/v2/auth?{query}", browser
+
+    def is_owner_reauth(self, state: str) -> bool:
+        return state in self.owner_transactions
+
+    def start_owner_reauth(self, challenge_id: str, created_at: float, expires_at: float) -> tuple[str, str]:
+        # Separate purpose store: these states can NEVER be consumed by normal finish().
+        url, browser = self.start("/")
+        from urllib.parse import parse_qs
+
+        state = parse_qs(urlsplit(url).query)["state"][0]
+        tx = self.transactions.pop(state)
+        self.owner_transactions[state] = (expires_at, browser, tx[2], tx[3], challenge_id, created_at)
+        return url + "&" + urlencode(
+            {"claims": json.dumps({"id_token": {"auth_time": {"essential": True}}}), "max_age": "0"}
+        ), browser
+
+    async def finish_owner_reauth(self, state: str, browser: str, code: str) -> str:
+        tx = self.owner_transactions.pop(state, None)
+        if (
+            not self.enabled
+            or tx is None
+            or tx[0] <= time.time()
+            or not secrets.compare_digest(tx[1], browser)
+            or not code
+        ):
+            raise Unauthorized("Owner verification expired or invalid")
+        claims = await self._claims(code, tx[3], tx[2])
+        await self._owner(claims)
+        auth_time = claims.get("auth_time")
+        # Google must be configured to emit this signed claim; account selection is not reauthentication.
+        if (
+            isinstance(auth_time, bool)
+            or not isinstance(auth_time, (int, float))
+            or not math.isfinite(auth_time)
+            or auth_time < tx[5] - 2
+            or auth_time > time.time() + 2
+        ):
+            raise Forbidden("Fresh owner authentication could not be verified")
+        return tx[4]
+
+    async def _owner(self, claims: dict[str, Any]) -> Profile:
+        if claims.get("email_verified") is not True or str(claims.get("email", "")).lower() not in self.allowed_emails:
+            raise Forbidden("This Google account is not authorized")
+        profiles = [p for p in await self.auth.list_profiles() if p.is_admin]
+        selected = self.settings.google_owner_profile_id
+        if selected:
+            profiles = [p for p in profiles if p.id == selected]
+        if len(profiles) != 1:
+            raise Forbidden("A unique owner profile must be configured")
+        return profiles[0]
 
     async def _claims(self, code: str, verifier: str, nonce: str) -> dict[str, Any]:
         try:
@@ -134,16 +188,9 @@ class GoogleAuthService:
         if tx is None or tx[0] <= time.time() or not secrets.compare_digest(tx[1], browser) or not code:
             raise Unauthorized("Sign-in expired or invalid; please start again")
         claims = await self._claims(code, tx[3], tx[2])
-        if claims.get("email_verified") is not True or str(claims.get("email", "")).lower() not in self.allowed_emails:
-            raise Forbidden("This Google account is not authorized")
-        profiles = [p for p in await self.auth.list_profiles() if p.is_admin]
-        selected = self.settings.google_owner_profile_id
-        if selected:
-            profiles = [p for p in profiles if p.id == selected]
-        if len(profiles) != 1:
-            raise Forbidden("A unique owner profile must be configured")
+        owner = await self._owner(claims)
         handoff = secrets.token_urlsafe(32)
-        self.handoffs[handoff] = (time.time() + 60, profiles[0].id, tx[4])
+        self.handoffs[handoff] = (time.time() + 60, owner.id, tx[4])
         return handoff, tx[4]
 
     async def consume(self, handoff: str, origin: str) -> Profile:
