@@ -27,11 +27,12 @@ from app.domain.ports import DeeplinkProvider, LiveProvider, MetadataProvider, P
 from app.infra.crypto import Crypto
 from app.infra.models import Channel, Source, Title
 from app.services import ids
+from app.services.audio_selection import audio_info, preferred_audio
 from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
-from app.services.errors import BadGateway, NotFound, ServiceError
+from app.services.errors import BadGateway, Conflict, NotFound, ServiceError
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
 from app.services.tiles import row_to_channel, row_to_item
@@ -194,6 +195,8 @@ class PlaybackResolver:
         hub_id: str,
         *,
         source_id: str | None = None,
+        variant_id: str | None = None,
+        allow_unverified_audio: bool = False,
         client: str = "web",
         catchup_programme_id: str | None = None,
         https_site: bool = False,
@@ -218,12 +221,128 @@ class PlaybackResolver:
             row = await self._catalog.title_row(h.a, h.b)
             if row is None:
                 raise NotFound("title not found")
-            if row.kind in ("show", "series", "season"):
-                row = await self._next_episode(profile_id, row)
-            return await self._resolve_title(profile_id, row, hub_id, client, https_site)
-        if h.scheme == "tmdb" and h.b.isdigit():
-            return await self._resolve_tmdb(profile_id, h.a, int(h.b), hub_id, source_id, client, https_site)
+            row = await self._select_audio(profile_id, [row], variant_id, allow_unverified_audio, source_id)
+            playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
+            return await self._resolve_title(profile_id, row, playback_id, client, https_site)
+        if h.scheme == "tmdb" and h.a in ("movie", "tv") and h.b.isdigit():
+            return await self._resolve_tmdb(
+                profile_id,
+                h.a,
+                int(h.b),
+                hub_id,
+                source_id,
+                client,
+                https_site,
+                variant_id,
+                allow_unverified_audio,
+            )
         raise NotFound("unknown id")
+
+    async def _audio_options(self, profile_id: str, rows: list[Title]) -> list[dict[str, Any]]:
+        sources = await self._sources.rows_by_id()
+        preferred = await self._catalog.preferred_languages(profile_id, None)
+        options = []
+        for row in sorted(
+            rows, key=lambda r: (getattr(sources.get(r.source_id), "priority", 100), r.source_id, r.ext_id)
+        ):
+            src = sources.get(row.source_id)
+            if src is None or not src.enabled:
+                continue
+            evidence_row = row
+            if row.kind in ("show", "series", "season"):
+                try:
+                    evidence_row = await self._next_episode(profile_id, row)
+                except NotFound:
+                    continue
+            info = audio_info(evidence_row.extra or {}, label=row.title, group=row.group_name)
+            options.append(
+                {
+                    "variant_id": ids.lib_id(row.source_id, row.ext_id),
+                    "source_id": row.source_id,
+                    "source_name": src.name,
+                    "provider_label": row.title,
+                    "kind": row.kind,
+                    "year": row.year,
+                    **info,
+                    "preferred_audio_available": preferred_audio(info, preferred),
+                }
+            )
+        return options
+
+    async def options(self, profile_id: str, hub_id: str, source_id: str | None = None) -> dict[str, Any]:
+        try:
+            h = ids.parse(hub_id)
+        except ValueError as exc:
+            raise NotFound("unknown id") from exc
+        rows: list[Title] = []
+        if h.scheme == "lib":
+            row = await self._catalog.title_row(h.a, h.b)
+            if row is not None:
+                rows = [row]
+        elif h.scheme == "tmdb" and h.a in ("movie", "tv") and h.b.isdigit():
+            sources = await self._sources.rows_by_id()
+            meta = await self._meta.details(h.a, int(h.b)) if self._meta.enabled else None
+            _, rows = await self._availability.badges_for(
+                h.a,
+                tmdb_id=int(h.b),
+                imdb_id=meta.imdb_id if meta else None,
+                title=meta.title if meta else None,
+                year=meta.year if meta else None,
+                sources=sources,
+                is_in_app=self._sources.registry.is_in_app,
+            )
+        elif h.scheme != "ch":
+            raise NotFound("unknown id")
+        if source_id:
+            rows = [row for row in rows if row.source_id == source_id]
+        options = await self._audio_options(profile_id, rows)
+        preferred = await self._catalog.preferred_languages(profile_id, None)
+        automatic = next((o["variant_id"] for o in options if not preferred or o["preferred_audio_available"]), None)
+        return {
+            "id": hub_id,
+            "preferred_languages": preferred,
+            "options": options,
+            "automatic_variant_id": automatic,
+            "selection_required": bool(options and not automatic),
+        }
+
+    async def _select_audio(
+        self,
+        profile_id: str,
+        rows: list[Title],
+        variant_id: str | None,
+        allow_unverified_audio: bool,
+        source_id: str | None = None,
+    ) -> Title:
+        if source_id:
+            rows = [row for row in rows if row.source_id == source_id]
+        options = await self._audio_options(profile_id, rows)
+        preferred = await self._catalog.preferred_languages(profile_id, None)
+        if variant_id:
+            selected = next((o for o in options if o["variant_id"] == variant_id), None)
+            if selected is None:
+                raise NotFound("variant does not belong to this title or source")
+            if preferred and not selected["preferred_audio_available"] and not allow_unverified_audio:
+                raise Conflict(
+                    "Confirm this source's unverified or nonpreferred audio.", code="audio_selection_required"
+                )
+        else:
+            selected = next((o for o in options if not preferred or o["preferred_audio_available"]), None)
+            if selected is None:
+                if not options:
+                    raise NotFound("no playable variants for this title")
+                raise Conflict(
+                    "No verified preferred audio. Choose and confirm a source.", code="audio_selection_required"
+                )
+        row = next(r for r in rows if ids.lib_id(r.source_id, r.ext_id) == selected["variant_id"])
+        if row.kind in ("show", "series", "season"):
+            row = await self._next_episode(profile_id, row)
+            # Progress may change while the chooser is open or during another await.
+            # Recheck the actual episode, never inherit a previous episode's evidence.
+            info = audio_info(row.extra or {}, label=row.title, group=row.group_name)
+            if preferred and not preferred_audio(info, preferred) and not (variant_id and allow_unverified_audio):
+                raise Conflict("Confirm the next episode's audio source.", code="audio_selection_required")
+        return row
 
     async def _resolve_trailer(self, profile_id: str, hub_id: str) -> dict[str, Any]:
         """``trailer:<title id>`` → hand-off to the YouTube app (specific video if TMDB knows one)."""
@@ -408,6 +527,8 @@ class PlaybackResolver:
         source_id: str | None,
         client: str,
         https_site: bool,
+        variant_id: str | None = None,
+        allow_unverified_audio: bool = False,
     ) -> dict[str, Any]:
         sources = await self._sources.rows_by_id()
         meta = await self._meta.details(media_type, tmdb_id) if self._meta.enabled else None
@@ -420,7 +541,13 @@ class PlaybackResolver:
             sources=sources,
             is_in_app=self._sources.registry.is_in_app,
         )
-        by_source = {m.source_id: m for m in matches}
+        matches = [m for m in matches if m.source_id in sources and sources[m.source_id].enabled]
+        if matches and (not source_id or any(m.source_id == source_id for m in matches)):
+            row = await self._select_audio(profile_id, matches, variant_id, allow_unverified_audio, source_id)
+            playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
+            return await self._resolve_title(profile_id, row, playback_id, client, https_site)
+        if variant_id:
+            raise NotFound("variant does not belong to this title or source")
         chosen = None
         if source_id:
             chosen = next((b for b in badges if b["source_id"] == source_id), None)
@@ -430,14 +557,6 @@ class PlaybackResolver:
             chosen = badges[0]
         if chosen is None:
             raise NotFound("no source can play this title")
-        if chosen["playable_in_app"] and chosen["source_id"] in by_source:
-            row = by_source[chosen["source_id"]]
-            if row.kind in ("show", "series"):
-                row = await self._next_episode(profile_id, row)
-                return await self._resolve_title(
-                    profile_id, row, ids.lib_id(row.source_id, row.ext_id), client, https_site
-                )
-            return await self._resolve_title(profile_id, row, hub_id, client, https_site)
         # hand-off
         svc = sources[chosen["source_id"]]
         link = await self._deeplinks.link_for(

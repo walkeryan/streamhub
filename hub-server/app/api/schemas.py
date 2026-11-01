@@ -291,6 +291,8 @@ class SearchResults(_M):
 
 class PlaybackRequest(_M):
     id: str
+    variant_id: str | None = Field(default=None, max_length=512)
+    allow_unverified_audio: bool = False
     source_id: str | None = None
     client: Literal["android_tv", "web"] = "web"
     prefer_hls: bool = False

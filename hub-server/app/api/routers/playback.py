@@ -36,12 +36,19 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         p.profile_id,
         body.id,
         source_id=body.source_id,
+        variant_id=body.variant_id,
+        allow_unverified_audio=body.allow_unverified_audio,
         client="web_hls" if body.client == "web" and body.prefer_hls else body.client,
         catchup_programme_id=body.catchup_programme_id,
         https_site=is_https.get(),
     )
     c.proxy.ensure_running(generation)
     return result
+
+
+@router.get("/playback/options", tags=["playback"])
+async def playback_options(id: str, c: C, p: P, source_id: str | None = None) -> dict[str, Any]:
+    return await c.playback.options(p.profile_id, id, source_id)
 
 
 @router.get("/playback/generation", tags=["playback"])

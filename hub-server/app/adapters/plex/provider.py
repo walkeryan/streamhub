@@ -28,6 +28,7 @@ from app.domain.entities import (
 )
 from app.domain.ports import AdapterContext, CatalogSink
 from app.infra.http import request_with_retry
+from app.services.audio_selection import provider_audio_extra
 
 log = logging.getLogger(__name__)
 
@@ -210,10 +211,18 @@ class PlexSource:
         if kind == MediaKind.SEASON or kind == MediaKind.EPISODE:
             parent = m.get("parentRatingKey")
         part_key = None
+        audio_extra: dict[str, Any] = {}
         container = None
         for media in m.get("Media") or []:
             for part in media.get("Part") or []:
                 part_key = part.get("key")
+                audio_extra = provider_audio_extra(
+                    [
+                        stream
+                        for stream in part.get("Stream") or []
+                        if isinstance(stream, dict) and str(stream.get("streamType")) == "2"
+                    ]
+                )
                 container = part.get("container") or media.get("container")
                 break
             if part_key:
@@ -238,6 +247,7 @@ class PlexSource:
             duration_ms=m.get("duration"),
             added_at=datetime.fromtimestamp(int(added), UTC) if added else None,
             extra={
+                **audio_extra,
                 "part_key": part_key,
                 "container": container,
                 "view_offset": m.get("viewOffset"),
