@@ -212,6 +212,15 @@ class Programme(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(128), nullable=True)
     icon: Mapped[str | None] = mapped_column(Text, nullable=True)
+    age_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
+
+
+class AgeClassification(Base):
+    __tablename__ = "age_classification"
+    subject_key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    observed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Favorite(Base):

@@ -10,7 +10,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -18,6 +19,7 @@ import httpx
 from app.domain.entities import MetaTitle, ProviderOffer
 from app.domain.ports import AdapterContext
 from app.infra.http import request_with_retry
+from app.services.classification import tmdb_age_evidence
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +81,7 @@ def to_meta(d: dict[str, Any], media_type: str | None = None) -> MetaTitle | Non
         poster=image_url(d.get("poster_path"), "w342"),
         backdrop=image_url(d.get("backdrop_path"), "w1280"),
         rating=d.get("vote_average"),
+        age_evidence=tmdb_age_evidence(d, mt),
         genres=genres,
         runtime_min=runtime,
         imdb_id=ext.get("imdb_id") or d.get("imdb_id"),
@@ -99,9 +102,15 @@ def _meta_from_json(d: dict[str, Any]) -> MetaTitle:
 
 
 class TmdbClient:
-    def __init__(self, ctx: AdapterContext, key_getter: Callable[[], str | None]) -> None:
+    def __init__(
+        self,
+        ctx: AdapterContext,
+        key_getter: Callable[[], str | None],
+        evidence_writer: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> None:
         self._ctx = ctx
         self._key_getter = key_getter
+        self._evidence_writer = evidence_writer
 
     @property
     def enabled(self) -> bool:
@@ -138,6 +147,7 @@ class TmdbClient:
             return None
         data = resp.json()
         if isinstance(data, dict):
+            data["_streamhub_retrieved_at"] = datetime.now(UTC).isoformat()
             await self._ctx.cache.set(cache_key, data, ttl)
             return data
         return None
@@ -155,18 +165,36 @@ class TmdbClient:
                 break
         return out
 
+    async def _record_age_evidence(self, subject: str, evidence: dict[str, Any]) -> None:
+        if self._evidence_writer is None:
+            return
+        try:
+            await self._evidence_writer(subject, evidence)
+        except Exception as exc:
+            # Evidence ingestion must not turn an otherwise working metadata or
+            # playback request into an outage. Missing durable evidence is unknown.
+            log.warning("classification persistence unavailable", extra={"error_type": type(exc).__name__})
+
     async def details(self, media_type: str, tmdb_id: int) -> MetaTitle | None:
         if media_type not in ("movie", "tv"):
             return None
         data = await self._get(
             f"/{media_type}/{tmdb_id}",
             TTL_DETAILS,
-            append_to_response="images,credits,external_ids",
+            append_to_response="images,credits,external_ids,"
+            + ("release_dates" if media_type == "movie" else "content_ratings"),
             include_image_language="en,null",
         )
         if not data:
+            if self._evidence_writer:
+                evidence = tmdb_age_evidence({"id": tmdb_id}, media_type)
+                evidence["reason"] = "fetch_unavailable"
+                await self._record_age_evidence(f"tmdb:{media_type}:{tmdb_id}", evidence)
             return None
-        return to_meta(data, media_type)
+        meta = to_meta(data, media_type)
+        if meta and meta.tmdb_id == tmdb_id and self._evidence_writer:
+            await self._record_age_evidence(f"tmdb:{media_type}:{tmdb_id}", meta.age_evidence)
+        return meta
 
     async def trailer_key(self, media_type: str, tmdb_id: int) -> str | None:
         if media_type not in ("movie", "tv"):

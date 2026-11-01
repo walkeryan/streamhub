@@ -30,6 +30,7 @@ from app.services.auth import AuthService
 from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
+from app.services.classification import ClassificationStore
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
@@ -108,7 +109,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     disclaimer = DisclaimerService(db)
     auth = AuthService(db, crypto, settings.access_token_ttl_s, settings.refresh_token_ttl_s)
     language = LanguageChain(ctx, settings.iptv_org_channels_url)
-    tmdb = TmdbClient(ctx, app_settings.tmdb_key)
+    tmdb = TmdbClient(ctx, app_settings.tmdb_key, ClassificationStore(db).record)
     sources = SourceService(db, crypto, registry, disclaimer, language)
     availability = AvailabilityService(db, tmdb)
     catalog = CatalogService(db, crypto, sources, availability, tmdb)

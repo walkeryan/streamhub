@@ -20,6 +20,7 @@ from lxml import etree
 
 from app.domain.entities import EpgSourceSpec, ProgrammeInfo
 from app.domain.ports import AdapterContext
+from app.services.classification import xmltv_age_evidence
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +105,9 @@ def iter_file(
                     title=_text(el, "title") or "",
                     description=_text(el, "desc"),
                     category=_text(el, "category"),
+                    age_evidence=xmltv_age_evidence(
+                        [(rating.get("system"), _text(rating, "value") or "") for rating in el.findall("rating")]
+                    ),
                     icon=icon_el.get("src") if icon_el is not None else None,
                 )
             finally:
