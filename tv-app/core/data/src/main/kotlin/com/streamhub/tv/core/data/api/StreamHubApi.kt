@@ -163,6 +163,16 @@ class StreamHubApi @Inject constructor(
         }
     suspend fun browseLanguages(section: String, sourceId: String? = null): List<LanguageCount> =
         get("/browse/${id(section)}/languages") { sourceId?.let { parameter("source_id", it) } }
+    suspend fun sportsEvents(filters: NativeSportsFilters, offset: Int = 0, limit: Int = 40): SportsEventsPage = get("/sports/events") {
+        filters.language?.let { parameter("language", it) }
+        filters.sport?.let { parameter("sport", it) }
+        filters.date?.let { parameter("date", it) }
+        parameter("timezone", "America/New_York")
+        parameter("status", filters.status)
+        parameter("offset", offset)
+        parameter("limit", limit)
+    }
+
     suspend fun sports(language: String? = null, sport: String? = null, offset: Int = 0, limit: Int = 40): SportsPage = get("/sports") {
         language?.let { parameter("language", it) }
         sport?.let { parameter("sport", it) }

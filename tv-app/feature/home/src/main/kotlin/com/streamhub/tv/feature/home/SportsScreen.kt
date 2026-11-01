@@ -30,6 +30,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -37,7 +39,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 import javax.inject.Inject
 
 data class SportsState(
-    val filters: NativeSportsFilters = NativeSportsFilters(), val result: SportsPage = SportsPage(),
+    val filters: NativeSportsFilters = NativeSportsFilters(), val result: SportsEventsPage = SportsEventsPage(),
     val languages: List<LanguageCount> = emptyList(), val page: Int = 0,
     val loading: Boolean = true, val ready: Boolean = false, val error: String? = null, val notice: String? = null,
 )
@@ -48,6 +50,7 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
     val state: StateFlow<SportsState> = _state.asStateFlow()
     private var scope: CatalogScope? = null
     private suspend fun ensureScope(expected: CatalogScope) {
+        currentCoroutineContext().ensureActive()
         if (scope != expected || session.current().catalogScope() != expected) throw CancellationException("Catalog scope changed")
     }
     private var request: Job? = null
@@ -71,7 +74,7 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
     }
     fun filters(value: NativeSportsFilters) {
         if (!_state.value.ready) return
-        _state.update { it.copy(filters = value, result = SportsPage()) }
+        _state.update { it.copy(filters = value, result = SportsEventsPage()) }
         val owner = scope ?: return
         val id = owner.profileId ?: return
         viewModelScope.launch {
@@ -87,9 +90,9 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
         val f = _state.value.filters
         request?.cancel()
         request = viewModelScope.launch {
-            _state.update { it.copy(loading = true, page = page, error = null, result = if (it.page == page) it.result else SportsPage()) }
+            _state.update { it.copy(loading = true, page = page, error = null, result = if (it.page == page) it.result else SportsEventsPage()) }
             try {
-                val result = api.sports(f.language, f.sport, page * 40, 40)
+                val result = api.sportsEvents(f, page * 40, 40)
                 ensureScope(owner)
                 _state.update { it.copy(result = result, loading = false) }
                 try { val languages = api.channelLanguages(); ensureScope(owner); _state.update { it.copy(languages = languages) } }
@@ -101,6 +104,10 @@ class SportsViewModel @Inject constructor(private val api: StreamHubApi, private
     }
 }
 
+private val knownSports = listOf("American football", "Basketball", "Baseball", "Hockey", "Soccer", "Football", "Tennis", "Golf", "Motorsport", "Cricket", "Rugby", "Combat sports", "Sports")
+
+private data class EventChoice(val event: SportsEvent, val opener: FocusRequester)
+
 @Composable
 fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
@@ -108,52 +115,83 @@ fun SportsScreen(vm: SportsViewModel = hiltViewModel()) {
     val rail = LocalRailController.current
     val launcher = LocalPlayLauncher.current
     val list = rememberLazyListState()
+    val uiScope = rememberCoroutineScope()
+    val restoreFocus: (FocusRequester) -> Unit = { target -> uiScope.launch { withFrameNanos { }; runCatching { target.requestFocus() } } }
     var picker by remember { mutableStateOf<String?>(null) }
-    val firstControl = remember { FocusRequester() }
+    var selected by remember { mutableStateOf<EventChoice?>(null) }
+    val controls = remember { listOf("sport", "date", "status", "language").associateWith { FocusRequester() } }
+    val firstControl = controls.getValue("sport")
     var needsInitialFocus by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(s.ready) {
-        if (!s.ready) { needsInitialFocus = true; picker = null }
+        if (!s.ready) { needsInitialFocus = true; picker = null; selected = null }
         else if (needsInitialFocus) {
             withFrameNanos { }
             if (runCatching { firstControl.requestFocus() }.getOrDefault(false)) needsInitialFocus = false
         }
     }
-    LaunchedEffect(s.page, s.filters) { list.scrollToItem(0) }
-    // Only refresh while this destination is composed; never retain stale schedules indefinitely.
+    LaunchedEffect(s.page, s.filters) { selected = null; list.scrollToItem(0) }
+    LaunchedEffect(s.result.events) {
+        selected?.takeIf { choice -> s.result.events.none { it.id == choice.event.id } }?.let { _ ->
+            selected = null; restoreFocus(firstControl)
+        }
+    }
     LaunchedEffect(vm) { while (true) { delay(60_000); vm.refresh() } }
-    Column(Modifier.fillMaxSize().padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Sports on now", style = MaterialTheme.typography.headlineMedium, color = t.text)
-        Text("Current guide listings; may include replays and sports news. No scores or live-event claims.", color = t.textMuted)
+    val today = java.time.LocalDate.now(java.time.ZoneId.of("America/New_York"))
+    Column(Modifier.fillMaxSize().padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Sports", style = MaterialTheme.typography.headlineMedium, color = t.text)
+        Text("Events from your guide · Times in America/New_York · Feed languages are provider hints", color = t.textMuted)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ShButton(s.filters.sport ?: "All sports", { picker = "sport" }, Modifier.focusRequester(firstControl).leftOpensRail(rail), enabled = s.ready)
-            ShButton(s.languages.find { it.code == s.filters.language }?.name ?: when(s.filters.language) { null -> "My languages"; "all" -> "All languages"; "und" -> "Unknown"; else -> s.filters.language!! }, { picker = "language" }, enabled = s.ready)
-            ShButton(if (s.loading) "Refreshing…" else "Refresh", { if (s.ready && !s.loading) vm.refresh() }, enabled = s.ready)
-            ShButton("Reset filters", { vm.filters(NativeSportsFilters()) }, enabled = s.ready)
+            ShButton(s.filters.date ?: "Today", { picker = "date" }, Modifier.focusRequester(controls.getValue("date")), enabled = s.ready)
+            ShButton(sportsStatusFilterLabel(s.filters.status), { picker = "status" }, Modifier.focusRequester(controls.getValue("status")), enabled = s.ready)
+            ShButton(s.languages.find { it.code == s.filters.language }?.name ?: when(s.filters.language) { null -> "My languages"; "all" -> "All languages"; "und" -> "Unknown"; else -> s.filters.language!! }, { picker = "language" }, Modifier.focusRequester(controls.getValue("language")), enabled = s.ready)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ShButton(if (s.page > 0) "Previous" else "Previous · Start", { if (!s.loading && s.page > 0) vm.refresh(s.page - 1) }, Modifier.leftOpensRail(rail), enabled = s.ready)
-            Text("Page ${s.page + 1} · ${s.result.total} listings${if (s.loading) " · Loading…" else ""}", color = t.text)
-            ShButton(if ((s.page + 1) * 40 < s.result.total) "Next" else "Next · End", { if (!s.loading && (s.page + 1) * 40 < s.result.total) vm.refresh(s.page + 1) }, enabled = s.ready)
+            ShButton("Reset", { vm.filters(NativeSportsFilters()) }, Modifier.leftOpensRail(rail), enabled = s.ready)
+            ShButton(if (s.loading) "Refreshing…" else "Refresh", { if (!s.loading) vm.refresh() }, enabled = s.ready)
+            ShButton("Previous", { if (!s.loading && s.page > 0) vm.refresh(s.page - 1) }, enabled = s.ready)
+            Text("Page ${s.page + 1} · ${if(s.result.truncated) "at least " else ""}${s.result.total} events", color = t.text)
+            ShButton("Next", { if (!s.loading && (s.page + 1) * 40 < s.result.total) vm.refresh(s.page + 1) }, enabled = s.ready)
         }
-        Text("Guide coverage: ${s.result.coverage.scheduledChannels} of ${s.result.coverage.eligibleChannels} eligible channels", color = t.textMuted)
+        Text("Sports guide coverage: ${s.result.coverage.scheduledChannels} / ${s.result.coverage.eligibleChannels} channels${if(s.result.truncated) " · Results capped; narrow filters" else ""}", color = t.textMuted)
         s.notice?.let { Text(it, color = t.textMuted) }
         when {
-            s.loading && s.result.items.isEmpty() -> LoadingView()
+            s.loading && s.result.events.isEmpty() -> LoadingView()
             s.error != null -> CenterMessage("Couldn't load sports", s.error) { ShButton("Retry", { vm.refresh() }) }
-            s.result.items.isEmpty() -> CenterMessage("No matching sports listings", "Try All sports or All languages. Missing guide listings do not mean no sports are airing.")
-            else -> LazyColumn(state = list, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(8.dp)) {
-                items(s.result.items, key = { it.id }) { event ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("${event.sport} · ${event.sourceName}", color = t.textMuted)
-                        ShButton("Watch ${event.channelName} · ${event.title}", { launcher.play(event.channelId) }, Modifier.fillMaxWidth().leftOpensRail(rail))
+            s.result.events.isEmpty() -> CenterMessage("No matching guide events", "Try another date, sport or language. Missing metadata does not prove no games are scheduled.")
+            else -> LazyColumn(state = list, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(8.dp)) {
+                listOf("current", "upcoming", "ended").forEach { status ->
+                    val events = s.result.events.filter { it.status == status }
+                    if (events.isNotEmpty()) item(status) {
+                        FocusRow(events, key = { it.id }, title = sportsStatusFilterLabel(status), contentPadding = PaddingValues(8.dp)) { _, event, modifier ->
+                            val opener = remember(event.id) { FocusRequester() }
+                            SportsEventCard(event, modifier.focusRequester(opener)) { selected = EventChoice(event, opener) }
+                        }
                     }
                 }
             }
         }
     }
     picker?.let { field ->
-        val options = if (field == "sport") listOf(FilterOption(null, "All sports")) + s.result.sports.map { FilterOption(it.name, "${it.name} · ${it.count}") }
-        else listOf(FilterOption(null, "My languages"), FilterOption("all", "All languages")) + s.languages.map { FilterOption(it.code, "${if(it.code == "und") "Unknown" else it.name} · ${it.count}") }
-        CatalogFilterPicker("Choose $field", if(field == "sport") s.filters.sport else s.filters.language, options, { value -> vm.filters(if(field == "sport") s.filters.copy(sport = value) else s.filters.copy(language = value)) }, { picker = null })
+        val options = when(field) {
+            "sport" -> listOf(FilterOption(null, "All sports")) + (knownSports + s.result.sports.map { it.name }).distinct().map { name ->
+                val count = s.result.sports.firstOrNull { it.name == name }?.count
+                FilterOption(name, name + (count?.let { " · $it" } ?: ""))
+            }
+            "date" -> listOf(FilterOption(null, "Today")) + (-1L..7L).filter { it != 0L }.map { day -> val d = today.plusDays(day); FilterOption(d.toString(), d.toString()) }
+            "status" -> listOf("all", "current", "upcoming", "replay").map { FilterOption(it, sportsStatusFilterLabel(it)) }
+            else -> listOf(FilterOption(null, "My languages"), FilterOption("all", "All languages")) + s.languages.map { FilterOption(it.code, "${if(it.code == "und") "Unknown" else it.name} · ${it.count}") }
+        }
+        val value = when(field) { "sport" -> s.filters.sport; "date" -> s.filters.date; "status" -> s.filters.status; else -> s.filters.language }
+        CatalogFilterPicker("Choose $field", value, options, { v -> vm.filters(when(field) { "sport" -> s.filters.copy(sport=v); "date" -> s.filters.copy(date=v); "status" -> s.filters.copy(status=v ?: "all"); else -> s.filters.copy(language=v) }) }, { picker=null; controls[field]?.let(restoreFocus) })
+    }
+    selected?.let { choice ->
+        // Drop removed/stale events rather than playing a previously selected filter result.
+        val current = s.result.events.firstOrNull { it.id == choice.event.id }
+        if (current != null) SportsFeedDialog(current, onDismiss = { selected = null; restoreFocus(choice.opener) }) { feed ->
+            if (sportsCanWatch(current, java.time.Instant.now()) && current.feeds.any { it.channelId == feed.channelId && it.programmeId == feed.programmeId }) {
+                selected = null; launcher.play(feed.channelId)
+            }
+        }
     }
 }
