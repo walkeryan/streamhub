@@ -8,7 +8,8 @@ import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
@@ -66,7 +67,7 @@ class OwnerPinService:
         await self.auth.session_valid(p.profile_id, p.token_version, p.session_id)
         destination = await self.auth.get_profile(target)
         credential = await self._credential()
-        if action != "setup" and not credential.password_hash:
+        if action not in {"setup", "setup_request"} and not credential.password_hash:
             raise Forbidden("Owner PIN has not been configured", code="owner_pin_not_configured")
         cid, secret = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         now = utcnow()
@@ -94,7 +95,7 @@ class OwnerPinService:
                     action=action,
                     credential_version=credential.credential_version,
                     google_subject=subject,
-                    expires_at=now + timedelta(minutes=5),
+                    expires_at=now + timedelta(minutes=10 if action == "setup_request" else 5),
                     consumed=False,
                 )
             )
@@ -122,7 +123,7 @@ class OwnerPinService:
         return await self._new(owner, owner.profile_id, "setup", google_subject)
 
     async def status(self, p: Principal) -> dict[str, Any]:
-        await self.auth.session_valid(p.profile_id, p.token_version, p.session_id)
+        profile = await self.auth.session_valid(p.profile_id, p.token_version, p.session_id)
         configured = await self.configured()
         result: dict[str, Any] = {
             "configured": configured,
@@ -132,7 +133,7 @@ class OwnerPinService:
         if configured:
             return result
         subject = getattr(p, "google_subject", "")
-        if not subject:
+        if not subject or not self.auth.effective_admin(profile):
             return result
         async with self.db.session() as s:
             row = (
@@ -151,7 +152,75 @@ class OwnerPinService:
         if row is not None and row.grant_ciphertext:
             secret = self.crypto.decrypt(row.grant_ciphertext, ttl=300).decode()
             result.update(setup_authorized=True, local_approval_required=False, grant_id=row.id, grant_secret=secret)
+            return result
+        async with self.db.session() as s:
+            request = (
+                await s.execute(
+                    select(OwnerPinChallenge).where(
+                        OwnerPinChallenge.action == "setup_request",
+                        OwnerPinChallenge.source_profile_id == p.profile_id,
+                        OwnerPinChallenge.source_version == p.token_version,
+                        OwnerPinChallenge.source_session_id == p.session_id,
+                        OwnerPinChallenge.google_subject == subject,
+                        OwnerPinChallenge.consumed.is_(False),
+                        OwnerPinChallenge.expires_at > utcnow(),
+                    )
+                )
+            ).scalar_one_or_none()
+        if request is None:
+            created = await self._new(p, p.profile_id, "setup_request", subject)
+            result["setup_request_id"] = created["challenge_id"]
+        else:
+            result["setup_request_id"] = request.id
         return result
+
+    async def approve_setup_request(self, request_id: str) -> dict[str, Any]:
+        """LOCAL OPERATOR ONLY: approve exactly one displayed nonsecret request ID.
+
+        The request was created from an authenticated subject/session by status().
+        This method must never be wired to HTTP or invoked automatically.
+        """
+        async with self.db.session() as s:
+            request = await s.get(OwnerPinChallenge, request_id)
+        if (
+            request is None
+            or request.action != "setup_request"
+            or request.consumed
+            or request.expires_at <= utcnow()
+            or not request.google_subject
+        ):
+            raise Gone("Local setup request expired or consumed", code="owner_pin_expired")
+        profile = await self.auth.session_valid(
+            request.source_profile_id, request.source_version, request.source_session_id
+        )
+        owner = cast(
+            Principal,
+            SimpleNamespace(
+                profile_id=profile.id,
+                token_version=profile.token_version,
+                session_id=request.source_session_id,
+                google_subject=request.google_subject,
+                is_admin=self.auth.effective_admin(profile),
+                kids=profile.kids,
+            ),
+        )
+        async with self.db.session() as s:
+            consumed = await s.execute(
+                update(OwnerPinChallenge)
+                .where(
+                    OwnerPinChallenge.id == request_id,
+                    OwnerPinChallenge.consumed.is_(False),
+                    OwnerPinChallenge.expires_at > utcnow(),
+                )
+                .values(consumed=True)
+                .returning(OwnerPinChallenge.id)
+            )
+            if consumed.scalar_one_or_none() is None:
+                raise Gone("Local setup request already consumed", code="owner_pin_expired")
+            await s.commit()
+        grant = await self.authorize_setup(owner, request.google_subject)
+        # Only the bound authenticated browser receives the decrypted secret through status().
+        return {"request_id": request_id, "grant_id": grant["challenge_id"], "expires_in": 300}
 
     async def _bound(self, p: Principal, cid: str, secret: str) -> OwnerPinChallenge:
         if len(secret) > 128:

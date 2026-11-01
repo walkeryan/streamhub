@@ -20,7 +20,7 @@ TEST_PIN = "73918462"
 async def principal(api: Api) -> Any:
     profile = await api.c.auth.get_profile(api.profile_id)
     p = api.c.auth.principal_from_access(api.c.auth.issue(profile)["access_token"])
-    return SimpleNamespace(**asdict(p), google_subject="synthetic-google-subject")
+    return SimpleNamespace(**{**asdict(p), "google_subject": "synthetic-google-subject"})
 
 
 async def enrolled(api: Api) -> tuple[OwnerPinService, Any]:
@@ -199,3 +199,43 @@ async def test_repeated_cancellation_waits_for_hash_worker(api: Api, monkeypatch
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_status_requests_local_approval_without_enrolling_or_exposing_bearer(api: Api) -> None:
+    service = OwnerPinService(api.c.auth, api.c.db, api.c.crypto)
+    p = await principal(api)
+    status = await service.status(p)
+    assert status["local_approval_required"] and not status["setup_authorized"]
+    assert "grant_secret" not in status
+    request_id = status["setup_request_id"]
+    assert (await service.status(p))["setup_request_id"] == request_id
+    assert not await service.configured()
+    approval = await service.approve_setup_request(request_id)
+    assert "grant_secret" not in approval and "poll_token" not in approval
+    status = await service.status(p)
+    assert status["setup_authorized"] and status["grant_id"] == approval["grant_id"]
+    other = await principal(api)
+    assert not (await service.status(other))["setup_authorized"]
+    with pytest.raises(Gone):
+        await service.approve_setup_request(request_id)
+    proof = await service.setup(p, status["grant_id"], status["grant_secret"], TEST_PIN, p.google_subject)
+    assert proof.credential_version == 1
+
+
+async def test_local_setup_request_expires_and_cannot_approve_revoked_session(api: Api) -> None:
+    service = OwnerPinService(api.c.auth, api.c.db, api.c.crypto)
+    p = await principal(api)
+    request_id = (await service.status(p))["setup_request_id"]
+    async with api.c.db.session() as s:
+        await s.execute(
+            update(OwnerPinChallenge)
+            .where(OwnerPinChallenge.id == request_id)
+            .values(expires_at=utcnow() - timedelta(seconds=1))
+        )
+        await s.commit()
+    with pytest.raises(Gone):
+        await service.approve_setup_request(request_id)
+    request_id = (await service.status(p))["setup_request_id"]
+    await api.c.auth.consume_session(p.profile_id, p.token_version, p.session_id)
+    with pytest.raises(Unauthorized):
+        await service.approve_setup_request(request_id)
