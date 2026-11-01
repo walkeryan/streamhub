@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.Composable
@@ -61,6 +62,7 @@ import com.streamhub.tv.feature.favorites.FavoritesScreen
 import com.streamhub.tv.feature.guide.GuideScreen
 import com.streamhub.tv.feature.home.BrowseScreen
 import com.streamhub.tv.feature.home.HomeScreen
+import com.streamhub.tv.feature.home.SportsScreen
 import com.streamhub.tv.feature.livetv.LiveTvScreen
 import com.streamhub.tv.feature.onboarding.OnboardingScreen
 import com.streamhub.tv.feature.player.PlayerScreen
@@ -81,6 +83,7 @@ object Routes {
     const val SEARCH = "search"
     const val LIVE = "live"
     const val GUIDE = "guide"
+    const val SPORTS = "sports"
     const val MOVIES = "browse/movies"
     const val SHOWS = "browse/shows"
     const val FAVORITES = "favorites"
@@ -97,6 +100,7 @@ private val RAIL = listOf(
     RailItem(Routes.SEARCH, "Search", Icons.Filled.Search),
     RailItem(Routes.LIVE, "Live TV", Icons.Filled.LiveTv),
     RailItem(Routes.GUIDE, "Guide", Icons.Filled.CalendarViewWeek),
+    RailItem(Routes.SPORTS, "Sports", Icons.Filled.SportsSoccer),
     RailItem(Routes.MOVIES, "Movies", Icons.Filled.Movie),
     RailItem(Routes.SHOWS, "Shows", Icons.Filled.Tv),
     RailItem(Routes.FAVORITES, "Favorites", Icons.Filled.Favorite),
@@ -199,6 +203,7 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
                     composable(Routes.HOME) { HomeScreen() }
                     composable(Routes.SEARCH) { SearchScreen() }
                     composable(Routes.LIVE) { LiveTvScreen() }
+                    composable(Routes.SPORTS) { SportsScreen() }
                     composable(Routes.GUIDE) { GuideScreen() }
                     composable("browse/{section}", arguments = listOf(navArgument("section") { type = NavType.StringType })) { e ->
                         BrowseScreen(title = if (e.arguments?.getString("section") == "shows") "Shows" else "Movies")

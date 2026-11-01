@@ -83,6 +83,10 @@ class StreamHubApi @Inject constructor(
 
     // ---- Profiles ------------------------------------------------------------------------------
 
+    suspend fun profilePrefs(profileId: String): JsonObject = get("/profiles/${id(profileId)}/prefs")
+    suspend fun putProfilePrefs(profileId: String, prefs: JsonObject): JsonObject =
+        client.put(url("/profiles/${id(profileId)}/prefs")) { setBody(prefs) }.ok()
+
     suspend fun profiles(): List<Profile> = get("/profiles")
     suspend fun createProfile(p: Profile) = client.post(url("/profiles")) { setBody(p) }.unit()
     suspend fun updateProfile(p: Profile) = client.patch(url("/profiles/${id(p.id)}")) { setBody(p) }.unit()
@@ -142,11 +146,27 @@ class StreamHubApi @Inject constructor(
         genre: String? = null,
         sort: String? = null,
         page: Int = 1,
+        language: String? = null,
     ): BrowsePage = get("/browse/${id(section)}") {
         sourceId?.let { parameter("source_id", it) }
         genre?.let { parameter("genre", it) }
         sort?.let { parameter("sort", it) }
         parameter("page", page)
+        language?.let { parameter("language", it) }
+    }
+
+    suspend fun browseGenres(section: String, sourceId: String? = null, language: String? = null): List<CatalogFacet> =
+        get("/browse/${id(section)}/genres") {
+            sourceId?.let { parameter("source_id", it) }
+            language?.let { parameter("language", it) }
+        }
+    suspend fun browseLanguages(section: String, sourceId: String? = null): List<LanguageCount> =
+        get("/browse/${id(section)}/languages") { sourceId?.let { parameter("source_id", it) } }
+    suspend fun sports(language: String? = null, sport: String? = null, offset: Int = 0, limit: Int = 40): SportsPage = get("/sports") {
+        language?.let { parameter("language", it) }
+        sport?.let { parameter("sport", it) }
+        parameter("offset", offset)
+        parameter("limit", limit)
     }
 
     // ---- Live TV -------------------------------------------------------------------------------
