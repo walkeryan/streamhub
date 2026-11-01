@@ -109,15 +109,29 @@ async def test_kids_mutation_revokes_sessions_and_cannot_restrict_admin(api: Api
     auth = api.c.auth
     owner = await auth.get_profile(api.profile_id)
     p = await auth.resolve_principal(auth.issue(owner, owner_pin_version=version)["access_token"])
-    with pytest.raises(ServiceError, match="owner profile cannot be restricted"):
+    with pytest.raises(ServiceError, match="content policy editor"):
         await auth.update_profile(p, owner.id, {"kids": True})
     child = await auth.create_profile(p, {"name": "Child", "is_admin": True, "kids": False})
     assert not child.is_admin
     tokens = auth.issue(child, owner_pin_version=version)
     old_version = child.token_version
-    changed = await auth.update_profile(p, child.id, {"kids": True})
+    with pytest.raises(Forbidden, match="content policy editor"):
+        await auth.update_profile(p, child.id, {"kids": True})
+    changed = await api.c.content_policy.update(child.id, {"restricted": True})
     assert changed.token_version == old_version + 1
-    unchanged = await auth.update_profile(p, child.id, {"kids": True})
+    unchanged = await auth.update_profile(p, child.id, {"kids": False})
     assert unchanged.token_version == changed.token_version
     with pytest.raises(Unauthorized):
         await auth.resolve_principal(tokens["access_token"])
+
+
+async def test_restricted_profile_can_save_unchanged_readonly_hints(api: Api) -> None:
+    version = await enroll(api)
+    auth = api.c.auth
+    owner = await auth.get_profile(api.profile_id)
+    p = await auth.resolve_principal(auth.issue(owner, owner_pin_version=version)["access_token"])
+    child = await auth.create_profile(p, {"name": "Child", "kids": False})
+    child = await api.c.content_policy.update(child.id, {"restricted": True})
+    cp = await auth.resolve_principal(auth.issue(child)["access_token"])
+    result = await auth.update_profile(cp, child.id, {"kids": False, "theme_id": "midnight", "languages": ["eng"]})
+    assert result.languages == ["eng"] and api.c.content_policy.is_restricted(result)

@@ -522,16 +522,15 @@ class AuthService:
                     setattr(prof, key, data[key])
             if "languages" in data and data["languages"] is not None:
                 prof.languages = [str(x) for x in data["languages"]]
-            if "kids" in data and data["kids"] is not None:
+            if "kids" in data and data["kids"] is not None and prof.kids != bool(data["kids"]):
+                if self.content_policy is not None and self.content_policy.enabled:
+                    raise Forbidden(
+                        "Use the owner-approved content policy editor to change restrictions",
+                        code="owner_policy_required",
+                    )
                 if not principal.is_admin:
                     raise Forbidden("only admin can change kids flag")
-                requested_kids = bool(data["kids"])
-                if self.content_policy is not None and self.content_policy.enabled:
-                    if prof.is_admin and requested_kids:
-                        raise ServiceError("The owner profile cannot be restricted", code="invalid_content_policy")
-                    if prof.kids != requested_kids:
-                        prof.token_version += 1
-                prof.kids = requested_kids
+                prof.kids = bool(data["kids"])
             if isinstance(data.get("prefs"), dict):
                 prefs = dict(prof.prefs or {})
                 prefs.update(data["prefs"])
