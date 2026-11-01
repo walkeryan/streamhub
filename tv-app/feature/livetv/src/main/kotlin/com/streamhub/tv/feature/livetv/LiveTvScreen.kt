@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +74,8 @@ import com.streamhub.tv.core.ui.focus.leftOpensRail
 import com.streamhub.tv.core.ui.theme.LocalReducedMotion
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -93,13 +96,29 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
     val firstChannel = remember { FocusRequester() }
     val channelListState = rememberLazyListState()
     var enterChannelsWhenReady by remember { mutableStateOf(false) }
-    LaunchedEffect(s.loading, s.error, s.channels.firstOrNull()?.id, enterChannelsWhenReady) {
-        if (!filtersOnly && enterChannelsWhenReady && !s.loading) {
-            if (s.channels.isNotEmpty() && s.error == null) channelListState.scrollToItem(1)
-            withFrameNanos { }
-            firstChannel.requestFocus()
+    var entryFromGroups by remember { mutableStateOf(false) }
+    var groupsFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(s.loading, s.error, s.channels.firstOrNull()?.id,
+        enterChannelsWhenReady, entryFromGroups, groupsFocused) {
+        if (filtersOnly || !enterChannelsWhenReady) return@LaunchedEffect
+        // A queued Down must not pull focus back after the user navigates elsewhere.
+        if (entryFromGroups && !groupsFocused) {
             enterChannelsWhenReady = false
+            return@LaunchedEffect
         }
+        if (s.loading) return@LaunchedEffect
+        val firstId = s.channels.firstOrNull()?.id
+        if (firstId != null && s.error == null) {
+            channelListState.scrollToItem(1)
+            // Lazy composition/layout can take more than one frame after a filter/page load.
+            val laidOut = withTimeoutOrNull(1_500) {
+                snapshotFlow { channelListState.layoutInfo.visibleItemsInfo.any { it.key == firstId } }
+                    .first { it }
+            } == true
+            if (laidOut) runCatching { firstChannel.requestFocus() }
+        }
+        // A failed handoff leaves normal directional navigation available for the next key.
+        enterChannelsWhenReady = false
     }
     val choices = remember(s.groups) { groupChoices(s.groups) }
     LaunchedEffect(groupsOpen) {
@@ -142,10 +161,23 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                 groupsOpen = true
                 vm.stopPreview()
             }, Modifier.width(360.dp).focusRequester(groupOpener).leftOpensRail(rail)
+                .onFocusChanged { groupsFocused = it.isFocused }
                 .onPreviewKeyEvent { event ->
-                    if (!filtersOnly && (s.loading || s.channels.isNotEmpty()) && event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown) {
-                        enterChannelsWhenReady = true
-                        true
+                    if (!filtersOnly && event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown) {
+                        val firstId = s.channels.firstOrNull()?.id
+                        val visible = !s.loading && s.error == null && firstId != null &&
+                            channelListState.layoutInfo.visibleItemsInfo.any { it.key == firstId }
+                        if (visible) {
+                            // The common case needs no scroll or deferred effect. Never eat a
+                            // failed request: Compose can still perform its normal focus search.
+                            runCatching { firstChannel.requestFocus() }.getOrDefault(false)
+                        } else {
+                            if (s.loading || (firstId != null && s.error == null)) {
+                                entryFromGroups = true
+                                enterChannelsWhenReady = true
+                            }
+                            false
+                        }
                     } else false
                 })
             Text(if (s.groupsLoading) "Updating groups…" else if (s.groupsError != null) "Group counts unavailable" else {
@@ -160,7 +192,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
             Box(Modifier.width(440.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX)) {
                 when {
                     s.loading && s.channels.isEmpty() -> Text("Loading channels…", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
-                    s.error != null -> Column { Text("Couldn't load channels", color = t.danger); ShButton("Retry", { enterChannelsWhenReady = true; vm.load(s.offset) }, Modifier.focusRequester(firstChannel)) }
+                    s.error != null -> Column { Text("Couldn't load channels", color = t.danger); ShButton("Retry", { entryFromGroups = false; enterChannelsWhenReady = true; vm.load(s.offset) }, Modifier.focusRequester(firstChannel)) }
                     s.channels.isEmpty() -> Column { Text(if (s.favoritesOnly) "No favorite channels yet. Choose a channel, then select Add favorite in its details." else "No channels match these filters.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge); ShButton("Change filters", { groupOpener.requestFocus() }, Modifier.focusRequester(firstChannel)) }
                     else -> PivotScroll(leadingOffset = 72.dp) {
                         LazyColumn(
@@ -171,8 +203,8 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                         ) {
                             item("page-navigation") {
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    if (s.offset > 0) ShButton("Previous 60", { enterChannelsWhenReady = true; vm.previousPage() })
-                                    if (s.offset + 60 < s.total) ShButton("Next 60", { enterChannelsWhenReady = true; vm.nextPage() })
+                                    if (s.offset > 0) ShButton("Previous 60", { entryFromGroups = false; enterChannelsWhenReady = true; vm.previousPage() })
+                                    if (s.offset + 60 < s.total) ShButton("Next 60", { entryFromGroups = false; enterChannelsWhenReady = true; vm.nextPage() })
                                 }
                             }
                             itemsIndexed(s.channels, key = { _, c -> c.id }) { index, ch ->
@@ -229,7 +261,7 @@ private fun ChannelRow(ch: Channel, playing: Boolean, onClick: () -> Unit, onLon
         glow = false,
     ) {
         Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(ch.number.toString(), style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.width(44.dp))
+            Text(ch.number.toString(), style = MaterialTheme.typography.labelLarge, color = t.textMuted, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(64.dp))
             Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
                 if (ch.logo != null) AsyncImage(ch.logo, ch.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
                 else Text(ch.name.take(2).uppercase(), color = t.text, style = MaterialTheme.typography.labelLarge)
