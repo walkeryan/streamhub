@@ -25,7 +25,7 @@ def test_full_hour_seek_between_sealed_segment_boundaries(tmp_path):
     assert 'TIME-OFFSET=1.000' in manager.manifest('fixture', now - timedelta(hours=1))
 
 
-def test_future_burst_never_sets_cutoff_or_evicts_sealed_history(tmp_path):
+def test_manager_visible_future_entries_never_set_cutoff_or_evict_sealed_history(tmp_path):
     manager, now = fixture_manager(tmp_path, range(-3661, 501, 2))
     window = manager.window('fixture')
     assert window['buffered_seconds'] >= 3600

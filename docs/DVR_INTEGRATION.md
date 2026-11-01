@@ -73,7 +73,10 @@ On November 1 the owner approved the bounded 12 GiB watched-channel buffer and c
 Retention correction: retain the actual sealed live edge minus 60 minutes with up
 to 60 seconds plus one segment of rounding margin (under 62 minutes for accepted
 segments). Buffered HLS manifests allow 1,862 segments. The 12 GiB quota and producer
-headroom remain unchanged and override the time target. Future-dated burst output
-cannot define the retention cutoff or displace actual past history under the
-count/byte bound. Seek(end−3600) is the primary full-hour check; seek(now−3600) is
+headroom remain unchanged and override the time target. Within the entries still visible in the producer playlist, future-dated output
+cannot define the retention cutoff; manager eviction prefers future entries over
+past entries. This does not prevent FFmpeg itself from rolling a sufficiently fast
+startup burst beyond its bounded playlist and deleting older segments before the
+manager sees them. The real-hour fixture uses paced input; unpaced/provider bursts
+remain an explicit production acceptance and admission limitation. Seek(end−3600) is the primary full-hour check; seek(now−3600) is
 reported separately. A stalled input cannot promise a current wall-clock live edge.
