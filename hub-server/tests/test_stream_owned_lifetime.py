@@ -1,4 +1,5 @@
 """Closing a returned stream must release ownership even before iteration."""
+
 import asyncio
 
 import httpx

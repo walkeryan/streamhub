@@ -27,9 +27,13 @@ def ctx() -> Any:
     client.get.return_value = httpx.Response(200, content=b"fixture-image", headers={"content-type": "image/png"})
     client.__aenter__.return_value = client
     return SimpleNamespace(
-        content_policy=policy, auth=SimpleNamespace(session_valid=AsyncMock()), payload=payload,
-        crypto=Crypto("fixture-image-token-key"), sources=SimpleNamespace(provider_for=AsyncMock(return_value=(None, prov))),
-        http_factory=Mock(return_value=client), client=client,
+        content_policy=policy,
+        auth=SimpleNamespace(session_valid=AsyncMock()),
+        payload=payload,
+        crypto=Crypto("fixture-image-token-key"),
+        sources=SimpleNamespace(provider_for=AsyncMock(return_value=(None, prov))),
+        http_factory=Mock(return_value=client),
+        client=client,
     )
 
 
@@ -39,10 +43,17 @@ async def test_exact_library_and_session_validated(ctx: Any) -> None:
     ctx.content_policy.require.assert_awaited_once_with("kid", "lib:plex:17")
 
 
-@pytest.mark.parametrize("change", [
-    {"session": None}, {"version": True}, {"expires": 0}, {"expires": float("nan")},
-    {"ref": "lib:other:17"}, {"ref": "tmdb:movie:17"},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"session": None},
+        {"version": True},
+        {"expires": 0},
+        {"expires": float("nan")},
+        {"ref": "lib:other:17"},
+        {"ref": "tmdb:movie:17"},
+    ],
+)
 async def test_invalid_binding_rejected(ctx: Any, change: dict[str, Any]) -> None:
     with pytest.raises(Forbidden):
         await validate_image_grant({**ctx.payload, **change}, ctx.content_policy, ctx.auth)

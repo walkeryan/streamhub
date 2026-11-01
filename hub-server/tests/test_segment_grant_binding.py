@@ -1,4 +1,5 @@
 """Segments cannot be replayed under a different content/profile grant."""
+
 from __future__ import annotations
 
 import hashlib
@@ -18,15 +19,23 @@ from app.services.playback import StreamGrant
 @pytest.fixture
 def ctx() -> Any:
     grant = StreamGrant(
-        profile_id="fixture-profile", source_id="fixture", url="https://fixture.invalid/master.m3u8",
-        headers={}, mode="proxy", live=True, channel_key=None, transcode=False, recovery_generation=0,
+        profile_id="fixture-profile",
+        source_id="fixture",
+        url="https://fixture.invalid/master.m3u8",
+        headers={},
+        mode="proxy",
+        live=True,
+        channel_key=None,
+        transcode=False,
+        recovery_generation=0,
     )
     return SimpleNamespace(
         crypto=Crypto("local-fixture-only-segment-key"),
         tokens=SimpleNamespace(verify=lambda _: grant, ttl_s=300),
         sources=SimpleNamespace(get=AsyncMock(return_value=object()), max_connections=Mock(return_value=1)),
         proxy=SimpleNamespace(ensure_running=Mock(), generation=0, passthrough=AsyncMock(), fetch_text=AsyncMock()),
-        content_policy=SimpleNamespace(require_grant=AsyncMock()), auth=object(),
+        content_policy=SimpleNamespace(require_grant=AsyncMock()),
+        auth=object(),
     )
 
 
@@ -79,7 +88,8 @@ async def test_nested_playlist_retains_parent_binding(ctx: Any) -> None:
     response = await stream_segment("original", sub, request(), ctx)
     nested = bytes(response.body).decode().rsplit("/", 1)[1]
     assert ctx.crypto.decrypt_json(nested) == {
-        "u": "https://fixture.invalid/part.ts", "grant": hashlib.sha256(b"original").hexdigest(),
+        "u": "https://fixture.invalid/part.ts",
+        "grant": hashlib.sha256(b"original").hexdigest(),
     }
     with pytest.raises(Unauthorized):
         await stream_segment("another", nested, request(), ctx)

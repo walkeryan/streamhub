@@ -1,4 +1,5 @@
 """Release an acquired producer even if ASGI disconnects before body iteration."""
+
 from __future__ import annotations
 
 import asyncio
