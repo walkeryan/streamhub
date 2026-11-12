@@ -89,9 +89,10 @@ Cleartext HTTP is allowed (`network_security_config.xml`) because the server and
                         Ktor bearer auth w/ refresh · DeepLinkLauncher · PlaybackCoordinator · ChannelListCache
 :core:player            StreamHubPlayer (Media3) · MediaItemMapper · VideoSurface
 :feature:onboarding     server URL → disclaimer gate → device-code pairing
-:feature:home           hero + rows; Movies/Shows browse grid
+:feature:home           hero + rows; Movies/Shows as category shelves with a "See all" grid
 :feature:search         debounced search, Play here / Open in app / Channels
-:feature:livetv         channel list + 600 ms-dwell preview, language chips, groups, favorites filter
+:feature:livetv         channel list + details pane (no auto-preview: it would use a source connection),
+                        number keys, language chips, groups, favorites filter
 :feature:guide          EPG grid (30-min columns, now-line, catch-up)
 :feature:details        title detail, resume label, source picker, seasons/episodes, Available on
 :feature:player         full-screen player overlays

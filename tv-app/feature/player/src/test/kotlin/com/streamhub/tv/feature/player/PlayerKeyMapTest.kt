@@ -101,10 +101,4 @@ class PlayerKeyMapTest {
         val steps = (0..60).map(PlayerKeyMap::seekStepMs)
         assertTrue(steps.zipWithNext().all { (a, b) -> b >= a })
     }
-
-    @Test fun digitMappingCoversBothKeyRows() {
-        assertEquals((0..9).toList(), (KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9).map { PlayerKeyMap.digitOf(it) })
-        assertEquals((0..9).toList(), (KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9).map { PlayerKeyMap.digitOf(it) })
-        assertEquals(null, PlayerKeyMap.digitOf(KeyEvent.KEYCODE_A))
-    }
 }

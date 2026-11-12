@@ -42,6 +42,7 @@ import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.player.AspectMode
 import com.streamhub.tv.core.player.PlayerFactory
 import com.streamhub.tv.core.player.StreamHubPlayer
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -459,7 +460,7 @@ class PlayerViewModel @Inject constructor(
 
     fun digit(d: Int) {
         if (!_state.value.live) return
-        val next = (_state.value.numberEntry + d).takeLast(5)
+        val next = ChannelNumberEntry.append(_state.value.numberEntry, d)
         _state.update { it.copy(numberEntry = next, overlay = Overlay.Osd) }
         osdJob?.cancel()
         numberJob?.cancel()
@@ -470,10 +471,11 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun commitNumber(): Boolean {
-        val n = _state.value.numberEntry.toIntOrNull() ?: return false
+        val entry = _state.value.numberEntry
+        val n = ChannelNumberEntry.number(entry) ?: return false
         numberJob?.cancel()
         _state.update { it.copy(numberEntry = "") }
-        val ch = _state.value.channels.firstOrNull { it.number == n }
+        val ch = ChannelNumberEntry.match(entry, _state.value.channels) { it.number }
         if (ch != null) tuneTo(ch) else {
             _state.update { it.copy(message = "No channel $n") }
             viewModelScope.launch { delay(2000); _state.update { if (it.message == "No channel $n") it.copy(message = null) else it } }
@@ -553,7 +555,7 @@ class PlayerViewModel @Inject constructor(
 
     companion object {
         const val OSD_HIDE_MS = 4_000L
-        const val NUMBER_COMMIT_MS = 2_000L
+        const val NUMBER_COMMIT_MS = ChannelNumberEntry.COMMIT_MS
         const val ZAP_SETTLE_MS = 350L
         /** Window for the second Back that swaps to the last channel; 500 ms was too tight for a TV remote. */
         const val BACK_DOUBLE_MS = 750L

@@ -72,6 +72,8 @@ import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.programmeProgress
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.PivotScroll
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
+import com.streamhub.tv.core.ui.input.ChannelNumberOverlay
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 import kotlinx.coroutines.Job
@@ -248,7 +250,12 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
         AnimatedVisibility(s.overlay == Overlay.Controls && s.numberEntry.isEmpty(), enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
             FilmControls(vm, s, ps)
         }
-        if (s.numberEntry.isNotEmpty()) NumberEntry(s.numberEntry, s.channels, Modifier.align(Alignment.TopEnd))
+        if (s.numberEntry.isNotEmpty()) {
+            ChannelNumberOverlay(
+                s.numberEntry, ChannelNumberEntry.match(s.numberEntry, s.channels) { it.number }?.name,
+                Modifier.align(Alignment.TopEnd).padding(top = Tokens.Canvas.SafeMarginY, end = Tokens.Canvas.SafeMarginX),
+            )
+        }
 
         AnimatedVisibility(
             s.overlay == Overlay.MiniList,
@@ -406,16 +413,6 @@ private fun Scrubber(
             ProgressLine(if (durationMs > 0) positionMs.toFloat() / durationMs else 0f, Modifier.weight(1f), height = if (focused) 8.dp else 4.dp)
             if (durationMs > 0) Text("-" + fmt((durationMs - positionMs).coerceAtLeast(0)), color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
-    }
-}
-
-@Composable
-private fun NumberEntry(entry: String, channels: List<Channel>, modifier: Modifier) {
-    val t = LocalThemeTokens.current
-    val match = entry.toIntOrNull()?.let { n -> channels.firstOrNull { it.number == n } }
-    Column(modifier.padding(top = Tokens.Canvas.SafeMarginY, end = Tokens.Canvas.SafeMarginX).background(t.overlay, RoundedCornerShape(Tokens.Radius.Md)).padding(20.dp), horizontalAlignment = Alignment.End) {
-        Text(entry, style = MaterialTheme.typography.displayMedium, color = Color.White)
-        Text(match?.name ?: "—", style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f))
     }
 }
 

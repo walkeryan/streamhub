@@ -1,6 +1,7 @@
 package com.streamhub.tv.feature.player
 
 import android.view.KeyEvent
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
 
 /** What a remote key means to the player, before any side effect. */
 sealed interface PlayerCommand {
@@ -65,7 +66,7 @@ object PlayerKeyMap {
             else -> PlayerCommand.ShowControls
         }
         if (controlsVisible) return PlayerCommand.None
-        digitOf(key)?.let { return if (isLive) PlayerCommand.Digit(it) else PlayerCommand.None }
+        ChannelNumberEntry.digitOf(key)?.let { return if (isLive) PlayerCommand.Digit(it) else PlayerCommand.None }
         return when (key) {
             KeyEvent.KEYCODE_DPAD_UP -> if (isLive) PlayerCommand.Zap(+1) else PlayerCommand.ShowControls
             KeyEvent.KEYCODE_DPAD_DOWN -> if (isLive) PlayerCommand.Zap(-1) else PlayerCommand.ShowControls
@@ -79,13 +80,6 @@ object PlayerKeyMap {
 
     fun isSelect(key: Int): Boolean =
         key == KeyEvent.KEYCODE_DPAD_CENTER || key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER
-
-    /** 0-9 from the number row or the numeric keypad; null for anything else. */
-    fun digitOf(key: Int): Int? = when (key) {
-        in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> key - KeyEvent.KEYCODE_0
-        in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> key - KeyEvent.KEYCODE_NUMPAD_0
-        else -> null
-    }
 
     /**
      * Seek step for one Left/Right event on the scrubber. [repeatCount] is the key event's
