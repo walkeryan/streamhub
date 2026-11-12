@@ -88,6 +88,13 @@ def to_meta(d: dict[str, Any], media_type: str | None = None) -> MetaTitle | Non
         cast=cast,
         logo=logo,
         popularity=float(d.get("popularity") or 0.0),
+        season_numbers=sorted(
+            {
+                n
+                for x in d.get("seasons") or []
+                if isinstance(x, dict) and isinstance(n := x.get("season_number"), int) and n > 0
+            }
+        ),
     )
 
 

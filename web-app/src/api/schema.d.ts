@@ -3162,6 +3162,374 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/request_manager": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin only. The API key is write-only */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RequestManagerSettings"];
+                    };
+                };
+            };
+        };
+        /**
+         * Admin only. Seerr-compatible request manager (Overseerr / Jellyseerr / Seerr)
+         * @description Omit api_key to keep the stored key for the same server; a different server or a null url drops it.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        url?: string | null;
+                        api_key?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RequestManagerSettings"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/request_manager/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin only. Checks the stored URL and API key */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    scope?: "mine" | "all";
+                    state?: components["schemas"]["RequestState"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            requests: components["schemas"]["MediaRequest"][];
+                            /** @description The current profile may approve or decline requests and list scope=all. */
+                            can_approve?: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Ask for a title no source has */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        media_type: "movie" | "tv";
+                        tmdb_id: number;
+                        /** @description tv only; omitted = whole series */
+                        seasons?: number[] | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description an open request for this title already exists */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description already_available | request_manager_unconfigured | metadata_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        note?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description approved and */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description already decided */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        note?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description declined; the requester gets a notice */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description already decided */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Notices for the current profile; unread first */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            notices: components["schemas"]["Notice"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notices/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Notice"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -3420,6 +3788,10 @@ export interface components {
             is_favorite: boolean;
             sources: components["schemas"]["SourceBadge"][];
             now_playing?: components["schemas"]["Programme"];
+            /** @description Open request for this title, else its most recent closed one; null when never requested. */
+            request_state?: components["schemas"]["RequestState"] | null;
+            /** @description TMDB-identified, no in-app source, a request manager is configured and the profile may request. Independent of request_state: show the state instead while a request is open. */
+            requestable?: boolean;
         };
         Row: {
             id: string;
@@ -3444,6 +3816,8 @@ export interface components {
             episodes?: components["schemas"]["Tile"][];
             /** @description e.g. 'Availability data by JustWatch' */
             attribution?: string;
+            /** @description Requestable series only: season numbers a request may pick from (empty = whole series only). */
+            request_seasons?: number[];
         };
         DiscoveryPage: {
             tiles: components["schemas"]["Tile"][];
@@ -3747,6 +4121,8 @@ export interface components {
         };
         Settings: {
             tmdb_api_key_set?: boolean;
+            /** @description A request manager URL and API key are stored. The key is never returned. */
+            request_manager_configured?: boolean;
             region?: string;
             sleep_timer_min?: number | null;
             epg_refresh_hours?: number;
@@ -3758,6 +4134,48 @@ export interface components {
         Disclaimer: {
             version: string;
             text: string;
+        };
+        /** @enum {string} */
+        RequestState: "pending_approval" | "approved" | "sent" | "available" | "declined" | "failed";
+        MediaRequest: {
+            id: string;
+            profile_id: string;
+            profile_name?: string;
+            /** @enum {string} */
+            media_type: "movie" | "tv";
+            tmdb_id: number;
+            /** @description hub id of the requested title, e.g. tmdb:movie:603 */
+            title_id: string;
+            title: string;
+            year?: number | null;
+            poster?: string | null;
+            /** @description tv only; null = whole series */
+            seasons?: number[] | null;
+            state: components["schemas"]["RequestState"];
+            /** @description Decline reason, or why an approved request has not reached the request manager yet. */
+            note?: string | null;
+            decided_by_profile_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        Notice: {
+            id: string;
+            /** @description request_available | request_declined */
+            kind: string;
+            title: string;
+            body?: string;
+            /** @description hub id the notice is about */
+            ref_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            read_at?: string | null;
+        };
+        RequestManagerSettings: {
+            url?: string | null;
+            api_key_set: boolean;
         };
         SportsListing: {
             id: string;

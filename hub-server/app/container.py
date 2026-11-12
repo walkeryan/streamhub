@@ -16,6 +16,7 @@ from app.adapters import register_builtin_adapters
 from app.adapters.deeplink.registry import DeeplinkRegistry
 from app.adapters.language.inferrer import LanguageChain
 from app.adapters.plex.provider import PlexLinkFlow
+from app.adapters.seerr import SeerrConnection
 from app.adapters.tmdb.client import TmdbClient
 from app.adapters.xmltv.parser import XmltvEpgProvider
 from app.domain.ports import AdapterContext, Cache
@@ -35,10 +36,12 @@ from app.services.content_policy import ContentPolicy
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
+from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
 from app.services.owner_reauth import OwnerReauthService
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.registry import SourceRegistry
+from app.services.requests import RequestService
 from app.services.services_registry import ServiceRegistryService
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
@@ -92,6 +95,8 @@ class Container:
     tokens: StreamTokens
     playback: PlaybackResolver
     proxy: StreamProxy
+    requests: RequestService
+    notices: NoticeService
     http_factory: Any
 
 
@@ -136,7 +141,15 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     deeplinks = DeeplinkRegistry(ctx, service_registry.get)
     plex_link = PlexLinkFlow(ctx)
     sync = SyncService(db, sources, XmltvEpgProvider(ctx), app_settings)
-    scheduler = SyncScheduler(sync)
+
+    def request_manager() -> SeerrConnection | None:
+        configured = app_settings.request_manager()
+        return SeerrConnection(http_factory, *configured) if configured else None
+
+    requests = RequestService(db, availability, sources, tmdb, request_manager)
+    requests.content_policy = content_policy
+    sync.after_catalog_sync = requests.reconcile
+    scheduler = SyncScheduler(sync, requests.reconcile)
     home = HomeService(catalog, channels, progress, layout, sources, availability, tmdb)
     active = ActiveStreams()
     tokens = StreamTokens(crypto, settings.stream_token_ttl_s)
@@ -206,6 +219,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         tokens=tokens,
         playback=playback,
         proxy=proxy,
+        requests=requests,
+        notices=NoticeService(db),
         http_factory=http_factory,
     )
 

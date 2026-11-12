@@ -20,7 +20,7 @@ router = APIRouter(route_class=PolicyCatalogRoute)
 
 @router.get("/home", response_model=S.Home, tags=["catalog"])
 async def home(c: C, p: P) -> dict[str, Any]:
-    return await c.home.home(p.profile_id)
+    return await c.requests.annotate(p, await c.home.home(p.profile_id))
 
 
 @router.get("/sports", response_model=S.SportsPage, tags=["live"])
@@ -108,18 +108,19 @@ async def search(
     response.headers["Cache-Control"] = "private, no-store"
     kind_set = {k.strip() for k in kinds.split(",") if k.strip()} if kinds else None
     q = normalized_query(q) or ""
-    return await listing_cached(
+    result = await listing_cached(
         c.db,
         p.profile_id,
         "search",
         (q, tuple(sorted(kind_set or [])), limit, language, source_id),
         lambda: c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id),
     )
+    return await c.requests.annotate(p, result)
 
 
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
 async def title(id: str, c: C, p: P) -> dict[str, Any]:
-    return await c.catalog.detail(id, p.profile_id)
+    return await c.requests.annotate_detail(p, await c.catalog.detail(id, p.profile_id))
 
 
 @router.get("/discover/{section}", response_model=S.DiscoveryPage, tags=["catalog"])
@@ -135,7 +136,7 @@ async def discover(
     source_id: str | None = None,
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
-    return await listing_cached(
+    result = await listing_cached(
         c.db,
         p.profile_id,
         "discover",
@@ -145,6 +146,7 @@ async def discover(
         ),
         ttl=30,
     )
+    return await c.requests.annotate(p, result)
 
 
 @router.get("/browse/{section}", response_model=S.BrowsePage, tags=["catalog"])

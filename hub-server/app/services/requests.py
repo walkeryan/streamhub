@@ -53,6 +53,8 @@ class RequestManager(Protocol):
 
     async def request_status(self, request_id: int) -> str: ...
 
+    async def test(self) -> tuple[bool, str]: ...
+
 
 # Returns a connection to the configured manager, or None while none is configured.
 ManagerFactory = Callable[[], AbstractAsyncContextManager[RequestManager] | None]
@@ -166,7 +168,8 @@ class RequestService:
 
     async def to_api(self, rows: builtins.list[MediaRequest]) -> builtins.list[dict[str, Any]]:
         async with self._db.session() as s:
-            names = dict((await s.execute(select(Profile.id, Profile.name))).tuples().all()) if rows else {}
+            found = (await s.execute(select(Profile.id, Profile.name))).all() if rows else []
+        names = {profile_id: name for profile_id, name in found}
         return [
             {
                 "id": r.id,
@@ -187,6 +190,60 @@ class RequestService:
             }
             for r in rows
         ]
+
+    async def test_connection(self) -> tuple[bool, str]:
+        async with self._connection() as manager:
+            if manager is None:
+                return False, "The request manager is not configured."
+            return await manager.test()
+
+    # ------------------------------------------------------------------ tiles
+    async def annotate(self, p: Principal, payload: Any) -> Any:
+        """Stamp ``request_state`` / ``requestable`` on every TMDB-identified tile of an API payload.
+
+        Done on the finished payload, after any listing cache, because request state changes
+        independently of the catalog.
+        """
+        tiles: list[tuple[dict[str, Any], tuple[str, int]]] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, list):
+                for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                parts = str(value.get("id") or "").split(":")
+                if (
+                    len(parts) == 3
+                    and parts[0] == "tmdb"
+                    and parts[1] in ("movie", "tv")
+                    and parts[2].isdigit()
+                    and isinstance(value.get("sources"), list)
+                ):
+                    tiles.append((value, (parts[1], int(parts[2]))))
+                for item in value.values():
+                    collect(item)
+
+        collect(payload)
+        if not tiles:
+            return payload
+        states = await self.states_for({key for _, key in tiles})
+        allowed = self.configured and request_policy.can_request(p)
+        for tile, key in tiles:
+            tile["request_state"] = states.get(key)
+            tile["requestable"] = allowed and not any(b.get("playable_in_app") for b in tile["sources"])
+        return payload
+
+    async def annotate_detail(self, p: Principal, detail: dict[str, Any]) -> dict[str, Any]:
+        """``annotate`` plus, for a requestable series, the seasons a viewer may pick from."""
+        await self.annotate(p, detail)
+        if detail.get("requestable") and detail.get("kind") == "show":
+            try:
+                async with asyncio.timeout(8):
+                    meta = await self._meta.details("tv", int(str(detail["id"]).rsplit(":", 1)[1]))
+            except Exception:
+                meta = None
+            detail["request_seasons"] = list(meta.season_numbers) if meta else []
+        return detail
 
     # ------------------------------------------------------------------ library
     async def _in_library(self, media_type: str, tmdb_id: int, title: str | None, year: int | None) -> bool:
@@ -286,6 +343,12 @@ class RequestService:
     async def create(
         self, p: Principal, media_type: str, tmdb_id: int, seasons: builtins.list[int] | None
     ) -> MediaRequest:
+        return (await self.create_or_get(p, media_type, tmdb_id, seasons))[0]
+
+    async def create_or_get(
+        self, p: Principal, media_type: str, tmdb_id: int, seasons: builtins.list[int] | None
+    ) -> tuple[MediaRequest, bool]:
+        """The request for this title and whether this call opened it (False: joined an open one)."""
         if not request_policy.can_request(p):
             raise Forbidden("You cannot request titles.", code="request_forbidden")
         if media_type not in ("movie", "tv") or tmdb_id <= 0:
@@ -297,7 +360,7 @@ class RequestService:
             await self.content_policy.require(p.profile_id, ids.tmdb_id(media_type, tmdb_id))
         existing = await self._open(media_type, tmdb_id)
         if existing is not None:
-            return existing
+            return existing, False
         if not self.configured:
             raise Conflict("No request manager is configured.", code="request_manager_unconfigured")
         if await self._in_library(media_type, tmdb_id, meta.title, meta.year):
@@ -324,8 +387,8 @@ class RequestService:
             winner = await self._open(media_type, tmdb_id)
             if winner is None:
                 raise
-            return winner
-        return await self._dispatch(row.id) if approved else row
+            return winner, False
+        return (await self._dispatch(row.id) if approved else row), True
 
     async def decide(self, p: Principal, request_id: str, approve: bool, note: str | None) -> MediaRequest:
         if not request_policy.can_approve(p):

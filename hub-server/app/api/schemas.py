@@ -9,6 +9,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
+RequestStateL = Literal["pending_approval", "approved", "sent", "available", "declined", "failed"]
 
 
 class _M(BaseModel):
@@ -188,6 +189,8 @@ class Tile(_M):
     is_favorite: bool = False
     sources: list[SourceBadge]
     now_playing: Programme | None = None
+    request_state: RequestStateL | None = None
+    requestable: bool = False
 
 
 class Row(_M):
@@ -216,6 +219,7 @@ class TitleDetail(Tile):
     seasons: list[Tile] = Field(default_factory=list)
     episodes: list[Tile] = Field(default_factory=list)
     attribution: str = ""
+    request_seasons: list[int] = Field(default_factory=list)
 
 
 class BrowsePage(_M):
@@ -443,6 +447,7 @@ class Theme(_M):
 
 class Settings(_M):
     tmdb_api_key_set: bool = False
+    request_manager_configured: bool = False
     region: str = "US"
     sleep_timer_min: int | None = None
     epg_refresh_hours: int = 12
@@ -587,3 +592,60 @@ class ProfileSwitch(_M):
     profile_id: str
     pin: str | None = None
     password: str | None = None
+
+
+class MediaRequest(_M):
+    id: str
+    profile_id: str
+    profile_name: str = ""
+    media_type: Literal["movie", "tv"]
+    tmdb_id: int
+    title_id: str
+    title: str
+    year: int | None = None
+    poster: str | None = None
+    seasons: list[int] | None = None
+    state: RequestStateL
+    note: str | None = None
+    decided_by_profile_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MediaRequestList(_M):
+    requests: list[MediaRequest]
+    can_approve: bool = False
+
+
+class MediaRequestCreate(_M):
+    media_type: Literal["movie", "tv"]
+    tmdb_id: int = Field(gt=0)
+    seasons: list[int] | None = Field(default=None, max_length=100)
+
+
+class RequestDecision(_M):
+    note: str | None = Field(default=None, max_length=500)
+
+
+class Notice(_M):
+    id: str
+    kind: str
+    title: str
+    body: str = ""
+    ref_id: str | None = None
+    created_at: datetime
+    read_at: datetime | None = None
+
+
+class NoticeList(_M):
+    notices: list[Notice]
+
+
+class RequestManagerSettings(_M):
+    url: str | None = None
+    api_key_set: bool = False
+
+
+class RequestManagerWrite(_M):
+    url: str | None = Field(default=None, max_length=512)
+    api_key: str | None = Field(default=None, max_length=512, description="omit to keep the stored key")

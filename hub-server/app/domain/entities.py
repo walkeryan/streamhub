@@ -196,6 +196,7 @@ class MetaTitle:
     popularity: float = 0.0
 
     age_evidence: dict[str, Any] = field(default_factory=dict)
+    season_numbers: list[int] = field(default_factory=list)  # tv: regular seasons, specials excluded
 
 
 @dataclass(slots=True)

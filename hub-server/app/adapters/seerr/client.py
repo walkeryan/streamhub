@@ -11,6 +11,9 @@ with the admin API key and never on behalf of a manager-side user.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from types import TracebackType
 from typing import Any, Literal
 
 import httpx
@@ -147,3 +150,24 @@ class SeerrClient:
         if not isinstance(body, dict):
             raise SeerrError("The request manager returned an unreadable response.", resp.status_code)
         return map_status(body)
+
+
+class SeerrConnection(AbstractAsyncContextManager[SeerrClient]):
+    """Opens an HTTP client for one burst of manager calls and closes it afterwards."""
+
+    def __init__(self, http_factory: Callable[..., httpx.AsyncClient], base_url: str, api_key: str) -> None:
+        self._http_factory = http_factory
+        self._base_url = base_url
+        self._api_key = api_key
+        self._http: httpx.AsyncClient | None = None
+
+    async def __aenter__(self) -> SeerrClient:
+        self._http = self._http_factory()
+        return SeerrClient(self._http, self._base_url, self._api_key)
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
