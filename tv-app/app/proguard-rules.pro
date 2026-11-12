@@ -10,3 +10,5 @@
 -dontwarn java.lang.management.**
 # Media3 FFmpeg extension (optional, loaded reflectively when present)
 -keep class androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer { <init>(...); }
+# Prebuilt FFmpeg audio renderer added by -Pstreamhub.ffmpegDecoder=true (same: found by name at runtime)
+-keep class io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegAudioRenderer { <init>(...); }

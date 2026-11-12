@@ -122,9 +122,9 @@ class StreamHubPlayer(
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .setRenderersFactory(
-            // EXTENSION_RENDERER_MODE_PREFER lets the FFmpeg audio extension (if bundled, see README)
-            // take over AC-3/E-AC-3/DTS on devices lacking HW decoders. No-op without the extension.
-            DefaultRenderersFactory(context).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER),
+            // EXTENSION_RENDERER_MODE_PREFER lets an FFmpeg audio extension (if bundled, see README)
+            // take over AC-3/E-AC-3/DTS on devices lacking HW decoders. No-op without one.
+            SoftwareAudioRenderersFactory(context).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER),
         )
         .setMediaSourceFactory(mediaSourceFactory)
         .setLoadControl(

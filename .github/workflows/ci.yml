@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      ffmpeg_decoder:
+        description: "Android: build with -Pstreamhub.ffmpegDecoder=true (GPL decoder; the APK is not uploaded)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -80,8 +85,10 @@ jobs:
       # testDebugUnitTest without a module prefix runs every module that has tests, so a new test
       # directory is covered without editing this file. checkTokens fails on a stale Tokens.kt.
       - name: Unit tests, token check and debug APK
-        run: chmod +x ./gradlew && ./gradlew testDebugUnitTest :core:ui:checkTokens :app:assembleDebug --no-daemon
+        run: chmod +x ./gradlew && ./gradlew testDebugUnitTest :core:ui:checkTokens :app:assembleDebug --no-daemon ${{ inputs.ffmpeg_decoder && '-Pstreamhub.ffmpegDecoder=true' || '' }}
+      # A build with the optional decoder is a compile check only: it is GPL-3.0 and is not published from here.
       - name: Upload APK
+        if: ${{ !inputs.ffmpeg_decoder }}
         uses: actions/upload-artifact@v4
         with:
           name: streamhub-tv-debug-apk
