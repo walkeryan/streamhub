@@ -70,7 +70,8 @@ async def test_sync_stores_presentation_fields(api: Api) -> None:
             ],
             get_vod_streams=[
                 {"stream_id": 1, "name": "NF - Millionaire", "category_id": "1"},
-                {"stream_id": 2, "name": "EN - The Mill  (2023)", "category_id": "2", "is_adult": "1"},
+                {"stream_id": 2, "name": "EN - The Mill  (2023)", "category_id": "2"},
+                {"stream_id": 4, "name": "EN - Night Ferry", "category_id": "2", "is_adult": "1"},
             ],
             get_series_categories=[{"category_id": "7", "category_name": "APPLE+ KIDS"}],
             get_series=[{"series_id": 3, "name": "4K-A+ - Berlin ER (2025) (DE)", "category_id": "7"}],
@@ -88,6 +89,7 @@ async def test_sync_stores_presentation_fields(api: Api) -> None:
     sid = await add_xtream(api, hidden_groups=["US| NFL PPV"])
     rows = await titles(api, sid)
     brand, release, series = rows["1"], rows["2"], rows["s:3"]
+    assert rows["4"].adult and rows["4"].title == "Night Ferry"
     assert (brand.title, brand.group_name, brand.quality, brand.language, brand.adult) == (
         "Millionaire",
         "Netflix",
@@ -101,7 +103,7 @@ async def test_sync_stores_presentation_fields(api: Api) -> None:
         2023,
         "New Releases",
         "eng",
-        True,
+        False,
     )
     assert (series.title, series.year, series.group_name, series.quality) == ("Berlin ER", 2025, "Apple TV+", "4K")
     assert series.extra["kids"] is True
