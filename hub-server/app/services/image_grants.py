@@ -1,4 +1,4 @@
-"""Profile-bound access to authenticated library artwork."""
+"""Profile-bound access to artwork the hub serves itself (authenticated libraries, proxied sources)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,14 @@ from typing import Any
 from app.services.errors import Forbidden
 
 IMAGE_TTL = 300
+WEB_SCHEMES = ("http://", "https://")
+
+
+def _owned_by(ref: Any, source_id: str) -> bool:
+    """A title (``lib:``) or channel (``ch:``) reference that belongs to this source."""
+    return isinstance(ref, str) and any(
+        ref.startswith(prefix) and len(ref) > len(prefix) for prefix in (f"lib:{source_id}:", f"ch:{source_id}:")
+    )
 
 
 def image_payload(source_id: str, url: str, ref: str | None, policy: Any) -> dict[str, Any] | None:
@@ -17,7 +25,7 @@ def image_payload(source_id: str, url: str, ref: str | None, policy: Any) -> dic
     from app.services.content_policy import active_principal
 
     principal = active_principal.get()
-    if principal is None or not principal.session_id or not ref or not ref.startswith(f"lib:{source_id}:"):
+    if principal is None or not principal.session_id or not _owned_by(ref, source_id):
         return None
     payload.update(
         profile=principal.profile_id,
@@ -38,9 +46,7 @@ async def validate_image_grant(payload: dict[str, Any], policy: Any, auth: Any) 
     if (
         not isinstance(source, str)
         or not source
-        or not isinstance(ref, str)
-        or not ref.startswith(f"lib:{source}:")
-        or not ref.removeprefix(f"lib:{source}:")
+        or not _owned_by(ref, source)
         or not isinstance(profile, str)
         or not profile
         or not isinstance(session, str)

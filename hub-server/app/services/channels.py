@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -21,6 +21,7 @@ from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme
 from app.services import ids
 from app.services.errors import NotFound, ServiceError
 from app.services.sources import SourceService, apply_overrides
+from app.services.tiles import ImageFn
 
 LIST_PREFIX = "chlist:"
 MAX_GRID_HOURS = 24
@@ -98,6 +99,9 @@ async def now_next(
 
 
 class ChannelService:
+    # Set by the composition root (CatalogService.image_fn); logos stay provider URLs without it.
+    image_fn: Callable[[dict[str, Source]], ImageFn] | None = None
+
     def __init__(self, db: Database, sources: SourceService) -> None:
         self._db = db
         self._sources = sources
@@ -322,6 +326,8 @@ class ChannelService:
                 ).scalars()
             )
         nn = await now_next(self._db, chans)
+        sources = await self._sources.rows_by_id() if self.image_fn and chans else {}
+        image = self.image_fn(sources) if self.image_fn else None
         out = []
         for c in chans:
             cid = ids.channel_id(c.source_id, c.ext_id)
@@ -334,7 +340,7 @@ class ChannelService:
                     "ext_id": c.ext_id,
                     "number": c.number,
                     "name": c.name,
-                    "logo": c.logo,
+                    "logo": image(sources.get(c.source_id), c.logo, cid) if image else c.logo,
                     "group": c.group_override or c.group_name,
                     "language": c.language or "und",
                     "language_source": c.language_source,

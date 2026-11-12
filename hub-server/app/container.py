@@ -23,6 +23,7 @@ from app.infra.cache import SqlCache
 from app.infra.crypto import Crypto
 from app.infra.db import Database
 from app.infra.http import make_client
+from app.infra.image_cache import ImageCache
 from app.infra.settings import AppSettings
 from app.proxy.dvr import DvrManager
 from app.proxy.stream_proxy import StreamProxy
@@ -92,6 +93,7 @@ class Container:
     tokens: StreamTokens
     playback: PlaybackResolver
     proxy: StreamProxy
+    image_cache: ImageCache
     http_factory: Any
 
 
@@ -126,6 +128,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     catalog = CatalogService(db, crypto, sources, availability, tmdb)
     catalog.content_policy = content_policy
     channels = ChannelService(db, sources)
+    channels.image_fn = catalog.image_fn
     favorites = FavoritesService(db)
     watchlist = WatchlistService(db)
     progress = ProgressService(db, sources)
@@ -206,6 +209,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         tokens=tokens,
         playback=playback,
         proxy=proxy,
+        image_cache=ImageCache(settings.image_cache_dir, settings.image_cache_max_mb * 1024 * 1024),
         http_factory=http_factory,
     )
 

@@ -61,22 +61,30 @@ class CatalogService:
 
     # ------------------------------------------------------------------ context
     def image_fn(self, srcs: dict[str, Source]) -> Callable[[Source | None, str | None, str | None], str | None]:
-        def image(src: Source | None, url: str | None, ref: str | None = None) -> str | None:
-            if not url or src is None:
-                return url
+        from app.services.image_grants import WEB_SCHEMES, image_payload
+
+        proxied: dict[str, bool] = {}  # per call: the answer needs a config decrypt
+
+        def via_hub(src: Source, url: str) -> bool:
             try:
                 prov = self.sources.provider(src)
             except Exception:
-                return url
+                return False
             if isinstance(prov, ImageAuthProvider) and prov.image_headers(url) is not None:
-                from app.services.image_grants import image_payload
+                return True
+            if src.id not in proxied:
+                proxied[src.id] = self.sources.proxied_image_headers(src) is not None
+            # Clients of a fully proxied source cannot reach its hosts, artwork included.
+            return proxied[src.id] and url.startswith(WEB_SCHEMES)
 
-                payload = image_payload(src.id, url, ref, self.content_policy)
-                if payload is None:
-                    return None
-                token = self._crypto.sign_json(payload)
-                return absolute(f"/api/v1/images/{token}")
-            return url
+        def image(src: Source | None, url: str | None, ref: str | None = None) -> str | None:
+            if not url or src is None or not via_hub(src, url):
+                return url
+            payload = image_payload(src.id, url, ref, self.content_policy)
+            if payload is None:
+                return None
+            token = self._crypto.sign_json(payload)
+            return absolute(f"/api/v1/images/{token}")
 
         return image
 
@@ -946,6 +954,7 @@ class CatalogService:
         channels: list[dict[str, Any]] = []
         if "channel" in want:
             chsvc = ChannelService(self._db, self.sources)
+            chsvc.image_fn = self.image_fn
             res = await chsvc.list_channels(profile_id, q=q, language=language, source_id=source_id, limit=limit)
             channels = res["channels"]
         return {

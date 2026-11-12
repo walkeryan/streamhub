@@ -176,15 +176,16 @@ class TileContext:
     def channel_tile(self, ch: Channel, now: dict[str, Any] | None = None) -> dict[str, Any]:
         src = self.sources.get(ch.source_id)
         cid = ids.channel_id(ch.source_id, ch.ext_id)
+        logo = self.image(src, ch.logo, cid)
         return {
             "id": cid,
             "kind": "channel",
             "title": ch.name,
             "subtitle": f"{ch.number}" if ch.number else None,
             "year": None,
-            "poster": ch.logo,
+            "poster": logo,
             "backdrop": None,
-            "logo": ch.logo,
+            "logo": logo,
             "rating": None,
             "progress_pct": None,
             "is_favorite": cid in self.favorites,

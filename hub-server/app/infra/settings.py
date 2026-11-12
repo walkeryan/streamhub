@@ -48,6 +48,7 @@ class AppSettings(BaseSettings):
     refresh_token_ttl_s: int = 30 * 24 * 3600
     http_timeout_s: float = 20.0
     vaapi_device: str = "/dev/dri/renderD128"
+    image_cache_max_mb: int = 512  # CONFIG_DIR/cache/images, oldest files evicted first; 0 disables
 
     @cached_property
     def resolved_secret_key(self) -> str:
@@ -84,6 +85,10 @@ class AppSettings(BaseSettings):
     @property
     def cache_dir(self) -> Path:
         return self.config_dir / "cache"
+
+    @property
+    def image_cache_dir(self) -> Path:
+        return self.cache_dir / "images"
 
     @property
     def playlist_dir(self) -> Path:

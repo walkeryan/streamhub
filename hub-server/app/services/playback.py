@@ -638,7 +638,7 @@ class PlaybackResolver:
             channel_key=None if catchup_programme_id or rewind_at is not None else f"{src.id}:{ch.ext_id}",
             title=title,
             subtitle=subtitle,
-            poster=ch.logo,
+            poster=self._catalog.image_fn({src.id: src})(src, ch.logo, ids.channel_id(ch.source_id, ch.ext_id)),
             policy_ref=hub_id,
             policy_at=archive_start,
             policy_until=archive_end,

@@ -505,33 +505,56 @@ async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
 
 @router.get("/images/{token}", tags=["catalog"], include_in_schema=False)
 async def image_proxy(token: str, c: C) -> Response:
-    """Artwork from authenticated library servers (Plex) without exposing tokens to clients."""
+    """Artwork clients cannot fetch themselves, behind a signed grant.
+
+    Either the server needs a credential the client must never see (Plex), or the
+    source is ``proxy: "always"`` and its hosts are unreachable from the client.
+    """
     d = c.crypto.verify_json(token)
     if not isinstance(d, dict):
         raise NotFound("image not found")
-    from app.services.image_grants import validate_image_grant
+    from app.services.image_grants import WEB_SCHEMES, validate_image_grant
 
     await validate_image_grant(d, c.content_policy, c.auth)
+    source_id = str(d.get("s"))
     try:
-        _src, prov = await c.sources.provider_for(str(d.get("s")))
+        src, prov = await c.sources.provider_for(source_id)
     except NotFound:
         raise
     url = str(d.get("u") or "")
-    if not isinstance(prov, ImageAuthProvider):
-        raise NotFound("image not found")
-    headers = prov.image_headers(url)
+    headers = prov.image_headers(url) if isinstance(prov, ImageAuthProvider) else None
+    # Proxied artwork URLs are provider data: fetch only web URLs, and below, serve only images.
+    foreign = headers is None
+    if foreign and src is not None and url.startswith(WEB_SCHEMES):
+        headers = c.sources.proxied_image_headers(src)
     if headers is None:
         raise NotFound("image not found")
-    try:
-        async with c.http_factory(timeout=20.0, headers=headers) as client:
-            resp = await client.get(url)
-    except Exception as exc:
-        raise BadGateway("image unavailable") from exc
-    if resp.status_code >= 400:
-        raise NotFound("image not found")
-    await validate_image_grant(d, c.content_policy, c.auth)
+    cache = getattr(c, "image_cache", None)
+    hit = await cache.get(source_id, url) if cache is not None else None
+    if hit is not None:
+        body, media_type = hit
+    else:
+        try:
+            async with c.http_factory(timeout=20.0, headers=headers) as client:
+                resp = await client.get(url)
+        except Exception as exc:
+            raise BadGateway("image unavailable") from exc
+        if resp.status_code >= 400:
+            raise NotFound("image not found")
+        body, media_type = resp.content, resp.headers.get("content-type", "image/jpeg")
+        if foreign and not media_type.lower().startswith("image/"):
+            raise NotFound("image not found")
+        # The fetch can outlive the grant (session revoked, policy changed): check again.
+        await validate_image_grant(d, c.content_policy, c.auth)
+        if cache is not None and media_type.lower().startswith("image/"):
+            await cache.put(source_id, url, body, media_type)
     return Response(
-        resp.content,
-        media_type=resp.headers.get("content-type", "image/jpeg"),
-        headers={"Cache-Control": "private, no-store" if c.content_policy.enabled else "public, max-age=86400"},
+        body,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store" if c.content_policy.enabled else "public, max-age=86400",
+            # Never let a browser reinterpret or run what a provider called an image (SVG included).
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
     )

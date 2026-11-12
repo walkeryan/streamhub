@@ -98,6 +98,18 @@ class SourceService:
         cfg = self.decrypt_config(row)
         return str(cfg.get("proxy") or "auto")
 
+    def proxied_image_headers(self, row: Source) -> dict[str, str] | None:
+        """Request headers for fetching this source's artwork on a client's behalf.
+
+        ``None`` unless the source is ``proxy: "always"``: only then are clients assumed
+        unable to reach the provider's hosts, artwork included.
+        """
+        cfg = self.decrypt_config(row)
+        if str(cfg.get("proxy") or "auto") != "always":
+            return None
+        agent = cfg.get("user_agent")
+        return {"Accept": "image/*", **({"User-Agent": str(agent)} if agent else {})}
+
     def default_language(self, row: Source) -> str | None:
         """Language (ISO 639-3) assumed for this source's titles when nothing more specific is known."""
         value = self.decrypt_config(row).get("default_language")
