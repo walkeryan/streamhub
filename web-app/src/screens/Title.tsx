@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router'
-import { usePlaybackOptions, useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
+import { useCreateRequest, usePlaybackOptions, useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
 import { api, ok } from '../api/client'
 import type { PlaybackOption, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Meta, Modal, Skeleton } from '../components/ui'
 import { SafeImg } from '../components/SafeImg'
 import { MediaTile } from '../components/Tile'
 import { FocusGroup, Focusable } from '../nav/Focusable'
-import { setFocus } from '../nav/spatial'
+import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { useRestoreFocus } from '../nav/back'
 import { usePlayAction } from '../components/playAction'
 import { useAdaptiveAccent } from '../lib/theme'
 import { useSession } from '../store/session'
 import { audioDescription } from '../player/channelAudio'
 import { LANG_NAMES } from '../lib/util'
+import { isOpenRequest, requestStateLabel, tmdbRef } from '../lib/requests'
 import { useUi } from '../store/ui'
 
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', series: 'Series', vod: 'Movie', episode: 'Episode', season: 'Season' }
@@ -45,7 +46,16 @@ function TitleDetails({ id }: { id: string }) {
   }, [picker, confirmation])
   const seasonQ = useTitle(season ?? undefined)
   useAdaptiveAccent(t?.backdrop ?? t?.poster)
-  useRestoreFocus(!!t, t?.sources.length ? 'title:play' : 'title:watchlist')
+  const createRequest = useCreateRequest()
+  // null = closed; otherwise the seasons picked so far in the request dialog
+  const [seasonPick, setSeasonPick] = useState<number[] | null>(null)
+  const requestOpen = isOpenRequest(t?.request_state)
+  const canRequest = !!t?.requestable && !requestOpen && !!tmdbRef(t.id)
+  useRestoreFocus(!!t, t?.sources.length ? 'title:play' : canRequest ? 'title:request' : 'title:watchlist')
+  // The Request button leaves once a request is open (also when another profile asked first); do not strand focus on it.
+  useEffect(() => {
+    if (requestOpen && !doesFocusableExist(getCurrentFocusKey())) void setFocus('title:watchlist')
+  }, [requestOpen])
 
   const { inApp, handoff } = useMemo(() => {
     const seen = new Set<string>()
@@ -73,6 +83,20 @@ function TitleDetails({ id }: { id: string }) {
     setPicker(null); void play(t, null, { variantId: option.variant_id })
   }
   const choose = (s: SourceBadge) => { setPicker(null); void play(t, s) }
+  const sendRequest = (seasons?: number[]) => {
+    const ref = tmdbRef(t.id)
+    if (!ref || createRequest.isPending) return
+    setSeasonPick(null)
+    createRequest.mutate({ ...ref, seasons: seasons?.length ? [...seasons].sort((a, b) => a - b) : null }, {
+      onSuccess: (r) => {
+        // The button is about to be replaced by the request state; move on before it goes.
+        if (getCurrentFocusKey() === 'title:request') void setFocus('title:watchlist')
+        toast(r.state === 'pending_approval' ? 'Requested. Waiting for approval.' : 'Requested.', 'success')
+      },
+      onError: (e) => toast(e.message, 'error'),
+    })
+  }
+  const startRequest = () => { if (t.kind === 'show' && (t.request_seasons?.length ?? 0) > 1) setSeasonPick([]); else sendRequest() }
   const markWatched = async () => {
     const dur = (t.runtime_min ?? 0) * 60_000
     try {
@@ -97,9 +121,13 @@ function TitleDetails({ id }: { id: string }) {
             <h1 className="display">{t.title}</h1>
             <Meta items={[KIND_LABEL[t.kind], t.year, t.runtime_min ? `${t.runtime_min} min` : null, t.genres?.join(', '), t.rating ? `★ ${t.rating.toFixed(1)}` : null]} />
             {t.overview && <p style={{ lineHeight: 1.55 }}>{t.overview}</p>}
+            {t.request_state && t.request_state !== 'available' && !canPlay && (
+              <p role="status" data-testid="title-request-state"><span className="badge">{requestStateLabel(t.request_state)}</span></p>
+            )}
             <FocusGroup focusKey="title:actions" className="flex gap-3 flex-wrap items-center" preferred="title:play">
               {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id ? 'Choose audio / source' : playLabel}</Button>}
               {t.kind !== 'channel' && inApp.length > 0 && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
+              {canRequest && <Button focusKey="title:request" primary={!handoff.length} icon="plus" onEnter={startRequest} testId="title-request">{t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'}</Button>}
               <Button focusKey="title:watchlist" icon={onWatchlist ? 'check' : 'bookmark'} pressed={onWatchlist} onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })}>
                 {onWatchlist ? 'On watchlist' : 'Watchlist'}
               </Button>
@@ -161,6 +189,21 @@ function TitleDetails({ id }: { id: string }) {
             {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}
           </> : handoff.map((s, i) => <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>{s.name}</Button>)}
           <Button focusKey="pick:cancel" ghost onEnter={() => { setPicker(null); setConfirmation(null) }}>Cancel</Button>
+        </div>
+      </Modal>
+
+      <Modal open={seasonPick !== null} onClose={() => setSeasonPick(null)} title={`Request ${t.title}`} firstFocusKey="reqpick:all">
+        <div className="flex flex-col gap-3" data-testid="request-seasons">
+          <Button focusKey="reqpick:all" primary onEnter={() => sendRequest()}>All seasons</Button>
+          <p className="label">Or pick seasons</p>
+          <FocusGroup focusKey="reqpick:seasons" className="flex gap-2 flex-wrap">
+            {(t.request_seasons ?? []).map((n) => (
+              <Chip key={n} focusKey={`reqpick:s:${n}`} pressed={!!seasonPick?.includes(n)}
+                onEnter={() => setSeasonPick((cur) => (cur === null ? cur : cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n]))}>Season {n}</Chip>
+            ))}
+          </FocusGroup>
+          <Button focusKey="reqpick:some" disabled={!seasonPick?.length} onEnter={() => sendRequest(seasonPick ?? [])}>Request selected seasons</Button>
+          <Button focusKey="reqpick:cancel" ghost onEnter={() => setSeasonPick(null)}>Cancel</Button>
         </div>
       </Modal>
     </div>

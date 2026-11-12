@@ -20,6 +20,7 @@ import { Discover } from './screens/Discover'
 import { Browse } from './screens/Browse'
 import { LiveTV } from './screens/LiveTV'
 import { Favorites } from './screens/Favorites'
+import { Requests } from './screens/Requests'
 import { Sources } from './screens/Sources'
 import { Pair } from './screens/Pair'
 
@@ -87,6 +88,7 @@ export function App() {
             <Route path="guide" element={<Navigate to="/live?view=guide" replace />} />
             <Route path="sports" element={<Sports />} />
             <Route path="favorites" element={<Favorites />} />
+            <Route path="requests" element={<Requests />} />
             <Route path="sources" element={<Sources />} />
             <Route path="settings" element={<Settings />} />
             <Route path="pair" element={<Pair />} />

@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import tempfile
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -41,6 +42,8 @@ class SyncService:
         self._settings = settings
         self._locks: dict[str, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Runs after every successful catalog sync (new titles may satisfy open requests).
+        self.after_catalog_sync: Callable[[], Awaitable[Any]] | None = None
 
     def _lock(self, key: str) -> asyncio.Lock:
         return self._locks.setdefault(key, asyncio.Lock())
@@ -122,6 +125,7 @@ class SyncService:
                 await self._sources.set_status(source_id, SourceStatus.OK, last_sync=utcnow(), counts=counts)
                 await self._finish_run(run_id, True, None, counts)
                 log.info("source synced", extra={"source": source_id, **counts})
+                await self._after_catalog_sync()
                 return True
             except PermissionError as exc:
                 msg = redact_text(str(exc))
@@ -133,6 +137,15 @@ class SyncService:
                 await self._sources.set_status(source_id, SourceStatus.ERROR, error=msg)
                 await self._finish_run(run_id, False, msg, {})
             return False
+
+    async def _after_catalog_sync(self) -> None:
+        if self.after_catalog_sync is None:
+            return
+        try:
+            await self.after_catalog_sync()
+        except Exception as exc:
+            # The sync itself succeeded; the periodic job retries the follow-up.
+            log.warning("post-sync hook failed", extra={"err": redact_text(f"{type(exc).__name__}: {exc}")[:200]})
 
     # ------------------------------------------------------------------ EPG
     async def refresh_epg(self, source_id: str) -> int:
@@ -288,8 +301,9 @@ class SyncService:
 
 
 class SyncScheduler:
-    def __init__(self, sync: SyncService) -> None:
+    def __init__(self, sync: SyncService, reconcile_requests: Callable[[], Awaitable[Any]] | None = None) -> None:
         self._sync = sync
+        self._reconcile_requests = reconcile_requests
         self._sched: Any = None
 
     def start(self) -> None:
@@ -314,6 +328,16 @@ class SyncScheduler:
             coalesce=True,
             next_run_time=datetime.now(UTC) + timedelta(minutes=2),
         )
+        if self._reconcile_requests is not None:
+            sched.add_job(
+                self._reconcile_requests,
+                "interval",
+                minutes=5,
+                id="requests",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(minutes=1),
+            )
         sched.start()
         self._sched = sched
 

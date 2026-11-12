@@ -362,3 +362,48 @@ class OwnerPinAttempt(Base):
     credential_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     purpose: Mapped[str] = mapped_column(String(16), default="verify", server_default="verify")
     challenge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+REQUEST_OPEN_STATES = ("pending_approval", "approved", "sent")
+
+
+class MediaRequest(Base):
+    """A viewer's ask for a title no source has. StreamHub owns approval; the request manager executes."""
+
+    __tablename__ = "media_request"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
+    media_type: Mapped[str] = mapped_column(String(8))  # movie | tv
+    tmdb_id: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(512))
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    poster: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seasons: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)  # None = whole title
+    state: Mapped[str] = mapped_column(String(24), default="pending_approval", index=True)
+    manager_request_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decided_by_profile_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+# One open request per title for the whole household; closed ones stay as history.
+Index(
+    "uq_media_request_open",
+    MediaRequest.media_type,
+    MediaRequest.tmdb_id,
+    unique=True,
+    sqlite_where=MediaRequest.state.in_(REQUEST_OPEN_STATES),
+)
+
+
+class Notice(Base):
+    __tablename__ = "notice"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(String(512))
+    body: Mapped[str] = mapped_column(Text, default="")
+    ref_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

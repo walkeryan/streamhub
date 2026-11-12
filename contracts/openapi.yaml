@@ -162,6 +162,8 @@ components:
         is_favorite: {type: boolean, default: false}
         sources: { type: array, items: { $ref: '#/components/schemas/SourceBadge' } }
         now_playing: { $ref: '#/components/schemas/Programme', nullable: true }
+        request_state: { oneOf: [{ $ref: '#/components/schemas/RequestState' }, { type: 'null' }], description: "Open request for this title, else its most recent closed one; null when never requested." }
+        requestable: {type: boolean, description: "TMDB-identified, no in-app source, a request manager is configured and the profile may request. Independent of request_state: show the state instead while a request is open."}
     Row:
       type: object
       required: [id, title, tiles]
@@ -182,6 +184,7 @@ components:
             seasons: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             episodes: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             attribution: {type: string, description: "e.g. 'Availability data by JustWatch'"}
+            request_seasons: {type: array, items: {type: integer}, description: "Requestable series only: season numbers a request may pick from (empty = whole series only)."}
 
     DiscoveryPage:
       type: object
@@ -462,6 +465,7 @@ components:
       type: object
       properties:
         tmdb_api_key_set: {type: boolean}
+        request_manager_configured: {type: boolean, description: "A request manager URL and API key are stored. The key is never returned."}
         region: {type: string}
         sleep_timer_min: {type: integer, nullable: true}
         epg_refresh_hours: {type: integer}
@@ -471,6 +475,44 @@ components:
       type: object
       required: [version, text]
       properties: { version: {type: string}, text: {type: string} }
+
+    RequestState: { type: string, enum: [pending_approval, approved, sent, available, declined, failed] }
+    MediaRequest:
+      type: object
+      required: [id, profile_id, media_type, tmdb_id, title_id, title, state, created_at, updated_at]
+      properties:
+        id: {type: string}
+        profile_id: {type: string}
+        profile_name: {type: string}
+        media_type: {type: string, enum: [movie, tv]}
+        tmdb_id: {type: integer}
+        title_id: {type: string, description: "hub id of the requested title, e.g. tmdb:movie:603"}
+        title: {type: string}
+        year: {type: integer, nullable: true}
+        poster: {type: string, nullable: true}
+        seasons: {type: array, items: {type: integer}, nullable: true, description: "tv only; null = whole series"}
+        state: { $ref: '#/components/schemas/RequestState' }
+        note: {type: string, nullable: true, description: "Decline reason, or why an approved request has not reached the request manager yet."}
+        decided_by_profile_id: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Notice:
+      type: object
+      required: [id, kind, title, created_at]
+      properties:
+        id: {type: string}
+        kind: {type: string, description: "request_available | request_declined"}
+        title: {type: string}
+        body: {type: string}
+        ref_id: {type: string, nullable: true, description: "hub id the notice is about"}
+        created_at: {type: string, format: date-time}
+        read_at: {type: string, format: date-time, nullable: true}
+    RequestManagerSettings:
+      type: object
+      required: [api_key_set]
+      properties:
+        url: {type: string, nullable: true}
+        api_key_set: {type: boolean}
 
     SportsListing:
       type: object
@@ -945,6 +987,38 @@ paths:
     patch: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } }, responses: { '200': { description: ok } } }
   /settings/tmdb_key:
     put: { requestBody: { content: { application/json: { schema: { type: object, properties: { api_key: {type: string} } } } } }, responses: { '204': { description: ok } } }
+  /settings/request_manager:
+    get: { summary: Admin only. The API key is write-only, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RequestManagerSettings' } } } } } }
+    put:
+      summary: Admin only. Seerr-compatible request manager (Overseerr / Jellyseerr / Seerr)
+      description: Omit api_key to keep the stored key for the same server; a different server or a null url drops it.
+      requestBody: { content: { application/json: { schema: { type: object, properties: { url: {type: string, nullable: true}, api_key: {type: string, nullable: true} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RequestManagerSettings' } } } } }
+  /settings/request_manager/test:
+    post: { summary: Admin only. Checks the stored URL and API key, responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [ok, message], properties: { ok: {type: boolean}, message: {type: string} } } } } } } }
+
+  /requests:
+    get:
+      parameters:
+        - { name: scope, in: query, schema: {type: string, enum: [mine, all], default: mine, description: "all requires permission to approve"} }
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/RequestState' } }
+      responses: { '200': { description: newest first, content: { application/json: { schema: { type: object, required: [requests], properties: { requests: { type: array, items: { $ref: '#/components/schemas/MediaRequest' } }, can_approve: {type: boolean, description: "The current profile may approve or decline requests and list scope=all."} } } } } } }
+    post:
+      summary: Ask for a title no source has
+      requestBody: { content: { application/json: { schema: { type: object, required: [media_type, tmdb_id], properties: { media_type: {type: string, enum: [movie, tv]}, tmdb_id: {type: integer}, seasons: {type: array, items: {type: integer}, nullable: true, description: "tv only; omitted = whole series"} } } } } }
+      responses:
+        '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }
+        '200': { description: an open request for this title already exists, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }
+        '409': { description: "already_available | request_manager_unconfigured | metadata_unavailable" }
+  /requests/{id}/approve:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { note: {type: string, nullable: true} } } } } }, responses: { '200': { description: approved and, when the request manager accepted it, sent, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }, '409': { description: already decided } } }
+  /requests/{id}/decline:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { note: {type: string, nullable: true} } } } } }, responses: { '200': { description: declined; the requester gets a notice, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }, '409': { description: already decided } } }
+  /notices:
+    get: { summary: Notices for the current profile; unread first, responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [notices], properties: { notices: { type: array, items: { $ref: '#/components/schemas/Notice' } } } } } } } } }
+  /notices/{id}/read:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Notice' } } } } } }
+
   /health:
     get: { security: [], responses: { '200': { description: ok } } }
   /about:

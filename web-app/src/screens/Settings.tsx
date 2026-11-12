@@ -4,6 +4,7 @@ import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
 import { StreamRecovery } from '../components/StreamRecovery'
+import { RequestManagerSettings } from '../components/RequestManagerSettings'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -265,6 +266,7 @@ function ParentalTab() {
 /* ------------------------------ playback / server ------------------------------ */
 function PlaybackTab() {
   const { data, error, refetch } = useSettings()
+  const me = useCurrent()
   const qc = useQueryClient()
   const toast = useUi((s) => s.toast)
   const [key, setKey] = useState('')
@@ -291,6 +293,7 @@ function PlaybackTab() {
           <Button focusKey="tmdb:save" disabled={!key.trim()} onEnter={async () => { await ok(api.PUT('/settings/tmdb_key', { body: { api_key: key.trim() } })); setKey(''); void qc.invalidateQueries({ queryKey: qk.settings }); toast('TMDB key saved.', 'success') }}>Save key</Button>
         </div>
       </section>
+      {me.is_admin && <RequestManagerSettings configured={!!data.request_manager_configured} />}
     </div>
   )
 }

@@ -434,6 +434,7 @@ async def test_settings(api: Api) -> None:
     s = (await api.get("/settings")).json()
     assert s == {
         "tmdb_api_key_set": False,
+        "request_manager_configured": False,
         "region": "US",
         "sleep_timer_min": None,
         "epg_refresh_hours": 12,

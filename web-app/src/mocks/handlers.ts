@@ -3,8 +3,9 @@ import { delay, http, HttpResponse } from 'msw'
 import type { PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
   DISCLAIMER, channelTile, channels, episodesOf, fav, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, sources, tileOf, titles,
-  watch, withNowNext,
+  unavailable, watch, withNowNext,
 } from './fixtures'
+import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
@@ -20,8 +21,8 @@ const withProfile = (id: string) => {
 const tokens = (id: string) => ({ access_token: `mock-access-${id}`, refresh_token: `mock-refresh-${id}`, profile: withProfile(id) })
 const currentProfileId = (req: Request) => req.headers.get('authorization')?.replace('Bearer mock-access-', '') ?? 'p1'
 const tileById = (id: string): Tile | undefined => {
-  const t = titles.find((x) => x.id === id)
-  if (t) return tileOf(seedFor(id)!)
+  const seed = seedFor(id)
+  if (seed) return tileOf(seed)
   const c = channels.find((x) => x.id === id)
   return c ? channelTile(withNowNext(c)) : undefined
 }
@@ -30,6 +31,7 @@ const countryMatches = (value: string | null | undefined, country: string | null
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
 export const handlers = [
+  ...requestHandlers,
   http.get(`${B}/sports/recordings`, ({ request }) => {
     const params = new URL(request.url).searchParams
     return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])
@@ -112,7 +114,7 @@ export const handlers = [
     if (i >= 0) srcs.splice(i, 1)
     return new HttpResponse(null, { status: 204 })
   }),
-  http.post(`${B}/sources/:id/sync`, () => new HttpResponse(null, { status: 202 })),
+  http.post(`${B}/sources/:id/sync`, () => { sourceSynced(); return new HttpResponse(null, { status: 202 }) }),
   http.post(`${B}/sources/:id/test`, () => HttpResponse.json({ ok: true, message: 'Connection works.' })),
   http.post(`${B}/sources/plex/pin`, () => { pinPolls = 0; return HttpResponse.json({ pin_id: 4242, code: 'K7QP', link_url: 'https://app.plex.tv/auth#?code=K7QP' }) }),
   http.get(`${B}/sources/plex/pin/:id`, () => {
@@ -131,11 +133,14 @@ export const handlers = [
   http.get(`${B}/search`, async ({ request }) => {
     const q = (new URL(request.url).searchParams.get('q') ?? '').toLowerCase()
     await delay(100)
-    const hits = titles.filter((t) => t.title.toLowerCase().includes(q))
+    const missing = unavailable.filter((t) => t.title.toLowerCase().includes(q))
+    const hits = [...titles.filter((t) => t.title.toLowerCase().includes(q)), ...missing].map(annotate)
     const chans = channels.filter((c) => c.name.toLowerCase().includes(q)).map(withNowNext)
     return HttpResponse.json({
+      // Like the server, discovery of titles no source has comes back as one ranked list.
+      ...(missing.length ? { results: hits } : {}),
       play_here: hits.filter((t) => t.sources.some((s) => s.playable_in_app)),
-      open_in_app: hits.filter((t) => !t.sources.some((s) => s.playable_in_app)),
+      open_in_app: hits.filter((t) => t.sources.length > 0 && !t.sources.some((s) => s.playable_in_app)),
       channels: chans, attribution: 'Availability data by JustWatch',
     })
   }),
@@ -151,12 +156,14 @@ export const handlers = [
     const t = tileById(id)
     if (t?.kind === 'channel') return HttpResponse.json({ ...t, attribution: 'Provider guide metadata' })
     if (!seed || !t) return HttpResponse.json({ code: 'not_found', message: 'Title not found' }, { status: 404 })
-    const show = seed.kind === 'show'
+    const a = annotate(t)
+    // Seasons and episodes come from a library copy; a title no source has only offers seasons to request.
+    const show = seed.kind === 'show' && a.sources.length > 0
     return HttpResponse.json({
-      ...t, overview: seed.overview, genres: seed.genres, runtime_min: seed.runtime,
+      ...a, overview: seed.overview, genres: seed.genres, runtime_min: seed.runtime,
       cast: ['Mara Ellison', 'Theo Okafor', 'Junko Hale', 'Luis Ferreira'].map((name, i) => ({ name, character: ['Lead', 'Rival', 'Mentor', 'Stranger'][i] ?? '', photo: null })),
       seasons: show ? seasonsOf(seed.n) : [], episodes: show ? episodesOf(seed.n, 1) : [],
-      sources: [...seed.sources, ...(seed.sources.some((s) => !s.playable_in_app) ? [] : [])],
+      request_seasons: seed.kind === 'show' && a.requestable ? [1, 2, 3] : [],
       attribution: 'Availability data by JustWatch',
     })
   }),
@@ -281,7 +288,7 @@ export const handlers = [
   http.delete(`${B}/watchlist`, ({ request }) => { watch.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
   http.get(`${B}/history`, () => HttpResponse.json([])),
   http.get(`${B}/themes`, () => HttpResponse.json([])),
-  http.get(`${B}/settings`, () => HttpResponse.json(settings)),
+  http.get(`${B}/settings`, () => HttpResponse.json({ ...settings, request_manager_configured: requestManagerConfigured() })),
   http.patch(`${B}/settings`, async ({ request }) => { settings = { ...settings, ...((await request.json()) as object) }; return HttpResponse.json(settings) }),
   http.put(`${B}/settings/tmdb_key`, () => { settings.tmdb_api_key_set = true; return new HttpResponse(null, { status: 204 }) }),
 ]
