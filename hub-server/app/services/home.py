@@ -72,6 +72,7 @@ class HomeService:
                 year=m.year,
                 sources=ctx.sources,
                 is_in_app=ctx.is_in_app,
+                general=True,
             )
             hub = ids.tmdb_id(m.media_type, m.tmdb_id)
             out.append(meta_tile(m, badges, ctx.favorites, ctx.progress_pct(hub)))

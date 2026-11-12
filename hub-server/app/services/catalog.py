@@ -18,6 +18,7 @@ from app.infra.crypto import Crypto
 from app.infra.db import Database
 from app.infra.models import Channel, Favorite, Profile, Progress, Source, Title, Watchlist
 from app.services import ids
+from app.services.adult import general_audience, is_general_audience
 from app.services.availability import ATTRIBUTION, AvailabilityService
 from app.services.context import absolute
 from app.services.errors import BadGateway, Forbidden, NotFound
@@ -117,15 +118,20 @@ class CatalogService:
                 await s.execute(select(Title).where(Title.source_id == source_id, Title.ext_id == ext_id))
             ).scalar_one_or_none()
 
-    async def rows_for_tmdb(self, media_type: str, tmdb_id: int) -> list[Title]:
+    async def rows_for_tmdb(self, media_type: str, tmdb_id: int, *, general: bool = False) -> list[Title]:
         kinds = ids.MOVIE_KINDS if media_type == "movie" else ids.SHOW_KINDS
+        query = select(Title).where(Title.tmdb_id == tmdb_id, Title.kind.in_(kinds))
+        if general:
+            query = query.where(general_audience())
         async with self._db.session() as s:
-            return list(
-                (await s.execute(select(Title).where(Title.tmdb_id == tmdb_id, Title.kind.in_(kinds)))).scalars()
-            )
+            return list((await s.execute(query)).scalars())
 
     async def tiles_for_ids(self, ref_ids: list[str], ctx: TileContext) -> list[dict[str, Any]]:
-        """Resolve hub ids (tmdb:/lib:/ch:) to tiles, preserving order and skipping unknown ids."""
+        """Resolve hub ids (tmdb:/lib:/ch:) to tiles, preserving order and skipping unknown ids.
+
+        These are lists (home rows, favorites, history), so adult rows are skipped like
+        anywhere else unless the request included them.
+        """
         from app.services.channels import programme_dict  # local import avoids cycle
 
         out: dict[str, dict[str, Any]] = {}
@@ -148,7 +154,7 @@ class CatalogService:
                 row = (
                     await s.execute(select(Title).where(Title.source_id == sid, Title.ext_id == ext))
                 ).scalar_one_or_none()
-                if row and row.source_id in ctx.sources:
+                if row and row.source_id in ctx.sources and is_general_audience(row):
                     t = ctx.title_tile(row)
                     t["id"] = ids.lib_id(sid, ext)  # keep the id the client stored
                     out[t["id"]] = t
@@ -171,7 +177,7 @@ class CatalogService:
                 out[t["id"]] = t
         for media_type, tid in tmdb_keys:
             hub = ids.tmdb_id(media_type, tid)
-            rows = await self.rows_for_tmdb(media_type, tid)
+            rows = await self.rows_for_tmdb(media_type, tid, general=True)
             rows = [r for r in rows if r.source_id in ctx.sources]
             if rows:
                 merged = ctx.merge(ctx.title_tile(r) for r in rows)
@@ -188,6 +194,7 @@ class CatalogService:
                     year=meta.year,
                     sources=ctx.sources,
                     is_in_app=ctx.is_in_app,
+                    general=True,
                 )
                 out[hub] = meta_tile(meta, badges, ctx.favorites, ctx.progress_pct(hub))
         return [out[r] for r in ref_ids if r in out]
@@ -443,7 +450,7 @@ class CatalogService:
                 if restricted:
                     allowed = await policy.allowed_refs(profile_id, list(by_id))
                     by_id = {hub: meta for hub, meta in by_id.items() if hub in allowed}
-                matches = await self.availability.library_matches_many(list(by_id.values()))
+                matches = await self.availability.library_matches_many(list(by_id.values()), general=True)
                 match_ids = {row.id for rows in matches.values() for row in rows if row.source_id in enabled}
                 eligible_ids: set[int] = set()
                 if match_ids:
@@ -492,7 +499,7 @@ class CatalogService:
     def _browse_query(
         self, kinds: tuple[str, ...], source_ids: list[str], source_id: str | None, genre: str | None
     ) -> Select[Any]:
-        q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(source_ids))
+        q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(source_ids), general_audience())
         if source_id:
             q = q.where(Title.source_id == source_id)
         if genre:
@@ -789,7 +796,7 @@ class CatalogService:
                 match=match
             )
             query = select(Title).where(
-                Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.id.in_(matching_ids)
+                Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.id.in_(matching_ids), general_audience()
             )
             query = self._filter_title_languages(query, languages)
             normalized = func.canonical_title_key(Title.title)
@@ -890,7 +897,9 @@ class CatalogService:
                 for detail in details:
                     if detail is not None and not isinstance(detail, BaseException):
                         by_id[ids.tmdb_id(detail.media_type, detail.tmdb_id)] = detail
-                matched = await self.availability.library_matches_many(list(by_id.values()), candidates=rows)
+                matched = await self.availability.library_matches_many(
+                    list(by_id.values()), candidates=rows, general=True
+                )
                 match_ids = {r.id for matches in matched.values() for r in matches if r.source_id in enabled}
                 eligible_ids: set[int] = set()
                 if match_ids:
@@ -984,6 +993,7 @@ class CatalogService:
             Title.kind.in_(("movie", "vod")),
             Title.source_id.in_(self._enabled(ctx)),
             or_(Title.title.ilike("%halloween%"), Title.group_name.ilike("%halloween%")),
+            general_audience(),
         )
         query = self._filter_title_languages(query, await self.preferred_languages(profile_id, None))
         async with self._db.session() as session:
@@ -999,7 +1009,9 @@ class CatalogService:
         languages: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         enabled = self._enabled(ctx)
-        q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(enabled), Title.added_at.is_not(None))
+        q = select(Title).where(
+            Title.kind.in_(kinds), Title.source_id.in_(enabled), Title.added_at.is_not(None), general_audience()
+        )
         if source_id:
             q = q.where(Title.source_id == source_id)
         q = self._filter_title_languages(q, languages or [])

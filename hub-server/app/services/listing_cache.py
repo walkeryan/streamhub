@@ -22,6 +22,7 @@ async def listing_cached(
     load: Callable[[], Awaitable[Any]],
     ttl: float = 15,
 ) -> Any:
+    from app.services.adult import adult_included
     from app.services.content_policy import active_policy, active_principal
 
     policy = active_policy.get()
@@ -29,7 +30,8 @@ async def listing_cached(
     image_session = (principal.session_id, principal.token_version) if policy and principal else None
     for _ in range(2):
         revision = db.catalog_revisions.version(profile)
-        key = (operation, profile, image_session, revision, public_base.get(), params)
+        # An admin's include_adult listing must never be replayed for a general request.
+        key = (operation, profile, image_session, revision, public_base.get(), adult_included(), params)
         valid = lambda revision=revision: revision == db.catalog_revisions.version(profile)  # noqa: E731
         result = await db.result_cache.get(
             key,

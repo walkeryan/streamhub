@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Response
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.api.policy_route import PolicyCatalogRoute
+from app.services.adult import adult_scope
+from app.services.auth import Principal
 from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
 from app.services.sports import sports_events, sports_on_now
@@ -17,10 +20,20 @@ from app.services.sports_recordings import sports_recordings
 
 router = APIRouter(route_class=PolicyCatalogRoute)
 
+IncludeAdult = Annotated[
+    bool, Query(description="Admin profile only: also list titles marked adult. Ignored for other profiles.")
+]
+
+
+def listing_scope(p: Principal, include_adult: bool) -> AbstractContextManager[None]:
+    # Until profiles carry permissions, the admin is the only one who may ask.
+    return adult_scope(include_adult and p.is_admin)
+
 
 @router.get("/home", response_model=S.Home, tags=["catalog"])
-async def home(c: C, p: P) -> dict[str, Any]:
-    return await c.home.home(p.profile_id)
+async def home(c: C, p: P, include_adult: IncludeAdult = False) -> dict[str, Any]:
+    with listing_scope(p, include_adult):
+        return await c.home.home(p.profile_id)
 
 
 @router.get("/sports", response_model=S.SportsPage, tags=["live"])
@@ -104,17 +117,19 @@ async def search(
     limit: int = Query(40, ge=1, le=100),
     language: str | None = None,
     source_id: str | None = None,
+    include_adult: IncludeAdult = False,
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
     kind_set = {k.strip() for k in kinds.split(",") if k.strip()} if kinds else None
     q = normalized_query(q) or ""
-    return await listing_cached(
-        c.db,
-        p.profile_id,
-        "search",
-        (q, tuple(sorted(kind_set or [])), limit, language, source_id),
-        lambda: c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id),
-    )
+    with listing_scope(p, include_adult):
+        return await listing_cached(
+            c.db,
+            p.profile_id,
+            "search",
+            (q, tuple(sorted(kind_set or [])), limit, language, source_id),
+            lambda: c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id),
+        )
 
 
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
@@ -133,18 +148,20 @@ async def discover(
     year: int | None = Query(None, ge=1888, le=2100),
     language: str | None = None,
     source_id: str | None = None,
+    include_adult: IncludeAdult = False,
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
-    return await listing_cached(
-        c.db,
-        p.profile_id,
-        "discover",
-        (section, page, sort, year, language, source_id),
-        lambda: c.catalog.discover(
-            section, p.profile_id, page=page, sort=sort, year=year, language=language, source_id=source_id
-        ),
-        ttl=30,
-    )
+    with listing_scope(p, include_adult):
+        return await listing_cached(
+            c.db,
+            p.profile_id,
+            "discover",
+            (section, page, sort, year, language, source_id),
+            lambda: c.catalog.discover(
+                section, p.profile_id, page=page, sort=sort, year=year, language=language, source_id=source_id
+            ),
+            ttl=30,
+        )
 
 
 @router.get("/browse/{section}", response_model=S.BrowsePage, tags=["catalog"])
@@ -160,27 +177,29 @@ async def browse(
     q: str | None = Query(None, max_length=200),
     sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
     page: int = Query(1, ge=1),
+    include_adult: IncludeAdult = False,
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
     q = normalized_query(q)
-    return await listing_cached(
-        c.db,
-        p.profile_id,
-        "browse",
-        (section, source_id, genre, category, language, q, sort, page),
-        lambda: c.catalog.browse(
-            section,
+    with listing_scope(p, include_adult):
+        return await listing_cached(
+            c.db,
             p.profile_id,
-            source_id=source_id,
-            genre=genre,
-            category=category,
-            sort=sort,
-            page=page,
-            language=language,
-            q=q,
-        ),
-        ttl=60,
-    )
+            "browse",
+            (section, source_id, genre, category, language, q, sort, page),
+            lambda: c.catalog.browse(
+                section,
+                p.profile_id,
+                source_id=source_id,
+                genre=genre,
+                category=category,
+                sort=sort,
+                page=page,
+                language=language,
+                q=q,
+            ),
+            ttl=60,
+        )
 
 
 @router.get("/browse/{section}/categories", tags=["catalog"])
@@ -191,13 +210,18 @@ async def browse_categories(
     source_id: str | None = None,
     language: str | None = None,
     q: str | None = Query(None, max_length=200),
+    include_adult: IncludeAdult = False,
 ) -> list[dict[str, Any]]:
-    return await c.catalog.browse_categories(section, p.profile_id, source_id=source_id, language=language, q=q)
+    with listing_scope(p, include_adult):
+        return await c.catalog.browse_categories(section, p.profile_id, source_id=source_id, language=language, q=q)
 
 
 @router.get("/browse/{section}/languages", response_model=list[S.LanguageCount], tags=["catalog"])
-async def browse_languages(section: str, c: C, p: P, source_id: str | None = None) -> list[dict[str, Any]]:
-    return await c.catalog.browse_languages(section, p.profile_id, source_id)
+async def browse_languages(
+    section: str, c: C, p: P, source_id: str | None = None, include_adult: IncludeAdult = False
+) -> list[dict[str, Any]]:
+    with listing_scope(p, include_adult):
+        return await c.catalog.browse_languages(section, p.profile_id, source_id)
 
 
 @router.get("/browse/{section}/genres", tags=["catalog"])
@@ -209,10 +233,12 @@ async def browse_genres(
     language: str | None = None,
     category: str | None = None,
     q: str | None = Query(None, max_length=200),
+    include_adult: IncludeAdult = False,
 ) -> list[dict[str, Any]]:
-    return await c.catalog.genre_facets(
-        section, p.profile_id, source_id=source_id, language=language, category=category, q=q
-    )
+    with listing_scope(p, include_adult):
+        return await c.catalog.genre_facets(
+            section, p.profile_id, source_id=source_id, language=language, category=category, q=q
+        )
 
 
 # ---------------------------------------------------------------- channels
@@ -298,9 +324,10 @@ async def epg(
 
 # ---------------------------------------------------------------- favorites / watchlist / history
 @router.get("/favorites", response_model=list[S.Tile], tags=["user"])
-async def favorites(c: C, p: P) -> list[dict[str, Any]]:
+async def favorites(c: C, p: P, include_adult: IncludeAdult = False) -> list[dict[str, Any]]:
     ctx = await c.catalog.tile_context(p.profile_id)
-    return await c.catalog.tiles_for_ids(await c.favorites.ids(p.profile_id), ctx)
+    with listing_scope(p, include_adult):
+        return await c.catalog.tiles_for_ids(await c.favorites.ids(p.profile_id), ctx)
 
 
 @router.put("/favorites", status_code=204, tags=["user"])
@@ -322,9 +349,10 @@ async def reorder_favorites(body: list[S.Favorite], c: C, p: P) -> Response:
 
 
 @router.get("/watchlist", response_model=list[S.Tile], tags=["user"])
-async def watchlist(c: C, p: P) -> list[dict[str, Any]]:
+async def watchlist(c: C, p: P, include_adult: IncludeAdult = False) -> list[dict[str, Any]]:
     ctx = await c.catalog.tile_context(p.profile_id)
-    return await c.catalog.tiles_for_ids(await c.watchlist.ids(p.profile_id), ctx)
+    with listing_scope(p, include_adult):
+        return await c.catalog.tiles_for_ids(await c.watchlist.ids(p.profile_id), ctx)
 
 
 @router.put("/watchlist", status_code=204, tags=["user"])
@@ -340,10 +368,11 @@ async def delete_watchlist(c: C, p: P, id: str) -> Response:
 
 
 @router.get("/history", response_model=list[S.Tile], tags=["user"])
-async def history(c: C, p: P) -> list[dict[str, Any]]:
+async def history(c: C, p: P, include_adult: IncludeAdult = False) -> list[dict[str, Any]]:
     rows = await c.progress.history(p.profile_id, 60)
     ctx = await c.catalog.tile_context(p.profile_id)
-    return await c.catalog.tiles_for_ids([r.ref_id for r in rows], ctx)
+    with listing_scope(p, include_adult):
+        return await c.catalog.tiles_for_ids([r.ref_id for r in rows], ctx)
 
 
 def _bad(msg: str) -> ServiceError:

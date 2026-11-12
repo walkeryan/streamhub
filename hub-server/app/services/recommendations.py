@@ -9,6 +9,7 @@ from sqlalchemy import Integer, and_, cast, func, or_, select, tuple_
 from sqlalchemy.orm import aliased
 
 from app.infra.models import Profile, Progress, Source, Title
+from app.services.adult import general_audience
 from app.services.catalog import CatalogService
 from app.services.tiles import TileContext, hub_id_for_title
 
@@ -106,7 +107,9 @@ async def recommendations(
             labels[genre.casefold()] = genre
     genres = [g for g, _ in weights.most_common(3)]
     enabled = [s.id for s in ctx.sources.values() if s.enabled and ctx.is_in_app(s.type)]
-    query = select(Title).where(Title.source_id.in_(enabled), Title.kind.in_(("movie", "vod", "show", "series")))
+    query = select(Title).where(
+        Title.source_id.in_(enabled), Title.kind.in_(("movie", "vod", "show", "series")), general_audience()
+    )
     # Exclude every recorded title for this profile, not just the recent seed window.
     watched_rows = select(Title.id).join(Progress, title_ref_match()).where(Progress.profile_id == profile_id)
     child, parent = aliased(Title), aliased(Title)
