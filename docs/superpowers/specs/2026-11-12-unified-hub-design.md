@@ -306,10 +306,11 @@ The existing content-policy service is switched on and completed:
 
 ## 11. Delivery
 
-One branch and one draft pull request per phase, off `main`. Each phase gets its own
-implementation plan, written just before it starts, so later plans can use what earlier
-phases learned. The owner validates each phase on the dev instance and merges. Phases 5,
-6 and 7 are independent of one another.
+One branch (`feat/unified-hub`) and one draft pull request for the whole release; each
+phase lands as a series of commits on it. Each phase gets its own implementation plan,
+written just before it starts, so later plans can use what earlier phases learned. A dev
+instance runs the branch beside the live one; the owner validates there and merges once.
+Phases 5, 6 and 7 are independent of one another.
 
 | # | Phase | Ends with |
 |---|---|---|
@@ -349,7 +350,8 @@ two weeks, and deleted.
 
 ## 14. Needed from the owner
 
-1. Merge each phase's pull request after validating it.
+1. Validate on the dev instance and merge the pull request; link Plex once (a code at
+   plex.tv/link) so StreamHub gets its own Plex token.
 2. One forwarded port on the router for direct media delivery (Phase 4), or a decision to
    stay on the tunnel.
 3. Approving people and picking their role as they sign in (from Phase 4 on).
