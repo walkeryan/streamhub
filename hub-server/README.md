@@ -38,6 +38,7 @@ export ADMIN_PASSWORD=change-me     # optional; otherwise generated and logged O
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | `text` for dev |
 | `ENABLE_SCHEDULER` | `true` | catalog refresh (5 min tick) + EPG refresh (30 min tick) |
 | `FFMPEG_PATH`, `VAAPI_DEVICE` | `ffmpeg`, `/dev/dri/renderD128` | remux / transcode |
+| `IMAGE_CACHE_MAX_MB` | `512` | cap for proxied artwork in `CONFIG_DIR/cache/images` (oldest evicted first; `0` disables) |
 
 Migrations run automatically at startup (`alembic upgrade head`). Manual: `.venv/bin/alembic upgrade head`
 (uses `sqlalchemy.url` from `alembic.ini`, override with `-x` or edit for your DB path).
@@ -66,11 +67,22 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
 
 ## Behaviour notes
 
-- **Ids**: `tmdb:movie:603`, `tmdb:tv:1399`, `lib:<source>:<ext>`, `ch:<source>:<ext>`, `prog:<n>`.
+- **Ids**: `tmdb:movie:603`, `tmdb:tv:1399`, `lib:<source>:<ext>`, `ch:<source>:<ext>`, `prog:<n>`. Xtream panels
+  number movies and series independently, so their series, seasons and episodes use `s:<id>`, `s:<id>:s<n>` and
+  `e:<id>` as `<ext>`; movies and channels keep the panel's id. A sync may replace a row's TMDB/IMDb id, never clear it.
+- **Presentation** (`adapters/xtream/presentation.py`): at sync, Xtream titles lose provider tags and the year suffix,
+  categories become shelves (`group_name`), and `language`, `quality` and `adult` are stored on the row; raw names stay
+  in `extra`. Per-source config: `default_language`, `shelf_map` and `group_map` (raw name → display name),
+  `hidden_groups` (live groups not stored), `adult_categories`. `default_language` also applies to Plex/Jellyfin sources.
+  Title language filters read `title.language`; it is a hint, never audio evidence.
+- **Adult rows** (`services/adult.py`) are left out of home, search, browse and suggestions unless the admin profile
+  passes `include_adult=true`. This hides; it does not authorize access by id.
 - **Disclaimer gate**: `POST /sources` with `xtream`/`m3u` → 412 until the profile accepted version 1.0 (`docs/LEGAL.md`).
 - **Secrets**: source configs are Fernet-encrypted at rest; Xtream credentials are never stored in catalog rows
   (URLs rebuilt at play time); Plex artwork goes through `/api/v1/images/{signed}` so tokens never reach clients
   outside playback URLs; a log filter redacts registered secrets and credential URL parts.
+- **Proxied artwork**: for a source with `proxy: always`, posters, backdrops and channel logos use the same signed
+  image route (clients cannot reach such a source's hosts); responses are cached on disk and only image types are served.
 - **M3U upload**: `config.file` = playlist text → stored as `CONFIG_DIR/playlists/upload-*.m3u`.
 - **Playback modes** (`services/playback.py::decide_mode`): source `proxy: always|hls|never|auto`, source `cors: false`,
   global `proxy_mode`, `X-Forwarded-Proto: https` + `http://` upstream, custom headers on web, and
