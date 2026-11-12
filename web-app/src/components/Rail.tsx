@@ -15,6 +15,7 @@ export const NAV = [
   { to: '/discover/movies', label: 'Movies', icon: 'film' },
   { to: '/discover/shows', label: 'Series', icon: 'shows' },
   { to: '/favorites', label: 'Favorites', icon: 'heart' },
+  { to: '/requests', label: 'Requests', icon: 'list' },
   { to: '/sources', label: 'Sources', icon: 'source' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ] as const

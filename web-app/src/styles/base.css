@@ -306,6 +306,10 @@ h1, h2, h3, p { margin: 0; }
    target per card. Art falls back to real channel branding or neutral initials. */
 .home-destinations { display: flex; flex-wrap: wrap; gap: .625rem; padding: 1rem var(--safe-x) .25rem; overflow-x: auto; scroll-padding-inline: var(--safe-x); }
 .home-destinations .btn { flex: none; min-width: 6.5rem; }
+/* Notices sit above the destinations; each is one row: open the title, or dismiss. */
+.home-notices { display: flex; flex-direction: column; gap: .5rem; padding: 1rem var(--safe-x) 0; }
+.notice { display: flex; align-items: center; gap: .75rem; padding: .5rem .75rem; }
+.notice-open { flex: 1; min-width: 0; padding: .5rem .625rem; border-radius: var(--radius-md); }
 .home-discovery .hero { height: min(38dvh, 25rem); min-height: 17rem; }
 .home-discovery .hero-body { bottom: 1.5rem; }
 .feature-card { display: block; min-width: 0; border-radius: var(--radius-lg); background: var(--t-surface); overflow: hidden; }
@@ -324,6 +328,7 @@ h1, h2, h3, p { margin: 0; }
 .feature-grid .feature-card { height: 100%; }
 @media (max-width: 720px) {
   .home-destinations { padding-inline: 1rem; scroll-padding-inline: 1rem; }
+  .home-notices { padding-inline: 1rem; }
   .home-discovery .hero { height: 19rem; min-height: 19rem; }
   .feature-row .feature-card { flex-basis: min(19rem, 82vw); }
   .feature-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }

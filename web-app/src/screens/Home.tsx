@@ -1,4 +1,5 @@
 import { AndroidDownload } from '../components/AndroidDownload'
+import { HomeNotices } from '../components/Notices'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
 import type { Tile } from '../api/types'
@@ -61,6 +62,7 @@ export function Home() {
   const playable = isPlayable(active)
   return (
     <div data-testid="home" className="home-discovery">
+      <HomeNotices />
       <FocusGroup focusKey="home:destinations" className="home-destinations" label="Browse content">
         <Button focusKey="home:live" onEnter={() => go('/live?view=guide')}>Live TV</Button>
         <Button focusKey="home:movies" onEnter={() => go('/browse/movies')}>Movies</Button>

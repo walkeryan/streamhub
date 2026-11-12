@@ -4,7 +4,7 @@ import { api, ok, unwrap } from './client'
 import { useSession } from '../store/session'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
-  Settings, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind,
+  Settings, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
 } from './types'
 
 const useProfileId = () => useSession((s) => s.profile?.id ?? null)
@@ -204,3 +204,56 @@ export const usePlaybackOptions = (id?: string) => useQuery({
   enabled: !!id,
   queryFn: ({ signal }) => playbackOptions(id!, undefined, signal),
 })
+
+/* ---------- requests & notices ---------- */
+const REQUEST_VIEWS = [['requests'], ['title'], ['search'], ['discover'], qk.home] as const
+
+// Approval and arrival happen elsewhere (another profile, the server job), so these lists poll.
+export const useRequests = (scope: 'mine' | 'all', enabled = true) =>
+  useQuery({
+    queryKey: ['requests', useProfileId(), scope],
+    enabled,
+    staleTime: 0,
+    refetchInterval: 60_000,
+    queryFn: () => unwrap<RequestList>(api.GET('/requests', { params: { query: { scope } } })),
+  })
+
+export const useNotices = () =>
+  useQuery({
+    queryKey: ['notices', useProfileId()],
+    staleTime: 0,
+    refetchInterval: 60_000,
+    queryFn: async () => (await unwrap<{ notices: Notice[] }>(api.GET('/notices'))).notices,
+  })
+
+export function useCreateRequest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { media_type: 'movie' | 'tv'; tmdb_id: number; seasons?: number[] | null }) =>
+      unwrap<MediaRequest>(api.POST('/requests', { body })),
+    onSuccess: () => { for (const queryKey of REQUEST_VIEWS) void qc.invalidateQueries({ queryKey }) },
+  })
+}
+
+export function useDecideRequest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { id: string; approve: boolean; note?: string }) =>
+      unwrap<MediaRequest>(api.POST(v.approve ? '/requests/{id}/approve' : '/requests/{id}/decline', { params: { path: { id: v.id } }, body: { note: v.note?.trim() || null } })),
+    onSuccess: () => { for (const queryKey of REQUEST_VIEWS) void qc.invalidateQueries({ queryKey }) },
+  })
+}
+
+export function useReadNotice() {
+  const qc = useQueryClient()
+  const profileId = useProfileId()
+  return useMutation({
+    mutationFn: (id: string) => unwrap<Notice>(api.POST('/notices/{id}/read', { params: { path: { id } } })),
+    // The banner leaves at once; the server copy follows.
+    onMutate: (id) => qc.setQueryData<Notice[]>(['notices', profileId], (list) => list?.map((n) => (n.id === id ? { ...n, read_at: new Date().toISOString() } : n))),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['notices'] }),
+  })
+}
+
+export const useRequestManager = (enabled: boolean) =>
+  useQuery({ queryKey: ['request-manager', useProfileId()], enabled, queryFn: () => unwrap<RequestManagerSettings>(api.GET('/settings/request_manager')) })

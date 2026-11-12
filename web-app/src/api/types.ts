@@ -19,6 +19,10 @@ export type AuthTokens = S['AuthTokens']
 export type PlexPin = S['PlexPin']
 export type MediaKind = S['MediaKind']
 export type Theme = S['Theme']
+export type MediaRequest = S['MediaRequest']
+export type RequestState = S['RequestState']
+export type Notice = S['Notice']
+export type RequestManagerSettings = S['RequestManagerSettings']
 export type { paths }
 
 export type SearchResult = paths['/search']['get']['responses']['200']['content']['application/json']
@@ -26,6 +30,7 @@ export type HomeData = paths['/home']['get']['responses']['200']['content']['app
 export type BrowsePage = paths['/browse/{section}']['get']['responses']['200']['content']['application/json']
 export type ChannelsResult = paths['/channels']['get']['responses']['200']['content']['application/json']
 export type EpgData = paths['/epg']['get']['responses']['200']['content']['application/json']
+export type RequestList = paths['/requests']['get']['responses']['200']['content']['application/json']
 export type LanguageCount = { code: string; name: string; count: number }
 
 export type PlaybackOption = S['PlaybackOption']

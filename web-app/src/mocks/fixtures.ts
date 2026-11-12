@@ -72,7 +72,15 @@ export function tileOf(s: Seed): Tile {
 }
 
 export const titles = seeds.map(tileOf)
-export const seedFor = (id: string) => seeds.find((s) => idOf(s) === id)
+
+// Known to the metadata provider, owned by no source: what a viewer can request.
+// Kept out of `titles` so library, browse and home fixtures stay what they were.
+const unavailableSeeds: Seed[] = [
+  { n: 301, title: 'Velvet Antarctica', year: 2025, kind: 'movie', overview: 'A sound recordist winters alone at a research station and starts to hear the ice answer back.', genres: ['Adventure', 'Mystery'], runtime: 114, sources: [], rating: 7.6 },
+  { n: 302, title: 'The Tollgate Tapes', year: 2024, kind: 'show', overview: 'A toll collector keeps every dashcam tape handed in at her booth. One of them is evidence.', genres: ['Crime'], runtime: 45, sources: [], rating: 8.1 },
+]
+export const unavailable = unavailableSeeds.map(tileOf)
+export const seedFor = (id: string) => [...seeds, ...unavailableSeeds].find((s) => idOf(s) === id)
 
 export function episodesOf(show: number, season: number): Tile[] {
   const s = seeds.find((x) => x.n === show)
