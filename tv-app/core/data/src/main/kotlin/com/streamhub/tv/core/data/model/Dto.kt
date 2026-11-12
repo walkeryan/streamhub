@@ -260,7 +260,22 @@ data class SearchResponse(
 )
 
 @Serializable
-data class BrowsePage(val tiles: List<Tile> = emptyList(), val page: Int = 1, val total: Int = 0)
+data class BrowsePage(
+    val tiles: List<Tile> = emptyList(),
+    val page: Int = 1,
+    val total: Int = 0,
+    /** Absent on servers older than the paging fields; [more] then falls back to the total. */
+    @SerialName("has_more") val hasMore: Boolean? = null,
+    @SerialName("page_size") val pageSize: Int? = null,
+) {
+    /** Whether another page follows this one. */
+    val more: Boolean get() = hasMore ?: (page * (pageSize ?: DEFAULT_PAGE_SIZE) < total)
+
+    companion object {
+        /** Page size of servers that do not report one. */
+        const val DEFAULT_PAGE_SIZE = 60
+    }
+}
 
 // ---- Live TV -----------------------------------------------------------------------------------
 

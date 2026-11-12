@@ -101,6 +101,9 @@ object Routes {
     const val MULTIVIEW = "multiview"
     fun discover(section:String="movies") = "discover/$section"
     const val BROWSE = "browse/{section}"
+    /** The grid for one category, opened by a shelf's "See all". Not a top-level screen: Back returns to the shelves. */
+    const val BROWSE_ALL = "browse/{section}/all?category={category}"
+    fun browseAll(section: String, category: String) = "browse/${android.net.Uri.encode(section)}/all?category=${android.net.Uri.encode(category)}"
     const val MOVIES = "browse/movies"
     const val SHOWS = "browse/shows"
     const val FAVORITES = "favorites"
@@ -281,7 +284,22 @@ private fun AppShell(nav: NavHostController, start: String, profileName: String?
                     }
                     composable(Routes.GUIDE) { TopLevel(onTopLevelBack) { LiveDestination(startInGuide = true) } }
                     composable(Routes.BROWSE, arguments = listOf(navArgument("section") { type = NavType.StringType })) { e ->
-                        TopLevel(onTopLevelBack) { BrowseScreen(title = if (e.arguments?.getString("section") == "shows") "Shows" else "Movies") }
+                        val section = e.arguments?.getString("section") ?: "movies"
+                        TopLevel(onTopLevelBack) {
+                            BrowseScreen(
+                                title = if (section == "shows") "Shows" else "Movies",
+                                onSeeAll = { category -> nav.navigate(Routes.browseAll(section, category)) },
+                            )
+                        }
+                    }
+                    composable(
+                        Routes.BROWSE_ALL,
+                        arguments = listOf(
+                            navArgument("section") { type = NavType.StringType },
+                            navArgument("category") { type = NavType.StringType; nullable = true },
+                        ),
+                    ) { e ->
+                        BrowseScreen(title = if (e.arguments?.getString("section") == "shows") "Shows" else "Movies")
                     }
                     composable(Routes.FAVORITES) { TopLevel(onTopLevelBack) { FavoritesScreen() } }
                     composable(Routes.SOURCES) { TopLevel(onTopLevelBack) { SourcesScreen() } }
