@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.min
 
 data class TrackOption(
@@ -49,6 +50,8 @@ data class TrackOption(
     val trackIndex: Int,
     val selected: Boolean,
     val revision: Long = 0,
+    /** False when this TV has no decoder for the track: listed so the viewer sees it exists, but not selectable. */
+    val supported: Boolean = true,
 )
 
 data class PlayerUiState(
@@ -233,7 +236,8 @@ class StreamHubPlayer(
     private fun enforceAudioLanguage(): Boolean {
         if(updatingMedia) return false
         val d=current ?: return false
-        val audio=options(exoPlayer.currentTracks,C.TRACK_TYPE_AUDIO)
+        // Tracks the TV cannot decode are listed for the menu but can never play, so they do not count as observed audio.
+        val audio=options(exoPlayer.currentTracks,C.TRACK_TYPE_AUDIO).filter {it.supported}
         val selectedTracks=exoPlayer.currentTracks.groups.filter {it.type==C.TRACK_TYPE_AUDIO}.flatMap {group ->
             (0 until group.length).filter {group.isTrackSelected(it)}.map {group.mediaTrackGroup to it}
         }
@@ -310,9 +314,10 @@ class StreamHubPlayer(
         tracks.groups.forEachIndexed { gi, g ->
             if (g.type != type) return@forEachIndexed
             for (ti in 0 until g.length) {
-                if (!g.isTrackSupported(ti)) continue
+                // Unsupported tracks are kept (marked) rather than hidden: a film whose only English track is
+                // one this TV cannot decode should say so in the menu instead of appearing to have no English.
                 val f = g.getTrackFormat(ti)
-                out += TrackOption(label(f, out.size), f.language, gi, ti, g.isTrackSelected(ti),trackRevision)
+                out += TrackOption(label(f, out.size), f.language, gi, ti, g.isTrackSelected(ti),trackRevision,g.isTrackSupported(ti))
             }
         }
         return out
@@ -365,6 +370,15 @@ class StreamHubPlayer(
         }
     }
 
+    /** Absolute seek for the scrubber and "Start over"; the position shown updates at once. */
+    fun seekTo(positionMs: Long) {
+        if (exoPlayer.isCurrentMediaItemSeekable && exoPlayer.duration > 0) {
+            val target = positionMs.coerceIn(0, exoPlayer.duration)
+            exoPlayer.seekTo(target)
+            _state.value = _state.value.copy(positionMs = target)
+        }
+    }
+
     fun stop() {
         cancelReports()
         report(PlaybackState.STOPPED)
@@ -376,11 +390,21 @@ class StreamHubPlayer(
         reconnectJob?.cancel()
     }
 
+    /**
+     * Frees the player. Call [stop] first when leaving a screen: its STOPPED report carries the final
+     * position, and it is given a moment here to reach the server instead of being cancelled with
+     * the scope. Reports for a session that has since changed are still dropped (see the collector in init).
+     */
     fun release() {
-        cancelReports();progressOwner=null
+        progressOwner=null
+        tickerJob?.cancel();progressJob?.cancel();reconnectJob?.cancel()
         exoPlayer.removeListener(listener)
         exoPlayer.release()
-        scope.cancel()
+        val closing=scope
+        closing.launch {
+            withTimeoutOrNull(FINAL_REPORT_GRACE_MS) {reportJobs.joinAll()}
+            closing.cancel()
+        }
     }
 
     private fun friendly(e: PlaybackException): String = when (e.errorCode) {
@@ -394,6 +418,7 @@ class StreamHubPlayer(
 
     companion object {
         const val PROGRESS_INTERVAL_MS = 10_000L
+        const val FINAL_REPORT_GRACE_MS = 3_000L
         const val BASE_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L
         const val DEFAULT_UA = "StreamHub-AndroidTV/1.0 (Media3)"

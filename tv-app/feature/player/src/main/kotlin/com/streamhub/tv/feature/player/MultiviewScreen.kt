@@ -129,9 +129,9 @@ fun MultiviewScreen(onExit:()->Unit,vm:MultiviewViewModel=hiltViewModel()) {
                 } else {
                     if(state.audioTracks.isEmpty())Text("The stream exposes no selectable audio tracks. Its language remains unverified.",color=t.textMuted)
                     LazyColumn(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                        items(state.audioTracks){track->ShButton("${if(track.selected)"✓ " else ""}${track.label} · ${track.language ?: "Unknown"}",{
+                        items(state.audioTracks){track->ShButton("${if(track.selected)"✓ " else ""}${track.label} · ${track.language ?: "Unknown"}${if(track.supported)"" else " (not supported on this TV)"}",{
                             if(player.audioTrackNeedsConfirmation(track))confirm=track else if(player.selectTrack(track,C.TRACK_TYPE_AUDIO))close()
-                        })}
+                        },enabled=track.supported)}
                     }
                 }
             }
