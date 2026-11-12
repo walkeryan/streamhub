@@ -2,7 +2,6 @@ package com.streamhub.tv
 
 import android.app.Activity
 import android.os.SystemClock
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -46,6 +45,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.handoff.HandoffResult
@@ -53,6 +53,7 @@ import com.streamhub.tv.core.data.repo.LocalPrefs
 import com.streamhub.tv.core.data.repo.PlayEvent
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.data.repo.SessionEvents
+import com.streamhub.tv.core.ui.components.ErrorDialog
 import com.streamhub.tv.core.ui.components.HandoffQrDialog
 import com.streamhub.tv.core.ui.components.isDisclaimerAccepted
 import com.streamhub.tv.core.ui.components.LeftRail
@@ -147,11 +148,11 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     val s = session ?: return ScreenBackground {}
     val localAccepted = accepted ?: return ScreenBackground {}
     val nav = rememberNavController()
-    val context = LocalContext.current
     var audioChoice by remember { mutableStateOf<PlayEvent.ChooseAudio?>(null) }
+    var playError by remember { mutableStateOf<UserError?>(null) }
     var qr by remember { mutableStateOf<HandoffResult.ShowQr?>(null) }
 
-    LaunchedEffect(s.serverUrl, s.profile?.id, s.profile?.languages) { audioChoice = null; vm.coordinator.cancelPending() }
+    LaunchedEffect(s.serverUrl, s.profile?.id, s.profile?.languages) { audioChoice = null; playError = null; vm.coordinator.cancelPending(); vm.coordinator.dismissError() }
     var previousProfile by remember { mutableStateOf(s.profile?.id) }
     var previousServer by remember { mutableStateOf(s.serverUrl) }
     LaunchedEffect(s.serverUrl,s.profile?.id) {
@@ -169,16 +170,17 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     LaunchedEffect(Unit) {
         vm.coordinator.events.collect { e ->
             when (e) {
-                is PlayEvent.ChooseAudio -> { audioChoice = e }
-                is PlayEvent.StartPlayer -> nav.navigate(Routes.player(e.key)) { launchSingleTop = true }
+                is PlayEvent.ChooseAudio -> { playError = null; audioChoice = e }
+                is PlayEvent.StartPlayer -> { playError = null; nav.navigate(Routes.player(e.key)) { launchSingleTop = true } }
                 is PlayEvent.Handoff -> if (e.result is HandoffResult.ShowQr) qr = e.result as HandoffResult.ShowQr
-                is PlayEvent.Error -> Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                is PlayEvent.Error -> { audioChoice = null; playError = e.error }
             }
         }
     }
     LaunchedEffect(Unit) {
         vm.sessionEvents.expired.collect {
             audioChoice = null
+            playError = null
             vm.coordinator.cancelPending()
             nav.navigate(Routes.ONBOARDING) { popUpTo(0) { inclusive = true } }
         }
@@ -208,6 +210,14 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
                 }
             }
             qr?.let { HandoffQrDialog(it.webUrl, it.serviceName) { qr = null } }
+            // Play failures: a dialog the remote can answer, focused on Try again when retrying can help.
+            playError?.let { error ->
+                ErrorDialog(
+                    error,
+                    onRetry = { playError = null; vm.coordinator.retryLast() },
+                    onDismiss = { playError = null; vm.coordinator.dismissError() },
+                )
+            }
         }
     }
 }

@@ -10,8 +10,20 @@ import kotlinx.serialization.json.JsonObject
  * so the server can add fields without breaking older TV builds.
  */
 
+/** One stream holding a source connection, named in a `source_busy` error when the server knows it. */
 @Serializable
-data class ApiError(val code: String, val message: String)
+data class ActiveStream(
+    @SerialName("profile_name") val profileName: String? = null,
+    val title: String? = null,
+)
+
+@Serializable
+data class ApiError(
+    val code: String = "",
+    val message: String = "",
+    /** Optional on `source_busy`: who is using the source's connections right now. */
+    val active: List<ActiveStream> = emptyList(),
+)
 
 // ---- Auth ------------------------------------------------------------------------------------
 

@@ -65,7 +65,7 @@ class StreamHubApi @Inject constructor(
     private suspend fun HttpResponse.toError(): ApiException {
         val text = runCatching { bodyAsText() }.getOrNull()
         val err = text?.let { runCatching { StreamHubJson.decodeFromString(ApiError.serializer(), it) }.getOrNull() }
-        return ApiException(status.value, err, err?.message ?: "HTTP ${status.value}", headers["Retry-After"]?.toIntOrNull())
+        return ApiException(status.value, err, err?.message?.takeIf { it.isNotBlank() } ?: "HTTP ${status.value}", headers["Retry-After"]?.toIntOrNull())
     }
 
     private suspend inline fun <reified T> get(path: String, noinline block: HttpRequestBuilder.() -> Unit = {}): T =
