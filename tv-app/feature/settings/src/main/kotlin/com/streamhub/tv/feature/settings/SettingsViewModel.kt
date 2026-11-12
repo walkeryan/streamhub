@@ -3,6 +3,7 @@ package com.streamhub.tv.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.api.ApiErrors
 import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.sameSwitchSession
@@ -42,6 +43,10 @@ import com.streamhub.tv.core.data.model.Profile
 import com.streamhub.tv.core.data.model.Row
 import com.streamhub.tv.core.data.model.Settings
 import com.streamhub.tv.core.data.repo.LocalPrefs
+import com.streamhub.tv.core.data.repo.UpdateException
+import com.streamhub.tv.core.data.repo.UpdateInfo
+import com.streamhub.tv.core.data.repo.UpdateInstaller
+import com.streamhub.tv.core.data.repo.UpdateRepository
 import com.streamhub.tv.core.ui.theme.ThemeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,6 +83,10 @@ data class SettingsState(
     val ownerPinBusy: Boolean = false, val ownerPinError: String? = null,
     val authorizationFinishing: Boolean = false, val authorizationUncertain: Boolean = false,
     val switchTargetName: String? = null,
+    /** A newer TV build the server offers; null when there is none or no update service. */
+    val update: UpdateInfo? = null,
+    val updateBusy: Boolean = false,
+    val updateStatus: String? = null,
 )
 
 @HiltViewModel
@@ -88,6 +97,8 @@ class SettingsViewModel @Inject constructor(
     private val themes: ThemeRepository,
     private val playback: PlaybackCoordinator,
     private val channelCache: ChannelListCache,
+    private val updates: UpdateRepository,
+    private val installer: UpdateInstaller,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState())
     val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -316,6 +327,39 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun unpair() = viewModelScope.launch { session.clearTokens() }
+
+    // ---- App update (About) --------------------------------------------------------------------
+    private var updateCheck: Job? = null
+
+    /** Asked when About opens. A server without the update service, or any failure, simply shows nothing. */
+    fun checkForUpdate() {
+        if (updateCheck?.isActive == true || _state.value.updateBusy) return
+        updateCheck = viewModelScope.launch {
+            val info = try { updates.check() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            _state.update { it.copy(update = info) }
+        }
+    }
+
+    /** Download, verify against the published SHA-256, then hand over to the system installer. */
+    fun installUpdate() {
+        val info = _state.value.update ?: return
+        if (_state.value.updateBusy) return
+        _state.update { it.copy(updateBusy = true, updateStatus = "Downloading…") }
+        viewModelScope.launch {
+            try {
+                var shown = -1
+                val apk = installer.download(info) { fraction ->
+                    val percent = fraction?.let { (it * 100).toInt() }
+                    if (percent != null && percent != shown) { shown = percent; _state.update { it.copy(updateStatus = "Downloading… $percent%") } }
+                }
+                installer.launchInstaller(apk)
+                _state.update { it.copy(updateBusy = false, updateStatus = "Download verified. Confirm in the installer to finish. If no installer opened, allow StreamHub to install apps in this TV's settings, then choose Install again.") }
+            } catch (e: CancellationException) { throw e }
+            catch (e: UpdateException) { _state.update { it.copy(updateBusy = false, updateStatus = e.message) } }
+            catch (_: android.content.ActivityNotFoundException) { _state.update { it.copy(updateBusy = false, updateStatus = "This TV has no installer that can open the update.") } }
+            catch (e: Exception) { _state.update { it.copy(updateBusy = false, updateStatus = ApiErrors.describe(e).body) } }
+        }
+    }
 
     private fun Settings.merge(o: Settings) = Settings(
         tmdbApiKeySet = o.tmdbApiKeySet ?: tmdbApiKeySet, region = o.region ?: region,

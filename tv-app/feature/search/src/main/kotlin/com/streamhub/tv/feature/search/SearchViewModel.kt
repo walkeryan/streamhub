@@ -1,5 +1,6 @@
 package com.streamhub.tv.feature.search
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.StreamHubApi
@@ -20,9 +21,12 @@ class SearchViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val prefs: LocalPrefs,
     private val session: SessionStore,
+    private val saved: SavedStateHandle,
 ) : ViewModel() {
-    val query = MutableStateFlow("")
-    val language = MutableStateFlow<String?>(null)
+    // In SavedStateHandle so the search is still there after the system reclaims the app in the
+    // background (a TV does this as soon as another app plays video).
+    val query: StateFlow<String> = saved.getStateFlow(KEY_QUERY, "")
+    val language: StateFlow<String?> = saved.getStateFlow<String?>(KEY_LANGUAGE, null)
     private val scope = session.session.map { SearchScope(it.serverUrl, it.profile?.id, it.profile?.languages.orEmpty()) }.distinctUntilChanged()
     private val requests = combine(scope, query, language) { s, q, l -> SearchRequest(s, q.trim(), l) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -38,8 +42,8 @@ class SearchViewModel @Inject constructor(
         else SearchUi(loaded.loading, loaded.result?.getOrNull(), loaded.result?.exceptionOrNull()?.message)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SearchUi())
 
-    fun onQuery(q: String) { query.value = q }
-    fun onLanguage(value: String?) { language.value = value }
+    fun onQuery(q: String) { saved[KEY_QUERY] = q }
+    fun onLanguage(value: String?) { saved[KEY_LANGUAGE] = value }
     fun commit() {
         val q = query.value.trim()
         val owner = requests.value?.scope ?: return
@@ -47,5 +51,10 @@ class SearchViewModel @Inject constructor(
         val server = owner.server ?: return
         if (q.length < 2) return
         viewModelScope.launch { prefs.pushRecentSearch(server, profileId, q) }
+    }
+
+    private companion object {
+        const val KEY_QUERY = "query"
+        const val KEY_LANGUAGE = "language"
     }
 }

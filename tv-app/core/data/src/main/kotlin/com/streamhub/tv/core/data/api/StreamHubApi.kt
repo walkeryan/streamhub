@@ -65,7 +65,7 @@ class StreamHubApi @Inject constructor(
     private suspend fun HttpResponse.toError(): ApiException {
         val text = runCatching { bodyAsText() }.getOrNull()
         val err = text?.let { runCatching { StreamHubJson.decodeFromString(ApiError.serializer(), it) }.getOrNull() }
-        return ApiException(status.value, err, err?.message ?: "HTTP ${status.value}", headers["Retry-After"]?.toIntOrNull())
+        return ApiException(status.value, err, err?.message?.takeIf { it.isNotBlank() } ?: "HTTP ${status.value}", headers["Retry-After"]?.toIntOrNull())
     }
 
     private suspend inline fun <reified T> get(path: String, noinline block: HttpRequestBuilder.() -> Unit = {}): T =
@@ -156,13 +156,17 @@ class StreamHubApi @Inject constructor(
         sort: String? = null,
         page: Int = 1,
         language: String? = null,
+        category: String? = null,
+        q: String? = null,
     ): BrowsePage = get("/browse/${id(section)}") {
-        sourceId?.let { parameter("source_id", it) }
-        genre?.let { parameter("genre", it) }
-        sort?.let { parameter("sort", it) }
-        parameter("page", page)
-        language?.let { parameter("language", it) }
+        browseParameters(sourceId, genre, sort, page, language, category, q).forEach { (key, value) -> parameter(key, value) }
     }
+
+    /** Provider categories in server order, with scoped title counts: the shelves of Movies and Shows. */
+    suspend fun browseCategories(section: String, sourceId: String? = null, language: String? = null, q: String? = null): List<CatalogFacet> =
+        get("/browse/${id(section)}/categories") {
+            browseFacetParameters(sourceId, language, q = q).forEach { (key, value) -> parameter(key, value) }
+        }
 
     suspend fun discover(
         section: String,
@@ -175,10 +179,9 @@ class StreamHubApi @Inject constructor(
         }
     }
 
-    suspend fun browseGenres(section: String, sourceId: String? = null, language: String? = null): List<CatalogFacet> =
+    suspend fun browseGenres(section: String, sourceId: String? = null, language: String? = null, category: String? = null, q: String? = null): List<CatalogFacet> =
         get("/browse/${id(section)}/genres") {
-            sourceId?.let { parameter("source_id", it) }
-            language?.let { parameter("language", it) }
+            browseFacetParameters(sourceId, language, category, q).forEach { (key, value) -> parameter(key, value) }
         }
     suspend fun browseLanguages(section: String, sourceId: String? = null): List<LanguageCount> =
         get("/browse/${id(section)}/languages") { sourceId?.let { parameter("source_id", it) } }
@@ -322,6 +325,8 @@ class StreamHubApi @Inject constructor(
     /** Version + TMDB/JustWatch attribution strings (schema open in the contract). */
     suspend fun about(): JsonObject = get("/about")
     suspend fun settings(): Settings = get("/settings")
+    /** Newest TV build on offer. Servers without the update service answer 404 (see UpdateRepository). */
+    suspend fun tvAppRelease(): TvAppRelease = get("/app/tv")
     suspend fun patchSettings(s: Settings) = client.patch(url("/settings")) { setBody(s) }.unit()
     suspend fun setTmdbKey(key: String) =
         client.put(url("/settings/tmdb_key")) { setBody(JsonObject(mapOf("api_key" to kotlinx.serialization.json.JsonPrimitive(key)))) }.unit()

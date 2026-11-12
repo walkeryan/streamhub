@@ -15,8 +15,12 @@ dependencies {
     ksp(libs.hilt.compiler)
     ksp(libs.kotlin.metadata.jvm)
     implementation(libs.kotlinx.coroutines.android)
-    // FFmpeg decoder extension (AC-3/E-AC-3/DTS on devices without HW decoders) is NOT published to
-    // Maven. See README.md "FFmpeg decoder extension". Once built, drop the AAR in core/player/libs/
-    // and uncomment:
-    // implementation(files("libs/lib-decoder-ffmpeg-release.aar"))
+    // Optional software audio decoding (AC-3 / E-AC-3 / DTS on TVs without those decoders):
+    //   ./gradlew :app:assembleDebug -Pstreamhub.ffmpegDecoder=true
+    // Off by default: the prebuilt FFmpeg build is GPL-3.0 and the default APK must not inherit that.
+    // StreamHubPlayer picks the renderer up by reflection, so no source changes with the flag.
+    // See README.md "Software audio decoding".
+    if (providers.gradleProperty("streamhub.ffmpegDecoder").orNull == "true") {
+        implementation(libs.media3.ffmpeg.decoder)
+    }
 }

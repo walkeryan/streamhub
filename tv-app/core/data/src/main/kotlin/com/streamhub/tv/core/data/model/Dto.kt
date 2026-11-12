@@ -10,8 +10,20 @@ import kotlinx.serialization.json.JsonObject
  * so the server can add fields without breaking older TV builds.
  */
 
+/** One stream holding a source connection, named in a `source_busy` error when the server knows it. */
 @Serializable
-data class ApiError(val code: String, val message: String)
+data class ActiveStream(
+    @SerialName("profile_name") val profileName: String? = null,
+    val title: String? = null,
+)
+
+@Serializable
+data class ApiError(
+    val code: String = "",
+    val message: String = "",
+    /** Optional on `source_busy`: who is using the source's connections right now. */
+    val active: List<ActiveStream> = emptyList(),
+)
 
 // ---- Auth ------------------------------------------------------------------------------------
 
@@ -248,7 +260,22 @@ data class SearchResponse(
 )
 
 @Serializable
-data class BrowsePage(val tiles: List<Tile> = emptyList(), val page: Int = 1, val total: Int = 0)
+data class BrowsePage(
+    val tiles: List<Tile> = emptyList(),
+    val page: Int = 1,
+    val total: Int = 0,
+    /** Absent on servers older than the paging fields; [more] then falls back to the total. */
+    @SerialName("has_more") val hasMore: Boolean? = null,
+    @SerialName("page_size") val pageSize: Int? = null,
+) {
+    /** Whether another page follows this one. */
+    val more: Boolean get() = hasMore ?: (page * (pageSize ?: DEFAULT_PAGE_SIZE) < total)
+
+    companion object {
+        /** Page size of servers that do not report one. */
+        const val DEFAULT_PAGE_SIZE = 60
+    }
+}
 
 // ---- Live TV -----------------------------------------------------------------------------------
 
@@ -411,6 +438,17 @@ data class Settings(
     @SerialName("epg_refresh_hours") val epgRefreshHours: Int? = null,
     @SerialName("transcode_hw") val transcodeHw: String? = null,
     @SerialName("proxy_mode") val proxyMode: String? = null,
+)
+
+/** GET /app/tv: the newest TV build the server can hand out. Every field is defaulted so a partial answer decodes. */
+@Serializable
+data class TvAppRelease(
+    @SerialName("version_code") val versionCode: Int = 0,
+    @SerialName("version_name") val versionName: String = "",
+    /** Absolute, or a path on the same server. */
+    @SerialName("apk_url") val apkUrl: String = "",
+    /** Hex SHA-256 of the APK; the download is refused if it does not match. */
+    val sha256: String = "",
 )
 
 @Serializable

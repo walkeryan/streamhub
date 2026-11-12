@@ -33,7 +33,10 @@ import com.streamhub.tv.feature.guide.GuideScreen
 import com.streamhub.tv.feature.livetv.LiveTvScreen
 import com.streamhub.tv.feature.livetv.LiveTvViewModel
 
-/** One remote-friendly destination. Only the visible content can own a preview player. */
+/**
+ * One remote-friendly destination. There is deliberately no live preview: focusing a channel shows
+ * its details only, because a preview stream would take one of the source's few connections.
+ */
 @Composable
 fun LiveDestination(startInGuide: Boolean = false, vm: LiveTvViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()

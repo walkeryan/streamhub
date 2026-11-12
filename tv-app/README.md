@@ -13,7 +13,7 @@ cd tv-app
 cp local.properties.example local.properties   # set sdk.dir to your SDK path
 ./gradlew :app:assembleDebug                    # → app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:assembleRelease                  # minified; signed with the debug key for sideloading
-./gradlew test                                  # JVM unit tests (contract DTOs, MIME mapping, row ordering)
+./gradlew testDebugUnitTest                     # JVM unit tests of every module (what CI runs)
 ```
 
 Headless SDK install (Linux):
@@ -89,9 +89,10 @@ Cleartext HTTP is allowed (`network_security_config.xml`) because the server and
                         Ktor bearer auth w/ refresh · DeepLinkLauncher · PlaybackCoordinator · ChannelListCache
 :core:player            StreamHubPlayer (Media3) · MediaItemMapper · VideoSurface
 :feature:onboarding     server URL → disclaimer gate → device-code pairing
-:feature:home           hero + rows; Movies/Shows browse grid
+:feature:home           hero + rows; Movies/Shows as category shelves with a "See all" grid
 :feature:search         debounced search, Play here / Open in app / Channels
-:feature:livetv         channel list + 600 ms-dwell preview, language chips, groups, favorites filter
+:feature:livetv         channel list + details pane (no auto-preview: it would use a source connection),
+                        number keys, language chips, groups, favorites filter
 :feature:guide          EPG grid (30-min columns, now-line, catch-up)
 :feature:details        title detail, resume label, source picker, seasons/episodes, Available on
 :feature:player         full-screen player overlays
@@ -120,39 +121,60 @@ Accent text is black or white, whichever contrasts more with the extracted accen
 
 ### Remote control in the player
 
-| Key | Live | VOD |
+The mapping is `PlayerKeyMap` (a pure function, unit-tested). Everything is reachable with the
+D-pad, OK and Back; media and Menu keys are shortcuts for remotes that have them.
+
+| Key | Live | Film / catch-up / buffered history |
 |---|---|---|
-| Up / Down, CH+ / CH− | zap (OSD updates immediately; stream switches 350 ms after the last press) | show OSD |
+| Up / Down | zap (banner updates at once; the stream switches 350 ms after the last press) | show the control row |
+| CH+ / CH− | zap | — |
 | 0–9 | channel number; commits after 2 s or on OK | — |
-| OK (short press) | mini channel list | play/pause |
+| OK (short press) | mini channel list | show the control row; on the scrubber: play/pause |
 | OK (hold ½ s) | audio track · subtitles · aspect ratio · sleep timer | same |
-| Back | exit; pressed twice within 500 ms → last channel | exit |
-| Left / Right, RW / FF | — | seek ±10 s / ±30 s |
-| Menu / Settings key (if the remote has one) | same as holding OK | same |
+| Left / Right | archive / menu | seek ∓10 s; on the scrubber, holding speeds up |
+| Back | closes what is open; otherwise exit. With a previous channel: twice within 750 ms → last channel | closes what is open; otherwise exit |
+| Play/Pause, RW / FF | play/pause, ∓30 s | same |
+| Menu / Settings key | same as holding OK | same |
 
-## FFmpeg decoder extension (AC-3 / E-AC-3 / DTS / MP2 audio)
+The control row (scrubber, Play/Pause, −10 s, +10 s, Start over, Audio & subtitles) hides after 5 s
+without a key press while playing and stays up while paused. A stopped stream shows a dialog with
+*Try again* (which asks the server for a fresh stream) and *Back*.
 
-Many cheap TV sticks have no AC-3/E-AC-3 decoder, so IPTV streams play with no sound. Media3's
-FFmpeg audio extension fixes this, but **it is not published to Maven**: you have to build it yourself.
+Number keys work the same way on the Live TV channel list and in the guide: the typed channel is
+tuned after 2 s or on OK.
+
+## Software audio decoding (AC-3 / E-AC-3 / DTS)
+
+Many cheap TV sticks have no AC-3/E-AC-3/DTS decoder, so some films and IPTV streams play with no
+sound. The default build does not bundle a software decoder; the player menu lists such tracks as
+"(not supported on this TV)" so it is clear why they cannot be chosen.
+
+To bundle one, build with a Gradle property:
 
 ```bash
-git clone --depth 1 --branch 1.11.1 https://github.com/androidx/media.git
-cd media
-export FFMPEG_MODULE_PATH="$(pwd)/libraries/decoder_ffmpeg/src/main"
-export NDK_PATH=$ANDROID_HOME/ndk/<version>          # sdkmanager "ndk;27.x"
-export HOST_PLATFORM="linux-x86_64"
-# Use the FFmpeg release branch named in libraries/decoder_ffmpeg/README.md for this Media3 tag
-cd "${FFMPEG_MODULE_PATH}/jni" && git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg --branch release/<x.y> --depth 1
-./build_ffmpeg.sh "${FFMPEG_MODULE_PATH}" "${NDK_PATH}" "${HOST_PLATFORM}" 21 ac3 eac3 dca mp3 aac mp2 truehd
-cd ../../../../.. && ./gradlew :lib-decoder-ffmpeg:assembleRelease
-cp libraries/decoder_ffmpeg/buildout/outputs/aar/lib-decoder-ffmpeg-release.aar \
-   <streamhub>/tv-app/core/player/libs/
+./gradlew :app:assembleDebug -Pstreamhub.ffmpegDecoder=true
 ```
 
-Then uncomment `implementation(files("libs/lib-decoder-ffmpeg-release.aar"))` in
-`core/player/build.gradle.kts`. No code change is needed: `StreamHubPlayer` already sets
-`EXTENSION_RENDERER_MODE_PREFER`, which picks up `FfmpegAudioRenderer` by reflection when it's present.
-FFmpeg is LGPL/GPL depending on the configure flags, so check the licence before distributing.
+This adds a prebuilt FFmpeg decoder for Media3 (`io.github.anilbeesetti:nextlib-media3ext`, pinned in
+`gradle/libs.versions.toml` to the build made for the pinned Media3 version). No code changes:
+`SoftwareAudioRenderersFactory` finds its audio renderer by reflection and puts it ahead of the
+platform decoders. Things to know before turning it on:
+
+- **Licence.** That artifact is GPL-3.0, so an APK built with the property is a GPL-3.0 combined work.
+  The property is off by default so the normal build keeps its own licence; do not distribute a
+  build made with it unless you can meet the GPL's terms.
+- **Audio only, and no passthrough.** Audio is decoded to PCM on the TV, so a receiver or soundbar
+  gets PCM rather than the original bitstream. Video always stays on the hardware decoders.
+- **Size.** The artifact carries native libraries for four ABIs and adds roughly 10 MB per ABI.
+- **Keeping versions in step.** When `media3` is bumped, bump `media3FfmpegDecoder` to the build for
+  the same Media3 version, or leave the property off until one exists.
+- Not exercised on a device yet: the dependency and the reflective lookup are in place, the actual
+  decoding has not been heard on a TV.
+
+Alternative without the GPL artifact: build Media3's own `decoder_ffmpeg` module with the codecs
+you need (see `libraries/decoder_ffmpeg/README.md` in the Media3 source for the pinned tag) and add
+the resulting AAR to `core/player` as a file dependency. The stock renderer in it is also picked
+up by reflection (`EXTENSION_RENDERER_MODE_PREFER`); check FFmpeg's licence for your configure flags.
 
 ## What is stubbed / known gaps
 

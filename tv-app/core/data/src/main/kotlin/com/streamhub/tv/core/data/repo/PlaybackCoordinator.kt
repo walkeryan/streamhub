@@ -1,6 +1,8 @@
 package com.streamhub.tv.core.data.repo
 
+import com.streamhub.tv.core.data.api.ApiErrors
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.auth.SessionStore
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -28,7 +30,8 @@ sealed interface PlayEvent {
     data class StartPlayer(val key: String) : PlayEvent
     data class Handoff(val result: HandoffResult) : PlayEvent
     data class ChooseAudio(val request: PlaybackRequest, val options: PlaybackOptions) : PlayEvent
-    data class Error(val message: String) : PlayEvent
+    /** Shown as a dialog; "Try again" calls [PlaybackCoordinator.retryLast] when [UserError.canRetry]. */
+    data class Error(val error: UserError) : PlayEvent
 }
 
 /**
@@ -44,7 +47,11 @@ class PlaybackCoordinator @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val cache = ConcurrentHashMap<String, PlaybackDescriptor>()
+    private val requests = ConcurrentHashMap<String, PlaybackRequest>()
     private var inFlight: Job? = null
+    /** The attempt behind the last [PlayEvent.Error], kept whole so a retry passes the same checks. */
+    private var lastFailed: Attempt? = null
+    private data class Attempt(val request: PlaybackRequest, val preflight: Boolean, val expectedOwner: CatalogScope?)
     private var choiceOwner: CatalogScope? = null
     private var activeOwner: String? = null
     private var stopActive: (suspend () -> Unit)? = null
@@ -65,18 +72,29 @@ class PlaybackCoordinator @Inject constructor(
 
     fun cancelPending() { inFlight?.cancel(); choiceOwner=null }
 
+    /** "Try again" on the error dialog. A no-op once the failure has been dismissed or superseded. */
+    fun retryLast() { val attempt = lastFailed ?: return; submit(attempt.request, attempt.preflight, attempt.expectedOwner) }
+    fun dismissError() { lastFailed = null }
+
+    /**
+     * Resolves [request] again without navigating. The player's "Try again" uses this instead of
+     * replaying its descriptor: the stream URL in an old descriptor carries a token that may have expired.
+     */
+    suspend fun resolveAgain(request: PlaybackRequest): PlaybackDescriptor = api.resolve(request)
+
     /** Called before committing a profile switch, while the old profile can still release its leases. */
     suspend fun clearForProfileSwitch() {
         cancelPending()
         val owner=activeOwner
         val stop=stopActive
         stop?.invoke()
-        cache.clear()
+        cache.clear(); requests.clear(); lastFailed = null
         if(activeOwner==owner) { activeOwner=null; stopActive=null }
     }
 
     private fun submit(request: PlaybackRequest, preflight: Boolean = true, expectedOwner: CatalogScope? = null) {
         inFlight?.cancel()
+        lastFailed = null
         inFlight = scope.launch {
             try {
                 val owner=sessions.current().catalogScope()
@@ -90,35 +108,39 @@ class PlaybackCoordinator @Inject constructor(
                 if(sessions.current().catalogScope()!=owner) return@launch
                 when (result) {
                     is AudioPlaybackAttempt.Choice -> { choiceOwner=owner; _events.emit(PlayEvent.ChooseAudio(result.request, result.options)) }
-                    is AudioPlaybackAttempt.Ready -> { choiceOwner=null; dispatch(result.descriptor) }
+                    is AudioPlaybackAttempt.Ready -> { choiceOwner=null; dispatch(result.descriptor, result.request) }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _events.emit(PlayEvent.Error(e.message ?: "Playback failed"))
+                lastFailed = Attempt(request, preflight, expectedOwner)
+                _events.emit(PlayEvent.Error(ApiErrors.describe(e)))
             }
         }
     }
 
-    private suspend fun dispatch(d: PlaybackDescriptor) {
+    private suspend fun dispatch(d: PlaybackDescriptor, request: PlaybackRequest) {
         if (d.mode == PlaybackMode.HANDOFF) {
             val h = d.handoff
-            if (h == null) _events.emit(PlayEvent.Error("Hand-off target missing"))
+            if (h == null) _events.emit(PlayEvent.Error(UserError("Can't open this title", "The server didn't say which app plays it. Try another source from the title's page.", canRetry = false)))
             else _events.emit(PlayEvent.Handoff(launcher.launch(h)))
         } else {
-            val key = put(d)
+            val key = put(d, request)
             _events.emit(PlayEvent.StartPlayer(key))
         }
     }
 
-    fun put(d: PlaybackDescriptor): String {
+    fun put(d: PlaybackDescriptor, request: PlaybackRequest? = null): String {
         val key = "${d.id}#${System.nanoTime()}"
         cache[key] = d
+        if (request != null) requests[key] = request
         return key
     }
 
     fun take(key: String): PlaybackDescriptor? = cache[key]
-    fun release(key: String) { cache.remove(key) }
+    /** The accepted request (source and audio choice included) that produced [take]'s descriptor. */
+    fun requestFor(key: String): PlaybackRequest? = requests[key]
+    fun release(key: String) { cache.remove(key); requests.remove(key) }
 
     // Channel zapping uses the player's scoped audio preflight; no unguarded direct resolver.
 }

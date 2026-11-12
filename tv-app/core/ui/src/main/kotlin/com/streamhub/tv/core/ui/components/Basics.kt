@@ -79,7 +79,10 @@ fun ShButton(
     }
 }
 
-/** Selectable chip (language chips, groups, filters). Selected = filled + check-mark semantics, not colour only. */
+/**
+ * Selectable chip (language chips, groups, filters). Selected = filled + check-mark semantics, not colour only.
+ * A disabled chip is shown dimmed and skipped by focus: it states that a choice exists but cannot be made.
+ */
 @Composable
 fun ShChip(
     text: String,
@@ -87,19 +90,23 @@ fun ShChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     leading: ImageVector? = null,
+    enabled: Boolean = true,
 ) {
     val t = LocalThemeTokens.current
+    val container = if (selected) t.accent else t.surfaceAlt
+    val content = (if (selected) t.accentText else t.text).let { if (enabled) it else it.copy(alpha = 0.6f) }
     FocusSurface(
         onClick = onClick,
         modifier = modifier.height(36.dp),
         shape = RoundedCornerShape(Tokens.Radius.Pill),
-        containerColor = if (selected) t.accent else t.surfaceAlt,
+        containerColor = if (enabled) container else container.copy(alpha = 0.4f),
         glow = false,
+        enabled = enabled,
     ) {
         Row(Modifier.align(Alignment.Center).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (selected) Text("✓ ", color = t.accentText, style = MaterialTheme.typography.labelMedium)
-            if (leading != null) Icon(leading, null, tint = if (selected) t.accentText else t.text, modifier = Modifier.size(16.dp).padding(end = 4.dp))
-            Text(text, color = if (selected) t.accentText else t.text, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            if (selected) Text("✓ ", color = content, style = MaterialTheme.typography.labelMedium)
+            if (leading != null) Icon(leading, null, tint = content, modifier = Modifier.size(16.dp).padding(end = 4.dp))
+            Text(text, color = content, style = MaterialTheme.typography.labelMedium, maxLines = 1)
         }
     }
 }

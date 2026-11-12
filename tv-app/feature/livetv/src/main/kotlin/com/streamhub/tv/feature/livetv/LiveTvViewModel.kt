@@ -149,6 +149,22 @@ class LiveTvViewModel @Inject constructor(
     fun selectGroup(name: String?) { if (!_state.value.ready) return; _state.update { it.copy(selectedGroup = name) }; saveFilters(); load() }
     fun toggleFavoritesOnly() { if (!_state.value.ready) return; _state.update { it.copy(favoritesOnly = !it.favoritesOnly) }; saveFilters(); refreshGroups(); load() }
 
+    /**
+     * The channel a typed number names: the loaded page first, then the whole list under the current
+     * filters on the server (the page holds 60 of what can be thousands). null when there is none.
+     */
+    suspend fun channelByNumber(n: Int): Channel? {
+        val s = _state.value
+        s.channels.firstOrNull { it.number == n }?.let { return it }
+        return try {
+            api.channels(
+                q = n.toString(), group = s.selectedGroup, languages = s.selectedLanguages?.toList() ?: emptyList(),
+                favorites = s.favoritesOnly.takeIf { it }, country = s.country, limit = NUMBER_LOOKUP_LIMIT,
+            ).channels.firstOrNull { it.number == n }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+
     /** Focus only updates metadata; browsing must never consume a provider stream. */
     fun onChannelFocused(ch: Channel) {
         _state.update { it.copy(previewChannelId = ch.id) }
@@ -174,4 +190,9 @@ class LiveTvViewModel @Inject constructor(
     }
 
     fun stopPreview() { _state.update { it.copy(previewChannelId = null) } }
+
+    private companion object {
+        /** A number search also matches names containing the digits; the exact number is among the first hits. */
+        const val NUMBER_LOOKUP_LIMIT = 100
+    }
 }

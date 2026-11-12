@@ -71,6 +71,8 @@ object Tokens {
     object Rail {
         val CollapsedW = 72.dp
         val ExpandedW = 240.dp
+        val TvCollapsedW = 104.dp
+        val TvExpandedW = 272.dp
     }
 
     val themes: Map<String, ThemeTokens> = linkedMapOf(

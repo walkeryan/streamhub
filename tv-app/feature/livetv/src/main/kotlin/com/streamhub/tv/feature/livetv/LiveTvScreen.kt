@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -71,10 +72,16 @@ import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
+import com.streamhub.tv.core.ui.input.ChannelNumberOverlay
+import com.streamhub.tv.core.ui.input.channelNumberKeys
+import com.streamhub.tv.core.ui.input.rememberChannelNumberState
 import com.streamhub.tv.core.ui.theme.LocalReducedMotion
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -119,6 +126,32 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
         }
         // A failed handoff leaves normal directional navigation available for the next key.
         enterChannelsWhenReady = false
+    }
+    // Number keys on the channel list: same rules as in the player (2 s commit, Select commits at once).
+    // The channel is tuned, as a typed number is everywhere on a TV; when its row is on this page focus
+    // moves to it first, so Back from the player returns there.
+    val scope = rememberCoroutineScope()
+    val numberFocus = remember { FocusRequester() }
+    var numberTarget by remember { mutableStateOf<String?>(null) }
+    var numberMessage by remember { mutableStateOf<String?>(null) }
+    val number = rememberChannelNumberState { n ->
+        scope.launch {
+            val ch = vm.channelByNumber(n)
+            if (ch == null) {
+                numberMessage = "No channel $n"
+                delay(2_000)
+                if (numberMessage == "No channel $n") numberMessage = null
+            } else {
+                val index = s.channels.indexOfFirst { it.id == ch.id }
+                if (index >= 0) {
+                    numberTarget = ch.id
+                    runCatching { channelListState.scrollToItem(index + 1) } // item 0 is the page navigation
+                    withFrameNanos { }
+                    runCatching { numberFocus.requestFocus() }
+                }
+                launcher.play(ch.id)
+            }
+        }
     }
     val choices = remember(s.groups) { groupChoices(s.groups) }
     LaunchedEffect(groupsOpen) {
@@ -197,7 +230,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                     else -> PivotScroll(leadingOffset = 72.dp) {
                         LazyColumn(
                             state = channelListState,
-                            modifier = Modifier.fillMaxSize().focusRestorer(),
+                            modifier = Modifier.fillMaxSize().channelNumberKeys(number).focusRestorer(),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                             contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
                         ) {
@@ -215,6 +248,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                                     onLongClick = { vm.toggleFavorite(ch) },
                                     modifier = Modifier
                                         .then(if (index == 0) Modifier.focusRequester(firstChannel) else Modifier)
+                                        .then(if (ch.id == numberTarget) Modifier.focusRequester(numberFocus) else Modifier)
                                         .leftOpensRail(rail).onFocusChanged { if (it.isFocused) vm.onChannelFocused(ch) },
                                 )
                             }
@@ -231,6 +265,12 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                     if (s.previewChannelId == null) {
                         Text("Focus a channel for details", color = t.textMuted, modifier = Modifier.align(Alignment.Center), style = MaterialTheme.typography.bodyLarge)
                     }
+                    val typed = number.entry
+                    if (typed.isNotEmpty() || numberMessage != null) ChannelNumberOverlay(
+                        typed,
+                        if (typed.isNotEmpty()) ChannelNumberEntry.match(typed, s.channels) { it.number }?.name else numberMessage,
+                        Modifier.align(Alignment.TopEnd).padding(12.dp),
+                    )
                 }
                 val ch = s.channels.firstOrNull { it.id == s.previewChannelId }
                 if (ch != null) {

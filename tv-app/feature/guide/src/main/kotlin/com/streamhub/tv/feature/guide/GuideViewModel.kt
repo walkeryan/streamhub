@@ -123,7 +123,27 @@ class GuideViewModel @Inject constructor(
         }
     }
 
-    companion object { const val PAGE_SIZE = 40 }
+    /**
+     * The channel a typed number names: this page first, then the guide's whole filtered list on the
+     * server. null when there is none.
+     */
+    suspend fun channelByNumber(n: Int): Channel? {
+        val s = _state.value
+        s.channels.firstOrNull { it.number == n }?.let { return it }
+        return try {
+            api.channels(
+                q = n.toString(), group = s.filters.group, languages = s.filters.languages,
+                favorites = s.filters.favorites, country = s.filters.country, limit = NUMBER_LOOKUP_LIMIT,
+            ).channels.firstOrNull { it.number == n }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+
+    companion object {
+        const val PAGE_SIZE = 40
+        /** A number search also matches names containing the digits; the exact number is among the first hits. */
+        const val NUMBER_LOOKUP_LIMIT = 100
+    }
 
     fun select(ch: Channel, gp: GuideProgramme?) = _state.update { it.copy(selected = gp, selectedChannel = ch) }
 }

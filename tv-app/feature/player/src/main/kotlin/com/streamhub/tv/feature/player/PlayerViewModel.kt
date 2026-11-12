@@ -4,7 +4,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.handoff.DeepLinkLauncher
+import com.streamhub.tv.core.data.api.ApiErrors
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.repo.catalogScope
 import com.streamhub.tv.core.data.repo.resolveArchiveSelection
@@ -40,6 +42,7 @@ import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.player.AspectMode
 import com.streamhub.tv.core.player.PlayerFactory
 import com.streamhub.tv.core.player.StreamHubPlayer
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,7 +55,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class Overlay { None, Osd, MiniList, Menu, Rewind, Buffer }
+/** [Controls] is the focusable film control row; [Osd] is the passive live banner. */
+enum class Overlay { None, Osd, Controls, MiniList, Menu, Rewind, Buffer }
 
 data class PlayerScreenState(
     val descriptor: PlaybackDescriptor? = null,
@@ -76,6 +80,13 @@ data class PlayerScreenState(
     val aspect: AspectMode = AspectMode.FIT,
     val sleepMinutes: Int? = null,
     val sleepEndsAt: Long? = null,
+    /** A failure that needs an answer (Try again / Back); shown as a dialog. */
+    val failure: UserError? = null,
+    /** The failure came from a channel change that left the previous stream running: dismissing keeps watching. */
+    val failureKeepsPlaying: Boolean = false,
+    val retrying: Boolean = false,
+    /** Where the scrubber is heading while Left/Right is still being pressed; null once the seek has landed. */
+    val scrubTargetMs: Long? = null,
 )
 
 /**
@@ -86,6 +97,8 @@ data class PlayerScreenState(
  *  - Number entry commits 2 s after the last digit (or immediately on OK).
  *  - Last channel toggle (Back-twice).
  *  - Sleep timer → pause and exit.
+ *  - Films and buffered history get a focusable control row (scrubber + buttons) instead of the live banner.
+ *  - "Try again" resolves the accepted request again; it never replays the descriptor on screen.
  */
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
@@ -116,6 +129,11 @@ class PlayerViewModel @Inject constructor(
     private var attachJob: Job? = null
     private var bufferHeartbeat: Job? = null
     private var bufferSeekJob: Job? = null
+    private var scrubJob: Job? = null
+    /** The accepted request (source and audio choice included) behind the descriptor on screen. */
+    private var currentRequest: PlaybackRequest? = null
+    /** A channel change that failed; "Try again" repeats it rather than the stream that was playing. */
+    private var failedRequest: PlaybackRequest? = null
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val buffer = BufferLeaseSession(object: BufferLeaseApi {
         override suspend fun acquire(token: String): BufferLease = api.acquireBuffer(token)
@@ -130,8 +148,12 @@ class PlayerViewModel @Inject constructor(
         coordinator.registerActivePlayer(key) { stopCurrentPlayback() }
         val d = coordinator.take(key)
         if (d == null) {
-            _state.update { it.copy(message = "Nothing to play") }
+            // Reached when the system restores this screen after the process died: the resolved stream is gone.
+            _state.update { it.copy(failure = UserError("Nothing to play", "This screen was reopened without its stream. Go back and press Play again.", canRetry = false)) }
         } else {
+            currentRequest = coordinator.requestFor(key) ?: PlaybackRequest(d.id)
+            // Known before the first frame so the right overlay (live banner or film controls) is chosen.
+            _state.update { it.copy(live = d.live) }
             attachJob = viewModelScope.launch { start(d); if(d.live) loadChannelList(d) }
         }
         showOsd()
@@ -155,7 +177,7 @@ class PlayerViewModel @Inject constructor(
         releaseCurrentBuffer()
     }
 
-    private suspend fun start(d: PlaybackDescriptor) {
+    private suspend fun start(d: PlaybackDescriptor, startPositionMs: Long? = null) {
         releaseCurrentBuffer()
         if (d.mode == PlaybackMode.HANDOFF) {
             d.handoff?.let { launcher.launch(it) }; _exit.tryEmit(Unit); return
@@ -170,7 +192,7 @@ class PlayerViewModel @Inject constructor(
             currentCoroutineContext().ensureActive()
             if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
             currentStopped=false
-            player.play(d,reportOwner)
+            if (startPositionMs != null) player.play(d, reportOwner, startPositionMs) else player.play(d, reportOwner)
             _state.update { it.copy(bufferWindow=lease?.window,bufferBusy=false) }
             if(lease != null) bufferHeartbeat=viewModelScope.launch {
                 try {
@@ -253,14 +275,64 @@ class PlayerViewModel @Inject constructor(
 
     // ---- OSD -----------------------------------------------------------------------------------
 
+    /** Films, catch-up and buffered history are driven from the control row; only true live gets the banner. */
+    private fun usesControls(s: PlayerScreenState = _state.value) = !s.live || s.bufferTimeshift
+
     fun showOsd() {
         if (_state.value.overlay in listOf(Overlay.MiniList, Overlay.Menu, Overlay.Rewind, Overlay.Buffer)) return
+        if (usesControls()) { showControls(); return }
         _state.update { it.copy(overlay = Overlay.Osd) }
         osdJob?.cancel()
         osdJob = viewModelScope.launch {
             delay(OSD_HIDE_MS)
             if (_state.value.numberEntry.isEmpty()) _state.update { if (it.overlay == Overlay.Osd) it.copy(overlay = Overlay.None) else it }
         }
+    }
+
+    // ---- Film controls ------------------------------------------------------------------------
+
+    fun showControls() {
+        if (_state.value.overlay in listOf(Overlay.MiniList, Overlay.Menu, Overlay.Rewind, Overlay.Buffer)) return
+        _state.update { it.copy(overlay = Overlay.Controls) }
+        armControlsHide()
+    }
+
+    /** Any key press while the row is up counts as activity. */
+    fun touchControls() { if (_state.value.overlay == Overlay.Controls) armControlsHide() }
+
+    private fun armControlsHide() {
+        osdJob?.cancel()
+        osdJob = viewModelScope.launch {
+            delay(CONTROLS_HIDE_MS)
+            // A paused picture keeps its controls: they are the only sign of why it stopped.
+            while (!player.exoPlayer.playWhenReady) delay(500)
+            _state.update { if (it.overlay == Overlay.Controls) it.copy(overlay = Overlay.None) else it }
+        }
+    }
+
+    /**
+     * Left/Right on the scrubber and the ±10 s buttons. The target moves at once so the bar follows
+     * the remote; the seek itself waits for the presses to settle, so a held key is one seek, not twenty.
+     */
+    fun scrubBy(deltaMs: Long) {
+        val ps = player.state.value
+        if (!ps.seekable || ps.durationMs <= 0) return
+        val target = ((_state.value.scrubTargetMs ?: ps.positionMs) + deltaMs).coerceIn(0, ps.durationMs)
+        _state.update { it.copy(scrubTargetMs = target) }
+        scrubJob?.cancel()
+        scrubJob = viewModelScope.launch {
+            delay(SCRUB_SETTLE_MS)
+            player.seekTo(target)
+            // Keep showing the target until the player's position ticker has caught up with it.
+            delay(SCRUB_RELEASE_MS)
+            _state.update { it.copy(scrubTargetMs = null) }
+        }
+    }
+
+    fun startOver() {
+        scrubJob?.cancel()
+        _state.update { it.copy(scrubTargetMs = null) }
+        player.seekTo(0)
     }
 
     fun hideOverlay() { rewindJob?.cancel(); bufferSeekJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false, bufferBusy=false, audioChoice=null) } }
@@ -329,6 +401,7 @@ class PlayerViewModel @Inject constructor(
                     }
                     is AudioPlaybackAttempt.Ready -> {
                         val descriptor=result.descriptor
+                        currentRequest=result.request; failedRequest=null
                         if(previousId != descriptor.id) lastChannelId=previousId
                         val idx=_state.value.channels.indexOfFirst { it.id == descriptor.id }
                         _state.update { it.copy(index=idx, osdChannel=it.channels.getOrNull(idx), rewindLoading=false, overlay=Overlay.Osd) }
@@ -339,7 +412,15 @@ class PlayerViewModel @Inject constructor(
                 }
             } catch(e: CancellationException) { throw e }
             catch(_: ExpiredArchiveSelection) { _state.update { it.copy(rewindLoading=false, overlay=Overlay.Rewind, rewindError="That selection expired. Refresh the advertised window.") } }
-            catch(_: Exception) { _state.update { it.copy(rewindLoading=false, rewindError=if(previousStopped) "Stream switch failed after stopping the previous stream. Select a channel or Go Live to retry." else "Could not check this source. The current stream was kept.", message="Could not start selected channel") } }
+            catch(e: Exception) {
+                val rewindError=if(previousStopped) "Stream switch failed after stopping the previous stream. Select a channel or Go Live to retry." else "Could not check this source. The current stream was kept."
+                // The archive dialog shows its own error line; a plain channel change gets the Try again dialog.
+                if(archiveAction) _state.update { it.copy(rewindLoading=false, rewindError=rewindError) }
+                else {
+                    failedRequest=request
+                    _state.update { it.copy(rewindLoading=false, rewindError=rewindError, failure=ApiErrors.describe(e), failureKeepsPlaying=!previousStopped, osdChannel=if(previousStopped) it.osdChannel else it.channels.getOrNull(it.index)) }
+                }
+            }
         }
     }
 
@@ -379,7 +460,7 @@ class PlayerViewModel @Inject constructor(
 
     fun digit(d: Int) {
         if (!_state.value.live) return
-        val next = (_state.value.numberEntry + d).takeLast(5)
+        val next = ChannelNumberEntry.append(_state.value.numberEntry, d)
         _state.update { it.copy(numberEntry = next, overlay = Overlay.Osd) }
         osdJob?.cancel()
         numberJob?.cancel()
@@ -390,10 +471,11 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun commitNumber(): Boolean {
-        val n = _state.value.numberEntry.toIntOrNull() ?: return false
+        val entry = _state.value.numberEntry
+        val n = ChannelNumberEntry.number(entry) ?: return false
         numberJob?.cancel()
         _state.update { it.copy(numberEntry = "") }
-        val ch = _state.value.channels.firstOrNull { it.number == n }
+        val ch = ChannelNumberEntry.match(entry, _state.value.channels) { it.number }
         if (ch != null) tuneTo(ch) else {
             _state.update { it.copy(message = "No channel $n") }
             viewModelScope.launch { delay(2000); _state.update { if (it.message == "No channel $n") it.copy(message = null) else it } }
@@ -418,21 +500,68 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun retry() { _state.value.descriptor?.let { d -> attachJob?.cancel(); attachJob=viewModelScope.launch { start(d) } } }
+    /**
+     * "Try again". The descriptor on screen is never replayed: its stream URL carries a token that
+     * has usually expired by the time playback fails, so the accepted request is resolved again
+     * through the coordinator. A failed channel change repeats that change instead.
+     */
+    fun retry() {
+        val zap = failedRequest
+        if (zap != null) {
+            failedRequest = null
+            _state.update { it.copy(failure = null, message = null) }
+            submitChannel(zap, archiveAction = zap.rewindAt != null)
+            return
+        }
+        val stale = _state.value.descriptor
+        val request = currentRequest ?: stale?.let { PlaybackRequest(it.id) } ?: return
+        // A film resumes where it failed; live and archive streams restart where the server puts them.
+        val resumeAt = if (stale != null && !stale.live) player.exoPlayer.currentPosition.takeIf { it > 0 } else null
+        attachJob?.cancel(); rewindJob?.cancel()
+        _state.update { it.copy(failure = null, retrying = true, message = null) }
+        attachJob = viewModelScope.launch {
+            val owner = sessions.current().catalogScope()
+            try {
+                // Give back this player's own connection first: a one-stream source would answer source_busy.
+                releaseCurrentBuffer()
+                val fresh = coordinator.resolveAgain(request)
+                currentCoroutineContext().ensureActive()
+                if (sessions.current().catalogScope() != owner) return@launch
+                start(fresh, resumeAt)
+                if (fresh.live) loadChannelList(fresh)
+                _state.update { it.copy(retrying = false) }
+                showOsd()
+            } catch (e: CancellationException) {
+                _state.update { it.copy(retrying = false) }
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(retrying = false, failure = ApiErrors.describe(e), failureKeepsPlaying = false) }
+            }
+        }
+    }
+
+    /** Closes a failure that left the previous stream playing. */
+    fun dismissFailure() { failedRequest = null; _state.update { it.copy(failure = null, failureKeepsPlaying = false) } }
 
     override fun onCleared() {
         rewindJob?.cancel(); attachJob?.cancel(); bufferHeartbeat?.cancel(); bufferSeekJob?.cancel()
         cleanupScope.launch { buffer.close() }
         coordinator.unregisterActivePlayer(key)
+        // stop() reports the final position; release() alone would leave "continue watching" at the last 10 s tick.
+        player.stop()
         player.release()
         coordinator.release(key)
     }
 
     companion object {
         const val OSD_HIDE_MS = 4_000L
-        const val NUMBER_COMMIT_MS = 2_000L
+        const val NUMBER_COMMIT_MS = ChannelNumberEntry.COMMIT_MS
         const val ZAP_SETTLE_MS = 350L
-        const val BACK_DOUBLE_MS = 500L
+        /** Window for the second Back that swaps to the last channel; 500 ms was too tight for a TV remote. */
+        const val BACK_DOUBLE_MS = 750L
+        const val CONTROLS_HIDE_MS = 5_000L
+        const val SCRUB_SETTLE_MS = 300L
+        const val SCRUB_RELEASE_MS = 700L
         val SLEEP_OPTIONS = listOf<Int?>(null, 15, 30, 60, 90, 120)
     }
 }

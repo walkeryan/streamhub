@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,9 +55,14 @@ import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
+import com.streamhub.tv.core.ui.input.ChannelNumberOverlay
+import com.streamhub.tv.core.ui.input.channelNumberKeys
+import com.streamhub.tv.core.ui.input.rememberChannelNumberState
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -66,6 +72,8 @@ private val HHMM = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDe
 
 /** 30 minutes = 180 dp → 2 h visible in the ~720 dp grid viewport (960 dp design minus rail/channel column). */
 private val SLOT_WIDTH = 180.dp
+/** How long "Starts at 21:30" / "No channel 105" stays up. */
+private const val HINT_MS = 3_000L
 private val ROW_HEIGHT = 60.dp
 private val CHANNEL_COL = 200.dp
 
@@ -75,7 +83,8 @@ private fun Duration.toDp(): Dp = SLOT_WIDTH * (toMinutes() / 30f)
  * Classic horizontal EPG. All rows share one horizontal ScrollState so time columns stay aligned;
  * D-pad Left/Right moves between programme cells (focus search brings them into view), Up/Down
  * moves between channels. OK on a live programme plays the channel; OK/long-press on a past
- * programme with catch_up_available offers Catch-up.
+ * programme with catch_up_available offers Catch-up; OK on a future one says when it starts.
+ * Number keys on the grid tune to that channel after 2 s (or OK), as in the player.
  */
 @Composable
 fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters = LiveGuideFilters(), compact: Boolean = false) {
@@ -88,6 +97,16 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
     val hScroll = rememberScrollState()
     val density = LocalDensity.current
     var catchup by remember { mutableStateOf<Pair<Channel, GuideProgramme>?>(null) }
+    // Answer to a press that cannot play anything: a future programme, or a number with no channel.
+    var hint by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(hint) { if (hint != null) { delay(HINT_MS); hint = null } }
+    val scope = rememberCoroutineScope()
+    val number = rememberChannelNumberState { n ->
+        scope.launch {
+            val ch = vm.channelByNumber(n)
+            if (ch == null) hint = "No channel $n" else launcher.play(ch.id)
+        }
+    }
     val now by produceState(Instant.now()) { while (true) { delay(30_000); value = Instant.now() } }
 
     // Start scrolled so 'now' is near the left edge (one slot of past visible).
@@ -99,6 +118,7 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
     }
 
     val totalWidth = Duration.between(s.windowStart, s.windowEnd).toDp()
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(vertical = if (compact) 0.dp else Tokens.Canvas.SafeMarginY)) {
         Column(Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -147,7 +167,7 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
             }
         }
         PivotScroll(leadingOffset = ROW_HEIGHT) {
-            LazyColumn(Modifier.fillMaxSize().padding(start = Tokens.Canvas.SafeMarginX).focusRestorer()) {
+            LazyColumn(Modifier.fillMaxSize().padding(start = Tokens.Canvas.SafeMarginX).channelNumberKeys(number).focusRestorer()) {
                 items(s.channels, key = { it.id }) { ch ->
                     Row(Modifier.fillMaxWidth().height(ROW_HEIGHT).padding(vertical = 2.dp)) {
                         ChannelCell(ch)
@@ -173,7 +193,8 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
                                             when {
                                                 live -> launcher.play(ch.id)
                                                 past && gp.p.catchupAvailable -> catchup = ch to gp
-                                                else -> Unit // future: nothing to play yet
+                                                // Not yet on air: say when, rather than doing nothing on Select.
+                                                else -> hint = "Starts at ${HHMM.format(gp.start)}"
                                             }
                                         },
                                         onLongClick = { if (past && gp.p.catchupAvailable) catchup = ch to gp },
@@ -186,6 +207,12 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
                 }
             }
         }
+    }
+    val typed = number.entry
+    val caption = if (typed.isNotEmpty()) ChannelNumberEntry.match(typed, s.channels) { it.number }?.name else hint
+    if (typed.isNotEmpty() || caption != null) {
+        ChannelNumberOverlay(typed, caption, Modifier.align(Alignment.TopEnd).padding(top = Tokens.Canvas.SafeMarginY, end = Tokens.Canvas.SafeMarginX))
+    }
     }
 
     catchup?.let { (ch, gp) ->
