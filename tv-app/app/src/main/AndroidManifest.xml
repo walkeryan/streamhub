@@ -33,6 +33,11 @@
         </intent>
     </queries>
 
+    <!--
+      enableOnBackInvokedCallback="false": the player, the rail and several dialogs handle the Back
+      *key* (double-press for last channel, closing overlays). With targetSdk 36 the system would
+      otherwise stop delivering KEYCODE_BACK on Android 16 and Back would always leave the screen.
+    -->
     <application
         android:name=".StreamHubApp"
         android:allowBackup="false"
@@ -42,6 +47,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.StreamHub"
         android:networkSecurityConfig="@xml/network_security_config"
+        android:enableOnBackInvokedCallback="false"
         tools:targetApi="36">
 
         <activity

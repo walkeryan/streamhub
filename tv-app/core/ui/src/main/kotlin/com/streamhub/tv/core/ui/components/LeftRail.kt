@@ -67,7 +67,8 @@ object RailMetrics {
 
 /**
  * Collapsible left rail. Icons only when collapsed ([RailMetrics.CollapsedW]), icon+label when expanded.
- * Expands while any item has focus. Right/Back hands focus back to content via [onExit].
+ * Expands while any item has focus. Right hands focus back to content via [onExit]; Back is left to
+ * the shell (see BackPolicy).
  * Rendered as an overlay over content (content is laid out with collapsed width offset), so
  * expanding never shifts layout.
  */
@@ -105,16 +106,11 @@ fun LeftRail(
             .onFocusChanged { onExpandedChange(it.hasFocus) }
             .focusRestorer(requesters.getOrElse(selectedIndex) { FocusRequester.Default })
             .focusGroup()
+            // Back is deliberately not handled here: it reaches the shell's BackPolicy like any other
+            // Back press, which knows the rail is open and moves on (Home, then exit) instead of
+            // handing focus back to content, where the next Back would only reopen the rail.
             .onPreviewKeyEvent { e ->
-                when {
-                    e.key == Key.Back -> {
-                        // Consume both edges so the KeyUp can't reach a screen BackHandler and re-open us.
-                        if (e.type == KeyEventType.KeyDown) onExit()
-                        true
-                    }
-                    e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight -> { onExit(); true }
-                    else -> false
-                }
+                if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight) { onExit(); true } else false
             },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
