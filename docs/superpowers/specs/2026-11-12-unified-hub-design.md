@@ -23,8 +23,9 @@ Jellyfin stack that currently fills this role has been switched off.
 2. The same title on a phone, away from home, signed in with Google.
 3. A friend opens an invite link in a console browser and watches that film in sync with
    the owner; pause and seek carry to both screens; only one provider stream is used.
-4. A kid profile cannot see, search for, or play adult-category or over-rating titles,
-   even by calling the API directly.
+4. On the shared TV each family member picks themselves and gets their own Continue
+   Watching. A kid cannot see, search for, or play adult-category or over-rating titles,
+   even by calling the API directly, and cannot switch to a parent without the PIN.
 5. From the guide, "record this" and "record every game for this team" produce files that
    play in StreamHub and also appear in Plex.
 6. A title in neither source can be requested from the search screen and shows up, with a
@@ -40,7 +41,7 @@ Three layers, each with one job.
 
 ```
                  ┌──────────────────────── StreamHub server ────────────────────────┐
- TV app  ──────► │ catalog merge · profiles+policy · playback resolver · stream     │
+ TV app  ──────► │ catalog merge · users+policy · playback resolver · stream        │
  web app ──────► │ proxy (remux/NVENC) · rooms · recorder · requests                │
                  └──────┬───────────────────────────┬───────────────────────┬───────┘
                         │ Xtream API (one user)     │ Plex API              │ Seerr API
@@ -59,7 +60,7 @@ Three layers, each with one job.
   Its own apps keep working (the owner uses the phone app occasionally) and its existing
   IPTV live tuner stays as it is. Nobody is required to open a Plex app.
 - **StreamHub is the only interface people need.** The server merges both catalogs,
-  enforces profiles and policy, resolves playback, and hosts the new services. The two
+  enforces users and policy, resolves playback, and hosts the new services. The two
   clients stay thin: they render what the API returns and play a `PlaybackDescriptor`.
 
 Why this shape and not "StreamHub as a skin over Jellyfin": Jellyfin flattens
@@ -112,8 +113,10 @@ management screen · watch rooms · recorder · requests · a status/watchdog su
   timestamps in between. Expected size after enabling: tens of thousands of movies and
   several thousand series, within what the existing paged catalog and FTS search handle.
 - **Progress.** StreamHub already forwards progress to Plex for owned titles. It now also
-  reads Plex's view offsets on sync and on title open, last-writer-wins by timestamp.
-- **Existing data.** Profiles and settings are kept. The old direct-provider source and
+  reads Plex's view offsets on sync and on title open, last-writer-wins by timestamp, for
+  users linked to a Plex home user (section 5).
+- **Existing data.** Existing profiles become users and keep their state; settings are
+  kept. The old direct-provider source and
   its variants are dropped; title-level favorites, watchlist and history survive because
   they are keyed by TMDB id. Channel favorites are not migrated.
 
@@ -148,36 +151,40 @@ cap is surfaced in the status screen.
 Today Google sign-in is owner-only: every allowed address maps to the single admin
 profile, and there is no user record at all. This release adds one.
 
-**Model**
+**Model: one person, one user**
 
-- **User** = one Google identity (subject, email, name, picture) with a status
-  (`pending`, `active`, `suspended`), one role, optional per-user overrides, limits, and a
-  household. **Profile** = a viewer inside a household (the existing concept, unchanged).
-- **Household** groups users who share profiles, favorites and history. Family users join
-  the owner's household; each friend gets a household of their own when approved.
-- **Role** = a named set of permissions. Three are built in. Owner is fixed; Family and
-  Friend are editable, and the owner can create more.
+- **User** = one person. Each user has their own watch history, resume points, favorites,
+  watchlist, preferences, role, permissions and limits. Nothing is shared between users.
+- A user signs in one of two ways. A **Google user** has a Google identity and can sign in
+  anywhere. A **managed user** has no Google account (a child, typically); the owner
+  creates them, and they exist only on the household's shared devices.
+- Every user has a status (`pending`, `active`, `suspended`), one role, and optional
+  per-user overrides. The existing profile record becomes the user's viewer state, one to
+  one; "profile" stops being a separate thing people manage.
+- **Role** = a named set of permissions. Four are built in. Owner is fixed; Family, Kid
+  and Friend are editable, and the owner can create more.
 - **Permissions** are the unit the server checks. A user's effective set is their role's
   set plus or minus their overrides.
 
-| Permission | Owner | Family | Friend |
-|---|---|---|---|
-| `watch.library` owned titles | yes | yes | yes |
-| `watch.vod` IPTV movies and series | yes | yes | yes |
-| `watch.live` live TV and guide | yes | yes | yes |
-| `watch.adult` adult category (still PIN-gated) | yes | no | no |
-| `rooms.join` · `rooms.create` | yes | yes | yes |
-| `recordings.view` | yes | yes | no |
-| `recordings.schedule` | yes | yes | no |
-| `requests.create` | yes | yes | yes |
-| `requests.auto_approve` | yes | yes | no |
-| `requests.approve` other people's requests | yes | no | no |
-| `remote.access` use away from the home network | yes | yes | yes |
-| `users.invite` create invite links | yes | yes | no |
-| `users.manage` · `sources.manage` · `system.manage` | yes | no | no |
+| Permission | Owner | Family | Kid | Friend |
+|---|---|---|---|---|
+| `watch.library` owned titles | yes | yes | yes | yes |
+| `watch.vod` IPTV movies and series | yes | yes | yes | yes |
+| `watch.live` live TV and guide | yes | yes | yes | yes |
+| `watch.adult` adult category (still PIN-gated) | yes | no | no | no |
+| `rooms.join` | yes | yes | yes | yes |
+| `rooms.create` | yes | yes | no | yes |
+| `recordings.view` | yes | yes | yes | no |
+| `recordings.schedule` | yes | yes | no | no |
+| `requests.create` | yes | yes | yes | yes |
+| `requests.auto_approve` | yes | yes | no | no |
+| `requests.approve` other people's requests | yes | no | no | no |
+| `remote.access` use away from the home network | yes | yes | no | yes |
+| `users.invite` create invite links | yes | yes | no | no |
+| `users.manage` · `sources.manage` · `system.manage` | yes | no | no | no |
 
-Limits, set on the role and overridable per user: concurrent streams (Friend: 1), a
-rating ceiling that caps every profile in the user's household, and number of profiles.
+Limits, set on the role and overridable per user: concurrent streams (Friend and Kid: 1)
+and a rating ceiling (Kid: PG by default, unknown ratings hidden).
 
 **Signing in**
 
@@ -189,15 +196,25 @@ rating ceiling that caps every profile in the user's household, and number of pr
   links for the Friend role.
 - The first owner is bootstrapped from configuration; the existing admin profile and its
   owner PIN migrate to that user. The address allowlist setting is retired.
-- TV device pairing binds the device to the approving user, so devices are per user.
+
+**Shared devices and "Who's watching?"**
+
+- A device paired by the owner can be marked a **household device** (the living-room TV).
+  It opens on a "Who's watching?" picker listing the family's users, Google and managed.
+- Picking a user switches the device to that user's history, permissions and limits.
+  Each user can have a PIN; switching to a user with wider access than the current one
+  always requires that user's PIN. Kids therefore cannot step into a parent's user.
+- A personal device (a phone, a friend's browser) is signed in as one user and has no
+  picker.
 
 **Users screen** (web app, `users.manage` only)
 
 - Pending queue: approve with a role, or deny.
-- User list: name, email, role, status, household, last seen, what they are watching now.
-- User detail: change role; toggle individual permissions; set limits; move household;
-  list devices and sessions with revoke; recent activity; suspend, reinstate, remove.
-- Roles tab: edit the permission set and limits of Family, Friend and custom roles.
+- Add a managed user: name, avatar, role, optional PIN.
+- User list: name, sign-in type, role, status, last seen, what they are watching now.
+- User detail: change role; toggle individual permissions; set limits; list devices and
+  sessions with revoke; watch history; recent activity; suspend, reinstate, remove.
+- Roles tab: edit the permission set and limits of Family, Kid, Friend and custom roles.
 - Every change is written to an audit log (who, what, when), shown on the same screen.
 
 **Enforcement**
@@ -207,6 +224,9 @@ rating ceiling that caps every profile in the user's household, and number of pr
   user cannot do but are never the gate.
 - Access tokens carry a user version. Changing a role, an override or a status bumps it,
   so the change applies on the next request and a suspended user's streams are cut.
+
+**Plex progress.** Two-way resume (section 3) is per user: a user can be linked to a Plex
+home user, and only linked users sync. Unlinked users keep their history in StreamHub.
 
 **Remote access.** The web app and API stay on the existing public hostname with Google
 sign-in required. Long-form video should not ride the tunnel: media segments are served
@@ -219,11 +239,12 @@ short-lived signed tokens.
 The existing content-policy service is switched on and completed:
 
 - ratings come from TMDB certifications (US), cached on the title;
-- a profile has a maximum rating and an "unknown rating" rule; kid profiles hide unknowns;
-- the adult category needs the `watch.adult` permission and a profile with the adult flag, and opening
-  it asks for the owner PIN each session;
+- a user has a rating ceiling and an "unknown rating" rule from their role or overrides;
+  the Kid role hides unknowns;
+- the adult category needs the `watch.adult` permission, and opening it asks for that
+  user's PIN each session;
 - enforcement is in the server query layer, so browse, search, detail, playback resolve,
-  rooms and recordings all obey it; switching to a less restricted profile needs its PIN.
+  rooms and recordings all obey it; switching to a less restricted user needs their PIN.
 
 ## 7. Watch rooms
 
