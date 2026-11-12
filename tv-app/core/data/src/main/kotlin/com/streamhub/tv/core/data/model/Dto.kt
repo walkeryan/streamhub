@@ -440,6 +440,17 @@ data class Settings(
     @SerialName("proxy_mode") val proxyMode: String? = null,
 )
 
+/** GET /app/tv: the newest TV build the server can hand out. Every field is defaulted so a partial answer decodes. */
+@Serializable
+data class TvAppRelease(
+    @SerialName("version_code") val versionCode: Int = 0,
+    @SerialName("version_name") val versionName: String = "",
+    /** Absolute, or a path on the same server. */
+    @SerialName("apk_url") val apkUrl: String = "",
+    /** Hex SHA-256 of the APK; the download is refused if it does not match. */
+    val sha256: String = "",
+)
+
 @Serializable
 data class PlaybackOption(
     @SerialName("variant_id") val variantId: String,

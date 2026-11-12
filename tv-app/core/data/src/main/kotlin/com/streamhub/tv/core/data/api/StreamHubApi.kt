@@ -325,6 +325,8 @@ class StreamHubApi @Inject constructor(
     /** Version + TMDB/JustWatch attribution strings (schema open in the contract). */
     suspend fun about(): JsonObject = get("/about")
     suspend fun settings(): Settings = get("/settings")
+    /** Newest TV build on offer. Servers without the update service answer 404 (see UpdateRepository). */
+    suspend fun tvAppRelease(): TvAppRelease = get("/app/tv")
     suspend fun patchSettings(s: Settings) = client.patch(url("/settings")) { setBody(s) }.unit()
     suspend fun setTmdbKey(key: String) =
         client.put(url("/settings/tmdb_key")) { setBody(JsonObject(mapOf("api_key" to kotlinx.serialization.json.JsonPrimitive(key)))) }.unit()

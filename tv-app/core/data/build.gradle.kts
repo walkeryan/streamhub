@@ -15,6 +15,8 @@ dependencies {
     implementation(libs.ktor.client.logging)
     implementation(libs.ktor.serialization.json)
     implementation(libs.androidx.datastore.preferences)
+    // FileProvider: hands a downloaded update to the system package installer.
+    implementation(libs.androidx.core.ktx)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     ksp(libs.kotlin.metadata.jvm)

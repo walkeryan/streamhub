@@ -269,8 +269,20 @@ private fun PlaybackPane(s: SettingsState, vm: SettingsViewModel) = Pane("Playba
 @Composable
 private fun AboutPane(s: SettingsState, appVersion: String, vm: SettingsViewModel) {
     val t = LocalThemeTokens.current
+    // Asked each time About opens; servers without the update service just show nothing here.
+    LaunchedEffect(Unit) { vm.checkForUpdate() }
     Pane("About") {
     item { Text("StreamHub for Android TV $appVersion", color = t.text, style = MaterialTheme.typography.bodyLarge) }
+    s.update?.let { update ->
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Update available: ${update.versionName}", color = t.text, style = MaterialTheme.typography.titleSmall)
+                // Stays enabled while busy (presses are ignored) so focus is not dropped mid-download.
+                ShButton(if (s.updateBusy) "Installing…" else "Install", vm::installUpdate, style = ButtonStyle.Primary)
+                s.updateStatus?.let { Text(it, color = t.textMuted, style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+    }
     item {
         Column(Modifier.background(t.surface, RoundedCornerShape(Tokens.Radius.Md)).padding(16.dp)) {
             // TMDB + JustWatch attribution (LEGAL.md). Logos are not bundled (engineering rule); text attribution shown.
