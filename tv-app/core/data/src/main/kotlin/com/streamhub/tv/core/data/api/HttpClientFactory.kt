@@ -37,11 +37,20 @@ private val PUBLIC_PATHS = listOf(
 )
 
 /**
+ * Whether a failed POST /auth/refresh means this TV's pairing is gone. Only an explicit rejection of
+ * the refresh token (400/401/403) does. A restarting or overloaded server answers 5xx, a proxy in
+ * front of it 502/504, and an unreachable one not at all ([status] null): clearing the tokens then
+ * would send a working TV back through pairing after every server restart.
+ */
+internal fun shouldClearSession(status: Int?): Boolean = status == 400 || status == 401 || status == 403
+
+/**
  * Ktor CIO client with:
  *  - JSON via kotlinx.serialization
  *  - Bearer auth: tokens loaded from [SessionStore]; on 401 the refresh token is exchanged at
  *    POST /auth/refresh (marked as a refresh request so it is not itself retried), new pair persisted.
- *    If refresh fails the session is cleared and [onSessionExpired] fires so the UI can re-pair.
+ *    If the server rejects the refresh token the session is cleared and [onSessionExpired] fires so
+ *    the UI can re-pair; any other refresh failure keeps the session (see [shouldClearSession]).
  *  - Base URL resolved per request from the session (server URL can change at runtime).
  */
 fun createStreamHubHttpClient(
@@ -83,13 +92,15 @@ fun createStreamHubHttpClient(
                     onSessionExpired(); return@refreshTokens null
                 }
                 val base = original.apiBase ?: return@refreshTokens null
+                // An I/O failure here (server restarting, network down) propagates to the caller as a
+                // network error; the stored tokens are untouched and the next request tries again.
                 val resp = client.post("$base/auth/refresh") {
                     markAsRefreshTokenRequest()
                     contentType(ContentType.Application.Json)
                     setBody(RefreshRequest(refresh))
                 }
                 if (!resp.status.isSuccess()) {
-                    if(sessionStore.clearExpiredSession(original)) onSessionExpired()
+                    if (shouldClearSession(resp.status.value) && sessionStore.clearExpiredSession(original)) onSessionExpired()
                     return@refreshTokens null
                 }
                 val tokens = resp.body<AuthTokens>()
