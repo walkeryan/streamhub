@@ -30,6 +30,9 @@ Jellyfin stack that currently fills this role has been switched off.
 6. A title in neither source can be requested from the search screen and shows up, with a
    notice to the requester, once it has been downloaded.
 7. A film started in the Plex phone app resumes at the same point in StreamHub on the TV.
+8. Someone new signs in with Google and sees "waiting for approval". The owner opens
+   Users, approves them as Friend, and they are in without signing in again. The owner
+   later suspends them and their TV stops playing within a minute.
 
 ## 2. Architecture
 
@@ -69,7 +72,7 @@ parts than today.
 
 Xtream, Plex, M3U and XMLTV adapters · TMDB-keyed titles with stream variants and
 audio-track choice · profiles, profile PINs, owner PIN · a server-side content policy
-service (disabled by default) · Google sign-in with an allowlist and TV device pairing ·
+service (disabled by default) · owner-only Google sign-in and TV device pairing ·
 live TV, guide, favorites, watchlist, history · stream proxy with codec-copy HLS, libx264,
 VAAPI and NVENC paths and a shared upstream per channel · provider-archive rewind · a
 rolling-buffer DVR core (present, switched off) · sports classification · 66 server test
@@ -78,8 +81,8 @@ modules, native TV tests, Playwright suites, CI that publishes the image.
 ### What is new
 
 A Dispatcharr source mode (Xtream against Dispatcharr, with category mapping) · catalog
-merge across Plex and IPTV · two-way Plex progress · accounts and roles above profiles ·
-watch rooms · recorder · requests · a status/watchdog surface.
+merge across Plex and IPTV · two-way Plex progress · users, roles and permissions with a
+management screen · watch rooms · recorder · requests · a status/watchdog surface.
 
 ## 3. Catalog
 
@@ -140,18 +143,76 @@ cap is surfaced in the status screen.
 
 **Not built:** native phone apps, a native console app.
 
-## 5. Accounts, profiles and access
+## 5. Users, roles and permissions
 
-- **Account** = one Google identity on the allowlist, with a role: `owner`, `family` or
-  `friend`. **Profile** = a viewer inside an account (existing concept).
-- Family accounts share the household's profiles. Each friend account has its own.
-- Friends can browse, play, join and create rooms, and file requests that need approval.
-  They cannot see the adult category, change sources, or schedule recordings.
-- **Remote access.** The web app and API stay on the existing public hostname with Google
-  sign-in required. Long-form video should not ride the tunnel: media segments are served
-  from a direct HTTPS endpoint (reverse proxy plus one forwarded port) when it is
-  configured, and fall back to the tunnel when it is not. Stream URLs are already
-  short-lived signed tokens.
+Today Google sign-in is owner-only: every allowed address maps to the single admin
+profile, and there is no user record at all. This release adds one.
+
+**Model**
+
+- **User** = one Google identity (subject, email, name, picture) with a status
+  (`pending`, `active`, `suspended`), one role, optional per-user overrides, limits, and a
+  household. **Profile** = a viewer inside a household (the existing concept, unchanged).
+- **Household** groups users who share profiles, favorites and history. Family users join
+  the owner's household; each friend gets a household of their own when approved.
+- **Role** = a named set of permissions. Three are built in. Owner is fixed; Family and
+  Friend are editable, and the owner can create more.
+- **Permissions** are the unit the server checks. A user's effective set is their role's
+  set plus or minus their overrides.
+
+| Permission | Owner | Family | Friend |
+|---|---|---|---|
+| `watch.library` owned titles | yes | yes | yes |
+| `watch.vod` IPTV movies and series | yes | yes | yes |
+| `watch.live` live TV and guide | yes | yes | yes |
+| `watch.adult` adult category (still PIN-gated) | yes | no | no |
+| `rooms.join` · `rooms.create` | yes | yes | yes |
+| `recordings.view` | yes | yes | no |
+| `recordings.schedule` | yes | yes | no |
+| `requests.create` | yes | yes | yes |
+| `requests.auto_approve` | yes | yes | no |
+| `requests.approve` other people's requests | yes | no | no |
+| `remote.access` use away from the home network | yes | yes | yes |
+| `users.invite` create invite links | yes | yes | no |
+| `users.manage` · `sources.manage` · `system.manage` | yes | no | no |
+
+Limits, set on the role and overridable per user: concurrent streams (Friend: 1), a
+rating ceiling that caps every profile in the user's household, and number of profiles.
+
+**Signing in**
+
+- Anyone can sign in with Google. A first sign-in creates a `pending` user who sees a
+  "waiting for approval" screen and nothing else; the owner gets a badge on the status
+  screen and a webhook notification. A setting switches this to invite-only.
+- An **invite link** carries a role and an expiry. Signing in through it activates the
+  user at once with that role. Room invitations to people without an account are invite
+  links for the Friend role.
+- The first owner is bootstrapped from configuration; the existing admin profile and its
+  owner PIN migrate to that user. The address allowlist setting is retired.
+- TV device pairing binds the device to the approving user, so devices are per user.
+
+**Users screen** (web app, `users.manage` only)
+
+- Pending queue: approve with a role, or deny.
+- User list: name, email, role, status, household, last seen, what they are watching now.
+- User detail: change role; toggle individual permissions; set limits; move household;
+  list devices and sessions with revoke; recent activity; suspend, reinstate, remove.
+- Roles tab: edit the permission set and limits of Family, Friend and custom roles.
+- Every change is written to an audit log (who, what, when), shown on the same screen.
+
+**Enforcement**
+
+- Permissions are checked in the server on every request, in one dependency used by all
+  routers, and in the catalog query layer for the `watch.*` family. Clients hide what a
+  user cannot do but are never the gate.
+- Access tokens carry a user version. Changing a role, an override or a status bumps it,
+  so the change applies on the next request and a suspended user's streams are cut.
+
+**Remote access.** The web app and API stay on the existing public hostname with Google
+sign-in required. Long-form video should not ride the tunnel: media segments are served
+from a direct HTTPS endpoint (reverse proxy plus one forwarded port) when it is
+configured, and fall back to the tunnel when it is not. Stream URLs are already
+short-lived signed tokens.
 
 ## 6. Parental policy
 
@@ -159,7 +220,7 @@ The existing content-policy service is switched on and completed:
 
 - ratings come from TMDB certifications (US), cached on the title;
 - a profile has a maximum rating and an "unknown rating" rule; kid profiles hide unknowns;
-- the adult category is visible only to profiles with an explicit adult flag, and opening
+- the adult category needs the `watch.adult` permission and a profile with the adult flag, and opening
   it asks for the owner PIN each session;
 - enforcement is in the server query layer, so browse, search, detail, playback resolve,
   rooms and recordings all obey it; switching to a less restricted profile needs its PIN.
@@ -169,7 +230,7 @@ The existing content-policy service is switched on and completed:
 - A room is a server object: host, title + chosen version + audio track, members, and an
   authoritative playback state `{position, playing, as_of}`.
 - Create from any title or live channel; share by link, QR code or six-character code.
-  Joining requires an account; a friend's first join can double as their invitation.
+  Joining needs `rooms.join`; someone without an account gets a Friend invite link.
 - Each member holds a WebSocket. Play, pause and seek from any member (host can lock
   controls) update the room state; clients steer to it and correct drift above one second.
 - If a member stalls, the room pauses for everyone for up to 15 seconds, then carries on.
@@ -184,6 +245,7 @@ The existing content-policy service is switched on and completed:
 - **Recorder service.** Schedules from guide programmes; codec-copy capture through the
   existing proxy producer, so a recording of a channel someone is watching shares their
   upstream. Padding: 2 minutes early; 5 minutes late, 60 for sports.
+- **Who.** Needs `recordings.schedule`; viewing needs `recordings.view`.
 - **Rules.** "This programme", "every new episode of this series", and "every game for
   this team" (built on the existing sports classifier and guide titles).
 - **Storage.** Files go to the array, in the folder Plex already uses for its recordings
@@ -200,9 +262,9 @@ The existing content-policy service is switched on and completed:
 
 - Search results include TMDB titles that are in neither source, marked "Not available".
   Selecting one offers **Request**.
-- StreamHub records the request and its state. Owner and family requests are approved
-  automatically; friend requests wait for the owner. Approved requests are sent to Seerr,
-  which drives Radarr and Sonarr.
+- StreamHub records the request and its state. Requests from users with
+  `requests.auto_approve` go straight through; others wait for someone with
+  `requests.approve`. Approved requests are sent to Seerr, which drives Radarr and Sonarr.
 - When the title appears in the Plex library sync, the request closes and the requester
   sees a notice on their home screen.
 
@@ -233,7 +295,7 @@ phases learned. The owner validates each phase on the dev instance and merges. P
 | 1 | Foundations | Space freed, watchdog and backups running, dev instance up |
 | 2 | One catalog | Everything browsable and playable from Dispatcharr + Plex on web and TV |
 | 3 | TV daily driver | Remote-only walk and soak tests pass on the real TV |
-| 4 | People | Accounts, roles, parental policy, remote sign-in for family and friends |
+| 4 | People | Users, roles, permissions and the Users screen; parental policy; remote sign-in (scenarios 4 and 8) |
 | 5 | Watch rooms | Acceptance scenario 3 |
 | 6 | Recording | Acceptance scenario 5, plus pause/rewind live |
 | 7 | Requests | Acceptance scenario 6 |
@@ -269,5 +331,5 @@ two weeks, and deleted.
 1. Merge each phase's pull request after validating it.
 2. One forwarded port on the router for direct media delivery (Phase 4), or a decision to
    stay on the tunnel.
-3. Google addresses for family and friends (Phase 4).
+3. Approving people and picking their role as they sign in (from Phase 4 on).
 4. Confirmation of the recordings folder on the array (Phase 6).
