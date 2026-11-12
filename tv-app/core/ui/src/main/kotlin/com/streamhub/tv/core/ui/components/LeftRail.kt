@@ -50,9 +50,10 @@ data class RailItem(val route: String, val label: String, val icon: ImageVector)
 
 /**
  * Rail geometry. Items are inset to the TV safe area (BRIEF UAT #3: nothing interactive outside
- * 48/27 dp); only the rail background bleeds to the screen edge. tokens.json still says 72/240 dp,
- * which predates the safe-area inset (72 dp minus a 48 dp margin leaves no room for a 44 dp item),
- * so the shell uses these widths instead of Tokens.Rail.
+ * 48/27 dp); only the rail background bleeds to the screen edge. The widths come from the
+ * `rail.tv_*` tokens: `rail.collapsed_w` / `expanded_w` (72/240 dp) are the web rail, which has no
+ * overscan margin, and 72 dp minus a 48 dp margin would leave no room for a 44 dp item.
+ * RailMetricsTest keeps the tokens and this arithmetic in step.
  */
 object RailMetrics {
     /** Width of a rail item (icon button) when collapsed. */
@@ -60,9 +61,9 @@ object RailMetrics {
     /** Gap between the items and the content edge. */
     val InnerGutter = 12.dp
     /** SafeMarginX (48) + item (44) + gutter (12) = 104 dp. Content is offset by this. */
-    val CollapsedW = Tokens.Canvas.SafeMarginX + ItemW + InnerGutter
-    /** Expanded width keeps the 240 dp token's label room (240 − 72 + 104). */
-    val ExpandedW = Tokens.Rail.ExpandedW + (CollapsedW - Tokens.Rail.CollapsedW)
+    val CollapsedW = Tokens.Rail.TvCollapsedW
+    /** The web rail's label room (240 − 72) beside the TV's collapsed width: 272 dp. */
+    val ExpandedW = Tokens.Rail.TvExpandedW
 }
 
 /**

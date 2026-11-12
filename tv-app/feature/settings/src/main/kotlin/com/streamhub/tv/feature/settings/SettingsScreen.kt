@@ -2,6 +2,7 @@ package com.streamhub.tv.feature.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.ShTextField
 import com.streamhub.tv.core.ui.focus.FocusSurface
+import com.streamhub.tv.core.ui.focus.InitialFocusOnce
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -61,6 +63,7 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
     val t = LocalThemeTokens.current
     val rail = LocalRailController.current
     val first = remember { FocusRequester() }
+    val screenFocus = remember { FocusRequester() }
     var switchOpener by remember { mutableStateOf<FocusRequester?>(null) }
     var restoreSwitchFocus by remember { mutableStateOf(false) }
     var hadOwnerPinPrompt by remember { mutableStateOf(false) }
@@ -76,10 +79,12 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
             restoreSwitchFocus=false
         }
     }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    // The section list gets focus the first time only. A plain LaunchedEffect(Unit) ran again every
+    // time the screen was shown, pulling focus out of whatever pane the viewer had been in.
+    InitialFocusOnce(initial = first, restore = screenFocus)
     DisposableEffect(Unit) { onDispose { vm.previewTheme(null); vm.cancelPin() } }
 
-    Row(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
+    Row(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY).focusRequester(screenFocus).focusRestorer().focusGroup()) {
         Column(Modifier.width(260.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX).focusRestorer(first), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Settings", style = MaterialTheme.typography.headlineSmall, color = t.text, modifier = Modifier.padding(bottom = 12.dp))
             SettingsSection.entries.forEachIndexed { i, sec ->
