@@ -1,0 +1,29 @@
+# media-ops sidecar: watchdog + nightly backup. Stock image, no build.
+# Copy this directory to the host, create .env from .env.example, then
+#   docker compose up -d
+services:
+  media-ops:
+    image: docker:cli
+    container_name: media-ops
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      STATE_DIR: /state
+      BACKUP_DEST: /backup-dest
+    entrypoint: ["/bin/sh", "/ops/media-ops.sh"]
+    volumes:
+      - ./media-ops.sh:/ops/media-ops.sh:ro
+      - ./state:/state
+      - ${BACKUP_DEST_HOST:?set BACKUP_DEST_HOST}:/backup-dest
+      - ${ENGINE_BACKUPS_HOST:?set ENGINE_BACKUPS_HOST}:/src/engine-backups:ro
+      - ${STREAMHUB_CONFIG_HOST:?set STREAMHUB_CONFIG_HOST}:/src/streamhub-config:ro
+    networks: [dockerapi]
+    mem_limit: 64m
+    logging:
+      driver: json-file
+      options: {max-size: "2m", max-file: "2"}
+
+networks:
+  dockerapi:
+    name: ${DOCKER_API_NETWORK:?set DOCKER_API_NETWORK}
+    external: true
