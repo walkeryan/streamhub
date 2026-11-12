@@ -7,12 +7,15 @@ import hashlib
 import logging
 import secrets
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 
+from app.adapters.language.country import group_country
+from app.adapters.language.inferrer import lang_from_category, normalise_code
 from app.domain.entities import (
     IPTV_SOURCE_TYPES,
     CatalogItem,
@@ -94,6 +97,11 @@ class SourceService:
         cfg = self.decrypt_config(row)
         return str(cfg.get("proxy") or "auto")
 
+    def default_language(self, row: Source) -> str | None:
+        """Language (ISO 639-3) assumed for this source's titles when nothing more specific is known."""
+        value = self.decrypt_config(row).get("default_language")
+        return normalise_code(value) if isinstance(value, str) else None
+
     def max_connections(self, row: Source) -> int | None:
         cfg = self.decrypt_config(row)
         v = cfg.get("max_connections") or (row.hints or {}).get("max_connections")
@@ -119,6 +127,8 @@ class SourceService:
             summary = self.provider(row).config_summary()
         except Exception:
             summary = {}
+        if row.type != SourceType.STREAMING_SERVICE.value:
+            summary = {**summary, "default_language": self.default_language(row)}
         return {
             "id": row.id,
             "type": row.type,
@@ -292,11 +302,19 @@ class SourceService:
 class DbCatalogSink:
     """CatalogSink implementation used during a sync run."""
 
-    def __init__(self, db: Database, source: Source, gen: int, language: LanguageInferrer) -> None:
+    def __init__(
+        self,
+        db: Database,
+        source: Source,
+        gen: int,
+        language: LanguageInferrer,
+        default_language: str | None = None,
+    ) -> None:
         self._db = db
         self._source = source
         self._gen = gen
         self._lang = language
+        self._default_language = default_language
         self._offset = int((source.hints or {}).get("channel_offset") or 0)
         self._groups: dict[str, str] = {}
         self._group_overrides: dict[str, str | None] = {}
@@ -335,7 +353,12 @@ class DbCatalogSink:
                     {"id": gid, "source_id": sid, "name": gname, "sort": self._group_sort, "sync_gen": self._gen}
                 )
             self.channel_count += 1
-            guess = self._lang.infer(ch)
+            # An adapter that cleaned the group name keeps the provider's own in raw_group;
+            # that is the one carrying the language and country tags.
+            raw_group = ch.extra.get("raw_group")
+            tagged = raw_group if isinstance(raw_group, str) and raw_group != gname else None
+            guess = self._lang.infer(replace(ch, group=tagged) if tagged else ch)
+            country = ch.tvg_country or (group_country(tagged)[0] if tagged else None)
             index = int(ch.extra.get("index") or self.channel_count)
             number_auto = self._offset + (ch.number if ch.number else index)
             data = {
@@ -359,7 +382,7 @@ class DbCatalogSink:
                     "group_name": gname,
                     "tvg_id": ch.tvg_id,
                     "epg_id": ch.tvg_id,
-                    "country": (ch.tvg_country or None),
+                    "country": country,
                     "number_auto": number_auto,
                     "number": number_auto,
                     "language": guess.code,
@@ -406,6 +429,8 @@ class DbCatalogSink:
         rows = []
         for it in items:
             self.item_counts[it.kind.value] = self.item_counts.get(it.kind.value, 0) + 1
+            if it.language is None:
+                it.language = self._default_language or lang_from_category(it.group)
             rows.append(item_row(self._source.id, it, self._gen))
         if rows:
             await upsert_titles(self._db, rows)
@@ -451,6 +476,9 @@ def item_row(source_id: str, it: CatalogItem, gen: int) -> dict[str, Any]:
         "tmdb_id": it.tmdb_id,
         "imdb_id": it.imdb_id,
         "group_name": it.group,
+        "language": normalise_code(it.language) or "und",
+        "quality": it.quality,
+        "adult": it.adult,
         "parent_ext_id": it.parent_ext_id,
         "season_number": it.season_number,
         "episode_number": it.episode_number,

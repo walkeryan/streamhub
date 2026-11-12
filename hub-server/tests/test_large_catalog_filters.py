@@ -36,6 +36,7 @@ async def seed_catalog(api: Api, title_count: int = 0, channel_count: int = 0) -
                         title=f"Film {i:06}",
                         norm_title=f"film {i:06}",
                         group_name=["UK| Films", "FR| Films", None][i % 3],
+                        language=["eng", "fra", "und"][i % 3],
                     )
                     for i in range(title_count)
                 ],
@@ -66,6 +67,7 @@ async def seed_catalog(api: Api, title_count: int = 0, channel_count: int = 0) -
                 title="Film hidden",
                 norm_title="film hidden",
                 group_name="UK| Films",
+                language="eng",
             )
         )
         await s.commit()

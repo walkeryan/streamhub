@@ -115,6 +115,11 @@ class CatalogItem:
     stream_url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
+    # Presentation facts an adapter may know. ``language`` is a filter hint (ISO 639-3 or
+    # "und"), not verified audio; ``None`` leaves it to the source default / category inference.
+    language: str | None = None
+    quality: str | None = None
+    adult: bool = False
 
 
 @dataclass(slots=True)

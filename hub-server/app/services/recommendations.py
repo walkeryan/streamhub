@@ -142,7 +142,7 @@ async def recommendations(
     if genres:
         genre_rows = func.json_each(Title.genres).table_valued("value")
         query = query.where(select(genre_rows.c.value).where(func.lower(genre_rows.c.value).in_(genres)).exists())
-    query = await catalog._filter_title_languages(query, await catalog.preferred_languages(profile_id, None))
+    query = catalog._filter_title_languages(query, await catalog.preferred_languages(profile_id, None))
     async with catalog._db.session() as session:
         rows = list(
             (

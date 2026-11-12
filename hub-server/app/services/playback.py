@@ -324,7 +324,7 @@ class PlaybackResolver:
                     evidence_row = await self._next_episode(profile_id, row)
                 except NotFound:
                     continue
-            info = audio_info(evidence_row.extra or {}, label=row.title, group=row.group_name)
+            info = audio_info(evidence_row.extra or {}, label=row.title, group=row.group_name, language=row.language)
             options.append(
                 {
                     "variant_id": ids.lib_id(row.source_id, row.ext_id),
@@ -461,7 +461,7 @@ class PlaybackResolver:
             row = await self._next_episode(profile_id, row)
             # Progress may change while the chooser is open or during another await.
             # Recheck the actual episode, never inherit a previous episode's evidence.
-            info = audio_info(row.extra or {}, label=row.title, group=row.group_name)
+            info = audio_info(row.extra or {}, label=row.title, group=row.group_name, language=row.language)
             if preferred and not preferred_audio(info, preferred) and not (variant_id and allow_unverified_audio):
                 raise Conflict("Confirm the next episode's audio source.", code="audio_selection_required")
         return row

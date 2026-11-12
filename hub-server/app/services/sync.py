@@ -110,7 +110,7 @@ class SyncService:
                 if row.type in (SourceType.M3U.value, SourceType.XTREAM.value):
                     await self._sources.language.prepare()
                 gen = int((row.hints or {}).get("sync_gen") or 0) + 1
-                sink = DbCatalogSink(self._db, row, gen, self._sources.language)
+                sink = DbCatalogSink(self._db, row, gen, self._sources.language, self._sources.default_language(row))
                 await prov.sync(sink)
                 counts = await sink.finalize()
                 hints = dict(row.hints or {})

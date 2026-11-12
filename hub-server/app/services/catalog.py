@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import ColumnElement, Select, String, case, cast, func, literal, or_, select, text, true
 
-from app.adapters.language.inferrer import lang_from_flag, lang_from_group, normalise_code
+from app.adapters.language.inferrer import normalise_code
 from app.domain.entities import CatalogItem, MediaKind
 from app.domain.ports import DetailProvider, ImageAuthProvider, MetadataProvider
 from app.infra.crypto import Crypto
@@ -195,6 +195,11 @@ class CatalogService:
         if isinstance(prov, DetailProvider):
             try:
                 kids = await prov.children(row_to_item(row))
+                for kid in kids:
+                    # Seasons and episodes carry no category of their own; without this an
+                    # adult series would leak through its episodes and language filters.
+                    kid.language = kid.language or row.language
+                    kid.adult = kid.adult or bool(row.adult)
                 await self._lazy_store(row.source_id, kids)
             except Exception as exc:
                 log.warning("children fetch failed", extra={"source": row.source_id, "err": type(exc).__name__})
@@ -434,7 +439,7 @@ class CatalogService:
                 match_ids = {row.id for rows in matches.values() for row in rows if row.source_id in enabled}
                 eligible_ids: set[int] = set()
                 if match_ids:
-                    query = await self._filter_title_languages(select(Title).where(Title.id.in_(match_ids)), languages)
+                    query = self._filter_title_languages(select(Title).where(Title.id.in_(match_ids)), languages)
                     async with self._db.session() as session:
                         eligible_ids = {row.id for row in (await session.execute(query)).scalars()}
                 scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
@@ -442,7 +447,9 @@ class CatalogService:
                 async def tile(hub: str, meta: Any) -> dict[str, Any]:
                     badges = [
                         badge_for_source(
-                            ctx.sources[row.source_id], in_app=ctx.is_in_app(ctx.sources[row.source_id].type)
+                            ctx.sources[row.source_id],
+                            in_app=ctx.is_in_app(ctx.sources[row.source_id].type),
+                            quality=row.quality,
                         )
                         for row in matches[hub]
                         if row.id in eligible_ids
@@ -499,21 +506,10 @@ class CatalogService:
         return [normalise_code(str(v)) or str(v).strip() for v in values if str(v).strip()]
 
     @staticmethod
-    def category_language(group: str | None) -> str:
-        # Categories are a provider hint, not verified audio metadata. Never guess English
-        # from a Latin-script title or treat missing metadata as English.
-        return lang_from_group(group) or lang_from_flag(group) or "und"
-
-    async def _filter_title_languages(self, query: Select[Any], languages: list[str]) -> Select[Any]:
-        if not languages:
-            return query
-        async with self._db.session() as s:
-            groups = list((await s.execute(query.with_only_columns(Title.group_name).distinct())).scalars())
-        matching = [g for g in groups if g is not None and self.category_language(g) in languages]
-        terms = [Title.group_name.in_(matching)]
-        if "und" in languages:
-            terms.append(Title.group_name.is_(None))
-        return query.where(or_(*terms))
+    def _filter_title_languages(query: Select[Any], languages: list[str]) -> Select[Any]:
+        # Title.language is fixed at sync (explicit tag, source default, category hint).
+        # It is a provider hint, not verified audio metadata; unknown stays "und".
+        return query.where(Title.language.in_(languages)) if languages else query
 
     async def browse_categories(
         self,
@@ -531,7 +527,7 @@ class CatalogService:
         query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
         if q and q.strip():
             query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
-        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        query = self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
         async with self._db.session() as s:
             rows = (
                 await s.execute(
@@ -551,19 +547,11 @@ class CatalogService:
         ctx = await self.tile_context(profile_id)
         query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
         async with self._db.session() as session:
-            groups = list((await session.execute(query.with_only_columns(Title.group_name).distinct())).scalars())
-            by_language: dict[str, list[str]] = {}
-            for group in groups:
-                if group is not None:
-                    by_language.setdefault(self.category_language(group), []).append(group)
-            code = (
-                case(*[(Title.group_name.in_(names), lang) for lang, names in by_language.items()], else_="und")
-                if by_language
-                else literal("und")
-            )
             rows = (
                 await session.execute(
-                    query.with_only_columns(code, func.count(func.distinct(self._canonical_key()))).group_by(code)
+                    query.with_only_columns(Title.language, func.count(func.distinct(self._canonical_key()))).group_by(
+                        Title.language
+                    )
                 )
             ).all()
         counts = {code: int(count) for code, count in rows}
@@ -636,7 +624,7 @@ class CatalogService:
             query = query.where(
                 Title.norm_title.like("%" + _escape_like(ids.normalise_title(text_query)) + "%", escape="\\")
             )
-        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        query = self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
         # Count and page identities before loading variants. Merging raw pages
         # allowed the same TMDB film to recur on later pages and inflated totals.
         key = self._canonical_key()
@@ -726,7 +714,7 @@ class CatalogService:
             query = query.where(Title.group_name == category)
         if q and q.strip():
             query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
-        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        query = self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
         scoped = query.with_only_columns(self._canonical_key().label("hub"), Title.genres).subquery()
         values = func.json_each(scoped.c.genres).table_valued("value", "type")
         name = func.lower(func.trim(values.c.value))
@@ -795,7 +783,7 @@ class CatalogService:
             query = select(Title).where(
                 Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.id.in_(matching_ids)
             )
-            query = await self._filter_title_languages(query, languages)
+            query = self._filter_title_languages(query, languages)
             normalized = func.canonical_title_key(Title.title)
             phrase_rank = case(
                 (normalized == norm, 0),
@@ -898,7 +886,7 @@ class CatalogService:
                 match_ids = {r.id for matches in matched.values() for r in matches if r.source_id in enabled}
                 eligible_ids: set[int] = set()
                 if match_ids:
-                    eligible_query = await self._filter_title_languages(
+                    eligible_query = self._filter_title_languages(
                         select(Title).where(Title.id.in_(match_ids)), languages
                     )
                     async with self._db.session() as session:
@@ -907,7 +895,11 @@ class CatalogService:
                     popularity[hub] = meta.popularity
                     eligible = [r for r in matched[hub] if r.id in eligible_ids]
                     badges = [
-                        badge_for_source(ctx.sources[r.source_id], in_app=ctx.is_in_app(ctx.sources[r.source_id].type))
+                        badge_for_source(
+                            ctx.sources[r.source_id],
+                            in_app=ctx.is_in_app(ctx.sources[r.source_id].type),
+                            quality=r.quality,
+                        )
                         for r in eligible
                     ]
                     scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
@@ -984,7 +976,7 @@ class CatalogService:
             Title.source_id.in_(self._enabled(ctx)),
             or_(Title.title.ilike("%halloween%"), Title.group_name.ilike("%halloween%")),
         )
-        query = await self._filter_title_languages(query, await self.preferred_languages(profile_id, None))
+        query = self._filter_title_languages(query, await self.preferred_languages(profile_id, None))
         async with self._db.session() as session:
             rows = list((await session.execute(query.order_by(Title.title, Title.id).limit(limit * 2))).scalars())
         return ctx.merge(ctx.title_tile(row) for row in rows)[:limit]
@@ -1001,7 +993,7 @@ class CatalogService:
         q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(enabled), Title.added_at.is_not(None))
         if source_id:
             q = q.where(Title.source_id == source_id)
-        q = await self._filter_title_languages(q, languages or [])
+        q = self._filter_title_languages(q, languages or [])
         async with self._db.session() as s:
             rows = list(
                 (await s.execute(q.order_by(Title.added_at.desc(), Title.id.desc()).limit(limit * 2))).scalars()

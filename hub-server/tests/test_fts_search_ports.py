@@ -141,13 +141,11 @@ def test_fts_upgrade_from_pin_schema_preserves_existing_data(tmp_path):
         session.add(Source(id="fixture-source", type="plex", name="Fixture", config_enc="synthetic-retained-data"))
         session.add(OwnerCredential(id=1, credential_version=7, password_hash="synthetic-hash"))
         session.flush()
-        session.add(
-            Title(
-                source_id="fixture-source",
-                ext_id="42",
-                kind="movie",
-                title="Before migration",
-                norm_title="before migration",
+        # Raw SQL: the ORM model describes the head schema, which this database predates.
+        session.execute(
+            text(
+                "INSERT INTO title(source_id,ext_id,kind,title,norm_title,genres,extra,sync_gen) "
+                "VALUES ('fixture-source','42','movie','Before migration','before migration','[]','{}',0)"
             )
         )
         session.commit()
@@ -158,7 +156,7 @@ def test_fts_upgrade_from_pin_schema_preserves_existing_data(tmp_path):
             assert session.get(Source, "fixture-source").config_enc == "synthetic-retained-data"
             assert session.get(OwnerCredential, 1).credential_version == 7
             assert session.get(OwnerCredential, 1).password_hash == "synthetic-hash"
-            assert session.query(Title).one().ext_id == "42"
+            assert session.execute(text("SELECT ext_id FROM title")).scalars().all() == ["42"]
 
     command.upgrade(cfg, "0006")
     preserved()

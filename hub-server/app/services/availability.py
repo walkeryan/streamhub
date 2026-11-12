@@ -220,7 +220,7 @@ class AvailabilityService:
     ) -> tuple[list[dict[str, Any]], list[Title]]:
         matches = await self.library_matches(media_type, tmdb_id=tmdb_id, imdb_id=imdb_id, title=title, year=year)
         badges = [
-            badge_for_source(sources[m.source_id], in_app=is_in_app(sources[m.source_id].type))
+            badge_for_source(sources[m.source_id], in_app=is_in_app(sources[m.source_id].type), quality=m.quality)
             for m in matches
             if m.source_id in sources
         ]

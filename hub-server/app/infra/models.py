@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     TypeDecorator,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -118,6 +119,8 @@ class Title(Base):
         Index("ix_title_norm", "norm_title", "year"),
         Index("ix_title_kind_added", "kind", "added_at"),
         Index("ix_title_parent", "source_id", "parent_ext_id"),
+        Index("ix_title_language", "language"),
+        Index("ix_title_adult", "adult"),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[str] = mapped_column(ForeignKey("source.id", ondelete="CASCADE"))
@@ -133,7 +136,12 @@ class Title(Base):
     genres: Mapped[list[Any]] = mapped_column(JSON, default=list)
     tmdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     imdb_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Display shelf. The provider's own category name, when it differs, is extra["raw_category"].
     group_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Filter hint (ISO 639-3 or "und") fixed at sync; never evidence of the audio actually present.
+    language: Mapped[str] = mapped_column(String(8), default="und", server_default="und")
+    quality: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    adult: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     parent_ext_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     season_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     episode_number: Mapped[int | None] = mapped_column(Integer, nullable=True)

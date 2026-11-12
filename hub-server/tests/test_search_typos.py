@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import insert
 
+from app.adapters.language.inferrer import lang_from_category
 from app.infra.models import Source, Title
 from app.services.ids import normalise_title
 from app.services.search_match import search_tokens, token_match_rank
@@ -44,6 +45,7 @@ async def test_typo_partial_ranking_and_scope_on_large_catalog(api: Api):
                     title=title,
                     norm_title=normalise_title(title),
                     group_name=group,
+                    language=lang_from_category(group) or "und",
                 )
                 for source, ext, title, group in [
                     ("catalog", "canonical", canonical, "UK| Series"),
@@ -66,6 +68,7 @@ async def test_typo_partial_ranking_and_scope_on_large_catalog(api: Api):
                     title=f"Universe Documentary {i}",
                     norm_title=f"universe documentary {i}",
                     group_name="UK| Series",
+                    language="eng",
                 )
                 for i in range(600)
             ],

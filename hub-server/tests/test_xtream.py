@@ -279,7 +279,8 @@ async def test_full_sync_and_short_epg(tmp_path: Path) -> None:
     assert (await src.test()).ok
     sink = Sink()
     await src.sync(sink)
-    assert [c.name for c in sink.channels] == ["BBC News"] and sink.channels[0].group == "UK | News"
+    assert [c.name for c in sink.channels] == ["BBC News"] and sink.channels[0].group == "News"
+    assert sink.channels[0].extra["raw_group"] == "UK | News"  # kept for language and country inference
     assert {i.kind for i in sink.items} == {MediaKind.VOD, MediaKind.SERIES}
     assert sink.hints["max_connections"] == 1
     epg = await src.short_epg(sink.channels[0])
@@ -445,3 +446,62 @@ async def test_rows_stored_before_namespacing_still_resolve(tmp_path: Path) -> N
     src.client.api.assert_awaited_once_with("get_series_info", series_id="9")
     legacy_episode = CatalogItem(ext_id="1001", kind=MediaKind.EPISODE, title="E", extra={"ext": "mp4"})
     assert (await src.stream_for_item(legacy_episode)).url == f"{SERVER}/series/alice/s3cret/1001.mp4"
+
+
+def test_mapping_applies_presentation(client: XtreamClient) -> None:
+    from app.adapters.xtream.presentation import PresentationConfig
+
+    config = PresentationConfig.from_config(
+        {
+            "default_language": "en",
+            "shelf_map": {"TOP MOVIES BLURAY (MULTI-SUBS)": "Staff Picks"},
+            "group_map": {"US| NFL PPV": "Game Day"},
+            "hidden_groups": ["US| NEWS ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ"],
+            "adult_categories": ["EN - LATE NIGHT"],
+        }
+    )
+    cats = {
+        "1": "NETFLIX MOVIES ⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ",
+        "2": "TOP MOVIES BLURAY (MULTI-SUBS)",
+        "3": "EN - LATE NIGHT",
+        "4": "US| SPORT ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ",
+        "5": "US| NEWS ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ",
+        "6": "US| NFL PPV",
+    }
+    movie = map_vod({"stream_id": 1, "name": "NF - Millionaire", "category_id": "1"}, cats, client, config)
+    assert movie is not None
+    assert (movie.title, movie.group, movie.quality, movie.language, movie.adult) == (
+        "Millionaire",
+        "Netflix",
+        "4K",
+        "eng",
+        False,
+    )
+    assert movie.extra["raw_title"] == "NF - Millionaire" and movie.extra["raw_category"] == cats["1"]
+    assert movie.extra["ext"] == "mp4" and movie.extra["stream_id"] == "1" and movie.extra["kids"] is False
+
+    picked = map_vod({"stream_id": 2, "name": "EN-TOP - Something (1999)", "category_id": "2"}, cats, client, config)
+    assert picked is not None and (picked.title, picked.year, picked.group) == ("Something", 1999, "Staff Picks")
+    flagged = map_vod({"stream_id": 3, "name": "DE - Night Ferry", "category_id": "1", "is_adult": "1"}, cats, client)
+    listed = map_vod({"stream_id": 4, "name": "Night Ferry", "category_id": "3"}, cats, client, config)
+    assert flagged is not None and flagged.adult and flagged.language == "deu"
+    assert listed is not None and listed.adult and listed.group == "Late Night"
+
+    series = map_series({"series_id": 5, "name": "4K-A+ - Berlin ER (2025) (DE)", "category_id": "1"}, cats, config)
+    assert series is not None
+    assert (series.ext_id, series.title, series.year, series.quality) == ("s:5", "Berlin ER", 2025, "4K")
+    unknown = map_series({"series_id": 6, "name": "Harbour Lights", "category_id": "9"}, cats)
+    assert unknown is not None and unknown.group is None and unknown.language == "und"
+
+    sport = map_live({"stream_id": 10, "name": "Sport One", "category_id": "4"}, cats, "ts", client, config)
+    assert sport is not None and sport.group == "Sport" and sport.extra["raw_group"] == cats["4"]
+    game = map_live({"stream_id": 11, "name": "Game One", "category_id": "6"}, cats, "ts", client, config)
+    assert game is not None and game.group == "Game Day"
+    assert map_live({"stream_id": 12, "name": "News One", "category_id": "5"}, cats, "ts", client, config) is None
+
+
+def test_config_summary_lists_presentation_settings(tmp_path: Path) -> None:
+    summary = make_source(tmp_path, default_language="en", hidden_groups=["US| NFL PPV"], shelf_map="bogus")
+    assert summary.config_summary()["default_language"] == "eng"
+    assert summary.config_summary()["hidden_groups"] == ["US| NFL PPV"]
+    assert summary.config_summary()["shelf_map"] == {}  # malformed settings are ignored, never fatal

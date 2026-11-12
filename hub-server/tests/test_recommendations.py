@@ -1,5 +1,6 @@
 from sqlalchemy import update
 
+from app.adapters.language.inferrer import lang_from_category
 from app.infra.models import Profile, Progress, Source, Title
 from app.services.recommendations import recommendations
 from tests.conftest import Api
@@ -26,7 +27,14 @@ async def seed(api: Api, count=0):
         for ext, genre, tmdb, source, group in rows:
             s.add(
                 Title(
-                    source_id=source, ext_id=ext, kind="vod", title=ext, tmdb_id=tmdb, genres=[genre], group_name=group
+                    source_id=source,
+                    ext_id=ext,
+                    kind="vod",
+                    title=ext,
+                    tmdb_id=tmdb,
+                    genres=[genre],
+                    group_name=group,
+                    language=lang_from_category(group) or "und",
                 )
             )
         s.add_all(
@@ -38,6 +46,7 @@ async def seed(api: Api, count=0):
                 tmdb_id=1000 + i,
                 genres=["Comedy"],
                 group_name="English",
+                language="eng",
             )
             for i in range(count)
         )
@@ -102,6 +111,7 @@ async def test_episode_history_uses_local_show_and_excludes_duplicates(api: Api)
                     tmdb_id=10,
                     genres=["Action"],
                     group_name="English",
+                    language="eng",
                 ),
                 Title(
                     source_id="s",
@@ -111,6 +121,7 @@ async def test_episode_history_uses_local_show_and_excludes_duplicates(api: Api)
                     tmdb_id=10,
                     genres=["Action"],
                     group_name="English",
+                    language="eng",
                 ),
                 Title(source_id="s", ext_id="season", kind="season", title="Season", parent_ext_id="show"),
                 Title(source_id="s", ext_id="episode", kind="episode", title="Episode", parent_ext_id="season"),
@@ -167,6 +178,7 @@ async def test_episode_tmdb_namespace_never_matches_unrelated_show(api: Api):
                     tmdb_id=42,
                     genres=["Action"],
                     group_name="English",
+                    language="eng",
                 ),
                 Progress(profile_id=api.profile_id, ref_id="lib:s:ep", completed=True),
             ]

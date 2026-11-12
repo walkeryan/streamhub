@@ -13,7 +13,10 @@ from app.adapters.language.inferrer import lang_from_group, normalise_code
 EVIDENCE = {"provider_audio_tracks", "media_probe"}
 
 
-def audio_info(extra: dict[str, Any], *, label: str = "", group: str | None = None) -> dict[str, Any]:
+def audio_info(
+    extra: dict[str, Any], *, label: str = "", group: str | None = None, language: str | None = None
+) -> dict[str, Any]:
+    """``language`` is the hint already stored on the row; label/group are parsed only without one."""
     raw = extra.get("audio_tracks")
     evidence = extra.get("audio_evidence")
     tracks = [t for t in raw if isinstance(t, dict)] if isinstance(raw, list) and evidence in EVIDENCE else []
@@ -27,7 +30,12 @@ def audio_info(extra: dict[str, Any], *, label: str = "", group: str | None = No
         default = languages[0]
     if default == "und":
         default = None
-    hint = normalise_code(lang_from_group(group or "") or lang_from_group(label) or "")
+    stored = normalise_code(language)
+    hint = (
+        stored
+        if stored and stored != "und"
+        else normalise_code(lang_from_group(group or "") or lang_from_group(label) or "")
+    )
     return {
         "audio_languages": known,
         "audio_verified": bool(known),

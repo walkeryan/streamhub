@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 from sqlalchemy import insert
 
+from app.adapters.language.inferrer import lang_from_category
 from app.domain.entities import MetaTitle
 from app.infra.models import Favorite, Progress, Source, Title
 from app.services.ids import normalise_title
@@ -28,6 +29,7 @@ async def seeded(api, count=65):
                             tmdb_id=1000 + i,
                             year=2000,
                             group_name=group,
+                            language=lang_from_category(group) or "und",
                             genres=["Drama"],
                         )
                     )
@@ -84,6 +86,7 @@ async def test_unavailable_metadata_and_no_id_titles_remain_honest(api):
                     year=year,
                     tmdb_id=0 if ext == "unknown" else None,
                     group_name="UK| Movies",
+                    language="eng",
                 )
             )
         await session.commit()
