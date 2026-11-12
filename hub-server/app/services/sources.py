@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 
 LAZY_GEN = -1  # rows fetched lazily (seasons/episodes, details) — never swept by sync
 CHANNEL_OFFSET_STEP = 1000
+IDENTIFIER_COLUMNS = ("tmdb_id", "imdb_id")  # a sync may replace these, never clear them
 
 
 def new_id() -> str:
@@ -499,6 +500,10 @@ async def upsert_titles(db: Database, rows: list[dict[str, Any]]) -> None:
             ex = stmt.excluded
             cols = [c for c in chunk[0] if c not in ("source_id", "ext_id")]
             set_ = {c: getattr(ex, c) for c in cols}
+            # List endpoints often omit ids that a detail call found later. Erasing them
+            # would change the title's hub id and orphan its favorites and progress.
+            for c in IDENTIFIER_COLUMNS:
+                set_[c] = func.coalesce(getattr(ex, c), getattr(Title, c))
             if chunk[0]["sync_gen"] == LAZY_GEN:
                 # lazy refresh must not demote a synced row to LAZY or drop sync-only data
                 set_.pop("sync_gen", None)
