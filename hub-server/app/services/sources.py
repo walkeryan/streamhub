@@ -197,9 +197,8 @@ class SourceService:
         elif st == SourceType.JELLYFIN:
             if not cfg.get("server_url"):
                 raise ServiceError("jellyfin config needs server_url")
-        elif st == SourceType.PLEX:
-            if not cfg.get("server_url") and not cfg.get("token"):
-                raise ServiceError("plex sources are created via /sources/plex/pin")
+        elif st == SourceType.PLEX and not cfg.get("server_url") and not cfg.get("token"):
+            raise ServiceError("plex sources are created via /sources/plex/pin")
 
     async def update(self, source_id: str, patch: dict[str, Any]) -> Source:
         async with self._db.session() as s:
