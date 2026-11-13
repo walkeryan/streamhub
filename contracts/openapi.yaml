@@ -909,8 +909,12 @@ components:
         - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
           `host_only`, `live_no_seek`, `bad_message`.
         - `closed {reason}`: the last message before the server closes the socket: `expired`, `deleted`,
-          `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized` (4401),
-          `not_found`, `not_a_member` (4404).
+          `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized`,
+          `remote_access_denied` (4401), `not_found`, `not_a_member` (4404).
+          `remote_access_denied` is the socket's form of the API's 403 of that name: the member's
+          user lacks remote.access and the socket was opened from outside home_networks. The seat
+          is not taken away by it. POST /rooms/{code}/join and GET /rooms/{code}/descriptor answer
+          403 remote_access_denied in the same situation.
 
         On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
         Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
@@ -1706,7 +1710,7 @@ paths:
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoin' } } } }
       responses:
         '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoined' } } } }
-        '403': { description: "content_restricted and the other /playback/resolve refusals" }
+        '403': { description: "remote_access_denied (as on every call of a user without remote.access away from the home network), content_restricted and the other /playback/resolve refusals" }
         '404': { description: "room_not_found, or the room's title or variant is not available to this profile" }
         '409': { description: "room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them)" }
   /rooms/{code}/descriptor:

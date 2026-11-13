@@ -9,6 +9,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.requests import HTTPConnection
 
 from app.container import Container
 from app.services.auth import Principal
@@ -51,8 +52,8 @@ def device_label(kind: str, agent: str) -> str | None:
     return f"{browser} on {system}" if system else browser
 
 
-def client_ip(request: Request, settings: Any = None) -> str | None:
-    """Where this request comes from: the peer, or what a trusted proxy says it forwarded for."""
+def client_ip(request: HTTPConnection, settings: Any = None) -> str | None:
+    """Where this request (or socket) comes from: the peer, or what a trusted proxy says it forwarded for."""
     settings = settings or request.app.state.container.settings
     forwarded = ",".join(request.headers.getlist("x-forwarded-for"))
     return client_address(request.client.host if request.client else None, forwarded, settings.forwarded_allow_ips)
@@ -70,11 +71,11 @@ def session_meta(request: Request, kind: str | None = None) -> SessionMeta:
     )
 
 
-def require_reachable(request: Request, c: Container, remote: bool) -> None:
+def require_reachable(request: HTTPConnection, c: Container, remote: bool) -> None:
     """Without ``remote.access`` (``remote``) a user is served on the home network and nowhere else.
 
-    Asked for a bearer token's principal and, on the signed stream and image URLs, for the
-    user the URL was signed for.
+    Asked for a bearer token's principal and, where there is none, for the user a signed stream
+    or image URL was signed for and the user a room member token was issued to.
     """
     if remote:
         return

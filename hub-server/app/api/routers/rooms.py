@@ -209,15 +209,18 @@ async def close_room(code: str, c: C, p: P) -> Response:
     return Response(status_code=204)
 
 
-async def _admit(c: Container, code: str, member_token: str) -> Connection | tuple[str, int]:
+async def _admit(c: Container, ws: WebSocket, code: str, member_token: str) -> Connection | tuple[str, int]:
     """The member's connection, or why (and with which close code) the socket is refused."""
     claims = c.rooms.tokens.verify(member_token)
     if claims is None or claims.room != code.upper():
         return "unauthorized", CLOSE_UNAUTHORIZED
     try:
-        await c.auth.session_valid(claims.profile_id, claims.token_version, claims.session_id)
-    except ServiceError:
-        return "unauthorized", CLOSE_UNAUTHORIZED
+        # The socket carries no bearer, so the member's user is held to the home network here,
+        # as the join that seated them was and as their descriptor is.
+        p = await c.auth.session_principal(claims.profile_id, claims.token_version, claims.session_id)
+        require_reachable(ws, c, "remote.access" in p.permissions)
+    except ServiceError as exc:
+        return "remote_access_denied" if exc.code == "remote_access_denied" else "unauthorized", CLOSE_UNAUTHORIZED
     # No await between here and attach: the room cannot change under the checks.
     room = c.rooms.registry.get(code)
     if room is None:
@@ -251,7 +254,7 @@ async def room_socket(ws: WebSocket, code: str, member_token: str = "") -> None:
     c: Container = ws.app.state.container
     # Admitted before the handshake completes, so nothing the room says after the
     # client sees the socket open can be missed.
-    admitted = await _admit(c, code, member_token)
+    admitted = await _admit(c, ws, code, member_token)
     if not isinstance(admitted, Connection):
         # Accept, then close with a reason: a browser cannot read a refused handshake.
         reason, close_code = admitted
