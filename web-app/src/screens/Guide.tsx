@@ -78,9 +78,9 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
           }}>Now</Button>
         </div>
         <div className="flex gap-3 flex-wrap items-center" aria-label="Guide pages">
-          <Button focusKey="guide:previous" disabled={page === 0 || ch.isFetching} onEnter={() => { setPage((p) => Math.max(0, p - 1)); setSel(null) }}>Previous channels</Button>
-          <span className="label" role="status">{ch.isFetching ? 'Loading channels…' : `${total.toLocaleString()} channels · Page ${page + 1} of ${pages}`}</span>
-          <Button focusKey="guide:next" disabled={page + 1 >= pages || ch.isFetching} onEnter={() => { setPage((p) => p + 1); setSel(null) }}>Next channels</Button>
+          {pages > 1 && <Button focusKey="guide:previous" disabled={page === 0 || ch.isFetching} onEnter={() => { setPage((p) => Math.max(0, p - 1)); setSel(null) }}>Previous channels</Button>}
+          <span className="label" role="status">{ch.isFetching ? 'Loading channels…' : pages > 1 ? `${total.toLocaleString()} channels · Page ${page + 1} of ${pages}` : `${total.toLocaleString()} channels`}</span>
+          {pages > 1 && <Button focusKey="guide:next" disabled={page + 1 >= pages || ch.isFetching} onEnter={() => { setPage((p) => p + 1); setSel(null) }}>Next channels</Button>}
         </div>
       </FocusGroup>
       {ch.isLoading || ch.isPlaceholderData || epg.isLoading ? <Skeleton style={{ height: '24rem' }} /> : channels.length === 0 ? (
@@ -90,25 +90,25 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
       ) : (
         <>
           <div ref={scroller} className="epg" style={{ overflow: 'auto', maxHeight: 'calc(100dvh - 24rem)', minHeight: '14rem', borderRadius: 'var(--radius-md)', background: 'var(--t-surface)' }}>
-            <div style={{ width: `calc(${totalMin * REM_PER_MIN}rem + 13rem)`, position: 'relative' }}>
+            <div style={{ width: `calc(${totalMin * REM_PER_MIN}rem + var(--epg-ch))`, position: 'relative' }}>
               <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, background: 'var(--t-surface)', height: '2rem' }}>
-                <div style={{ width: '13rem', flex: 'none', position: 'sticky', left: 0, zIndex: 21, background: 'var(--t-surface)' }} />
+                <div style={{ width: 'var(--epg-ch)', flex: 'none', position: 'sticky', left: 0, zIndex: 21, background: 'var(--t-surface)' }} />
                 {ticks.map((t) => <div key={t} className="label" style={{ width: `${COL_REM}rem`, flex: 'none', paddingLeft: '0.5rem', borderLeft: '1px solid color-mix(in srgb, var(--t-text) 12%, transparent)', lineHeight: '2rem' }}>{fmtTime(t)}</div>)}
               </div>
               <FocusGroup focusKey="guide:grid" remember>
                 {channels.map((c) => (
                   <FocusGroup key={c.id} focusKey={`guide:row:${c.id}`} className="" remember>
                     <div style={{ display: 'flex', height: '3.5rem' }}>
-                      <div style={{ width: '13rem', flex: 'none', position: 'sticky', left: 0, zIndex: 10, background: 'var(--t-surface)', padding: '0.25rem' }}>
+                      <div style={{ width: 'var(--epg-ch)', flex: 'none', position: 'sticky', left: 0, zIndex: 10, background: 'var(--t-surface)', padding: '0.25rem' }}>
                         <Focusable focusKey={`guide:ch:${c.id}`} className="flex items-center gap-2 h-full px-2 rounded-md fx-flat" label={`${c.number} ${c.name}`} onFocus={() => onSelectChannel(c.id)} onEnter={() => go(`/play/${encodeURIComponent(c.id)}`)}>
                           <span className="label" style={{ width: '1.75rem', textAlign: 'right' }}>{c.number}</span>
                           <LogoBlock name={c.name} logo={c.logo} />
-                          <span className="truncate" style={{ fontSize: 'var(--text-label)', fontWeight: 600 }}>{c.name}</span>
+                          <span className="truncate epg-name" style={{ fontSize: 'var(--text-label)', fontWeight: 600 }}>{c.name}</span>
                         </Focusable>
                       </div>
                       <div style={{ position: 'relative', flex: 1, borderTop: '1px solid color-mix(in srgb, var(--t-text) 8%, transparent)' }}>
                         {(epg.data?.[c.id] ?? []).length === 0 && (
-                          <span className="label muted" style={{ position: 'sticky', left: '13.5rem', display: 'inline-block', padding: '1rem 0.5rem' }}>
+                          <span className="label muted" style={{ position: 'sticky', left: 'calc(var(--epg-ch) + 0.5rem)', display: 'inline-block', padding: '1rem 0.5rem' }}>
                             {c.epg_id ? 'No schedule supplied for this time' : 'No guide mapping supplied'}
                           </span>
                         )}
@@ -133,7 +133,7 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
                   </FocusGroup>
                 ))}
               </FocusGroup>
-              <div aria-hidden="true" data-testid="now-line" style={{ position: 'absolute', top: 0, bottom: 0, left: `calc(13rem + ${nowLeft}rem)`, width: 2, background: 'var(--t-danger)', zIndex: 15, pointerEvents: 'none' }} />
+              <div aria-hidden="true" data-testid="now-line" style={{ position: 'absolute', top: 0, bottom: 0, left: `calc(var(--epg-ch) + ${nowLeft}rem)`, width: 2, background: 'var(--t-danger)', zIndex: 15, pointerEvents: 'none' }} />
             </div>
           </div>
           <div className="mt-3" style={{ minHeight: '4.5rem' }} aria-live="polite" data-testid="guide-info">
