@@ -113,7 +113,8 @@ def rig(settings: AppSettings, container: Container) -> Iterator[Rig]:
     app = create_app(settings, container=container, start_background=False)
     clock = FakeClock()
     container.rooms.clock = clock
-    with TestClient(app, base_url="http://hub.test") as client:
+    # A loopback peer, like the other suites: "testclient" is no address, so nobody's home network.
+    with TestClient(app, base_url="http://hub.test", client=("127.0.0.1", 50000)) as client:
         rig = Rig(client, container, clock)
         admin = next(p for p in client.get("/api/v1/profiles").json() if p["is_admin"])
         r = client.post("/api/v1/auth/login", json={"profile_id": admin["id"], "password": ADMIN_PASSWORD})
@@ -310,9 +311,80 @@ def test_member_who_may_not_watch_the_title_is_refused(rig: Rig) -> None:
     assert (r.status_code, r.json()) == (403, expected.json()) and r.json()["code"] == "content_restricted"
     r = rig.req("GET", f"/rooms/{code}", child)  # the join screen must not describe it either
     assert r.status_code == 403 and r.json()["code"] == "content_restricted"
+    # A restricted profile holds the Kid role's permissions at most: no rooms of its own at all.
     r = rig.req("POST", "/rooms", child, json={"id": rig.film})
-    assert r.status_code == 403 and r.json()["code"] == "content_restricted"
+    assert r.status_code == 403 and r.json()["missing"] == ["rooms.create"]
     assert [m["name"] for m in rig.req("GET", f"/rooms/{code}").json()["members"]] == ["Admin"]
+
+
+def member_of(rig: Rig, role_id: str, name: str, **patch: Any) -> dict[str, str]:
+    """A managed user in ``role_id`` (with overrides), signed in: their bearer header."""
+    created = rig.req("POST", "/users", json={"name": name, "role_id": role_id, "pin": "1234"})
+    assert created.status_code == 201, created.text
+    if patch:
+        assert rig.req("PATCH", f"/users/{created.json()['id']}", json=patch).status_code == 200
+    login = rig.client.post("/api/v1/auth/login", json={"profile_id": created.json()["profile_id"], "pin": "1234"})
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+UNRATED_OK = {"rating_ceiling_movie": None, "rating_ceiling_tv": None, "allow_unrated": True}
+
+
+def test_a_kid_joins_rooms_but_cannot_create_one(rig: Rig) -> None:
+    # The fixture film carries no rating; this is about the room permissions alone.
+    kid = member_of(rig, "kid", "Kid", limits=UNRATED_OK)
+    r = rig.req("POST", "/rooms", kid, json={"id": rig.film})
+    assert r.status_code == 403 and r.json()["code"] == "forbidden" and r.json()["missing"] == ["rooms.create"]
+    assert len(rig.c.rooms.registry) == 0
+    code = rig.room()["code"]
+    shown = rig.req("GET", f"/rooms/{code}", kid)
+    assert shown.status_code == 200 and shown.json()["is_host"] is False
+    joined = rig.join_raw(code, kid, client="android_tv")
+    assert joined.status_code == 200, joined.text
+    assert rig.members(code) == ["Kid"]
+    # Granting the one permission is all it takes.
+    host = member_of(rig, "kid", "Host", limits=UNRATED_OK, grants=["rooms.create"])
+    assert rig.req("POST", "/rooms", host, json={"id": rig.film}).status_code == 201
+
+
+def test_without_rooms_join_a_room_cannot_be_seen_or_entered(rig: Rig) -> None:
+    code = rig.room()["code"]
+    barred = member_of(rig, "family", "Barred", denials=["rooms.join"])
+    for r in (rig.req("GET", f"/rooms/{code}", barred), rig.join_raw(code, barred)):
+        assert r.status_code == 403 and r.json()["missing"] == ["rooms.join"], r.text
+    assert rig.members(code) == []
+    # Creating is its own permission: a room they open is theirs to close, not to watch.
+    theirs = rig.room(headers=barred)
+    assert rig.join_raw(theirs["code"], barred).status_code == 403
+    assert rig.req("DELETE", f"/rooms/{theirs['code']}", barred).status_code == 204
+
+
+def test_a_room_is_closed_by_its_host_or_a_users_manager(rig: Rig) -> None:
+    guest = member_of(rig, "family", "Guest")
+    # system.manage used to be what closed anyone's room; it no longer is.
+    operator = member_of(rig, "family", "Operator", grants=["system.manage", "sources.manage"])
+    manager = member_of(rig, "family", "Manager", grants=["users.manage"])
+    code = rig.room(headers=guest)["code"]
+    for other in (operator, member_of(rig, "friend", "Friend")):
+        r = rig.req("DELETE", f"/rooms/{code}", other)
+        assert r.status_code == 403 and r.json()["code"] == "forbidden"
+    assert rig.req("DELETE", f"/rooms/{code}", manager).status_code == 204
+    assert rig.req("GET", f"/rooms/{code}").status_code == 404
+    mine = rig.room(headers=guest)["code"]
+    assert rig.req("DELETE", f"/rooms/{mine}", guest).status_code == 204
+
+
+def test_a_room_is_no_way_around_a_rating_ceiling(rig: Rig) -> None:
+    code = rig.room()["code"]  # the film has no rating evidence
+    kid = member_of(rig, "kid", "Kid", grants=["rooms.create"])
+    for r in (
+        rig.req("GET", f"/rooms/{code}", kid),
+        rig.join_raw(code, kid, client="android_tv"),
+        rig.req("POST", "/rooms", kid, json={"id": rig.film}),
+    ):
+        assert r.status_code == 403 and r.json()["code"] == "content_restricted", r.text
+    assert rig.members(code) == []
 
 
 def test_title_that_opens_in_another_app_cannot_be_watched_in_a_room(rig: Rig) -> None:

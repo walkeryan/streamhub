@@ -14,6 +14,7 @@ from app.infra.models import Channel, ChannelGroup, Programme, Recording, Record
 from app.services import ids
 from app.services.auth import Principal
 from app.services.errors import Forbidden, NotFound, ServiceError
+from app.services.permissions import BUILTIN_ROLES
 from app.services.recorder import (
     CaptureResult,
     NullCapture,
@@ -134,7 +135,8 @@ class Env:
 
     async def viewer(self, name: str = "Viewer", *, kids: bool = False) -> Principal:
         profile = (await self.api.post("/profiles", json={"name": name, "pin": "1234", "kids": kids})).json()
-        return Principal(profile_id=profile["id"], is_admin=False, kids=kids)
+        role = BUILTIN_ROLES["kid" if kids else "family"]
+        return Principal(profile_id=profile["id"], kids=kids, permissions=role.permissions)
 
 
 @pytest.fixture
@@ -801,7 +803,7 @@ async def test_rules_and_scheduling_respect_the_profiles_content_policy(api: Api
     root.mkdir()
     svc = RecorderService(api.c.db, api.c.channels, recordings_dir=str(root), capture=FakeCapture())
     svc.content_policy = policy
-    child = Principal(profile_id="child", is_admin=False, kids=False)
+    child = Principal(profile_id="child", permissions=BUILTIN_ROLES["family"].permissions)
     admin = Principal(profile_id=api.profile_id, is_admin=True, kids=False)
 
     await svc.add_rule(child, "series", "Harbour Lights", None, False, None)

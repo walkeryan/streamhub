@@ -13,7 +13,7 @@ from app.container import Container
 from app.services import room_policy
 from app.services.auth import Principal
 from app.services.context import is_https
-from app.services.errors import Forbidden, NotFound, ServiceError
+from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError
 from app.services.room_hub import CLOSE_NOT_FOUND, CLOSE_UNAUTHORIZED, LEAVE_CODES, Connection, RoomHub
 from app.services.rooms import MAX_MEMBERS, Room
 
@@ -67,7 +67,7 @@ def _out(c: Container, room: Room, p: Principal, title: dict[str, Any]) -> dict[
 @router.post("/rooms", response_model=S.Room, status_code=201, tags=["rooms"])
 async def create_room(body: S.RoomCreate, c: C, p: P) -> dict[str, Any]:
     if not room_policy.can_create(p):
-        raise Forbidden("You are not allowed to create watch rooms.")
+        raise PermissionDenied(["rooms.create"])
     title = await _title(c, p, body.id)
     host = await c.auth.get_profile(p.profile_id)
     room = c.rooms.create(
@@ -85,7 +85,7 @@ async def create_room(body: S.RoomCreate, c: C, p: P) -> dict[str, Any]:
 async def show_room(code: str, c: C, p: P) -> dict[str, Any]:
     room = _room(c, code)
     if not room_policy.can_join(p):
-        raise Forbidden("You are not allowed to join watch rooms.")
+        raise PermissionDenied(["rooms.join"])
     return _out(c, room, p, await _title(c, p, room.ref))
 
 
@@ -93,7 +93,7 @@ async def show_room(code: str, c: C, p: P) -> dict[str, Any]:
 async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
     room = _room(c, code)
     if not room_policy.can_join(p):
-        raise Forbidden("You are not allowed to join watch rooms.")
+        raise PermissionDenied(["rooms.join"])
     await _require_rated(c, p, room.ref)
     room.require_space()
     # The member token outlives this request, so it is only minted for a session that is valid now.
@@ -123,7 +123,7 @@ async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
 @router.delete("/rooms/{code}", status_code=204, tags=["rooms"])
 async def close_room(code: str, c: C, p: P) -> Response:
     room = _room(c, code)
-    if not (room.is_host(p.profile_id) or p.is_admin):
+    if not room_policy.can_close(p, room.is_host(p.profile_id)):
         raise Forbidden("Only the host can close this room.")
     c.rooms.close(room.code, "deleted")
     return Response(status_code=204)
