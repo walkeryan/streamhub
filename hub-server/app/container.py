@@ -45,6 +45,9 @@ from app.services.owner_reauth import OwnerReauthService
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.registry import SourceRegistry
 from app.services.requests import RequestService
+from app.services.room_hub import RoomHub, RoomTokens
+from app.services.room_playback import RoomPlayback
+from app.services.rooms import RoomRegistry
 from app.services.services_registry import ServiceRegistryService
 from app.services.sessions import SessionsService
 from app.services.settings_service import SettingsService
@@ -106,6 +109,8 @@ class Container:
     image_cache: ImageCache
     requests: RequestService
     notices: NoticeService
+    rooms: RoomHub
+    room_playback: RoomPlayback
     http_factory: Any
 
 
@@ -240,6 +245,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         image_cache=ImageCache(settings.image_cache_dir, settings.image_cache_max_mb * 1024 * 1024),
         requests=requests,
         notices=NoticeService(db),
+        rooms=RoomHub(RoomRegistry(), RoomTokens(crypto)),
+        room_playback=RoomPlayback(playback, proxy),
         http_factory=http_factory,
     )
 
@@ -258,12 +265,14 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
     await c.sync.reset_stuck()
     if start_background:
         c.proxy.start()
+        c.rooms.start()
         if c.settings.enable_scheduler:
             c.scheduler.start()
 
 
 async def shutdown(c: Container) -> None:
     c.scheduler.shutdown()
+    await c.rooms.shutdown()
     await c.sync.wait_idle()
     await c.proxy.shutdown()
     await c.db.dispose()

@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.deps import playback_watch_gate
-from app.api.routers import auth, catalog, owner_pin, playback, requests, sources, system, users
+from app.api.routers import auth, catalog, owner_pin, playback, requests, rooms, sources, system, users
 from app.container import Container, build_container, shutdown, startup
 from app.infra.logging import configure_logging
 from app.infra.settings import APP_VERSION, AppSettings
@@ -122,6 +122,7 @@ def create_app(
         system.router,
         requests.router,
         users.router,
+        rooms.router,
     ):
         app.include_router(r, prefix=API_PREFIX)
     # The resolver knows nothing of permissions: what a caller may play is settled before it runs.
