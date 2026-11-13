@@ -79,7 +79,7 @@ h1, h2, h3, p { margin: 0; }
   font-size: var(--text-label); font-weight: 500; white-space: nowrap;
 }
 .chip[aria-pressed='true'] { background: var(--t-accent); color: var(--t-accent-text); font-weight: 600; }
-/* A button in a row of chips (the picker of the groups past the chips, the header's icons) takes their height and shape. */
+/* A button among chips (Live TV's search and Options icons, the guide's Watch and Record) takes their height and shape. */
 .btn.btn-chip { min-height: 2.125rem; padding: 0 0.875rem; border-radius: var(--radius-pill); font-size: var(--text-label); gap: 0.375rem; }
 /* A chip that drops its choices down (ChipMenu) and names the one in force, shortened when it is long. */
 /* (The choice follows the name as one phrase: its own leading space, not the chip's gap, separates them.) */
@@ -359,9 +359,10 @@ h1, h2, h3, p { margin: 0; }
 .epg-details-line svg { flex: none; color: var(--t-text-muted); }
 
 /* Live TV: one compact header over both views (title, view switch, search and Options, then the groups), so that
-   the guide under it keeps the window. Search is an icon until asked for; what is rarely changed is in Options. */
+   the guide or the list of channels under it keeps the window: the screen is as tall as the window and what is
+   under the header scrolls inside itself. Search is an icon until asked for; what is rarely changed is in Options. */
 .live-screen { padding: 0.5rem var(--safe-x) 2rem; }
-.live-screen[data-view='guide'] { display: flex; flex-direction: column; height: calc(100dvh - var(--bar-h)); padding-bottom: 0.5rem; overflow: hidden; }
+.live-screen[data-view] { display: flex; flex-direction: column; height: calc(100dvh - var(--bar-h)); padding-bottom: 0.5rem; overflow: hidden; }
 .live-head { flex: none; display: flex; gap: 1.5rem; margin-bottom: 0.5rem; }
 .live-head-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 0.5rem; }
 .live-bar { display: flex; align-items: center; gap: 0.75rem; min-width: 0; min-height: 2.125rem; }
@@ -384,7 +385,7 @@ h1, h2, h3, p { margin: 0; }
 @media (max-width: 720px) {
   .live-screen { padding: 0.75rem 1rem 1rem; }
   /* .main keeps the bottom bar's height free under every screen. */
-  .live-screen[data-view='guide'] { height: calc(100dvh - 4rem - env(safe-area-inset-bottom)); padding-bottom: 0.25rem; }
+  .live-screen[data-view] { height: calc(100dvh - 4rem - env(safe-area-inset-bottom)); padding-bottom: 0.25rem; }
   /* Title, switch and the two icons share the first line; an open search field takes the next one. */
   .live-bar { flex-wrap: wrap; gap: 0.5rem; }
   .live-tools { margin-left: auto; max-width: 100%; }
@@ -404,9 +405,23 @@ h1, h2, h3, p { margin: 0; }
 /* theme preview swatches */
 .theme-card { border-radius: var(--radius-lg); padding: 0.75rem; background: var(--t-surface); }
 
-/* Keep large catalog controls compact and channel rows visible on narrow screens. */
-.live-catalog-layout { grid-template-columns: minmax(0, 28rem) minmax(0, 1fr); }
+/* Live TV's Channels view: the list takes the height the window has left under the header and scrolls inside
+   itself, like the guide; the preview beside it stays put. Every row is --chan-row from the next (ROW_REM in
+   Channels.tsx is the same number), so only the rows near the view are drawn, each placed by its index. The list
+   is padded by what a focused row's ring needs, and reaches that far past its column, so the ring is not clipped. */
+.live-catalog-layout { flex: 1; min-height: 0; display: grid; gap: 1.5rem; grid-template: minmax(0, 1fr) / minmax(0, 28rem) minmax(0, 1fr); }
 .live-catalog-layout[data-preview='false'] { grid-template-columns: minmax(0, 1fr); }
+.chan-list {
+  --chan-row: 6.5rem;
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0.375rem 0.625rem; margin: -0.375rem -0.625rem;
+  scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--t-text) 28%, transparent) transparent;
+}
+.chan-list-canvas { position: relative; }
+.chan-list .chan-row { position: absolute; left: 0; right: 0; height: calc(var(--chan-row) - 0.5rem); }
+.chan-list-foot { position: absolute; left: 0.75rem; right: 0; display: flex; align-items: center; gap: 0.5rem; height: 2rem; }
+.chan-list-skel { display: flex; flex-direction: column; gap: 0.5rem; overflow: hidden; }
+.chan-list-skel .skel { flex: none; height: 6rem; }
+.live-catalog-preview { display: flex; flex-direction: column; gap: 0.75rem; min-height: 0; overflow-y: auto; scrollbar-width: none; }
 /* The phone layout leaves the preview out altogether; this covers the frame between a resize and that render. */
 @media (max-width: 720px) {
   .live-catalog-layout { grid-template-columns: minmax(0, 1fr); }

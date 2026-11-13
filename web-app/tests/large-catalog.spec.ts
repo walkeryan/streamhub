@@ -16,7 +16,12 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
     })))
   })
   await page.getByRole('link', { name: 'Live TV', exact: true }).click()
-  await expect(page.getByTestId('channel-row')).toHaveCount(80)
+  // The list has no pages: it draws the rows near the view and loads the next forty as its end comes near.
+  const list = page.getByTestId('channel-list'), channel = (n: number) => page.getByRole('option', { name: new RegExp(`^${n} \\w+ Channel ${n}(,|$)`) })
+  await expect(channel(1)).toBeVisible()
+  expect(await page.getByTestId('channel-row').count()).toBeLessThanOrEqual(30)
+  await expect(page.getByText('34,911 channels', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Next page|Previous page/ })).toHaveCount(0)
   // Language is one of the choices behind Options; the list under the sheet follows it.
   const options = await openLiveOptions(page)
   await options.getByRole('button', { name: 'English', exact: true }).click()
@@ -26,16 +31,20 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
   await closeLiveOptions(page)
   // Not this profile's usual choice, so the header names it.
   await expect(liveChoice(page, 'English')).toBeVisible()
-  await page.getByRole('button', { name: 'Next page', exact: true }).click()
-  await expect(page.getByTestId('channel-row').first()).toContainText('English Channel 241')
-  await page.getByTestId('channel-row').first().click()
+  await expect(page.getByText('17,456 channels', { exact: true })).toBeVisible()
+  // The eighty-first English channel is on the third page.
+  for (const first of [121, 241]) {
+    await list.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await expect(channel(first)).toBeVisible()
+  }
+  await channel(241).click()
   await expect(page.getByTestId('player')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('live')).toBeVisible()
-  await expect(page.getByTestId('channel-row').first()).toContainText('English Channel 241')
-  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
+  await expect(channel(241)).toHaveAttribute('data-focused', 'true')
+  await expect(channel(241)).toBeInViewport()
   await expect(liveChoice(page, 'English')).toBeVisible()
-  await expect(page.getByTestId('channel-row')).toHaveCount(80)
+  expect(await page.getByTestId('channel-row').count()).toBeLessThanOrEqual(30)
   await chooseLiveOption(page, 'All languages')
   // 804 groups: the first few are chips, the rest stay behind one searchable picker.
   expect(await page.getByRole('group', { name: 'Channel groups', exact: true }).getByRole('button').count()).toBeLessThanOrEqual(27)
@@ -45,7 +54,7 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
   await dialog.getByLabel('Search more groups').fill('Category 803')
   await dialog.getByRole('button', { name: /Category 803/ }).click()
   await expect(page.getByTestId('channel-row').first()).toContainText('Unknown Channel 804')
-  expect(await page.getByTestId('channel-row').count()).toBeLessThanOrEqual(80)
+  expect(await page.getByTestId('channel-row').count()).toBeLessThanOrEqual(30)
   // A group is left by choosing All; the one × is the search field's.
   await expect(page.getByRole('button', { name: /clear/i })).toHaveCount(0)
   await page.getByRole('group', { name: 'Channel groups', exact: true }).getByRole('button', { name: 'All', exact: true }).click()

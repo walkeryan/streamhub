@@ -6,12 +6,10 @@ export interface CatalogOption { id: string; label: string; count?: number }
 const PAGE_SIZE = 40
 
 /** Search and page metadata instead of mounting hundreds of category controls. */
-export function CatalogPicker({ scope, label, value, options, selectedLabel, onChange, search = true, testId, className }: {
+export function CatalogPicker({ scope, label, value, options, selectedLabel, onChange, search = true, testId }: {
   scope: string; label: string; value: string; options: CatalogOption[]; selectedLabel?: string; onChange: (id: string) => void
   /** false for a short, ordered list (seasons): no search field, and the list opens on the current choice. */
   search?: boolean; testId?: string
-  /** For the button that opens the list, where it sits among controls of another size. */
-  className?: string
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -24,7 +22,7 @@ export function CatalogPicker({ scope, label, value, options, selectedLabel, onC
   const currentLabel = selected?.label ?? selectedLabel ?? 'Choose'
   const close = () => setOpen(false)
   return <>
-    <Button focusKey={`${scope}:pick`} testId={testId} className={className} icon={search ? undefined : 'down'}
+    <Button focusKey={`${scope}:pick`} testId={testId} icon={search ? undefined : 'down'}
       onEnter={() => { setQuery(''); setPage(search || !selected ? 0 : Math.floor(options.indexOf(selected) / PAGE_SIZE)); setOpen(true) }} label={`${label}: ${currentLabel}`}>
       {search ? `${label}: ${currentLabel}` : currentLabel}
     </Button>
