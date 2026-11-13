@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import type { MediaRequest, Notice, RequestList, RequestManagerSettings, RequestState, SourceBadge, Tile } from '../api/types'
+import type { MediaRequest, Notice, RequestList, RequestManagerSettings, RequestProgress, RequestState, SourceBadge, Tile } from '../api/types'
 import { profiles, seedFor, tileOf } from './fixtures'
 
 const B = '/api/v1'
@@ -24,6 +24,9 @@ const profileOf = (req: Request) => profiles.find((p) => p.id === req.headers.ge
 const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('')
 const error = (status: number, code: string, message: string) => HttpResponse.json({ code, message }, { status })
 const publicNotice = ({ profile_id: _owner, ...n }: StoredNotice): Notice => n
+/** What the server says of a request it has not asked the request manager about: only what its state shows. */
+const progressOf = (state: RequestState, at: string): RequestProgress =>
+  ({ phase: state === 'pending_approval' ? 'requested' : state === 'sent' ? 'searching' : state, last_phase: null, percent: null, eta: null, detail: null, checked_at: at })
 
 function notify(s: Store, r: MediaRequest, kind: 'request_available' | 'request_declined') {
   s.notices.push({
@@ -41,6 +44,7 @@ export function annotate<T extends Tile>(tile: T): T {
   const current = history.find((r) => OPEN.includes(r.state)) ?? history.at(-1)
   return {
     ...tile, sources, request_state: current?.state ?? null,
+    request_progress: current ? { phase: current.progress.phase, percent: current.progress.percent ?? null } : null,
     requestable: configured(s) && /^tmdb:(movie|tv):\d+$/.test(tile.id) && !sources.some((b) => b.playable_in_app),
   }
 }
@@ -51,6 +55,7 @@ export function sourceSynced() {
   for (const r of s.requests.filter((x) => x.state === 'sent')) {
     r.state = 'available'
     r.updated_at = new Date().toISOString()
+    r.progress = progressOf(r.state, r.updated_at)
     s.arrived.push(r.title_id)
     notify(s, r, 'request_available')
   }
@@ -84,6 +89,7 @@ export const requestHandlers = [
       id: newId(), profile_id: me.id, profile_name: me.name, media_type: b.media_type, tmdb_id: b.tmdb_id, title_id: titleId, title: seed.title, year: seed.year,
       poster: tile.poster ?? null, seasons: b.media_type === 'tv' && b.seasons?.length ? b.seasons : null,
       state: me.is_admin ? 'sent' : 'pending_approval', note: null, decided_by_profile_id: me.is_admin ? me.id : null, created_at: now, updated_at: now,
+      progress: progressOf(me.is_admin ? 'sent' : 'pending_approval', now),
     }
     s.requests.push(created)
     save(s)
@@ -102,6 +108,7 @@ export const requestHandlers = [
     r.note = body?.note?.trim() || null
     r.decided_by_profile_id = me.id
     r.updated_at = new Date().toISOString()
+    r.progress = { ...progressOf(r.state, r.updated_at), detail: r.state === 'declined' ? r.note : null }
     if (r.state === 'declined') notify(s, r, 'request_declined')
     save(s)
     return HttpResponse.json(r)

@@ -5210,6 +5210,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Serves each request's stored progress. Stale ones (older than their phase's interval: 15 s while downloading or importing, 3 min otherwise) are refreshed first, at most 8 per call and for at most 4 s; the rest stay as stored until the server's own polling reaches them. */
         get: {
             parameters: {
                 query?: {
@@ -5278,6 +5279,116 @@ export interface paths {
                 };
                 /** @description already_available | request_manager_unconfigured | metadata_unavailable */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One request, for its requester or whoever may approve requests
+         * @description Serves the stored progress, refreshed first when it is older than its phase's interval.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description request_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the request manager about this request now
+         * @description For its requester or whoever may approve requests. A sent request is asked about at once (at most every 5 s; sooner calls return the stored progress); an approved request that has not reached the request manager is sent again; any other request is returned as it is.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description the request as it is now */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description request_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -6635,6 +6746,8 @@ export interface components {
             now_playing?: components["schemas"]["Programme"];
             /** @description Open request for this title, else its most recent closed one; null when never requested. */
             request_state?: components["schemas"]["RequestState"] | null;
+            /** @description What that same request is doing right now; set exactly when request_state is. The stored answer: a tile never makes the server ask the request manager. */
+            request_progress?: components["schemas"]["TileRequestProgress"] | null;
             /** @description TMDB-identified, no in-app source, a request manager is configured and the profile may request. Independent of request_state: show the state instead while a request is open. */
             requestable?: boolean;
         };
@@ -7130,6 +7243,41 @@ export interface components {
         };
         /** @enum {string} */
         RequestState: "pending_approval" | "approved" | "sent" | "available" | "declined" | "failed";
+        /**
+         * @description What is happening to a requested title, as last reported by the request manager. Never ahead of what an answer showed.
+         *     requested: waiting for approval here. approved: approved here, the request manager has not taken it yet (or holds it for
+         *     an approval of its own). searching: the request manager has it and nothing is in its download queue. downloading: its
+         *     download queue has an unfinished item for the title. importing: every queue item has finished and the title is not
+         *     available yet. partially_available: series only, some of the requested seasons can be watched. stalled: every unfinished
+         *     download reports a problem, or a running download's bytes (or a finished download's import) have not moved for 30
+         *     minutes. unknown: the request manager did not answer, or its answer could not be read; last_phase has the phase before.
+         * @enum {string}
+         */
+        RequestPhase: "requested" | "approved" | "searching" | "downloading" | "importing" | "partially_available" | "available" | "declined" | "failed" | "stalled" | "unknown";
+        RequestProgress: {
+            phase: components["schemas"]["RequestPhase"];
+            /** @description Only with phase unknown: the last phase that was known. */
+            last_phase?: components["schemas"]["RequestPhase"] | null;
+            /** @description Only while downloading: bytes done over bytes total across the title's queue items, rounded down. Null when a size is missing: show an indeterminate bar. */
+            percent?: number | null;
+            /**
+             * Format: date-time
+             * @description Only while downloading: when the last queue item is due. Null unless every unfinished item gives a time that is still ahead.
+             */
+            eta?: string | null;
+            /** @description Short plain text for beside the phase: "2 of 8 episodes", "Queued", "Paused", why it is stalled or failed, or the decline note. Never a file name, release name, host or URL. */
+            detail?: string | null;
+            /**
+             * Format: date-time
+             * @description When the request manager last answered for this request; for a request it is not asked about (requested, approved, closed), when it reached that state.
+             */
+            checked_at?: string | null;
+        };
+        /** @description The part of RequestProgress a poster needs. */
+        TileRequestProgress: {
+            phase: components["schemas"]["RequestPhase"];
+            percent?: number | null;
+        };
         MediaRequest: {
             id: string;
             profile_id: string;
@@ -7145,6 +7293,7 @@ export interface components {
             /** @description tv only; null = whole series */
             seasons?: number[] | null;
             state: components["schemas"]["RequestState"];
+            progress: components["schemas"]["RequestProgress"];
             /** @description Decline reason, or why an approved request has not reached the request manager yet. */
             note?: string | null;
             decided_by_profile_id?: string | null;
