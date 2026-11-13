@@ -265,7 +265,7 @@ export interface paths {
         };
         /**
          * Who's watching? The users a shared device can be handed to
-         * @description Active users whose role (or own override) has on_shared_devices, owners and family first, then by name. Only a shared-device session may ask.
+         * @description Active users whose role (or own override) has on_shared_devices, owners and family first, then by name. Only a shared-device session may ask. A shared device whose current user has been suspended is not stranded: while its session itself stands (not revoked), this route and POST /auth/switch keep answering for it, and POST /auth/refresh keeps renewing its tokens so the two stay reachable after the access token expires. Every other route, /auth/me included, answers 401 user_suspended, with a renewed token as with the old one. The suspended user is not listed, so no entry has current true.
          */
         get: {
             parameters: {
@@ -286,6 +286,13 @@ export interface paths {
                             users: components["schemas"]["SwitchableUser"][];
                         };
                     };
+                };
+                /** @description token_expired | session_stale | session_revoked (signed out, or the device has been handed over since this token was issued). user_suspended only on a device that is not shared. */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
                 /** @description not_shared_device */
                 403: {
@@ -315,7 +322,7 @@ export interface paths {
         put?: never;
         /**
          * Hand a shared device to another user
-         * @description Keeps the device's session and re-binds it to the target, with fresh tokens; the previous user's tokens for this device stop working. A target with a PIN needs it. A target with more access than the current user must have one. Switching to oneself hands nothing over and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the current user's PIN is verified (pin_invalid when wrong, counted against the same five guesses), and a user without a PIN has nothing to check.
+         * @description Keeps the device's session and re-binds it to the target, with fresh tokens; the previous user's tokens for this device stop working. A target with a PIN needs it. A target with more access than the current user must have one. Switching to oneself hands nothing over and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the current user's PIN is verified (pin_invalid when wrong, counted against the same five guesses), and a user without a PIN has nothing to check. When the current user has been suspended the device can still be handed over (see GET /auth/switchable): to anyone listed, by the same PIN rules, a target's access being compared with what the suspended user held. The suspended user is not a target (404), and their tokens for this device stop working with the hand-over like anyone's.
          */
         post: {
             parameters: {
@@ -343,7 +350,7 @@ export interface paths {
                         "application/json": components["schemas"]["Switched"];
                     };
                 };
-                /** @description pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. */
+                /** @description pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. user_suspended only on a device that is not shared. */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -357,7 +364,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description not a user this device can switch to */
+                /** @description not a user this device can switch to (a suspended user included) */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -3260,7 +3267,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again. */
+                /** @description session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again. The code alone tells them apart, as on API calls, with no need to ask /auth/me. session_stale: only the URL is out of date (the user's role, overrides or limits changed since it was issued) and the session stands; refresh the tokens and resolve again. session_revoked: the session it was issued to is signed out, or, on a shared device, was handed to another user; that user's tokens answer the same. unauthorized: the token is not a stream token of this server or is past its lifetime, which says nothing about the session; resolve again. */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -3325,7 +3332,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description as for /stream/{token}; segments answer the same */
+                /** @description as for /stream/{token}; segments answer the same. A segment (or nested playlist) URL also answers stream_epoch_stale: it belongs to an earlier stream_epoch of a watch room's shared stream, which a seek has since restarted. The member's playlist URL is still good: reload it, and ask GET /rooms/{code}/descriptor for the current stream_epoch and start_position_ms. This playlist URL itself never answers it. Any other segment that is not of the grant's stream answers forbidden. */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -3853,7 +3860,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Suspend an active user; their sessions answer 401 user_suspended (users.manage) */
+        /** Suspend an active user; their sessions answer 401 user_suspended, except that a shared device they are the current user of can still be handed over (GET /auth/switchable, POST /auth/switch) (users.manage) */
         post: {
             parameters: {
                 query?: never;
@@ -4832,7 +4839,7 @@ export interface paths {
         put?: never;
         /**
          * Create a watch room for a title or channel
-         * @description The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+         * @description The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once. A room is on one thing. Made from a show (or a season) it is on one episode: the one POST /playback/resolve would start for the creator now (their next unwatched episode, of the variant named or of the one resolve would pick), chosen once, here. Room.id is that episode's id, Room.title describes the episode, and every member plays it whatever their own history with the show; a variant_id naming a variant of the show comes back as the episode's id. The episode does not change for the life of the room.
          */
         post: {
             parameters: {
@@ -4863,7 +4870,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description unknown title */
+                /** @description unknown title; a show with no episode to play; a variant_id that is not a variant of the show */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -5008,7 +5015,7 @@ export interface paths {
                         "application/json": components["schemas"]["RoomJoined"];
                     };
                 };
-                /** @description content_restricted and the other /playback/resolve refusals */
+                /** @description remote_access_denied (as on every call of a user without remote.access away from the home network), content_restricted and the other /playback/resolve refusals */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -6256,7 +6263,7 @@ export interface components {
             audio_track?: number | null;
             /** @description Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms. */
             start_position_ms?: number | null;
-            /** @description Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. Null for every other descriptor. */
+            /** @description Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor. */
             stream_epoch?: number | null;
             id: string;
             /** @enum {string} */
@@ -6423,7 +6430,7 @@ export interface components {
         };
         /** @enum {string} */
         RecordingState: "scheduled" | "recording" | "done" | "failed" | "missed" | "cancelled";
-        /** @description One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file it plays with POST /playback/resolve {id: "rec:<id>"}. */
+        /** @description One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file (has_file) it plays with POST /playback/resolve {id: "rec:<id>"}. */
         Recording: {
             id: string;
             profile_id: string;
@@ -6454,7 +6461,10 @@ export interface components {
             state: components["schemas"]["RecordingState"];
             /** @description why it failed or was missed */
             error?: string | null;
+            /** @description what the capture wrote. Not whether it can be played: see has_file */
             size_bytes?: number | null;
+            /** @description There is a file that POST /playback/resolve {id: "rec:<id>"} would play now: the recording is done, or failed and kept what it had captured, and that file is still on the server. False while scheduled or recording, and for a file since removed. Always sent. */
+            has_file?: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -6486,9 +6496,9 @@ export interface components {
             api_key_set: boolean;
         };
         RoomCreate: {
-            /** @description title or channel id (lib:, tmdb:, ch:). A channel makes a live room. */
+            /** @description title or channel id (lib:, tmdb:, ch:). A channel makes a live room. A show or season makes a room on one of its episodes (see POST /rooms). */
             id: string;
-            /** @description source variant every member plays; validated when a member joins */
+            /** @description source variant every member plays; validated when a member joins, and for a show when the room is created */
             variant_id?: string | null;
             audio_track?: number | null;
         };
@@ -6513,7 +6523,9 @@ export interface components {
         RoomTitle: {
             id: string;
             kind: components["schemas"]["MediaKind"];
+            /** @description for an episode, the episode's own title */
             title: string;
+            /** @description for an episode, its show where known and its number: "<show> · S01E02", or "S01E02" */
             subtitle?: string | null;
             year?: number | null;
             poster?: string | null;
@@ -6538,9 +6550,10 @@ export interface components {
             code: string;
             /** @description web path of the join screen: /room/<code> */
             join_path: string;
-            /** @description the title or channel the room watches */
+            /** @description the title or channel the room watches: what every member plays. Never a show or a season: a room created from one names the episode it is on (see POST /rooms), so this can differ from the id the room was created with */
             id: string;
             live: boolean;
+            /** @description in a room created from a show with a variant named, the episode's id */
             variant_id?: string | null;
             audio_track?: number | null;
             host_name: string;
@@ -6582,8 +6595,12 @@ export interface components {
          *     - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
          *       `host_only`, `live_no_seek`, `bad_message`.
          *     - `closed {reason}`: the last message before the server closes the socket: `expired`, `deleted`,
-         *       `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized` (4401),
-         *       `not_found`, `not_a_member` (4404).
+         *       `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized`,
+         *       `remote_access_denied` (4401), `not_found`, `not_a_member` (4404).
+         *       `remote_access_denied` is the socket's form of the API's 403 of that name: the member's
+         *       user lacks remote.access and the socket was opened from outside home_networks. The seat
+         *       is not taken away by it. POST /rooms/{code}/join and GET /rooms/{code}/descriptor answer
+         *       403 remote_access_denied in the same situation.
          *
          *     On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
          *     Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
@@ -6597,7 +6614,13 @@ export interface components {
          *     room closes. A seek restarts it at the new position before the seek's `state` is sent. That
          *     `state` carries the new `stream_epoch` and `stream_start_ms`: a client whose epoch differs
          *     reloads the same playlist URL (the descriptor's `url` does not change) and treats
-         *     `stream_start_ms` as its new time zero; segments of the previous epoch answer 403. A seek to
+         *     `stream_start_ms` as its new time zero; segments of an earlier epoch answer 403 with code
+         *     `stream_epoch_stale` (the status the stream routes use for media they refuse; the code is
+         *     what tells this refusal from the others), which a member who missed the `state` answers by
+         *     asking GET /rooms/{code}/descriptor. `stream_epoch` only ever increases within a room: it
+         *     counts every start of the room's stream, also one made after the room stood empty and its
+         *     stream was released, so a greater epoch is always the later stream and no epoch is ever
+         *     reused; it need not increase by one. A seek to
          *     a position the running stream already starts at (positions are floored to 5 s) keeps the
          *     epoch, and the client seeks within what it is playing. The stream's audio is the room's
          *     `audio_track`, else the first member's preferred or default track; `audio_track` in the

@@ -217,11 +217,14 @@ class AuthService:
         google_subject: str = "",
         *,
         meta: SessionMeta | None = None,
+        handover: bool = False,
     ) -> dict[str, str]:
         """Mint an access/refresh pair and make sure the ``auth_session`` row behind its ``sid`` exists.
 
         Only an active user gets tokens. A new ``sid`` creates its row here; an existing one
-        (refresh) must still be live and belong to this profile.
+        (refresh) must still be live and belong to this profile. ``handover``: the refresh of a
+        shared device whose user is suspended (see ``refresh``); such a pair opens nothing but
+        the two hand-over routes, since every other route asks for an active user.
         """
         owner_auth_time = self.owner_time(
             owner_auth_time if owner_auth_time is not None else getattr(profile, "_owner_auth_time", None)
@@ -233,7 +236,8 @@ class AuthService:
             if row is None:
                 raise Unauthorized("Session revoked; sign in again", code="session_revoked")
             user = await ensure_user(s, row)
-            self._require_active(user)
+            if not (handover and user.status == "suspended"):
+                self._require_active(user)
             generation = (await self.sessions.attach(s, session_id, user, row, meta)).generation
             await s.commit()
         return self._pair(profile, user, session_id, generation, owner_auth_time, owner_pin_version, google_subject)
@@ -296,10 +300,11 @@ class AuthService:
             user_version=int(p.get("uv", -1)),
         )
 
-    async def session_valid(self, profile_id: str, version: int, session_id: str) -> Profile:
+    async def session_valid(self, profile_id: str, version: int, session_id: str, *, handover: bool = False) -> Profile:
         """The chokepoint for anything that carries (profile, version, sid) but no user version:
         stream and image grants, owner-PIN challenges. Refuses a revoked session and a user
-        who is no longer active."""
+        who is no longer active. ``handover`` (refresh only) lets a suspended user's shared
+        device through while its row stands."""
         async with self._db.session() as session:
             profile = await session.get(Profile, profile_id)
             revoked = await session.get(RevokedSession, session_id) if session_id else None
@@ -313,7 +318,7 @@ class AuthService:
             or (row is not None and (row.revoked_at is not None or row.profile_id != profile_id))
         ):
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
-        if user is not None:
+        if user is not None and not (handover and user.status == "suspended" and row is not None and row.shared_device):
             self._require_active(user)
         return profile
 
@@ -642,18 +647,35 @@ class AuthService:
         async with self._db.session() as s:
             prof = await s.get(Profile, str(p["sub"]))
             row = await s.get(AuthSession, sid) if sid else None
+            user = await s.get(User, prof.user_id) if prof is not None and prof.user_id else None
         if prof is None or prof.token_version != int(p.get("ver", -1)):
             raise Unauthorized("refresh token revoked")
+        # A shared device whose user has been suspended keeps refreshing while its row stands:
+        # access tokens are short-lived, and without a fresh one the device could not reach the
+        # hand-over routes and would have to be paired again. The pair it gets opens only those.
+        handover = (
+            user is not None
+            and user.status == "suspended"
+            and row is not None
+            and row.shared_device
+            and row.revoked_at is None
+        )
         # A token minted before sessions had rows carries no ``uid``; its first refresh adopts
         # the ``sid`` (issue() creates the row) so an upgrade signs nobody out. Every later
         # token has a row, and a missing one means the session is gone.
         if (row is None and "uid" in p) or (row is not None and row.generation != self._generation(p)):
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
         # Checks the profile version, the deny-list, the row when present, and the user's status.
-        await self.session_valid(prof.id, int(p.get("ver", -1)), sid)
+        await self.session_valid(prof.id, int(p.get("ver", -1)), sid, handover=handover)
         await self.check_owner_entry(prof, int(p.get("opv", 0)))
         return prof, await self.issue(
-            prof, sid, self.owner_time(p.get("oat")), int(p.get("opv", 0)), str(p.get("gs") or ""), meta=meta
+            prof,
+            sid,
+            self.owner_time(p.get("oat")),
+            int(p.get("opv", 0)),
+            str(p.get("gs") or ""),
+            meta=meta,
+            handover=handover,
         )
 
     # ------------------------------------------------------------------ login

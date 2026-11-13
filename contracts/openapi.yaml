@@ -1132,9 +1132,10 @@ paths:
         then by name. Only a shared-device session may ask.
         A shared device whose current user has been suspended is not stranded: while its session
         itself stands (not revoked), this route and POST /auth/switch keep answering for it, and
-        are the only two routes that do (every other one, /auth/me and /auth/refresh included,
-        answers 401 user_suspended). The suspended user is not listed, so no entry has current true.
-        Neither route can be reached once the access token has expired, because the refresh is refused.
+        POST /auth/refresh keeps renewing its tokens so the two stay reachable after the access
+        token expires. Every other route, /auth/me included, answers 401 user_suspended, with a
+        renewed token as with the old one. The suspended user is not listed, so no entry has
+        current true.
       responses:
         '200': { description: ok, content: { application/json: { schema: { type: object, required: [users], properties: { users: { type: array, items: { $ref: '#/components/schemas/SwitchableUser' } } } } } } }
         '401': { description: "token_expired | session_stale | session_revoked (signed out, or the device has been handed over since this token was issued). user_suspended only on a device that is not shared." }

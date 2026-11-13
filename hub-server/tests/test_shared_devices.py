@@ -419,7 +419,6 @@ async def test_a_suspended_user_reaches_nothing_but_the_hand_over(api: Api) -> N
         ("GET", "/settings", None),
         ("GET", "/home", None),
         ("POST", "/playback/resolve", {"id": "ch:1"}),
-        ("POST", "/auth/refresh", {"refresh_token": tv["refresh_token"]}),
     )
     for method, path, body in calls:
         r = await api.client.request(method, "/api/v1" + path, json=body, headers=bearer(tv))
@@ -428,6 +427,33 @@ async def test_a_suspended_user_reaches_nothing_but_the_hand_over(api: Api) -> N
     row = await session_row(api, sid)
     assert (row.user_id, row.revoked_at) == (gone["id"], None)
     assert (await api.client.get("/api/v1/auth/switchable", headers=bearer(tv))).status_code == 200
+
+
+async def test_a_suspended_users_shared_device_refreshes_only_towards_the_hand_over(api: Api) -> None:
+    """Access tokens are short-lived: without a refresh the device would be stranded minutes later."""
+    sibling = await user(api, "Sibling", "family")
+    _, tv = await suspended_tv(api)
+    sid = claims_of(tv["access_token"])["sid"]
+    r = await api.client.post("/api/v1/auth/refresh", json={"refresh_token": tv["refresh_token"]})
+    assert r.status_code == 200, r.text
+    fresh = r.json()
+    assert claims_of(fresh["access_token"])["sid"] == sid
+    # The fresh pair opens the hand-over and nothing else.
+    for method, path, body in (("GET", "/auth/me", None), ("GET", "/home", None), ("GET", "/settings", None)):
+        refused = await api.client.request(method, "/api/v1" + path, json=body, headers=bearer(fresh))
+        assert refused.status_code == 401 and refused.json()["code"] == "user_suspended", (path, refused.text)
+    assert (await api.client.get("/api/v1/auth/switchable", headers=bearer(fresh))).status_code == 200
+    taken = await switch(api, fresh, sibling["id"])
+    assert taken.status_code == 200, taken.text
+    assert (await session_row(api, sid)).user_id == sibling["id"]
+
+
+async def test_a_suspended_user_on_a_personal_device_cannot_refresh(api: Api) -> None:
+    gone = await user(api, "Gone", "family")
+    tv = await pair(api, profile_id=gone["profile_id"])
+    assert (await api.post(f"/users/{gone['id']}/suspend")).status_code == 200
+    r = await api.client.post("/api/v1/auth/refresh", json={"refresh_token": tv["refresh_token"]})
+    assert r.status_code == 401 and r.json()["code"] == "user_suspended", r.text
 
 
 async def test_the_pin_rules_of_a_hand_over_outlive_the_suspension(api: Api) -> None:
