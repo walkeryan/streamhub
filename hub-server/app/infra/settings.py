@@ -53,6 +53,8 @@ class AppSettings(BaseSettings):
     http_timeout_s: float = 20.0
     vaapi_device: str = "/dev/dri/renderD128"
     image_cache_max_mb: int = 512  # CONFIG_DIR/cache/images, oldest files evicted first; 0 disables
+    recordings_dir: str = ""  # recording is off until this names an existing, writable directory
+    recordings_min_free_gb: int = 50  # recordings stop, and none start, below this much free space
 
     @cached_property
     def resolved_secret_key(self) -> str:

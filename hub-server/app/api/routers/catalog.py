@@ -265,7 +265,7 @@ async def channels(
     offset: int = Query(0, ge=0),
     has_epg: bool = False,
 ) -> dict[str, Any]:
-    return await c.channels.list_channels(
+    listed = await c.channels.list_channels(
         p.profile_id,
         source_id=source_id,
         group=group,
@@ -278,6 +278,7 @@ async def channels(
         offset=offset,
         has_epg=has_epg,
     )
+    return await c.recorder.annotate(p, listed)
 
 
 @router.get("/channels/groups", response_model=list[S.ChannelGroup], tags=["live"])
@@ -314,7 +315,8 @@ async def channel_languages(c: C, p: P) -> list[dict[str, Any]]:
 
 @router.patch("/channels/{id}", response_model=S.Channel, tags=["live"])
 async def patch_channel(id: str, body: S.ChannelPatch, c: C, p: SourcesAdmin) -> dict[str, Any]:
-    return await c.channels.update_channel(id, body.model_dump(exclude_unset=True), p.profile_id)
+    updated = await c.channels.update_channel(id, body.model_dump(exclude_unset=True), p.profile_id)
+    return await c.recorder.annotate(p, updated)
 
 
 @router.get("/epg", response_model=dict[str, list[S.Programme]], tags=["live"])
@@ -327,7 +329,8 @@ async def epg(
     to: datetime | None = None,
 ) -> dict[str, Any]:
     cids = [x.strip() for x in channel_ids.split(",") if x.strip()] if channel_ids else None
-    return await c.channels.epg_grid(p.profile_id, cids, from_, to, country=country)
+    grid = await c.channels.epg_grid(p.profile_id, cids, from_, to, country=country)
+    return await c.recorder.annotate(p, grid)
 
 
 # ---------------------------------------------------------------- favorites / watchlist / history

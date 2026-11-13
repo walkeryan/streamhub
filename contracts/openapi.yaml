@@ -418,6 +418,7 @@ components:
         category: {type: string, nullable: true}
         icon: {type: string, nullable: true}
         catchup_available: {type: boolean, default: false}
+        recording_state: { oneOf: [{ $ref: '#/components/schemas/RecordingState' }, { type: 'null' }], description: "State of the household's recording of this programme, if there is one. Null when recording is off." }
 
     PlaybackRecoveryStatus:
       type: object
@@ -712,6 +713,47 @@ components:
         ref_id: {type: string, nullable: true, description: "hub id the notice is about"}
         created_at: {type: string, format: date-time}
         read_at: {type: string, format: date-time, nullable: true}
+    RecordingState: { type: string, enum: [scheduled, recording, done, failed, missed, cancelled] }
+    Recording:
+      type: object
+      description: One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes.
+      required: [id, profile_id, channel_id, title, starts_at, ends_at, state, created_at, updated_at]
+      properties:
+        id: {type: string}
+        profile_id: {type: string}
+        profile_name: {type: string}
+        rule_id: {type: string, nullable: true, description: "the rule that scheduled it; null when scheduled by hand"}
+        channel_id: {type: string}
+        channel_name: {type: string}
+        title: {type: string}
+        subtitle: {type: string, nullable: true}
+        season: {type: integer, nullable: true}
+        episode: {type: integer, nullable: true}
+        is_sport: {type: boolean}
+        starts_at: {type: string, format: date-time, description: "listed start; capture begins pad_before_s earlier"}
+        ends_at: {type: string, format: date-time, description: "listed end; capture runs pad_after_s longer"}
+        pad_before_s: {type: integer}
+        pad_after_s: {type: integer}
+        state: { $ref: '#/components/schemas/RecordingState' }
+        error: {type: string, nullable: true, description: "why it failed or was missed"}
+        size_bytes: {type: integer, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    RecordingRule:
+      type: object
+      required: [id, profile_id, kind, match, new_only, enabled, created_at]
+      properties:
+        id: {type: string}
+        profile_id: {type: string}
+        profile_name: {type: string}
+        kind: {type: string, enum: [series, team, keyword], description: "series = same title; team = a sports listing naming the team; keyword = title contains the text"}
+        match: {type: string}
+        channel_id: {type: string, nullable: true, description: "null = any channel"}
+        channel_name: {type: string, nullable: true}
+        new_only: {type: boolean, description: "skip listings marked as repeats and episodes already recorded"}
+        keep: {type: integer, nullable: true, description: "finished recordings to keep, oldest deleted first; null = all"}
+        enabled: {type: boolean}
+        created_at: {type: string, format: date-time}
     RequestManagerSettings:
       type: object
       required: [api_key_set]
@@ -1482,6 +1524,41 @@ paths:
         '403': { description: "content_restricted and the other /playback/resolve refusals" }
         '404': { description: "room_not_found, or the room's title or variant is not available to this profile" }
         '409': { description: "room_full | room_unsupported | audio_selection_required" }
+  /recordings:
+    get:
+      summary: The current profile's recordings (everyone's for an admin), earliest first
+      parameters:
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/RecordingState' }, description: "omitted = every state except cancelled" }
+      responses: { '200': { description: "enabled is false, and the list empty, until the server has a recordings directory", content: { application/json: { schema: { type: object, required: [enabled, recordings], properties: { enabled: {type: boolean}, can_schedule: {type: boolean, description: "The current profile may schedule, cancel and delete."}, recordings: { type: array, items: { $ref: '#/components/schemas/Recording' } } } } } } } }
+    post:
+      summary: Record one programme
+      description: Programme ids change whenever the guide is refreshed. Send channel_id and start as shown on the guide and the server finds the programme by those if the id no longer names it.
+      requestBody: { content: { application/json: { schema: { type: object, required: [programme_id], properties: { programme_id: {type: string}, channel_id: {type: string, nullable: true, description: "omitted = the lowest-numbered channel carrying the programme"}, start: {type: string, format: date-time, nullable: true} } } } } }
+      responses:
+        '201': { description: scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
+        '200': { description: this programme was already scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
+        '403': { description: recording_forbidden }
+        '409': { description: "recording_unavailable | programme_ended | already_scheduled (by another profile) | guide_changed" }
+  /recordings/{id}:
+    delete: { summary: Cancel an upcoming or running recording; delete a finished one and its file, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
+  /recording-rules:
+    get: { summary: The current profile's rules (everyone's for an admin), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }
+    post:
+      summary: Record every matching programme, now and after each guide refresh
+      requestBody: { content: { application/json: { schema: { type: object, required: [kind, match], properties: { kind: {type: string, enum: [series, team, keyword]}, match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean, default: false}, keep: {type: integer, nullable: true} } } } } }
+      responses:
+        '201': { description: created; matching programmes are scheduled at once, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }
+        '200': { description: the profile already has this rule, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }
+        '403': { description: recording_forbidden }
+        '409': { description: "recording_unavailable | rule_limit" }
+  /recording-rules/{id}:
+    patch:
+      summary: Edit, disable or enable a rule
+      description: Fields left out are kept. Disabling a rule, or changing what it matches, drops the upcoming recordings it scheduled.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean}, keep: {type: integer, nullable: true}, enabled: {type: boolean} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }, '409': { description: recording_unavailable } }
+    delete: { summary: Remove a rule and the upcoming recordings it scheduled; finished ones stay, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
 
   /health:
     get: { security: [], responses: { '200': { description: ok } } }

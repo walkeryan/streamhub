@@ -43,6 +43,7 @@ from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
 from app.services.owner_reauth import OwnerReauthService
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
+from app.services.recorder import RecorderService
 from app.services.registry import SourceRegistry
 from app.services.requests import RequestService
 from app.services.room_hub import RoomHub, RoomTokens
@@ -111,6 +112,7 @@ class Container:
     notices: NoticeService
     rooms: RoomHub
     room_playback: RoomPlayback
+    recorder: RecorderService
     http_factory: Any
 
 
@@ -166,7 +168,13 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     requests = RequestService(db, availability, sources, tmdb, request_manager)
     requests.content_policy = content_policy
     sync.after_catalog_sync = requests.reconcile
-    scheduler = SyncScheduler(sync, requests.reconcile)
+    # Schedules only: the capture backend is NullCapture until one is assigned to ``recorder.capture``.
+    recorder = RecorderService(
+        db, channels, recordings_dir=settings.recordings_dir, min_free_gb=settings.recordings_min_free_gb
+    )
+    recorder.content_policy = content_policy
+    sync.after_epg_refresh = recorder.apply_rules
+    scheduler = SyncScheduler(sync, requests.reconcile, recorder.run_tick)
     home = HomeService(catalog, channels, progress, layout, sources, availability, tmdb)
     active = ActiveStreams()
     tokens = StreamTokens(crypto, settings.stream_token_ttl_s)
@@ -247,6 +255,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         notices=NoticeService(db),
         rooms=RoomHub(RoomRegistry(), RoomTokens(crypto)),
         room_playback=RoomPlayback(playback, proxy),
+        recorder=recorder,
         http_factory=http_factory,
     )
 
@@ -273,6 +282,7 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
 async def shutdown(c: Container) -> None:
     c.scheduler.shutdown()
     await c.rooms.shutdown()
+    await c.recorder.shutdown()
     await c.sync.wait_idle()
     await c.proxy.shutdown()
     await c.db.dispose()

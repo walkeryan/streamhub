@@ -40,6 +40,8 @@ export ADMIN_PASSWORD=change-me     # optional; otherwise generated and logged O
 | `FFMPEG_PATH`, `VAAPI_DEVICE` | `ffmpeg`, `/dev/dri/renderD128` | remux / transcode |
 | `FFPROBE_PATH` | `ffprobe` | reads a VOD file's codecs and audio tracks before web playback; without it files are served unprobed |
 | `IMAGE_CACHE_MAX_MB` | `512` | cap for proxied artwork in `CONFIG_DIR/cache/images` (oldest evicted first; `0` disables) |
+| `RECORDINGS_DIR` | – | where recordings are written; recording is off until this names an existing, writable directory |
+| `RECORDINGS_MIN_FREE_GB` | `50` | recordings stop, and none start, when free space under `RECORDINGS_DIR` falls below this |
 
 Migrations run automatically at startup (`alembic upgrade head`). Manual: `.venv/bin/alembic upgrade head`
 (uses `sqlalchemy.url` from `alembic.ini`, override with `-x` or edit for your DB path).
