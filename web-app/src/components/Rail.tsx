@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useLocation } from 'react-router'
 import { FocusGroup, Focusable } from '../nav/Focusable'
+import { Avatar } from './Avatar'
 import { Icon } from './Icon'
 import { Modal } from './ui'
 import { useGo, useBackHandler } from '../nav/back'
@@ -68,7 +69,10 @@ export function Rail() {
   const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (d.to === '/recordings' ? recordingsOffered : !d.needs || can(access, d.needs)))]
   const open = (to: string) => { setPinned(false); setMenu(false); go(to) }
   // On a shared household device the profile entry asks who is watching; elsewhere it opens the profile's settings.
-  const switchable = useSwitchable(!!useMe().data?.shared_device).data
+  const me = useMe().data
+  const switchable = useSwitchable(!!me?.shared_device).data
+  // The person's Google picture, else the avatar chosen for them, else their initial; the size of the icons above it.
+  const face = <Avatar name={profile?.name} avatar={me?.user.avatar ?? profile?.avatar} picture={me?.user.picture} size="22px" />
   const showWho = useWho((s) => s.show)
   const openProfile = () => { if (switchable) { setPinned(false); setMenu(false); showWho() } else open('/settings?tab=profiles') }
   return <>
@@ -90,7 +94,7 @@ export function Rail() {
         <div className="spacer" style={{ flex: 1 }} />
         <Focusable focusKey="rail:profile" className="rail-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`} title={profile?.name}
           data-testid="nav-profile" onEnter={openProfile}>
-          <Avatar name={profile?.name} />
+          {face}
           <span className="lbl">{profile?.name ?? 'Profile'}</span>
         </Focusable>
       </>}
@@ -110,18 +114,10 @@ export function Rail() {
         </Focusable>}
         {phone && <Focusable focusKey="more:profile" className="menu-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`}
           data-testid="nav-profile" onEnter={openProfile}>
-          <Avatar name={profile?.name} />{profile?.name ?? 'Profile'}
+          {face}{profile?.name ?? 'Profile'}
         </Focusable>}
       </FocusGroup>
     </Modal>
     <JoinRoomDialog open={joinRoom} onClose={() => setJoinRoom(false)} />
   </>
-}
-
-function Avatar({ name }: { name?: string }) {
-  return (
-    <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--t-accent)', color: 'var(--t-accent-text)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, flex: 'none' }}>
-      {(name ?? '?').slice(0, 1).toUpperCase()}
-    </span>
-  )
 }

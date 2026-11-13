@@ -13,7 +13,7 @@ This product uses the TMDB API but is not endorsed or certified by TMDB. Availab
 }
 
 export const profiles: Profile[] = [
-  { id: 'p1', name: 'Ryan', avatar: null, is_admin: true, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: false, disclaimer_accepted_version: null },
+  { id: 'p1', name: 'Ryan', avatar: null, is_admin: true, theme_id: 'midnight', languages: ['eng'], has_pin: false, has_password: true, kids: false, disclaimer_accepted_version: null },
   { id: 'p2', name: 'Guest', avatar: null, is_admin: false, theme_id: 'midnight', languages: ['eng', 'spa'], has_pin: false, kids: false, disclaimer_accepted_version: null },
   { id: 'p3', name: 'Kids', avatar: null, is_admin: false, theme_id: 'oled', languages: ['eng'], has_pin: true, kids: true, disclaimer_accepted_version: null },
 ]

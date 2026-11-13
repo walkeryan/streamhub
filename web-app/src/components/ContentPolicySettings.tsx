@@ -22,7 +22,7 @@ export function ContentPolicySettings() {
   if (capability.error) return <ErrorState error={capability.error} onRetry={() => void capability.refetch()} />
   if (!capability.data?.content_policy_enabled) return <p>Server-enforced content controls are not enabled. Profile labels and hidden groups are display preferences, not access restrictions.</p>
   if (!manages || me.content_restricted) return <p>Content restrictions are managed by the owner. They cannot be changed in this profile’s preferences.</p>
-  if (!capability.data.owner_pin_configured) return <p>Owner PIN setup is required before restricted profiles can be enabled. Open Settings → Profiles → Owner PIN setup or recovery and request local VM approval.</p>
+  if (!capability.data.owner_pin_configured) return <p>Owner PIN setup is required before restricted profiles can be enabled. Open Settings → Profile → Owner PIN setup or recovery and request local VM approval.</p>
   return <AdminPolicies />
 }
 
@@ -30,14 +30,16 @@ function AdminPolicies() {
   const profiles = useProfiles()
   const [target, setTarget] = useState<string | null>(null)
   const selected = profiles.data?.find((p) => p.id === target)
-  const policy = useContentPolicy(target, !!selected && !selected.is_admin)
+  const policy = useContentPolicy(target, !!selected)
   return <section className="flex flex-col gap-4" data-testid="content-policies">
     <h2 className="heading">Profile content restrictions</h2>
     <p>Choose the profile to manage. Only explicitly allowed US movie and TV ratings are permitted when restrictions are on. Unknown or unrated content is blocked.</p>
     {profiles.error ? <ErrorState error={profiles.error} onRetry={() => void profiles.refetch()} /> : <FocusGroup focusKey="policy:profiles" className="flex gap-2 flex-wrap">
       {profiles.data?.map((p) => <Chip key={p.id} focusKey={`policy:profile:${p.id}`} pressed={target === p.id} onEnter={() => setTarget(p.id)}>{p.name}</Chip>)}
     </FocusGroup>}
-    {target && (selected?.is_admin ? <p>Owner profiles cannot be restricted. Choose a separate profile to apply content restrictions.</p> : policy.error ? <ErrorState error={policy.error} onRetry={() => void policy.refetch()} /> : policy.data ? <PolicyEditor key={`${target}:${policy.dataUpdatedAt}`} policy={policy.data} name={profiles.data?.find((p) => p.id === target)?.name ?? 'selected profile'} /> : <p role="status">Loading this profile’s policy…</p>)}
+    {/* Whether a profile can be restricted is the server's rule; this only says what it will answer for an owner's. */}
+    {selected?.is_admin && <p className="muted" data-testid="policy-owner-note">An owner's own profile cannot be restricted: the server refuses it. Use a separate profile for restrictions.</p>}
+    {target && (policy.error ? <ErrorState error={policy.error} onRetry={() => void policy.refetch()} /> : policy.data ? <PolicyEditor key={`${target}:${policy.dataUpdatedAt}`} policy={policy.data} name={profiles.data?.find((p) => p.id === target)?.name ?? 'selected profile'} /> : <p role="status">Loading this profile’s policy…</p>)}
   </section>
 }
 

@@ -114,16 +114,17 @@ export function ProfilePicker() {
   const login = async (p: Profile, s?: string) => {
     setBusy(true); setErr(null)
     try {
-      const t = await unwrap<AuthTokens>(api.POST('/auth/login', { body: { profile_id: p.id, ...(p.is_admin ? { password: s ?? null } : { pin: s ?? null }) } }))
+      const t = await unwrap<AuthTokens>(api.POST('/auth/login', { body: { profile_id: p.id, ...(p.has_password ? { password: s ?? null } : { pin: s ?? null }) } }))
       setSession(t.access_token, t.refresh_token, t.profile)
       qc.clear()
       setPending(null); setSecret('')
     } catch (e) {
-      setErr(e instanceof ApiError && e.status === 401 ? (p.is_admin ? 'That password is not right.' : 'That PIN is not right.') : e instanceof Error ? e.message : 'Sign-in failed.')
+      setErr(e instanceof ApiError && e.status === 401 ? (p.has_password ? 'That password is not right.' : 'That PIN is not right.') : e instanceof Error ? e.message : 'Sign-in failed.')
     } finally { setBusy(false) }
   }
   const choose = (p: Profile) => {
-    if (p.is_admin || p.has_pin) { setPending(p); setSecret(''); setErr(null) } else void login(p)
+    // Which secret a profile signs in with is what the server says it has: a password, a PIN, or neither.
+    if (p.has_password || p.has_pin) { setPending(p); setSecret(''); setErr(null) } else void login(p)
   }
 
   return (
@@ -140,11 +141,11 @@ export function ProfilePicker() {
           </div>
         )}
       </FocusGroup>
-      <Modal open={!!pending} onClose={() => setPending(null)} title={pending ? (pending.is_admin ? `Password for ${pending.name}` : `PIN for ${pending.name}`) : ''} firstFocusKey="login:input">
+      <Modal open={!!pending} onClose={() => setPending(null)} title={pending ? (pending.has_password ? `Password for ${pending.name}` : `PIN for ${pending.name}`) : ''} firstFocusKey="login:input">
         {pending && (
           <>
-            <FocusableInput focusKey="login:input" label={pending.is_admin ? 'Password' : 'PIN'} type="password" value={secret}
-              inputMode={pending.is_admin ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
+            <FocusableInput focusKey="login:input" label={pending.has_password ? 'Password' : 'PIN'} type="password" value={secret}
+              inputMode={pending.has_password ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
             {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
             <div className="flex gap-3">
               <Button focusKey="login:go" primary disabled={busy || !secret} onEnter={() => void login(pending, secret)}>Sign in</Button>

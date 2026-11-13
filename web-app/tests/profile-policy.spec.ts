@@ -156,12 +156,12 @@ test('a restricted admin cannot expose policy or profile-management escape contr
 })
 
 
-test('owner profiles cannot be restricted through the editor', async ({page}) => {
+test('an owner profile is not held back by its admin flag: the editor says what the server will answer', async ({page}) => {
   await fixture(page);await page.goto('/settings?tab=parental')
-  await page.getByTestId('content-policies').getByRole('button',{name:'Ryan',exact:true}).click()
-  await expect(page.getByText('Owner profiles cannot be restricted.')).toBeVisible()
-  await expect(page.getByTestId('policy-editor')).toHaveCount(0)
-  expect(await calls(page)).toEqual([])
+  await page.getByTestId('content-policies').getByRole('button').first().click()
+  await expect(page.getByTestId('policy-owner-note')).toContainText('cannot be restricted: the server refuses it')
+  await expect(page.getByTestId('policy-editor')).toBeVisible()
+  expect((await calls(page)).map((c)=>c.path)).toEqual(['/api/v1/profiles/p1/content-policy'])
 })
 
 

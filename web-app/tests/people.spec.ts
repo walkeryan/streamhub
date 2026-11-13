@@ -184,6 +184,45 @@ test.describe('refusals read the same everywhere', () => {
   })
 })
 
+test.describe('the profile picker', () => {
+  test('asks for the secret a profile has, a password or a PIN, whatever its admin flag says', async ({ page, context }) => {
+    await page.goto('/')
+    const cards = page.getByTestId('profile-card')
+    // The first fixture profile has a password.
+    await cards.first().click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByRole('heading', { name: /^Password for / })).toBeVisible()
+    await page.getByLabel('Password', { exact: true }).fill('wrong')
+    await page.keyboard.press('Enter')
+    await expect(dialog.getByRole('alert')).toHaveText('That password is not right.')
+    await page.getByLabel('Password', { exact: true }).fill('admin')
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('disclaimer-gate')).toBeVisible()
+
+    // An admin flag without a password is not a reason to ask for one.
+    const other = await second(context)
+    await other.addInitScript(() => {
+      localStorage.removeItem('sh.session.v1')
+      const original = window.fetch.bind(window)
+      window.fetch = async (input, init) => {
+        const request = new Request(input, init)
+        if (new URL(request.url).pathname !== '/api/v1/profiles' || request.method !== 'GET') return original(request)
+        const profiles = await (await original(request)).json() as Array<Record<string, unknown>>
+        return Response.json(profiles.map((p) => (p.id === 'p2' ? { ...p, is_admin: true, has_password: false } : p)))
+      }
+    })
+    await other.goto('/')
+    await other.getByTestId('profile-card').filter({ hasText: 'Guest' }).click()
+    await expect(other.getByRole('dialog')).toHaveCount(0)
+    await expect(other.getByTestId('disclaimer-gate')).toBeVisible()
+    // A PIN is asked for as a PIN.
+    await other.evaluate(() => localStorage.removeItem('sh.session.v1'))
+    await other.reload()
+    await other.getByTestId('profile-card').filter({ hasText: 'Kids' }).click()
+    await expect(other.getByRole('dialog').getByRole('heading', { name: 'PIN for Kids', exact: true })).toBeVisible()
+  })
+})
+
 test.describe('signing in', () => {
   const INVITE = 'inv-open'.padEnd(43, 'x'), SPENT = 'inv-used'.padEnd(43, 'x')
   /** Google's part of the trip: the server would redirect there and come back with ?google_complete=1. */

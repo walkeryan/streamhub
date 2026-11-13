@@ -245,8 +245,9 @@ test('Home is composed from shelves: New Releases, shelves with See all, Recentl
   // Every row is compact: posters for titles, a captioned wide tile for what is in progress.
   await expect(page.locator('.feature-card')).toHaveCount(0)
   await expect(page.locator('[data-row="continue"] .tile-landscape .cap').first()).toHaveCSS('opacity', '1')
-  // The hero features the New Releases shelf.
+  // The hero features the New Releases shelf, and says where its title plays the way a tile does.
   await expect(page.getByTestId('hero-title')).toHaveText('Neon Cartographers')
+  await expect(page.getByTestId('hero').locator('.badge')).toHaveText(['In your library'])
   // First screen at 1280x720: the hero, what is in progress, what is on, and the first shelf's posters.
   const poster = (await page.locator('[data-row="shelf:movies:New Releases"] .tile-poster').first().boundingBox())!
   expect(poster.y + poster.height / 2).toBeLessThan(720)
@@ -582,5 +583,77 @@ test.describe('review of the first pass', () => {
     await expect(tile('Owned').locator('.badge')).toHaveText('In your library')
     await expect(tile('Owned Too').locator('.badge')).toHaveText('In your library')
     await expect(page.locator('.tile-badges').getByText(/Available · Plex/)).toHaveCount(0)
+
+    // The hero follows the focused tile and the same rule: nothing for one ordinary source, never "Available · <library>".
+    const hero = page.getByTestId('hero')
+    await walk(page, 'ArrowDown', tile('One Source'))
+    for (const [title, badges] of [['One Source', []], ['Two Sources', ['Available · IPTV', 'Available · Second IPTV']], ['Owned', ['In your library']], ['Owned Too', ['In your library']], ['Elsewhere', ['Open · Netflix']], ['Nowhere', []]] as const) {
+      await expect(tile(title)).toHaveAttribute('data-focused', 'true')
+      await expect(page.getByTestId('hero-title')).toHaveText(title)
+      await expect(hero.locator('.badge')).toHaveText([...badges])
+      await page.keyboard.press('ArrowRight')
+    }
+  })
+
+  test('Settings, Profile: the signed-in person and a way to Users; no profiles are added or deleted here', async ({ page, browser }) => {
+    await enter(page, '/settings?tab=profiles', 'owner')
+    await expect(page.getByTestId('tab-profiles')).toHaveText('Profile')
+    await expect(page.getByRole('heading', { name: /^Signed in as / })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Add profile', exact: true })).toHaveCount(0)
+    await expect(page.getByLabel('Profile name', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0)
+    // By remote: from the tab down to Open Users.
+    await walk(page, 'ArrowDown', page.getByTestId('open-users'))
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('users')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('open-users')).toHaveAttribute('data-focused', 'true')
+    // Their own preferences are still theirs to set.
+    await page.getByTestId('tab-appearance').click()
+    await expect(page.getByTestId('theme-oled')).toBeVisible()
+    await page.getByTestId('tab-languages').click()
+    await expect(page.getByRole('heading', { name: 'Preferred languages', exact: true })).toBeVisible()
+
+    const guest = await other(browser)
+    await enter(guest.page, '/settings?tab=profiles')
+    await expect(guest.page.getByRole('heading', { name: 'Signed in as Guest', exact: true })).toBeVisible()
+    await expect(guest.page.getByTestId('open-users')).toHaveCount(0)
+    await expect(guest.page.getByLabel('New PIN', { exact: true })).toBeVisible()
+    await guest.context.close()
+  })
+
+  test('the rail and the phone menu show the person, not only an initial: a picture, else their avatar', async ({ page, browser }) => {
+    const picture = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#888"/></svg>')}`
+    const withPicture = (url: string) => page.evaluate((url) => {
+      const db = JSON.parse(localStorage.getItem('mock.people.v1')!) as { users: Array<{ id: string; picture: string | null }> }
+      db.users.find((u) => u.id === 'u2')!.picture = url
+      localStorage.setItem('mock.people.v1', JSON.stringify(db))
+    }, url)
+    await enter(page)
+    const entry = page.getByTestId('nav-profile')
+    // No picture and no avatar: the initial.
+    await expect(entry.locator('img')).toHaveCount(0)
+    await expect(entry).toContainText('G')
+    await withPicture(picture)
+    await page.reload()
+    await expect(entry.locator('img')).toHaveAttribute('src', picture)
+    const face = (await entry.locator('img').boundingBox())!
+    expect([Math.round(face.width), Math.round(face.height)]).toEqual([22, 22])
+    // A picture that will not load falls back quietly.
+    await withPicture('/api/v1/images/refused-token')
+    await page.reload()
+    await expect(entry).toBeVisible()
+    await expect(entry.locator('img')).toHaveCount(0)
+
+    // Kids was given the fox, and has no picture; on a phone the entry sits in More.
+    const phone = await other(browser, PHONE)
+    await phone.page.addInitScript(() => {
+      sessionStorage.setItem('mock.accepted', JSON.stringify(['p1', 'p2', 'p3']))
+      localStorage.setItem('sh.session.v1', JSON.stringify({ access: 'mock-access-p3', refresh: 'mock-refresh-p3', profile: { id: 'p3', name: 'Kids', avatar: null, is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: true, kids: true, disclaimer_accepted_version: '1.0' } }))
+    })
+    await phone.page.goto('/')
+    await phone.page.getByTestId('nav-more').tap()
+    await expect(phone.page.getByTestId('more-menu').getByTestId('nav-profile').locator('[data-avatar="fox"]')).toBeVisible()
+    await phone.context.close()
   })
 })

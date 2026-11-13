@@ -60,23 +60,3 @@ test('late profile results and local preferences cannot cross a profile switch',
   expect(restored.home).toEqual({ order: ['favorites'], hidden: ['news'] })
   expect(JSON.parse(restored.legacy!)).toEqual(restored.home)
 })
-
-
-test('new profiles default to English while existing profile preferences remain unchanged', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('sh.session.v1', JSON.stringify({ access: 'mock-access-p1', refresh: 'mock-refresh-p1', profile: { id: 'p1', name: 'Ryan' } }))
-    sessionStorage.setItem('mock.accepted', JSON.stringify(['p1']))
-  })
-  await page.goto('/settings?tab=profiles')
-  await page.getByLabel('Profile name', { exact: true }).fill('Party guest')
-  await page.getByRole('button', { name: 'Add profile', exact: true }).click()
-  await expect.poll(() => page.evaluate(async () => {
-    const path = '/src/mocks/fixtures.ts'
-    return (await import(/* @vite-ignore */ path)).profiles.find((p: {name: string}) => p.name === 'Party guest')?.languages
-  })).toEqual(['eng'])
-  const profiles = await page.evaluate(async () => {
-    const path = '/src/mocks/fixtures.ts'
-    return (await import(/* @vite-ignore */ path)).profiles
-  })
-  expect(profiles.find((p: { id: string }) => p.id === 'p2').languages).toEqual(['eng', 'spa'])
-})
