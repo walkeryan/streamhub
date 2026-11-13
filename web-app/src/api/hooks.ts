@@ -1,10 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { z } from 'zod'
 import { api, ok, tokenless, unwrap } from './client'
 import { useSession } from '../store/session'
+import { mergeProgrammes } from '../lib/guideWindow'
 import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined } from './types'
 import type {
-  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
+  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult,
   Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
 } from './types'
 
@@ -81,6 +82,23 @@ export const useChannels = (f: ChannelFilters, enabled = true) => {
   })
 }
 
+type ChannelPage = ChannelsResult & { total?: number; offset?: number; limit?: number }
+/** The guide's channels, a page at a time: the next page starts where the loaded ones end. */
+export const useChannelPages = (f: ChannelFilters, limit: number) => {
+  const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
+  return useInfiniteQuery({
+    queryKey: ['channels', useProfileId(), { ...f, limit }, preferred, 'pages'],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => unwrap<ChannelPage>(api.GET('/channels', { params: { query: { ...f, limit, offset: pageParam } } })),
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + (p.channels?.length ?? 0), 0)
+      // A server that sends no total is asked again for as long as its pages come back full.
+      const more = last.total != null ? loaded < last.total : (last.channels?.length ?? 0) >= limit
+      return more && last.channels?.length ? loaded : undefined
+    },
+  })
+}
+
 export const useChannelGroups = (filters: ChannelFilters = {}, enabled = true) => {
   const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
   return useQuery({ enabled, queryKey: ['channel-groups', useProfileId(), filters, preferred], queryFn: () => unwrap<ChannelGroup[]>(api.GET('/channels/groups', { params: { query: filters } })) })
@@ -89,13 +107,37 @@ export const useChannelGroups = (filters: ChannelFilters = {}, enabled = true) =
 export const useLanguages = () =>
   useQuery({ queryKey: ['channel-languages', useProfileId()], queryFn: () => unwrap<LanguageCount[]>(api.GET('/channels/languages')) })
 
-export const useEpg = (ids: string[], from: string, to: string) =>
-  useQuery({
-    queryKey: ['epg', useProfileId(), ids.join(','), from, to],
-    enabled: ids.length > 0,
-    staleTime: 60_000,
-    queryFn: () => unwrap<EpgData>(api.GET('/epg', { params: { query: { channel_ids: ids.join(','), from, to } } })),
+export interface EpgRequest { ids: string[]; from: number; to: number; enabled: boolean }
+export interface EpgChunks { byChannel: Record<string, Programme[]>; loading: boolean[]; error: unknown }
+// Not a closure: the same function on every render is what lets the merged schedule keep its identity until an answer changes.
+const mergeEpg = (results: UseQueryResult<EpgData>[]): EpgChunks => {
+  const lists = new Map<string, Programme[][]>()
+  for (const r of results) for (const [id, list] of Object.entries(r.data ?? {})) lists.set(id, [...(lists.get(id) ?? []), list])
+  return {
+    byChannel: Object.fromEntries([...lists].map(([id, parts]) => [id, mergeProgrammes(parts)])),
+    loading: results.map((r) => r.isLoading),
+    error: results.find((r) => r.error)?.error ?? null,
+  }
+}
+/**
+ * The guide's programmes, asked for by page of channels and by span of hours. Every request is cached
+ * on its own, so loading more channels or later hours never asks again for what is on screen.
+ */
+export const useEpgChunks = (requests: EpgRequest[]): EpgChunks => {
+  const profile = useProfileId()
+  return useQueries({
+    queries: requests.map((r) => {
+      const from = new Date(r.from).toISOString(), to = new Date(r.to).toISOString()
+      return {
+        queryKey: ['epg', profile, r.ids.join(','), from, to],
+        enabled: r.enabled && r.ids.length > 0,
+        staleTime: 60_000,
+        queryFn: () => unwrap<EpgData>(api.GET('/epg', { params: { query: { channel_ids: r.ids.join(','), from, to } } })),
+      }
+    }),
+    combine: mergeEpg,
   })
+}
 
 export const useFavorites = () =>
   useQuery({ queryKey: [...qk.favorites, useProfileId()], queryFn: () => unwrap<Tile[]>(api.GET('/favorites')) })

@@ -4,20 +4,20 @@ import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
 import { useChannelGroups, useChannels, useLanguages, useRecordings, useSources, useToggleFavorite } from '../api/hooks'
 import type { Channel, ChannelGroup } from '../api/types'
-import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
+import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
 import { ChannelRow } from '../components/ChannelRow'
 import { Icon } from '../components/Icon'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
-import { setFocus } from '../nav/spatial'
+import { doesFocusableExist, setFocus } from '../nav/spatial'
 import { useHistoryState } from '../nav/historyState'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { Preview } from '../player/Preview'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
-import { usePhone } from '../lib/layout'
-import { fmtTime, useDebounced } from '../lib/util'
+import { usePhone, useWide } from '../lib/layout'
+import { LANG_NAMES, fmtTime, useDebounced } from '../lib/util'
 import { useCan } from '../api/me'
 import { RecordDialog } from '../recordings/RecordDialog'
 import { RecordingBadge } from '../recordings/RecordingBadge'
@@ -65,6 +65,17 @@ export function LiveTV() {
   })
   const [previewId, setPreviewId] = useState<string | null>(null)
   const phone = usePhone()
+  // The guide: its one rarely changed choice lives in Options with the others; its count is shown in the header.
+  const [scheduledOnly, setScheduledOnly] = useHistoryState('guide:scheduled', true)
+  const [guideTotal, setGuideTotal] = useState<number | null>(null)
+  // Wide screens leave the guide room beside the header for the focused programme (see Guide).
+  const wide = useWide()
+  const [side, setSide] = useState<HTMLDivElement | null>(null)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  // Search is an icon until it is asked for, and stays a field for as long as it holds text.
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searching = searchOpen || search !== ''
+  useEffect(() => { if (searchOpen) void setFocus('live:search') }, [searchOpen])
   const languages = useLanguages()
   const { offered: languageOffered, language } = languageScope(languages.data, lang, profile?.languages.join(',') ?? '')
   // A region row is a choice only when United States is some, not all or none, of what is listed.
@@ -97,7 +108,7 @@ export function LiveTV() {
   const go = useGo()
   useEffect(() => { if (ready && q.data) setChannelList(q.data.list_id ?? null, channels) }, [ready, q.data, channels, setChannelList])
   // Arrive on the channels, not on the search field (a focused field raises the on-screen keyboard).
-  useRestoreFocus(ready, channels.length ? 'live:list' : 'live:search')
+  useRestoreFocus(ready, channels.length ? 'live:list' : search ? 'live:search' : 'live:group:all')
   useEffect(() => {
     if (view !== 'channels' || !previewEnabled || !focused) { setPreviewId(null); return }
     const id = window.setTimeout(() => setPreviewId(focused.id), 600)
@@ -113,7 +124,12 @@ export function LiveTV() {
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || !/^[0-9]$/.test(e.key) || e.ctrlKey || e.metaKey || e.altKey) return
       digits.current = (digits.current + e.key).slice(-6)
       window.clearTimeout(timer)
-      timer = window.setTimeout(() => { setSearch(digits.current); digits.current = ''; void setFocus('live:search') }, 700)
+      timer = window.setTimeout(() => {
+        setSearch(digits.current); digits.current = ''
+        // The field is drawn by this update when search was still an icon: the effect above focuses it then.
+        setSearchOpen(true)
+        if (doesFocusableExist('live:search')) void setFocus('live:search')
+      }, 700)
     }
     window.addEventListener('keydown', onKey)
     return () => { window.removeEventListener('keydown', onKey); window.clearTimeout(timer) }
@@ -122,8 +138,9 @@ export function LiveTV() {
     setChannelList(q.data?.list_id ?? null, channels)
     go(`/play/${encodeURIComponent(c.id)}${q.data?.list_id ? `?list=${encodeURIComponent(q.data.list_id)}` : ''}`)
   }
-  const reset = () => { saved.update((v) => ({ ...v, group: '', source: '', favorites: false })); setSearch(''); setPage(0) }
-  const changePage = (p: number) => { setPage(p); setPreviewId(null); setFocusedId(null); void setFocus('live:search') }
+  // The × that cleared the filters goes with them: focus moves to All, which is now the choice.
+  const reset = () => { saved.update((v) => ({ ...v, group: '', source: '', favorites: false })); setSearch(''); setSearchOpen(false); setPage(0); void setFocus('live:group:all') }
+  const changePage = (p: number) => { setPage(p); setPreviewId(null); setFocusedId(null); void setFocus('live:groups') }
   const shownGroups = (groups.data ?? []).filter((g) => !g.hidden)
   // Chips are the top level. A group's children are one drop-down beside its chip, offered while it is the choice.
   const topGroups = shownGroups.filter((g) => !g.parent)
@@ -139,43 +156,82 @@ export function LiveTV() {
     options={[{ id: chip.id, label: `All ${chip.name}`, count: chip.channel_count }, ...children.map((g) => ({ id: g.id, label: g.name, count: g.channel_count }))]} onChange={(id) => pick(id)} />
   const sourceOptions = [{ id: '', label: 'All sources' }, ...(sources.data ?? []).filter((s) => s.type === 'm3u' || s.type === 'xtream').map((s) => ({ id: s.id, label: s.name }))]
 
-  if (!saved.ready) return <div className="page-pad" data-testid="live"><h1 className="display">Live TV</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="live:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
-  return <div className="page-pad" data-testid="live" style={{ paddingBottom: '2rem' }}>
-    <FocusGroup focusKey="live:filters" className="flex flex-col gap-3 mb-4">
-      <div className="browse-bar">
-        <h1 className="title-xl">Live TV</h1>
-        <FocusGroup focusKey="live:views" className="flex gap-2" role="group" label="Live TV view">
-          <Chip focusKey="live:view:guide" pressed={view === 'guide'} onEnter={() => setView('guide')}>Guide</Chip>
-          <Chip focusKey="live:view:channels" pressed={view === 'channels'} onEnter={() => setView('channels')}>Channels</Chip>
+  // One small × beside the filter in force clears them all: after the chosen chip, else beside the search.
+  const chipInRow = chipGroups.some((g) => g.id === chip?.id)
+  const clearAt = favOnly ? 'fav' : chipInRow ? chip!.id : group ? 'more' : 'search'
+  const clear = (group || source || favOnly || search) && <Chip focusKey="live:reset" label="Clear filters" onEnter={reset}><Icon name="x" size={14} /></Chip>
+  // A choice made in Options is named in the header only while it is not the usual one.
+  const notes = [
+    view === 'guide' && !scheduledOnly && 'All channels',
+    !!source && (sources.data?.find((x) => x.id === source)?.name ?? 'One source'),
+    languageOffered && lang !== defaults.language && (lang === 'mine' ? 'My languages' : lang === 'all' ? 'All languages' : LANG_NAMES[lang] ?? languages.data?.find((l) => l.code === lang)?.name ?? lang),
+    regionOffered && country !== 'US' && (country === 'all' ? 'All regions' : 'Unknown region'),
+  ].filter((n): n is string => !!n)
+  const counted = view === 'channels' ? (q.isFetching ? 'Updating…' : `${total.toLocaleString()} channels`) : guideTotal === null ? '' : `${guideTotal.toLocaleString()} channels`
+
+  if (!saved.ready) return <div className="live-screen" data-testid="live"><h1 className="heading">Live TV</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="live:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
+  return <div className="live-screen" data-testid="live" data-view={view}>
+    <div className="live-head" data-testid="live-head">
+      {/* Up from the channels or the guide arrives on the groups, at the one in force; the line above them is one more Up. */}
+      <FocusGroup focusKey="live:filters" className="live-head-main" preferred="live:groups">
+        <div className="live-bar">
+          <h1 className="heading">Live TV</h1>
+          <FocusGroup focusKey="live:views" className="flex gap-2" role="group" label="Live TV view">
+            <Chip focusKey="live:view:guide" pressed={view === 'guide'} onEnter={() => setView('guide')}>Guide</Chip>
+            <Chip focusKey="live:view:channels" pressed={view === 'channels'} onEnter={() => setView('channels')}>Channels</Chip>
+          </FocusGroup>
+          <div className="live-tools" onBlur={(e) => { if (!search && !e.currentTarget.contains(e.relatedTarget)) setSearchOpen(false) }}>
+            {searching
+              ? <div className="live-search"><FocusableInput focusKey="live:search" label="Search channels or number" placeholder="Channel name or number" value={search} onChange={setSearch} inputMode="search" /></div>
+              : <Button focusKey="live:search-open" className="btn-chip" iconOnly icon="search" label="Search channels" onEnter={() => setSearchOpen(true)} testId="live-search-open" />}
+            {clearAt === 'search' && clear}
+            <Button focusKey="live:options" className={notes.length ? 'btn-chip live-changed' : 'btn-chip'} iconOnly icon="filter" label="Options" onEnter={() => setOptionsOpen(true)} testId="live-options" />
+          </div>
+          <p className="label live-note" aria-live="polite" data-testid="live-note"><span>{counted}</span>{notes.map((n) => <span key={n} data-testid="live-choice">{n}</span>)}</p>
+        </div>
+        <FocusGroup focusKey="live:groups" className="chip-scroll" role="group" label="Channel groups" preferred={favOnly ? 'live:fav' : `live:group:${chipInRow ? chip!.id : 'all'}`}>
+          <Chip focusKey="live:group:all" pressed={!group && !favOnly} onEnter={() => pick('')}>All</Chip>
+          <Chip focusKey="live:fav" pressed={favOnly} onEnter={() => pick('', !favOnly)} testId="live-fav-filter">Favorites</Chip>
+          {clearAt === 'fav' && clear}
+          {chipGroups.map((g) => <Fragment key={g.id}>
+            <Chip focusKey={`live:group:${g.id}`} pressed={(chip?.id ?? group) === g.id} onEnter={() => pick(g.id)}>{g.name}{parents.has(`${g.source_id}|${g.name}`) && <Icon name="down" size={14} />}</Chip>
+            {besideChip && chip?.id === g.id && subgroups}
+            {clearAt === g.id && clear}
+          </Fragment>)}
+          {topGroups.length > GROUP_CHIPS && <CatalogPicker scope="live:category" label="More groups" value={group} options={[{ id: '', label: 'All groups' }, ...shownGroups.map((g) => ({ id: g.id, label: g.path, count: g.channel_count }))]} onChange={(id) => pick(id)} />}
+          {clearAt === 'more' && clear}
         </FocusGroup>
-        {view === 'channels' && <p className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} channels`}</p>}
-      </div>
-      <div className="browse-bar">
-        <div className="browse-search"><FocusableInput focusKey="live:search" label="Search channels or number" placeholder="Channel name or number" value={search} onChange={setSearch} inputMode="search" /></div>
-        {sourceOptions.length > 2 && <CatalogPicker scope="live:source" label="Source" value={source} options={sourceOptions} onChange={setSource} />}
-        {(group || source || favOnly || search) && <Button focusKey="live:reset" ghost onEnter={reset}>Clear filters</Button>}
-      </div>
-      <FocusGroup focusKey="live:groups" className="chip-scroll" role="group" label="Channel groups">
-        <Chip focusKey="live:group:all" pressed={!group && !favOnly} onEnter={() => pick('')}>All</Chip>
-        <Chip focusKey="live:fav" pressed={favOnly} onEnter={() => pick('', !favOnly)} testId="live-fav-filter">Favorites</Chip>
-        {chipGroups.map((g) => <Fragment key={g.id}>
-          <Chip focusKey={`live:group:${g.id}`} pressed={(chip?.id ?? group) === g.id} onEnter={() => pick(g.id)}>{g.name}{parents.has(`${g.source_id}|${g.name}`) && <Icon name="down" size={14} />}</Chip>
-          {besideChip && chip?.id === g.id && subgroups}
-        </Fragment>)}
-        {topGroups.length > GROUP_CHIPS && <CatalogPicker scope="live:category" label="More groups" value={group} options={[{ id: '', label: 'All groups' }, ...shownGroups.map((g) => ({ id: g.id, label: g.path, count: g.channel_count }))]} onChange={(id) => pick(id)} />}
+        {!besideChip && subgroups && <FocusGroup focusKey="live:subgroups" className="flex">{subgroups}</FocusGroup>}
+        {saved.error && <p className="label" role="alert">{saved.error}</p>}
+        {groups.error && <p role="status" className="muted">Groups could not load. You can still search channels.</p>}
       </FocusGroup>
-      {!besideChip && subgroups && <FocusGroup focusKey="live:subgroups" className="flex">{subgroups}</FocusGroup>}
+      {view === 'guide' && wide && <div ref={setSide} className="live-head-side" />}
+    </div>
+    <Modal open={optionsOpen} onClose={() => setOptionsOpen(false)} title="Options" firstFocusKey="guide:scheduled" variant="sheet" testId="live-options-sheet">
+      <section className="flex flex-col gap-2"><h3 className="label">The guide lists</h3>
+        <FocusGroup focusKey="live:schedules" className="flex gap-2 flex-wrap" role="group" label="Guide channels">
+          <Chip focusKey="guide:scheduled" pressed={scheduledOnly} onEnter={() => setScheduledOnly(true)}>With schedules</Chip>
+          <Chip focusKey="guide:all-channels" pressed={!scheduledOnly} onEnter={() => setScheduledOnly(false)}>All channels</Chip>
+        </FocusGroup>
+      </section>
       {/* a row with a single choice is not shown */}
-      {languageOffered && <LanguageFilter scope="live" value={lang} onChange={setLang} />}
-      {regionOffered && <div className="flex gap-2 flex-wrap" role="group" aria-label="Region">
-        <Chip focusKey="live:country:US" pressed={country === 'US'} onEnter={() => setCountry('US')}>United States</Chip>
-        <Chip focusKey="live:country:all" pressed={country === 'all'} onEnter={() => setCountry('all')}>All regions</Chip>
-        <Chip focusKey="live:country:und" pressed={country === 'und'} onEnter={() => setCountry('und')}>Unknown region</Chip>
-      </div>}
-      {saved.error && <p className="label" role="alert">{saved.error}</p>}
-      {groups.error && <p role="status" className="muted">Groups could not load. You can still search channels.</p>}
-    </FocusGroup>
-    {view === 'guide' ? <Suspense fallback={<Skeleton style={{ height: '24rem' }} />}><Guide filters={{ ...filters, group: group || undefined }} selectedChannelId={focusedId} onSelectChannel={setFocusedId} /></Suspense> : <div className="live-catalog-layout grid gap-6" data-testid="live-channels" data-preview={!phone}>
+      {languageOffered && <section className="flex flex-col gap-2"><h3 className="label">Language</h3><LanguageFilter scope="live" value={lang} onChange={setLang} /></section>}
+      {regionOffered && <section className="flex flex-col gap-2"><h3 className="label">Region</h3>
+        <FocusGroup focusKey="live:regions" className="flex gap-2 flex-wrap" role="group" label="Region">
+          <Chip focusKey="live:country:US" pressed={country === 'US'} onEnter={() => setCountry('US')}>United States</Chip>
+          <Chip focusKey="live:country:all" pressed={country === 'all'} onEnter={() => setCountry('all')}>All regions</Chip>
+          <Chip focusKey="live:country:und" pressed={country === 'und'} onEnter={() => setCountry('und')}>Unknown region</Chip>
+        </FocusGroup>
+      </section>}
+      {sourceOptions.length > 2 && <FocusGroup focusKey="live:sources" className="flex"><CatalogPicker scope="live:source" label="Source" value={source} options={sourceOptions} onChange={setSource} /></FocusGroup>}
+      <FocusGroup focusKey="live:options-actions" className="flex gap-2 flex-wrap">
+        <Button focusKey="live:options:done" primary onEnter={() => setOptionsOpen(false)}>Done</Button>
+      </FocusGroup>
+    </Modal>
+    {view === 'guide' ? <Suspense fallback={<Skeleton className="epg-skel" />}>
+      <Guide filters={{ ...filters, group: group || undefined }} scheduledOnly={scheduledOnly} onShowAll={() => setScheduledOnly(false)} selectedChannelId={focusedId} onSelectChannel={setFocusedId}
+        wide={wide} detailsSlot={side} upKey="live:groups" onTotal={setGuideTotal} />
+    </Suspense> : <div className="live-catalog-layout grid gap-6" data-testid="live-channels" data-preview={!phone}>
       <div>
         {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !ready ? <div className="flex flex-col gap-2">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} style={{ height: '3.5rem' }} />)}</div> : !channels.length ?
           <Empty title="No channels match" hint={languageOffered ? 'Clear the group or search, or choose All languages to include other and unknown languages.' : 'Clear the group or search to see every channel.'}><Button focusKey="live:empty-reset" onEnter={reset}>Clear filters</Button>{languageOffered && <Button focusKey="live:empty-all" onEnter={() => { reset(); setLang('all') }}>All languages</Button>}</Empty> :
