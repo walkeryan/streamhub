@@ -185,3 +185,12 @@ def test_every_permission_gates_something() -> None:
     assert "recording_policy.py" in found["recordings.view"] and "recording_policy.py" in found["recordings.schedule"]
     assert "deps.py" in found["remote.access"]
     assert "request_policy.py" in found["requests.approve"]
+    # And each permission a feature hangs on is refused over HTTP in a test of its own:
+    # ``test_every_feature_permission_is_refused_over_http_without_it`` runs once per entry.
+    from tests.test_permission_guards import API_DENIALS, FEATURE_PERMISSIONS
+
+    named = {"rooms.create", "rooms.join", "recordings.view", "recordings.schedule", "remote.access"}
+    families = {name for name in PERMISSIONS if name.startswith(("requests.", "watch."))}
+    assert named | families <= FEATURE_PERMISSIONS <= PERMISSIONS
+    untested = FEATURE_PERMISSIONS - set(API_DENIALS)
+    assert not untested, f"permissions without an API-level denial test: {sorted(untested)}"

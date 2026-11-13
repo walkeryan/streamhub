@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -476,3 +477,82 @@ async def test_require_names_every_missing_permission(probe: Api) -> None:
     assert r.status_code == 403 and r.json()["missing"] == ["system.manage", "users.manage"]
     half = await member(probe, "family", name="Half", grants=["users.manage"])
     assert (await probe.client.get("/probe-both", headers=half.headers)).json()["missing"] == ["system.manage"]
+
+
+# ---------------------------------------------------------------- one refusal over HTTP per feature permission
+FEATURE_PERMISSIONS = frozenset(
+    name for name in PERMISSIONS if name.split(".")[0] in ("watch", "rooms", "recordings", "requests")
+) | {"remote.access"}
+
+Call = Callable[[Api, Member], Awaitable[httpx.Response]]
+Refusal = Callable[[httpx.Response], bool]
+
+
+def _missing(permission: str) -> Refusal:
+    return lambda r: denied(r, permission)
+
+
+def _code(code: str) -> Refusal:
+    return lambda r: r.status_code == 403 and r.json()["code"] == code
+
+
+async def _room(api: Api, user: Member) -> httpx.Response:
+    room = await api.post("/rooms", json={"id": VOD})
+    assert room.status_code == 201, room.text
+    return await user.get(f"/rooms/{room.json()['code']}")
+
+
+async def _request(api: Api, user: Member) -> httpx.Response:
+    # One title per caller: a second request for the same title joins the first.
+    taken = {r["tmdb_id"] for r in (await api.get("/requests", params={"scope": "all"})).json()["requests"]}
+    body = {"media_type": "tv", "tmdb_id": 1399} if 603 in taken else {"media_type": "movie", "tmdb_id": 603}
+    return await user.post("/requests", json=body)
+
+
+async def _away(api: Api, user: Member) -> httpx.Response:
+    app = api.client._transport.app  # type: ignore[attr-defined]
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("203.0.113.9", 40000)), base_url="http://hub.test"
+    ) as c:
+        return await c.get("/api/v1/favorites", headers=user.headers)
+
+
+# permission -> (the call it gates, how the refusal reads). ``test_every_permission_gates_something``
+# requires an entry here for every feature permission.
+API_DENIALS: dict[str, tuple[Call, Refusal]] = {
+    "watch.library": (lambda api, u: u.get(f"/titles/{LIBRARY}"), _missing("watch.library")),
+    "watch.vod": (lambda api, u: u.get(f"/titles/{VOD}"), _missing("watch.vod")),
+    "watch.live": (lambda api, u: u.get("/playback/options", params={"id": "ch:none:1"}), _missing("watch.live")),
+    "watch.adult": (lambda api, u: u.post("/auth/adult-unlock", json={"pin": "2468"}), _missing("watch.adult")),
+    "rooms.create": (lambda api, u: u.post("/rooms", json={"id": VOD}), _missing("rooms.create")),
+    "rooms.join": (_room, _missing("rooms.join")),
+    "recordings.view": (lambda api, u: u.get("/recordings"), _code("recording_forbidden")),
+    "recordings.schedule": (
+        lambda api, u: u.post("/recordings", json={"programme_id": "prog:1"}),
+        _code("recording_forbidden"),
+    ),
+    "requests.create": (_request, _code("request_forbidden")),
+    "requests.approve": (lambda api, u: u.get("/requests", params={"scope": "all"}), _code("request_forbidden")),
+    # Nothing is refused without it: the request is taken, and waits for someone to approve it.
+    "requests.auto_approve": (_request, lambda r: r.status_code == 201 and r.json()["state"] == "pending_approval"),
+    "remote.access": (_away, _code("remote_access_denied")),
+}
+
+
+@pytest.mark.parametrize("permission", sorted(FEATURE_PERMISSIONS))
+async def test_every_feature_permission_is_refused_over_http_without_it(
+    api: Api,
+    upstream: respx.MockRouter,  # noqa: F811
+    permission: str,
+) -> None:
+    await seed_catalog(api)
+    if permission.startswith("requests."):
+        await configure(api)
+    call, refused = API_DENIALS[permission]
+    lacking = await member(api, "family", name="Lacking", denials=[permission])
+    holder = await member(api, "family", name="Holder", grants=[permission])
+    assert permission not in (await lacking.get("/auth/me")).json()["permissions"]
+    r = await call(api, lacking)
+    assert refused(r), (permission, r.status_code, r.text)
+    r = await call(api, holder)
+    assert not refused(r) and r.status_code < 500, (permission, r.status_code, r.text)
