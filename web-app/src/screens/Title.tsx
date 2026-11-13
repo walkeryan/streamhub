@@ -8,6 +8,7 @@ import { Attribution, Button, Chip, Crossfade, ErrorState, Meta, Modal, Skeleton
 import { Icon } from '../components/Icon'
 import { SafeImg } from '../components/SafeImg'
 import { MediaTile } from '../components/Tile'
+import { CatalogPicker } from '../components/CatalogPicker'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { useRestoreFocus } from '../nav/back'
@@ -24,6 +25,8 @@ import { ShareSheet } from '../room/ShareSheet'
 import { useCan } from '../api/me'
 import { useGo } from '../nav/back'
 
+/** Seasons shown as chips; a series with more gets one drop-down. */
+const MAX_SEASON_CHIPS = 8
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', series: 'Series', vod: 'Movie', episode: 'Episode', season: 'Season' }
 
 export function TitleScreen() {
@@ -212,9 +215,13 @@ function TitleDetails({ id }: { id: string }) {
         {seasons.length > 0 && (
           <section className="mt-8" aria-label="Seasons and episodes" data-testid="episodes">
             <FocusGroup focusKey="title:seasons" className="flex gap-2 flex-wrap mb-2">
-              {seasons.map((s, i) => (
-                <Chip key={s.id} focusKey={`season:${s.id}`} pressed={(season ?? seasons[0]?.id) === s.id} onEnter={() => setSeason(i === 0 ? null : s.id)}>{s.title}</Chip>
-              ))}
+              {/* A long-running series would fill the screen with chips: past a row's worth, one control opens the list. */}
+              {seasons.length > MAX_SEASON_CHIPS
+                ? <CatalogPicker scope="title:season" label="Season" search={false} testId="season-picker" value={season ?? seasons[0]?.id ?? ''}
+                    options={seasons.map((s) => ({ id: s.id, label: s.title }))} onChange={(picked) => setSeason(picked === seasons[0]?.id ? null : picked)} />
+                : seasons.map((s, i) => (
+                  <Chip key={s.id} focusKey={`season:${s.id}`} pressed={(season ?? seasons[0]?.id) === s.id} onEnter={() => setSeason(i === 0 ? null : s.id)}>{s.title}</Chip>
+                ))}
             </FocusGroup>
             <FocusGroup focusKey="title:episodes" className="row-scroll" style={{ paddingInline: 0 }}>
               {episodes.map((e) => (
