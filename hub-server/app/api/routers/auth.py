@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api import schemas as S
-from app.api.deps import Admin, C, P
+from app.api.deps import C, P, UsersAdmin, session_meta
 from app.infra.models import Profile as ProfileRow
-from app.services.errors import Forbidden, NotFound, ServiceError, Unauthorized
+from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 
 router = APIRouter()
 
@@ -37,17 +37,66 @@ async def tokens_out(c: C, prof: ProfileRow, tokens: dict[str, str]) -> dict[str
 
 # ---------------------------------------------------------------- auth
 @router.post("/auth/login", response_model=S.AuthTokens, tags=["auth"])
-async def login(body: S.LoginRequest, c: C) -> dict[str, Any]:
+async def login(body: S.LoginRequest, request: Request, c: C) -> dict[str, Any]:
     if c.settings.google_auth_required:
         raise Forbidden("Use Google sign-in or device pairing")
-    prof, tokens = await c.auth.login(body.profile_id, body.pin, body.password)
+    prof, tokens = await c.auth.login(body.profile_id, body.pin, body.password, session_meta(request))
     return await tokens_out(c, prof, tokens)
 
 
 @router.post("/auth/refresh", response_model=S.AuthTokens, tags=["auth"])
-async def refresh(body: S.RefreshRequest, c: C) -> dict[str, Any]:
-    prof, tokens = await c.auth.refresh(body.refresh_token)
+async def refresh(body: S.RefreshRequest, request: Request, c: C) -> dict[str, Any]:
+    prof, tokens = await c.auth.refresh(body.refresh_token, session_meta(request))
     return await tokens_out(c, prof, tokens)
+
+
+def _bearer(request: Request) -> str:
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise Unauthorized("missing bearer token")
+    return token
+
+
+@router.get("/auth/me", response_model=S.Me, tags=["auth"])
+async def me(request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Who am I and what may I do. Also the one call a user waiting for approval can make:
+    once approved, the answer carries full tokens."""
+    response.headers["Cache-Control"] = "private, no-store"
+    principal, identity, tokens = await c.auth.me(_bearer(request), session_meta(request))
+    out = c.users.me_out(
+        identity,
+        shared_device=bool(principal and principal.shared_device),
+        adult_unlocked=bool(principal and principal.adult_unlocked),
+    )
+    if tokens is not None:
+        out["tokens"] = await tokens_out(c, identity.profile, tokens)
+    return out
+
+
+@router.get("/auth/sessions", response_model=list[S.AuthSession], tags=["auth"])
+async def list_sessions(c: C, p: P, user_id: str | None = None) -> list[dict[str, Any]]:
+    """The caller's signed-in devices; someone else's with ``users.manage``."""
+    if user_id and user_id != p.user_id and not p.can("users.manage"):
+        raise PermissionDenied(["users.manage"])
+    return await c.sessions.list(user_id or p.user_id, p.session_id)
+
+
+@router.delete("/auth/sessions/{sid}", status_code=204, tags=["auth"])
+async def revoke_session(sid: str, c: C, p: P) -> Response:
+    await c.sessions.revoke(p, sid)
+    return Response(status_code=204)
+
+
+@router.post("/auth/adult-unlock", response_model=S.AdultUnlock, tags=["auth"])
+async def adult_unlock(body: S.AdultUnlockRequest, response: Response, c: C, p: P) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"adult_unlocked_until": await c.sessions.adult_unlock(p, body.pin)}
+
+
+@router.post("/auth/adult-lock", status_code=204, tags=["auth"])
+async def adult_lock(c: C, p: P) -> Response:
+    await c.sessions.adult_lock(p)
+    return Response(status_code=204)
 
 
 @router.post("/auth/device", response_model=S.DeviceCode, tags=["auth"])
@@ -61,8 +110,8 @@ async def device_start(c: C) -> dict[str, Any]:
     responses={428: {"model": S.Error, "description": "pending"}},
     tags=["auth"],
 )
-async def device_poll(body: S.DevicePoll, c: C) -> dict[str, Any]:
-    prof, tokens = await c.auth.poll_device(body.device_code)
+async def device_poll(body: S.DevicePoll, request: Request, c: C) -> dict[str, Any]:
+    prof, tokens = await c.auth.poll_device(body.device_code, session_meta(request, "tv"))
     return await tokens_out(c, prof, tokens)
 
 
@@ -79,7 +128,9 @@ async def list_profiles(request: Request, c: C) -> list[dict[str, Any]]:
         scheme, _, token = request.headers.get("authorization", "").partition(" ")
         if scheme.lower() != "bearer" or not token:
             raise Unauthorized("Sign in to list profiles")
-        await c.auth.resolve_principal(token)
+        # One person, one user: there is nobody else's profile to pick from here.
+        principal = await c.auth.resolve_principal(token)
+        return [await profile_out(c, await c.auth.get_profile(principal.profile_id))]
     return [await profile_out(c, p) for p in await c.auth.list_profiles()]
 
 
@@ -117,7 +168,7 @@ async def set_pin(id: str, body: S.PinBody, c: C, p: P) -> Response:
 
 
 def _own(p: P, id: str) -> None:
-    if id != p.profile_id and not p.is_admin:
+    if id != p.profile_id and not p.can("users.manage"):
         raise NotFound("profile not found")
 
 
@@ -155,13 +206,15 @@ async def profile_switch(body: S.ProfileSwitch, c: C, p: P) -> dict[str, Any]:
 
 
 @router.get("/profiles/{id}/content-policy", tags=["profiles"])
-async def get_content_policy(id: str, c: C, p: Admin) -> dict[str, Any]:
+async def get_content_policy(id: str, c: C, p: UsersAdmin) -> dict[str, Any]:
     profile = await c.content_policy.profile(id)
     return {"profile_id": id, "feature_enabled": c.content_policy.enabled, **c.content_policy.values(profile)}
 
 
 @router.put("/profiles/{id}/content-policy", tags=["profiles"])
-async def put_content_policy(id: str, body: S.ContentPolicyWrite, request: Request, c: C, p: Admin) -> dict[str, Any]:
+async def put_content_policy(
+    id: str, body: S.ContentPolicyWrite, request: Request, c: C, p: UsersAdmin
+) -> dict[str, Any]:
     authorization = await c.auth.validate_owner_action(request.headers.get("X-Owner-Action", ""), p, id)
     profile = await c.content_policy.update(id, body.model_dump(), authorization=authorization)
     return {"profile_id": id, "feature_enabled": c.content_policy.enabled, **c.content_policy.values(profile)}
@@ -179,21 +232,22 @@ async def accept_disclaimer(body: S.DisclaimerAccept, c: C, p: P) -> Response:
     return Response(status_code=204)
 
 
-# Google owner login deliberately does not change native JWT/device-code routes.
+# Google sign-in deliberately does not change native JWT/device-code routes.
 @router.get("/auth/config", tags=["auth"])
-async def auth_config(c: C) -> dict[str, bool]:
+async def auth_config(c: C) -> dict[str, Any]:
     return {
         "google_enabled": c.google_auth.enabled,
         "google_required": c.settings.google_auth_required,
         "content_policy_enabled": c.content_policy.enabled,
         "owner_pin_configured": await c.owner_pin.configured(),
         "owner_pin_setup_required": not await c.owner_pin.configured(),
+        "signup_mode": c.app_settings.get("signup_mode"),
     }
 
 
 @router.get("/auth/google/start", tags=["auth"])
-async def google_start(c: C, return_to: str = "/") -> Response:
-    url, browser = c.google_auth.start(return_to)
+async def google_start(c: C, return_to: str = "/", invite: str = Query("", max_length=64)) -> Response:
+    url, browser = c.google_auth.start(return_to, invite)
     response = RedirectResponse(url, status_code=303, headers={"Cache-Control": "no-store"})
     response.set_cookie(
         "__Host-sh-google-state", browser, max_age=600, secure=True, httponly=True, samesite="lax", path="/"
@@ -218,8 +272,10 @@ async def google_callback(request: Request, c: C, state: str = "", code: str = "
         handoff, destination = await c.google_auth.finish(
             state, request.cookies.get("__Host-sh-google-state", ""), code
         )
-    except ServiceError:
-        response = RedirectResponse("/?google_error=1", status_code=303)
+    except ServiceError as exc:
+        # Two refusals are worth telling apart on the sign-in page; neither reveals anything.
+        reason = exc.code if exc.code in ("invite_required", "user_suspended") else "1"
+        response = RedirectResponse(f"/?google_error={reason}", status_code=303)
     else:
         separator = "&" if "?" in destination else "?"
         response = RedirectResponse(destination + separator + "google_complete=1", status_code=303)
@@ -239,11 +295,25 @@ async def google_complete(request: Request, response: Response, c: C) -> dict[st
     )
     response.delete_cookie("__Host-sh-google-handoff", secure=True, httponly=True, samesite="strict", path="/")
     response.headers["Cache-Control"] = "no-store"
+    identity = await c.users.identity(prof.id)
+    if identity is None:
+        raise Unauthorized("Sign-in completion expired; please start again")
+    if identity.user.status == "pending":
+        # Not signed in yet: this token opens GET /auth/me and nothing else.
+        return {
+            "status": "pending",
+            "pending_token": await c.auth.issue_pending(prof, session_meta(request, "browser")),
+            "user": {"display_name": identity.user.display_name, "email": identity.user.email},
+        }
     if c.content_policy.enabled:
+        # Legacy regime: Google proves the owner, the owner PIN completes the sign-in.
+        if "system.manage" not in identity.permissions:
+            raise Forbidden("Only the owner signs in with Google here", code="owner_pin_required")
         return {
             "owner_pin_required": True,
             "pending_token": c.auth.owner_pending(prof),
             "profile": await profile_out(c, prof),
             "setup_required": not await c.owner_pin.configured(),
         }
-    return await tokens_out(c, prof, c.auth.issue(prof))
+    tokens = await c.auth.issue(prof, meta=session_meta(request, "browser"))
+    return {"status": "active", **await tokens_out(c, prof, tokens)}

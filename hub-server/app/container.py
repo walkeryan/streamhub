@@ -37,6 +37,7 @@ from app.services.content_policy import ContentPolicy
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
+from app.services.invites import InvitesService
 from app.services.media_probe import MediaProbe
 from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
@@ -45,6 +46,7 @@ from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.registry import SourceRegistry
 from app.services.requests import RequestService
 from app.services.services_registry import ServiceRegistryService
+from app.services.sessions import SessionsService
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
 from app.services.sync import SyncScheduler, SyncService
@@ -56,6 +58,7 @@ from app.services.user_state import (
     ProgressService,
     WatchlistService,
 )
+from app.services.users import UsersService
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +74,9 @@ class Container:
     app_settings: SettingsService
     disclaimer: DisclaimerService
     auth: AuthService
+    users: UsersService
+    sessions: SessionsService
+    invites: InvitesService
     google_auth: GoogleAuthService
     language: LanguageChain
     tmdb: TmdbClient
@@ -122,6 +128,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     app_settings = SettingsService(db, crypto, settings.tmdb_api_key)
     disclaimer = DisclaimerService(db)
     auth = AuthService(db, crypto, settings.access_token_ttl_s, settings.refresh_token_ttl_s)
+    # One users service, the one the auth service validates against, now able to notify.
+    auth.users = UsersService(db, sessions=auth.sessions, setting=app_settings.get, http_factory=http_factory)
     content_policy = ContentPolicy(db, settings)
     auth.content_policy = content_policy
     owner_pin = OwnerPinService(auth, db, crypto)
@@ -189,7 +197,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     playback.probe = MediaProbe(settings.ffprobe_path)
     playback.probe_slot = proxy.probe_slot
     playback.pin = proxy.pin
-    google_auth = GoogleAuthService(settings, auth)
+    google_auth = GoogleAuthService(settings, auth, lambda: app_settings.get("signup_mode"))
     return Container(
         settings=settings,
         db=db,
@@ -200,6 +208,9 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         app_settings=app_settings,
         disclaimer=disclaimer,
         auth=auth,
+        users=auth.users,
+        sessions=auth.sessions,
+        invites=InvitesService(db),
         google_auth=google_auth,
         language=language,
         tmdb=tmdb,

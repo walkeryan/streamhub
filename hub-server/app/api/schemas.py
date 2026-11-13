@@ -19,6 +19,7 @@ class _M(BaseModel):
 class Error(_M):
     code: str
     message: str
+    missing: list[str] | None = Field(default=None, description="403 only: the permissions the caller lacks")
 
 
 class StreamRecoveryConfirm(_M):
@@ -467,6 +468,8 @@ class Settings(_M):
     epg_refresh_hours: int = 12
     transcode_hw: Literal["none", "vaapi", "nvenc", "qsv"] = "none"
     proxy_mode: Literal["auto", "always", "never"] = "auto"
+    signup_mode: Literal["approval", "invite_only"] = "approval"
+    notify_webhook_set: bool = False
 
 
 class SettingsPatch(_M):
@@ -475,6 +478,8 @@ class SettingsPatch(_M):
     epg_refresh_hours: int | None = None
     transcode_hw: Literal["none", "vaapi", "nvenc", "qsv"] | None = None
     proxy_mode: Literal["auto", "always", "never"] | None = None
+    signup_mode: Literal["approval", "invite_only"] | None = None
+    notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
 
 
 class TmdbKey(_M):
@@ -663,3 +668,199 @@ class RequestManagerSettings(_M):
 class RequestManagerWrite(_M):
     url: str | None = Field(default=None, max_length=512)
     api_key: str | None = Field(default=None, max_length=512, description="omit to keep the stored key")
+
+
+# ---------------------------------------------------------------- people
+UserStatusL = Literal["pending", "active", "suspended"]
+
+
+def _pin(**kw: Any) -> Any:
+    return Field(min_length=4, max_length=8, pattern=r"^[0-9]+$", repr=False, **kw)
+
+
+class Limits(_M):
+    max_streams: int | None = None
+    rating_ceiling_movie: str | None = None
+    rating_ceiling_tv: str | None = None
+    allow_unrated: bool = True
+
+
+class LimitsWrite(_M):
+    """Only the fields present are set; null lifts that limit."""
+
+    model_config = ConfigDict(extra="forbid")
+    max_streams: int | None = None
+    rating_ceiling_movie: str | None = None
+    rating_ceiling_tv: str | None = None
+    allow_unrated: bool | None = None
+
+
+class RoleRef(_M):
+    id: str
+    name: str
+    builtin: bool
+
+
+class Role(RoleRef):
+    editable: bool
+    permissions: list[str]
+    limits: Limits
+    on_shared_devices: bool
+    user_count: int = 0
+    updated_at: datetime
+
+
+class RoleCreate(_M):
+    name: str = Field(min_length=1, max_length=64)
+    permissions: list[str] = []
+    limits: LimitsWrite = LimitsWrite()
+    on_shared_devices: bool = True
+
+
+class RolePatch(_M):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    permissions: list[str] | None = None
+    limits: LimitsWrite | None = None
+    on_shared_devices: bool | None = None
+
+
+class NowPlaying(_M):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    title: str | None = None
+
+
+class User(_M):
+    id: str
+    kind: Literal["google", "managed"]
+    display_name: str
+    email: str | None = None
+    picture: str | None = None
+    avatar: str | None = None
+    status: UserStatusL
+    role_id: str | None = None
+    role_name: str | None = None
+    profile_id: str | None = None
+    has_pin: bool = False
+    on_shared_devices: bool = False
+    plex_account_linked: bool = False
+    created_at: datetime
+    approved_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+
+class UserListItem(User):
+    now_playing: list[NowPlaying] = []
+
+
+class AuthSession(_M):
+    sid: str
+    user_id: str
+    kind: Literal["browser", "tv", "api"]
+    label: str | None = None
+    user_agent: str | None = None
+    ip: str | None = None
+    shared_device: bool = False
+    created_at: datetime
+    last_seen_at: datetime
+    current: bool = False
+
+
+class HistoryEntry(_M):
+    ref_id: str
+    kind: str | None = None
+    position_ms: int = 0
+    duration_ms: int | None = None
+    completed: bool = False
+    updated_at: datetime
+
+
+class UserDetail(UserListItem):
+    grants: list[str]
+    denials: list[str]
+    limit_overrides: dict[str, Any]
+    on_shared_devices_override: bool | None = None
+    permissions: list[str]
+    limits: Limits
+    sessions: list[AuthSession]
+    history: list[HistoryEntry]
+
+
+class UserCreate(_M):
+    name: str = Field(min_length=1, max_length=64)
+    avatar: str | None = Field(default=None, max_length=512)
+    role_id: str = "family"
+    pin: str | None = _pin(default=None)
+
+
+class UserPatch(_M):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    avatar: str | None = Field(default=None, max_length=512)
+    role_id: str | None = None
+    grants: list[str] | None = None
+    denials: list[str] | None = None
+    limits: LimitsWrite | None = None
+    on_shared_devices: bool | None = None
+
+
+class UserApprove(_M):
+    role_id: str
+
+
+class UserPin(_M):
+    pin: str | None = _pin(default=None)
+
+
+class Me(_M):
+    status: UserStatusL
+    user: User
+    role: RoleRef | None = None
+    permissions: list[str]
+    limits: Limits
+    shared_device: bool = False
+    adult_unlocked: bool = False
+    tokens: AuthTokens | None = Field(
+        default=None, description="set once, when a user who was waiting for approval has been approved"
+    )
+
+
+class AdultUnlockRequest(_M):
+    pin: str = _pin()
+
+
+class AdultUnlock(_M):
+    adult_unlocked_until: datetime
+
+
+class InviteCreate(_M):
+    role_id: str
+    expires_in_hours: int = Field(default=72, ge=1, le=720)
+    max_uses: int = Field(default=1, ge=1, le=50)
+
+
+class Invite(_M):
+    id: str
+    role_id: str
+    role_name: str | None = None
+    created_by_user_id: str | None = None
+    created_by_name: str | None = None
+    created_at: datetime
+    expires_at: datetime
+    max_uses: int
+    uses: int
+    state: Literal["open", "used", "expired", "revoked"]
+
+
+class InviteCreated(Invite):
+    url: str = Field(description="/invite/<token>; the token is never shown again")
+
+
+class AuditEntry(_M):
+    id: int
+    at: datetime
+    action: str
+    actor_user_id: str | None = None
+    actor_name: str | None = None
+    target_user_id: str | None = None
+    target_name: str | None = None
+    detail: dict[str, Any] = {}

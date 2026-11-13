@@ -22,7 +22,7 @@ async def themes(c: C) -> list[dict[str, Any]]:
 
 
 @router.post("/themes", response_model=S.Theme, status_code=201, tags=["system"])
-async def create_theme(body: S.Theme, c: C, p: P) -> dict[str, Any]:
+async def create_theme(body: S.Theme, c: C, p: Admin) -> dict[str, Any]:
     return await c.themes.create(p.profile_id, body.model_dump())
 
 

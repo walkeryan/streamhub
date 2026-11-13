@@ -34,9 +34,10 @@ _SENSITIVE_PARAMS = {
     "access_token",
     "auth",
     "key",
+    "invite",
 }
 _QUERY_RE = re.compile(
-    r"(?i)([?&](?:code|state|client_secret|password|pass|pw|username|user|api_key|apikey|token|x-plex-token|access_token|auth)=)[^&\s\"']+"
+    r"(?i)([?&](?:code|state|client_secret|password|pass|pw|username|user|api_key|apikey|token|x-plex-token|access_token|auth|invite)=)[^&\s\"']+"
 )
 # Xtream style path credentials: /live/{user}/{pass}/123.ts, /movie/.., /series/.., /timeshift/..
 _XTREAM_PATH_RE = re.compile(r"(?i)(/(?:live|movie|series|timeshift)/)([^/\s]+)/([^/\s]+)/")

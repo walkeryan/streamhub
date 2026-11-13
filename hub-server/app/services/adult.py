@@ -1,9 +1,9 @@
 """Adult rows stay out of general surfaces.
 
-Until profiles carry permissions, a row marked ``adult`` at sync is left out of
-everything that lists titles nobody asked for by id: home rows and hero, recently
-added, suggestions, browse and its facets, search. The one way in is a request
-that says ``include_adult=true`` from the admin profile.
+A row marked ``adult`` at sync is left out of everything that lists titles nobody
+asked for by id: home rows and hero, recently added, suggestions, browse and its
+facets, search. The one way in is a request that says ``include_adult=true`` from a
+user who holds ``watch.adult`` on a session unlocked with their own PIN.
 
 This hides; it does not authorize. Opening or playing a title by its exact id is
 unaffected.
@@ -24,7 +24,7 @@ _included: ContextVar[bool] = ContextVar("adult_included", default=False)
 
 @contextmanager
 def adult_scope(include: bool) -> Iterator[None]:
-    """Run one request's listing work with adult rows included (admin opt-in) or not."""
+    """Run one request's listing work with adult rows included (permitted, unlocked opt-in) or not."""
     token = _included.set(bool(include))
     try:
         yield

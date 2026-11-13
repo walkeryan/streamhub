@@ -51,8 +51,9 @@ async def configure(api: Api) -> None:
 
 
 async def viewer(api: Api, name: str = "Viewer") -> dict[str, str]:
-    profile = (await api.post("/profiles", json={"name": name, "pin": "1234"})).json()
-    r = await api.client.post("/api/v1/auth/login", json={"profile_id": profile["id"], "pin": "1234"})
+    # A Friend may request but not auto-approve or approve, which is what these tests mean by a viewer.
+    user = (await api.post("/users", json={"name": name, "role_id": "friend", "pin": "1234"})).json()
+    r = await api.client.post("/api/v1/auth/login", json={"profile_id": user["profile_id"], "pin": "1234"})
     assert r.status_code == 200, r.text
     return {"Authorization": "Bearer " + r.json()["access_token"]}
 

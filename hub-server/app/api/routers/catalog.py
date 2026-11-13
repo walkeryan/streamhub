@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Query, Response
 
 from app.api import schemas as S
-from app.api.deps import Admin, C, P
+from app.api.deps import C, P, SourcesAdmin
 from app.api.policy_route import PolicyCatalogRoute
 from app.services.adult import adult_scope
 from app.services.auth import Principal
@@ -17,17 +17,22 @@ from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
 from app.services.sports import sports_events, sports_on_now
 from app.services.sports_recordings import sports_recordings
+from app.services.visibility import require_watch
 
 router = APIRouter(route_class=PolicyCatalogRoute)
 
 IncludeAdult = Annotated[
-    bool, Query(description="Admin profile only: also list titles marked adult. Ignored for other profiles.")
+    bool,
+    Query(
+        description="Also list titles marked adult. Needs watch.adult and a session unlocked at "
+        "/auth/adult-unlock; ignored otherwise."
+    ),
 ]
 
 
 def listing_scope(p: Principal, include_adult: bool) -> AbstractContextManager[None]:
-    # Until profiles carry permissions, the admin is the only one who may ask.
-    return adult_scope(include_adult and p.is_admin)
+    # Asking is not enough: the permission, and this session's PIN unlock, both have to hold.
+    return adult_scope(include_adult and p.can("watch.adult") and p.adult_unlocked)
 
 
 @router.get("/home", response_model=S.Home, tags=["catalog"])
@@ -135,6 +140,7 @@ async def search(
 
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
 async def title(id: str, c: C, p: P) -> dict[str, Any]:
+    await require_watch(c.db, p.permissions, id)
     return await c.requests.annotate_detail(p, await c.catalog.detail(id, p.profile_id))
 
 
@@ -297,7 +303,7 @@ async def channel_groups(
 
 
 @router.patch("/channels/groups/{id}", response_model=S.ChannelGroup, tags=["live"])
-async def patch_group(id: str, body: S.GroupPatch, c: C, p: Admin) -> dict[str, Any]:
+async def patch_group(id: str, body: S.GroupPatch, c: C, p: SourcesAdmin) -> dict[str, Any]:
     return await c.channels.update_group(id, body.model_dump(exclude_unset=True))
 
 
@@ -307,7 +313,7 @@ async def channel_languages(c: C, p: P) -> list[dict[str, Any]]:
 
 
 @router.patch("/channels/{id}", response_model=S.Channel, tags=["live"])
-async def patch_channel(id: str, body: S.ChannelPatch, c: C, p: Admin) -> dict[str, Any]:
+async def patch_channel(id: str, body: S.ChannelPatch, c: C, p: SourcesAdmin) -> dict[str, Any]:
     return await c.channels.update_channel(id, body.model_dump(exclude_unset=True), p.profile_id)
 
 

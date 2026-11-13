@@ -1,16 +1,18 @@
-"""FastAPI dependencies: container access, current principal."""
+"""FastAPI dependencies: container access, current principal, permission checks."""
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.container import Container
 from app.services.auth import Principal
-from app.services.errors import Forbidden, Unauthorized
+from app.services.errors import Forbidden, PermissionDenied, Unauthorized
+from app.services.sessions import SessionMeta
+from app.services.visibility import require_watch, reset_watch, set_watch
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -23,12 +25,59 @@ def get_container(request: Request) -> Container:
 C = Annotated[Container, Depends(get_container)]
 
 
+_BROWSERS = (("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"), ("Chrome/", "Chrome"), ("Safari/", "Safari"))
+_SYSTEMS = (
+    ("Android", "Android"),
+    ("iPhone", "iPhone"),
+    ("iPad", "iPad"),
+    ("Windows", "Windows"),
+    ("Mac OS X", "macOS"),
+    ("CrOS", "ChromeOS"),
+    ("Linux", "Linux"),
+)
+
+
+def device_label(kind: str, agent: str) -> str | None:
+    """A name a person recognizes their device by in a session list: "Chrome on Linux", "TV"."""
+    if kind == "tv":
+        return "TV"
+    browser = next((name for mark, name in _BROWSERS if mark in agent), None)
+    system = next((name for mark, name in _SYSTEMS if mark in agent), None)
+    if kind != "browser" or not browser:
+        return None
+    return f"{browser} on {system}" if system else browser
+
+
+def session_meta(request: Request, kind: str | None = None) -> SessionMeta:
+    """What to record about the device asking for tokens. Informational: shown to its owner."""
+    agent = request.headers.get("user-agent", "")
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    kind = kind or ("browser" if agent.startswith("Mozilla/") else "api")
+    return SessionMeta(
+        kind=kind,
+        label=device_label(kind, agent),
+        user_agent=agent or None,
+        ip=forwarded or (request.client.host if request.client else None),
+    )
+
+
+async def _resolve(request: Request, c: Container, token: str) -> Principal:
+    """One validation per request, however many dependencies ask."""
+    cached = getattr(request.state, "resolved", None)
+    if cached is not None and cached[0] == token:
+        principal: Principal = cached[1]
+        return principal
+    principal = await c.auth.resolve_principal(token)
+    request.state.resolved = (token, principal)
+    return principal
+
+
 async def current_principal(
     request: Request, c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
 ) -> AsyncIterator[Principal]:
     if creds is None or not creds.credentials:
         raise Unauthorized("missing bearer token")
-    principal = await c.auth.resolve_principal(creds.credentials)
+    principal = await _resolve(request, c, creds.credentials)
     request.state.principal = principal
     from app.services.content_policy import active_policy, active_principal
 
@@ -37,9 +86,11 @@ async def current_principal(
     profile = await c.content_policy.profile(principal.profile_id) if c.content_policy.enabled else None
     principal_token = active_principal.set(principal)
     token = active_policy.set((c.content_policy, profile) if profile is not None else None)
+    watch_token = set_watch(principal.permissions)
     try:
         yield principal
     finally:
+        reset_watch(watch_token)
         active_policy.reset(token)
         active_principal.reset(principal_token)
 
@@ -47,10 +98,62 @@ async def current_principal(
 P = Annotated[Principal, Depends(current_principal)]
 
 
-def admin_principal(p: P) -> Principal:
-    if not p.is_admin:
-        raise Forbidden("admin only")
-    return p
+def require(*permissions: str) -> Any:
+    """Dependency: the caller must hold every named permission, or 403 names the missing ones."""
+
+    def checked(p: P) -> Principal:
+        missing = [name for name in permissions if name not in p.permissions]
+        if missing:
+            raise PermissionDenied(missing)
+        return p
+
+    return Depends(checked)
 
 
-Admin = Annotated[Principal, Depends(admin_principal)]
+Admin = Annotated[Principal, require("system.manage")]
+SourcesAdmin = Annotated[Principal, require("sources.manage")]
+UsersAdmin = Annotated[Principal, require("users.manage")]
+
+# Playback entry points that name what to play: (method, path) -> where the ids are.
+_PLAYBACK_REFS = {
+    ("POST", "/playback/resolve"),
+    ("POST", "/playback/multiview"),
+    ("GET", "/playback/options"),
+    ("GET", "/playback/rewind"),
+}
+
+
+async def playback_watch_gate(request: Request, c: C) -> None:
+    """Refuse playback of anything the caller's watch.* permissions do not cover.
+
+    Mounted on the playback router as a whole, so the resolver itself stays unaware of
+    permissions. Routes that carry no bearer (signed stream and image URLs) pass through;
+    their grants are checked by the stream path.
+    """
+    path = request.url.path.rsplit("/api/v1", 1)[-1]
+    if (request.method, path) not in _PLAYBACK_REFS:
+        return
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return  # the route's own principal dependency answers 401
+    principal = await _resolve(request, c, token)
+    refs: list[tuple[str, str | None]] = []
+    if request.method == "GET":
+        refs.append((request.query_params.get("id", ""), request.query_params.get("source_id")))
+    else:
+        try:
+            body = await request.json()
+        except ValueError:
+            return  # request validation reports the malformed body
+        if isinstance(body, dict):
+            listed = body.get("panes")
+            panes = listed if isinstance(listed, list) else [body]
+            for pane in panes:
+                if isinstance(pane, dict):
+                    source = pane.get("source_id") if isinstance(pane.get("source_id"), str) else None
+                    for key in ("id", "catchup_programme_id"):
+                        if isinstance(pane.get(key), str):
+                            refs.append((pane[key], source))
+    for ref, source in refs:
+        if ref:
+            await require_watch(c.db, principal.permissions, ref, source)
