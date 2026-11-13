@@ -16,7 +16,7 @@ import { RecordingBadge } from '../recordings/RecordingBadge'
 import { channelsEnd, useChannelFeed, useChannelRows } from './useChannelFeed'
 import { useRowView } from './useRowView'
 
-const ROW_REM = 6.5 // a row and the gap under it, see .chan-list --chan-row
+const ROW_REM = 4 // a row and the gap under it, see .chan-list --chan-row
 const CLEAR_REM = 0.375 // what a focused row's ring needs inside the list's edges, see .chan-list
 const PREVIEW_KEY = 'sh.live.preview'
 const rowKey = (channelId: string) => `live::${channelId}`
@@ -120,7 +120,7 @@ export function Channels({ filters, selectedChannelId, onSelectChannel, upKey, e
           <FocusGroup focusKey="live:list" className="chan-list-canvas" role="listbox" label="Channels" remember preferred={home} style={{ height: `${count * ROW_REM + 2}rem` }}>
             {drawn.map((i) => {
               const c = channels[i]!
-              return <ChannelRow key={c.id} focusKey={rowKey(c.id)} channel={c} style={{ top: `${i * ROW_REM}rem` }} scroll={false}
+              return <ChannelRow key={c.id} focusKey={rowKey(c.id)} channel={c} dense style={{ top: `${i * ROW_REM}rem` }} scroll={false}
                 data={{ row: String(i), 'tab-group': 'channels', 'tab-current': i === homeRow }}
                 onEnter={() => play(c)} onArrow={(d) => move(i, d)} onFocus={(layout) => { if (!pointer.current) revealRow(layout.node, CLEAR_REM); onSelectChannel(c.id) }} />
             })}

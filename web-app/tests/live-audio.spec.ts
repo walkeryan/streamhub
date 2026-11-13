@@ -161,7 +161,7 @@ test('programme entry retains programme identity while explicitly choosing its c
   expect((await bodies(page))[0]).toMatchObject({ id: 'prog:77', variant_id: 'ch:fixture:programme', allow_unverified_audio: true })
 })
 
-test('optional inline preview never starts unknown audio from an English provider hint', async ({ page }) => {
+test('the inline preview is muted, so it plays a channel whose audio is unconfirmed without asking', async ({ page }) => {
   await signIn(page)
   await page.goto('/live')
   await expect(page.getByTestId('channel-row').nth(1)).toBeVisible()
@@ -169,9 +169,10 @@ test('optional inline preview never starts unknown audio from an English provide
   await page.evaluate(async () => { const path = '/src/nav/spatial.ts'; const { setFocus } = await import(/* @vite-ignore */ path); await setFocus('live::ch:s_xt:1001') })
   await page.keyboard.press('ArrowDown')
   await expect(page.getByTestId('channel-row').nth(1)).toHaveAttribute('data-focused', 'true')
-  await expect(page.getByTestId('live-preview')).toContainText('Audio requires confirmation')
-  expect((await bodies(page)).filter((body) => !String(body.id).endsWith('1001'))).toEqual([])
-  await expect(page.getByTestId('live-preview').locator('video')).not.toHaveAttribute('src', /.+/)
+  // Full-screen playback would stop to ask which audio to accept; a silent picture has nothing to ask about.
+  await expect(page.getByTestId('live-preview')).not.toContainText('Audio requires confirmation')
+  await expect.poll(async () => (await bodies(page)).some((body) => !String(body.id).endsWith('1001') && body.allow_unverified_audio === true)).toBe(true)
+  await expect(page.getByTestId('live-preview').locator('video')).toHaveJSProperty('muted', true)
 })
 
 
