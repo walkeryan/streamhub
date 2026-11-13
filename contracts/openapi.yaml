@@ -1268,7 +1268,12 @@ paths:
   /auth/adult-unlock:
     post:
       summary: Open the adult category on this session for four hours
-      description: Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true.
+      description: >-
+        Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true. The same two
+        conditions hold wherever an adult title is named by its id: GET /titles/{id}, POST /playback/resolve,
+        POST /playback/multiview, GET /playback/options and /playback/rewind, and creating, showing or joining
+        a watch room on one answer 403 with missing [watch.adult], or 403 adult_locked for a session that
+        holds the permission but is not unlocked.
       requestBody: { content: { application/json: { schema: { type: object, required: [pin], properties: { pin: {type: string, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
       responses:
         '200': { description: unlocked, content: { application/json: { schema: { type: object, required: [adult_unlocked_until], properties: { adult_unlocked_until: {type: string, format: date-time} } } } } }

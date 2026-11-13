@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, Response
 from app.api import schemas as S
 from app.api.deps import C, P, SourcesAdmin
 from app.api.policy_route import PolicyCatalogRoute
-from app.services.adult import adult_scope
+from app.services.adult import adult_scope, require_adult
 from app.services.auth import Principal
 from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
@@ -154,6 +154,7 @@ async def _title_rows(c: C, id: str) -> list[Any]:
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
 async def title(id: str, c: C, p: P) -> dict[str, Any]:
     await require_watch(c.db, p.permissions, id)
+    await require_adult(c.db, p, id)
     # Opening a title is when the user linked to the library server's account picks up what
     # they watched there (see ``ProgressService.merge_account_state``); nobody else asks it.
     await c.progress.merge_account_state(p.profile_id, await _title_rows(c, id))

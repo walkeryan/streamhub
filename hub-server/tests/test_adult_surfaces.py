@@ -200,11 +200,71 @@ async def test_include_adult_is_ignored_for_other_profiles(seeded: Api) -> None:
         assert "Late Night" not in response.text
 
 
-async def test_a_known_title_still_opens_by_id(seeded: Api) -> None:
-    # Hiding is not access control: that arrives with profile permissions in a later phase.
-    detail = await seeded.get("/titles/lib:catalog:night")
+def refused(response: Any, code: str) -> bool:
+    return bool(response.status_code == 403 and response.json()["code"] == code)
+
+
+async def test_an_adult_title_is_not_opened_by_its_id_without_the_permission_and_the_unlock(seeded: Api) -> None:
+    """Hiding a row is not what keeps it shut: knowing (or guessing) its id opens nothing."""
+    api = seeded
+    guest = await guest_headers(api)
+    for ref in ("lib:catalog:night", "tmdb:movie:900", "lib:catalog:hours", "lib:catalog:hours-e1"):
+        theirs = await api.client.get(f"/api/v1/titles/{ref}", headers=guest)
+        assert theirs.status_code == 403 and theirs.json()["missing"] == ["watch.adult"], (ref, theirs.text)
+        assert "Night Ferry" not in theirs.text and "Late Tide" not in theirs.text
+        # Holding the permission is half of it: this session has not been unlocked.
+        assert refused(await api.get(f"/titles/{ref}"), "adult_locked"), ref
+    # Everything else opens as it always did.
+    assert (await api.client.get("/api/v1/titles/lib:catalog:harbour", headers=guest)).status_code == 200
+    await unlock_adult(api)
+    detail = await api.get("/titles/lib:catalog:night")
     assert detail.status_code == 200 and detail.json()["title"] == "Night Ferry"
     assert [b["source_id"] for b in detail.json()["sources"]] == ["catalog"]
+    assert (await api.get("/titles/tmdb:movie:900")).status_code == 200
+    # Locked again, shut again; and the unlock was this session's, not the permission's.
+    assert (await api.post("/auth/adult-lock")).status_code == 204
+    assert refused(await api.get("/titles/lib:catalog:night"), "adult_locked")
+
+
+async def test_an_adult_title_is_not_played_by_its_id_either(seeded: Api) -> None:
+    api = seeded
+    guest = await guest_headers(api)
+    epoch = api.c.proxy.recovery_epoch
+
+    async def play(headers: dict[str, str], ref: str, **extra: Any) -> Any:
+        body = {"id": ref, "client": "android_tv", "recovery_generation": epoch, **extra}
+        return await api.client.post("/api/v1/playback/resolve", json=body, headers=headers)
+
+    for ref in ("lib:catalog:night", "tmdb:movie:900", "trailer:lib:catalog:night", "lib:catalog:hours-e1"):
+        assert (await play(guest, ref)).json().get("missing") == ["watch.adult"], ref
+        assert refused(await play(api.headers, ref), "adult_locked"), ref
+    for headers in (guest, api.headers):
+        options = await api.client.get("/api/v1/playback/options", params={"id": "lib:catalog:night"}, headers=headers)
+        assert options.status_code == 403
+        panes = {"panes": [{"id": "lib:catalog:harbour"}, {"id": "lib:catalog:night"}]}
+        assert (await api.client.post("/api/v1/playback/multiview", json=panes, headers=headers)).status_code == 403
+    await unlock_adult(api)
+    assert not refused(await play(api.headers, "lib:catalog:night"), "adult_locked")
+    assert (await play(guest, "lib:catalog:night")).status_code == 403
+
+
+async def test_a_room_is_no_way_around_the_adult_lock(seeded: Api) -> None:
+    api = seeded
+    guest = await guest_headers(api)
+    assert refused(await api.post("/rooms", json={"id": "lib:catalog:night"}), "adult_locked")
+    assert (await api.client.post("/api/v1/rooms", json={"id": "lib:catalog:night"}, headers=guest)).status_code == 403
+    await unlock_adult(api)
+    made = await api.post("/rooms", json={"id": "lib:catalog:night"})
+    assert made.status_code == 201, made.text
+    code = made.json()["code"]
+    # The code is an invitation to watch together, not a way in for someone the title is shut to.
+    for method, path, body in (
+        ("GET", f"/rooms/{code}", None),
+        ("POST", f"/rooms/{code}/join", {"client": "android_tv"}),
+    ):
+        r = await api.client.request(method, "/api/v1" + path, json=body, headers=guest)
+        assert r.status_code == 403 and r.json().get("missing") == ["watch.adult"], (path, r.text)
+        assert "Night Ferry" not in r.text
 
 
 async def test_predicate_leaves_the_selective_index_in_charge(seeded: Api) -> None:

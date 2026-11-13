@@ -11,6 +11,7 @@ from app.api import schemas as S
 from app.api.deps import C, P, acting_as, require_reachable
 from app.container import Container
 from app.services import ids, room_policy
+from app.services.adult import require_adult
 from app.services.auth import Principal
 from app.services.context import is_https
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
@@ -31,7 +32,8 @@ def _room(c: Container, code: str) -> Room:
 
 
 async def _require_rated(c: Container, p: Principal, ref: str) -> None:
-    """A room is no way around a rating ceiling: the title must be one this caller may watch."""
+    """A room is no way around a rating ceiling or the adult lock: the title must be one this caller may watch."""
+    await require_adult(c.db, p, ref)
     if c.content_policy.applies_to(p):
         await c.content_policy.require(p.profile_id, ref)
 

@@ -12,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.requests import HTTPConnection
 
 from app.container import Container
+from app.services.adult import require_adult
 from app.services.auth import Principal
 from app.services.errors import Forbidden, PermissionDenied, Unauthorized
 from app.services.network import FORWARDING_HEADERS, client_address, from_home, vouched_for
@@ -242,6 +243,7 @@ async def playback_watch_gate(request: Request, c: C) -> None:
     for ref, source, judged, moment in refs:
         if ref:
             await require_watch(c.db, principal.permissions, ref, source)
+            await require_adult(c.db, principal, ref, source)
             if rated and judged:
                 await policy.require(principal.profile_id, ref.removeprefix("trailer:"), at=moment)
 
