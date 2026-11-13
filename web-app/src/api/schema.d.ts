@@ -2367,14 +2367,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** One search across everything the caller may watch: titles (movies and shows; a series by its name, never a row per episode), live channels, and guide broadcasts that are on now or start within 48 hours. Each section is capped and counted. A query shorter than two characters returns every list empty. */
         get: {
             parameters: {
-                query: {
-                    q: string;
+                query?: {
+                    /** @description Diacritics, punctuation, case and a leading article are ignored, and "&" is "and". A year after the title ("the mill 2023") narrows titles to that year. A number also finds the channel with that number. */
+                    q?: string;
                     kinds?: string;
+                    /** @description Cap of the titles section. */
                     limit?: number;
                     language?: string;
                     source_id?: string;
+                    expand?: string;
                 };
                 header?: never;
                 path?: never;
@@ -2388,15 +2392,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            results?: components["schemas"]["Tile"][];
-                            metadata_available?: boolean;
-                            discovery_note?: string;
-                            play_here?: components["schemas"]["Tile"][];
-                            open_in_app?: components["schemas"]["Tile"][];
-                            channels?: components["schemas"]["Channel"][];
-                            attribution?: string;
-                        };
+                        "application/json": components["schemas"]["SearchResults"];
                     };
                 };
             };
@@ -6867,6 +6863,48 @@ export interface components {
             teams?: string[];
             /** @description State of the household's recording of this programme, if there is one. Null when recording is off. */
             recording_state?: components["schemas"]["RecordingState"] | null;
+        };
+        SearchResults: {
+            /** @description Titles, best first: exact title, title prefix, word prefix, contains, then every word in any order; at equal rank what plays here comes before what opens in another app, and that before a title known from metadata alone. */
+            results: components["schemas"]["Tile"][];
+            metadata_available?: boolean;
+            discovery_note?: string;
+            /** @description The results a source of the hub plays. */
+            play_here: components["schemas"]["Tile"][];
+            /** @description The results that only open in another app. */
+            open_in_app: components["schemas"]["Tile"][];
+            /** @description By number (the exact number first) or name: whole name, start of the name, start of a word, then anywhere in it. The name is compared without quality marks or a country tag. */
+            channels: components["schemas"]["Channel"][];
+            /** @description Guide broadcasts whose title matches, on now first, then by start. Placeholder programmes (a title that repeats the channel's name) are never listed. */
+            programmes: components["schemas"]["SearchProgramme"][];
+            /** @description How many each section found, and whether it has more than were returned (ask again with expand). */
+            sections: {
+                titles: components["schemas"]["SearchSection"];
+                channels: components["schemas"]["SearchSection"];
+                programmes: components["schemas"]["SearchSection"];
+            };
+            /** @description The order to show the sections in. Broadcasts, channels, titles; channels first when the query is a channel's number or whole name. */
+            order: ("programmes" | "channels" | "titles")[];
+            attribution: string;
+        };
+        SearchSection: {
+            count: number;
+            more: boolean;
+        };
+        /** @description One broadcast: a programme as the guide lists it on the first channel carrying it (lowest number), and every channel that carries the same title at the same start as a feed. Can be recorded like any Programme. */
+        SearchProgramme: components["schemas"]["Programme"] & {
+            on_now: boolean;
+            channel_number: number;
+            /** @description As shown: see Channel.name. */
+            channel_name: string;
+            channel_logo?: string | null;
+            feeds: {
+                programme_id: string;
+                channel_id: string;
+                channel_number: number;
+                channel_name: string;
+                channel_logo?: string | null;
+            }[];
         };
         PlaybackRecoveryStatus: {
             paused: boolean;

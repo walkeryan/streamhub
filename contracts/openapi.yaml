@@ -507,6 +507,58 @@ components:
         teams: {type: array, items: {type: string}, description: "The two sides, in title order, when is_sport and the title spells out a matchup (A vs B, A v B, A versus B, A at B, A @ B; a league prefix and trailing notes are dropped). Empty otherwise: nothing is guessed."}
         recording_state: { oneOf: [{ $ref: '#/components/schemas/RecordingState' }, { type: 'null' }], description: "State of the household's recording of this programme, if there is one. Null when recording is off." }
 
+    SearchResults:
+      type: object
+      required: [results, play_here, open_in_app, channels, programmes, sections, order, attribution]
+      properties:
+        results: {type: array, items: {$ref: '#/components/schemas/Tile'}, description: "Titles, best first: exact title, title prefix, word prefix, contains, then every word in any order; at equal rank what plays here comes before what opens in another app, and that before a title known from metadata alone."}
+        metadata_available: {type: boolean}
+        discovery_note: {type: string}
+        play_here: { type: array, items: { $ref: '#/components/schemas/Tile' }, description: "The results a source of the hub plays." }
+        open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' }, description: "The results that only open in another app." }
+        channels: { type: array, items: { $ref: '#/components/schemas/Channel' }, description: "By number (the exact number first) or name: whole name, start of the name, start of a word, then anywhere in it. The name is compared without quality marks or a country tag." }
+        programmes: { type: array, items: { $ref: '#/components/schemas/SearchProgramme' }, description: "Guide broadcasts whose title matches, on now first, then by start. Placeholder programmes (a title that repeats the channel's name) are never listed." }
+        sections:
+          type: object
+          required: [titles, channels, programmes]
+          description: "How many each section found, and whether it has more than were returned (ask again with expand)."
+          properties:
+            titles: {$ref: '#/components/schemas/SearchSection'}
+            channels: {$ref: '#/components/schemas/SearchSection'}
+            programmes: {$ref: '#/components/schemas/SearchSection'}
+        order: {type: array, items: {type: string, enum: [programmes, channels, titles]}, description: "The order to show the sections in. Broadcasts, channels, titles; channels first when the query is a channel's number or whole name."}
+        attribution: {type: string}
+
+    SearchSection:
+      type: object
+      required: [count, more]
+      properties:
+        count: {type: integer}
+        more: {type: boolean}
+
+    SearchProgramme:
+      description: "One broadcast: a programme as the guide lists it on the first channel carrying it (lowest number), and every channel that carries the same title at the same start as a feed. Can be recorded like any Programme."
+      allOf:
+        - $ref: '#/components/schemas/Programme'
+        - type: object
+          required: [on_now, channel_number, channel_name, feeds]
+          properties:
+            on_now: {type: boolean}
+            channel_number: {type: integer}
+            channel_name: {type: string, description: "As shown: see Channel.name."}
+            channel_logo: {type: string, nullable: true}
+            feeds:
+              type: array
+              items:
+                type: object
+                required: [programme_id, channel_id, channel_number, channel_name]
+                properties:
+                  programme_id: {type: string}
+                  channel_id: {type: string}
+                  channel_number: {type: integer}
+                  channel_name: {type: string}
+                  channel_logo: {type: string, nullable: true}
+
     PlaybackRecoveryStatus:
       type: object
       required: [paused, active_sessions, shared_upstreams, hls_sessions, http_sessions, external_sessions_tracked]
@@ -1564,13 +1616,15 @@ paths:
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { hero: { type: array, items: { $ref: '#/components/schemas/Tile' } }, rows: { type: array, items: { $ref: '#/components/schemas/Row' } } } } } } } }
   /search:
     get:
+      summary: "One search across everything the caller may watch: titles (movies and shows; a series by its name, never a row per episode), live channels, and guide broadcasts that are on now or start within 48 hours. Each section is capped and counted. A query shorter than two characters returns every list empty."
       parameters:
-        - { name: q, in: query, required: true, schema: {type: string} }
-        - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind"} }
-        - { name: limit, in: query, schema: {type: integer, default: 40} }
-        - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
+        - { name: q, in: query, schema: {type: string, default: ""}, description: "Diacritics, punctuation, case and a leading article are ignored, and \"&\" is \"and\". A year after the title (\"the mill 2023\") narrows titles to that year. A number also finds the channel with that number." }
+        - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind, plus programme for guide broadcasts. Omitted = movies, shows, channels and broadcasts; episodes only when asked for."} }
+        - { name: limit, in: query, schema: {type: integer, default: 40}, description: "Cap of the titles section." }
+        - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages first: a section that finds nothing in them is answered from every language instead. all = all; und = unknown; a language named here is taken at its word."} }
         - { name: source_id, in: query, schema: {type: string} }
-      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { results: {type: array, items: {$ref: '#/components/schemas/Tile'}}, metadata_available: {type: boolean}, discovery_note: {type: string}, play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+        - { name: expand, in: query, schema: {type: string, description: "csv of titles, channels, programmes: return those sections in full (up to 100 each) instead of capped. The rows of a capped section are the first rows of the expanded one."} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResults' } } } } }
   /playback/buffer/lease:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferLeaseRequest'}}}}

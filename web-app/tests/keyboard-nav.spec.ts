@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { focusBarEntry, focusedLabel, signIn } from './helpers'
+import { focusBarEntry, focusedLabel, searchBox, signIn } from './helpers'
 
 test('keyboard only: Home -> title -> player, Escape restores focus', async ({ page }) => {
   await signIn(page)
@@ -47,12 +47,16 @@ test('keyboard only: Up from the hero reaches the bar, Escape returns to the con
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   await expect(page).toHaveURL(/\/$/)
+  // Arrows stop on the search box without taking the caret (no on-screen keyboard); Enter is the choice to type.
   await focusBarEntry(page, 'nav-search')
+  await expect(searchBox(page)).not.toBeFocused()
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/search/)
-  await expect(page.getByLabel('Search titles and channels')).toBeFocused()
+  await expect(searchBox(page)).toBeFocused()
+  await expect(page).toHaveURL(/\/$/)
   await page.keyboard.type('harbor')
-  await expect(page.getByTestId('group-play')).toBeVisible({ timeout: 8000 })
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await expect(page.getByTestId('search-titles')).toBeVisible({ timeout: 8000 })
+  await expect(searchBox(page)).toBeFocused()
   await expect(page.getByTestId('justwatch-attribution')).toBeVisible()
 })
 

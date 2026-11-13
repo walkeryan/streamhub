@@ -56,7 +56,7 @@ test.describe('on a phone', () => {
     expect(await fits(page)).toBe(true)
   })
 
-  test('Library opens Movies on shelves: one search line, three shelves on the first screen', async ({ page }) => {
+  test('Library opens Movies on shelves: the switch and Filter on one line, three shelves on the first screen', async ({ page }) => {
     await enter(page)
     await page.getByTestId('nav-library').tap()
     await expect(page).toHaveURL(/\/browse\/movies$/)
@@ -64,12 +64,14 @@ test.describe('on a phone', () => {
     await expect(browse).toHaveAttribute('data-view', 'shelves')
     const rows = page.getByTestId('row')
     await expect(rows.first()).toHaveAttribute('aria-label', 'New Releases')
-    // Before the first poster: the Movies/Shows switch, then search and Filter side by side. Nothing else.
+    // Before the first poster: the Movies/Shows switch and Filter, on one line. Nothing else, and no search
+    // of its own: titles are found from the Search tab.
     await expect(page.getByRole('group', { name: 'Library', exact: true }).getByRole('button')).toHaveText(['Movies', 'Shows'])
     await expect(browse.locator('.browse-head').getByRole('button')).toHaveCount(3)
-    expect(Math.abs((await middle(page.getByLabel('Search this library'))) - (await middle(page.getByTestId('browse-filter'))))).toBeLessThan(4)
-    // Arriving does not put the caret in the search field (that would raise the keyboard).
-    await expect(page.getByLabel('Search this library')).not.toBeFocused()
+    await expect(browse.getByRole('textbox')).toHaveCount(0)
+    expect(Math.abs((await middle(page.getByRole('button', { name: 'Movies', exact: true }))) - (await middle(page.getByTestId('browse-filter'))))).toBeLessThan(4)
+    const head = (await browse.locator('.browse-head').boundingBox())!
+    expect(head.height).toBeLessThan(80)
     const top = (await page.getByTestId('rail').boundingBox())!.y
     for (const i of [0, 1, 2]) expect(await bottom(rows.nth(i).locator('.tile-poster').first())).toBeLessThanOrEqual(top)
     expect(new Set(await rows.evaluateAll((all) => all.slice(0, 3).map((row) => row.getAttribute('aria-label')))).size).toBe(3)
@@ -93,7 +95,7 @@ test.describe('on a phone', () => {
     await expect(rows.first()).toHaveAttribute('aria-label', 'TV Shows')
   })
 
-  test('Filter is a bottom sheet; a filter in force is named under the search field and clears in one tap', async ({ page }) => {
+  test('Filter is a bottom sheet; a filter in force is named under the switch and clears in one tap', async ({ page }) => {
     await enter(page, '/browse/movies')
     await expect(page.getByTestId('row').first()).toBeVisible()
     await page.getByTestId('browse-filter').tap()
@@ -184,16 +186,14 @@ test('keyboard only: the bar to Movies, along a shelf to See all and back, then 
   await enter(page)
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   const rail = page.getByTestId('rail')
-  // Every place to watch is named before focus goes anywhere near the bar; the three at its end are
-  // icons with a name of their own, and no two share an icon.
+  // Every place to watch is named before focus goes anywhere near the bar; at its end are the search
+  // box and two icons with a name of their own.
   await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Movies', 'Shows', 'My List'])
   for (const label of await rail.locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
-  await expect(rail.locator('.rail-icon')).toHaveCount(3)
-  await expect(rail.getByRole('link', { name: 'Search', exact: true })).toBeVisible()
+  await expect(rail.locator('.rail-icon')).toHaveCount(2)
+  await expect(rail.getByRole('textbox', { name: 'Search', exact: true })).toBeVisible()
   await expect(rail.getByRole('button', { name: 'More', exact: true })).toBeVisible()
   await expect(rail.getByRole('link', { name: 'Profile Guest', exact: true })).toBeVisible()
-  const icons = await rail.locator('.rail-item svg path').evaluateAll((paths) => paths.map((path) => path.getAttribute('d')))
-  expect(new Set(icons).size).toBe(2)
   // Up lands on the section being shown; the bar is the same size with focus in it as without.
   const before = (await rail.boundingBox())!
   await page.keyboard.press('ArrowUp')
@@ -491,13 +491,17 @@ test('My List gathers favorites, watchlist and history as tabs', async ({ page }
   await expect(page.getByTestId('mylist-watchlist')).toHaveAttribute('aria-pressed', 'true')
 })
 
-test('Search lists titles no source has under their own heading and leads to the metadata catalog', async ({ page }) => {
+test('Search lists a title no source has in the same grid, marked as such; the empty search page leads to the metadata catalog', async ({ page }) => {
   await enter(page, '/search')
-  await page.getByLabel('Search titles and channels').fill('velvet')
-  const missing = page.getByTestId('group-missing')
-  await expect(missing.getByRole('heading', { name: 'Not in your library', exact: true })).toBeVisible()
-  await expect(missing.getByTestId('tile')).toHaveAttribute('aria-label', 'Velvet Antarctica')
-  await expect(page.getByTestId('group-relevance')).toHaveCount(0)
+  // Nothing typed yet: the page says what the box finds, and offers the catalog of titles nobody has.
+  await expect(page.getByTestId('search-idle')).toBeVisible()
+  await page.getByRole('textbox', { name: 'Search', exact: true }).fill('velvet')
+  const titles = page.getByTestId('search-titles')
+  await expect(titles.getByRole('heading', { name: 'Movies & Shows', exact: true })).toBeVisible()
+  await expect(titles.getByTestId('tile')).toHaveAttribute('aria-label', 'Velvet Antarctica')
+  await expect(titles.getByTestId('tile')).toContainText('Not available here')
+  await expect(page.getByTestId('search-idle')).toHaveCount(0)
+  await page.getByRole('textbox', { name: 'Search', exact: true }).fill('')
   await page.getByRole('button', { name: 'Popular movies', exact: true }).click()
   await expect(page).toHaveURL(/\/discover\/movies$/)
   await expect(page.getByTestId('discover')).toBeVisible()
@@ -508,10 +512,11 @@ test('TV browser at 1920x1080: Movies shows three shelves on the first screen an
   await enter(tv.page, '/browse/movies')
   const rows = tv.page.getByTestId('row')
   await expect(rows.first()).toBeVisible()
-  // Title, search and Filter share the one line above the shelves.
+  // The title and Filter share the one line above the shelves; the only search is the box in the bar.
   const line = await middle(tv.page.getByRole('heading', { name: 'Movies', exact: true }))
-  expect(Math.abs((await middle(tv.page.getByLabel('Search this library'))) - line)).toBeLessThan(6)
   expect(Math.abs((await middle(tv.page.getByTestId('browse-filter'))) - line)).toBeLessThan(6)
+  await expect(tv.page.getByTestId('browse').getByRole('textbox')).toHaveCount(0)
+  await expect(tv.page.getByRole('textbox', { name: /search/i })).toHaveCount(1)
   for (const i of [0, 1]) expect(await bottom(rows.nth(i).locator('.tile-poster').first())).toBeLessThanOrEqual(1080)
   const third = (await rows.nth(2).locator('.tile-poster').first().boundingBox())!
   expect(third.y + third.height / 3).toBeLessThan(1080) // under the bar: the third shelf's name and a third of its posters

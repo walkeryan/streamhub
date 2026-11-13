@@ -29,14 +29,13 @@ test('primary discovery preserves library routes and unavailable metadata withou
   await expect(page.getByRole('button',{name:'Play',exact:true})).toHaveCount(0)
   await page.getByRole('button',{name:'My library',exact:true}).click()
   await expect(page).toHaveURL(/\/browse\/movies$/)
-  await expect(page.getByLabel('Search this library',{exact:true})).toBeVisible()
   await expect(page.getByRole('button',{name:'Filter',exact:true})).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('discover')).toBeVisible()
   await expect(page.getByRole('button',{name:'My library',exact:true})).toHaveAttribute('data-focused','true')
-  await page.getByRole('button',{name:'Search all titles',exact:true}).click()
-  await expect(page).toHaveURL(/\/search(?:\?|$)/)
-  await expect(page.getByTestId('search')).toBeVisible()
+  // Titles are found with the one search box in the bar: the catalog has no search of its own.
+  await expect(page.getByTestId('discover').getByRole('button',{name:/search/i})).toHaveCount(0)
+  await expect(page.getByRole('textbox',{name:/search/i})).toHaveCount(1)
 })
 
 test('keyboard sort picker has a single focus and restores it on Back; filters survive reload',async({page})=>{
@@ -111,7 +110,7 @@ test('profile change uses its own saved discovery filters and never reuses the p
 
 test('default metadata fixtures support bar navigation and source scope without filtering out titles',async({page})=>{
   await signIn(page)
-  // Movies and Shows in the bar are the library; the metadata catalog is a step from Search.
+  // Movies and Shows in the bar are the library; the metadata catalog is a step from the search page.
   await page.getByRole('link',{name:'Movies',exact:true}).click()
   await expect(page).toHaveURL(/\/browse\/movies$/)
   await openDiscover(page)

@@ -23,6 +23,16 @@ from app.services.adult import general_audience, is_general_audience
 from app.services.availability import ATTRIBUTION, AvailabilityService
 from app.services.context import absolute
 from app.services.errors import BadGateway, Forbidden, NotFound
+from app.services.search import (
+    CHANNEL_CAP,
+    EXPANDED_CAP,
+    PROGRAMME_CAP,
+    search_channels,
+    search_programmes,
+    section_order,
+    split_year,
+    title_rank,
+)
 from app.services.search_match import CANDIDATE_LIMIT, anchors, search_tokens, token_match_rank
 from app.services.sources import LAZY_GEN, SourceService, item_row, upsert_titles
 from app.services.tiles import TileContext, badge_for_source, hub_id_for_title, meta_tile, row_to_item, sort_badges
@@ -954,18 +964,78 @@ class CatalogService:
         limit: int,
         language: str | None = None,
         source_id: str | None = None,
+        expand: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
+        """Titles, channels and guide broadcasts for one query; each section capped and counted.
+
+        ``expand`` names the sections to return in full (up to ``EXPANDED_CAP``): "Show more".
+        """
         from app.services.channels import ChannelService
 
+        q = q.strip()
+        # A series is found by its name; its episodes are listed only for a client that asks for them.
+        want = kinds or {"movie", "show", "vod", "series", "channel", "programme"}
+        limit = EXPANDED_CAP if "titles" in expand else max(1, min(limit, 100))
+        chsvc = ChannelService(self._db, self.sources)
+        chsvc.image_fn = self.image_fn
+
+        # A search asks for something by name. The profile's languages come first, as in every listing;
+        # a section that finds nothing in them looks in the others before it says there is nothing.
+        # Nobody has to find a language switch to reach a channel they typed the name of.
+        widen = language is None and bool(await self.preferred_languages(profile_id, None))
+
+        async def channels() -> tuple[list[dict[str, Any]], int, int | None]:
+            if "channel" not in want:
+                return [], 0, None
+            cap = EXPANDED_CAP if "channels" in expand else CHANNEL_CAP
+            found = await search_channels(chsvc, profile_id, q, language=language, source_id=source_id, cap=cap)
+            if widen and not found[0]:
+                found = await search_channels(chsvc, profile_id, q, language="all", source_id=source_id, cap=cap)
+            return found
+
+        async def programmes() -> tuple[list[dict[str, Any]], int, bool]:
+            if "programme" not in want:
+                return [], 0, False
+            cap = EXPANDED_CAP if "programmes" in expand else PROGRAMME_CAP
+            aired = await search_programmes(chsvc, profile_id, q, language=language, source_id=source_id, cap=cap)
+            if widen and not aired[0]:
+                aired = await search_programmes(chsvc, profile_id, q, language="all", source_id=source_id, cap=cap)
+            return aired
+
+        # The sections read different tables; side by side, each under this request's scopes.
+        (
+            titles,
+            (found_channels, channel_total, channel_rank),
+            (broadcasts, broadcast_total, more),
+        ) = await asyncio.gather(
+            self._search_titles(q, profile_id, want, limit, language, source_id), channels(), programmes()
+        )
+        count = titles.pop("count")
+        return {
+            **titles,
+            "channels": found_channels,
+            "programmes": broadcasts,
+            "sections": {
+                "titles": {"count": count, "more": count > limit},
+                "channels": {"count": channel_total, "more": channel_total > len(found_channels)},
+                "programmes": {"count": broadcast_total, "more": more},
+            },
+            "order": section_order(channel_rank),
+            "attribution": ATTRIBUTION,
+        }
+
+    async def _search_titles(
+        self, q: str, profile_id: str, want: set[str], limit: int, language: str | None, source_id: str | None
+    ) -> dict[str, Any]:
+        """The titles of a search, ranked: the library's own rows and what metadata discovery adds."""
         ctx = await self.tile_context(profile_id)
         enabled = self._enabled(ctx)
-        q = q.strip()
-        limit = max(1, min(limit, 100))
-        norm = ids.normalise_title(q)
+        # "the mill 2023": the year narrows, and is not part of the name that is matched.
+        named, year = split_year(q)
+        norm = ids.normalise_title(named if year else q)
         languages = await self.preferred_languages(profile_id, language)
         if source_id:
             enabled = [sid for sid in enabled if sid == source_id]
-        want = kinds or {"movie", "show", "vod", "series", "episode", "channel"}
         lib_kinds = set(want) & {"movie", "show", "vod", "series", "episode"}
         if lib_kinds & {"movie", "vod"}:
             lib_kinds.update(("movie", "vod"))
@@ -981,16 +1051,26 @@ class CatalogService:
             matching_ids = text("SELECT rowid FROM title_search WHERE title_search MATCH :match").bindparams(
                 match=match
             )
+            if len(norm) >= 3:
+                # FTS finds words by their start; the phrase inside a word ("mill" in "Windmill")
+                # is one pass over the normalised-title index, and ranks last.
+                matching_ids = text(
+                    "SELECT rowid FROM title_search WHERE title_search MATCH :match "
+                    "UNION SELECT id FROM title WHERE norm_title LIKE :contains ESCAPE '\\'"
+                ).bindparams(match=match, contains="%" + _escape_like(norm) + "%")
             query = select(Title).where(
                 Title.source_id.in_(enabled), Title.kind.in_(lib_kinds), Title.id.in_(matching_ids), general_audience()
             )
+            if year:
+                query = query.where(or_(Title.year == year, Title.title.like(f"%{year}%")))
             query = self._filter_title_languages(query, languages)
             normalized = func.canonical_title_key(Title.title)
             phrase_rank = case(
                 (normalized == norm, 0),
-                (normalized.like(_escape_like(norm) + " %", escape="\\"), 1),
-                (normalized.like("%" + _escape_like(norm) + "%", escape="\\"), 2),
-                else_=3,
+                (normalized.like(_escape_like(norm) + "%", escape="\\"), 1),
+                (normalized.like("% " + _escape_like(norm) + "%", escape="\\"), 2),
+                (normalized.like("%" + _escape_like(norm) + "%", escape="\\"), 3),
+                else_=4,
             )
             score: ColumnElement[int] = literal(0)
             for word in words:
@@ -1005,8 +1085,10 @@ class CatalogService:
                 (Title.norm_title == norm, 0),
                 (Title.norm_title.like("% " + _escape_like(norm), escape="\\"), 1),
                 (Title.norm_title.like("% " + _escape_like(norm) + " " + cast(Title.year, String), escape="\\"), 1),
-                (Title.norm_title.like("%" + _escape_like(norm) + "%", escape="\\"), 2),
-                else_=3,
+                (Title.norm_title.like(_escape_like(norm) + "%", escape="\\"), 1),
+                (Title.norm_title.like("% " + _escape_like(norm) + "%", escape="\\"), 2),
+                (Title.norm_title.like("%" + _escape_like(norm) + "%", escape="\\"), 3),
+                else_=4,
             )
             cheap_order = (cheap_phrase, score.desc(), func.length(Title.norm_title), Title.id)
             preliminary = query.with_only_columns(
@@ -1059,14 +1141,17 @@ class CatalogService:
         note = "Metadata discovery is not configured; searching your sources only."
         if self.meta.enabled and ({"movie", "show", "vod", "series"} & want):
             try:
-                metas = await self.meta.search(q, limit=40)
+                metas = await self.meta.search(named if year else q, limit=40)
                 metadata_available = True
                 note = "Metadata coverage varies. Language and source filters limit availability, not discovery."
                 metas = [
                     m
                     for m in metas
-                    if (m.media_type == "movie" and {"movie", "vod"} & want)
-                    or (m.media_type == "tv" and {"show", "series"} & want)
+                    if (
+                        (m.media_type == "movie" and {"movie", "vod"} & want)
+                        or (m.media_type == "tv" and {"show", "series"} & want)
+                    )
+                    and (not year or m.year == year or str(year) in m.title)
                 ]
                 by_id = {ids.tmdb_id(m.media_type, m.tmdb_id): m for m in metas}
                 # Resolve IDs on the bounded local result page; translated provider
@@ -1120,20 +1205,12 @@ class CatalogService:
 
         def relevance(tile: dict[str, Any]) -> tuple[Any, ...]:
             title_norm = ids.normalise_title(tile["title"])
-            token_rank = token_match_rank(tokens, title_norm) if tokens else None
-            rank = (
-                0
-                if title_norm == norm
-                else 1
-                if title_norm.startswith(norm + " ")
-                else 2
-                if norm in title_norm
-                else 3 + token_rank
-                if token_rank is not None
-                else 7
-            )
+            rank = title_rank(norm, tokens, title_norm)
+            # At equal rank what can be played here leads, then what opens elsewhere, then metadata alone.
+            owned = 0 if any(b["playable_in_app"] for b in tile["sources"]) else 1 if tile["sources"] else 2
             return (
-                rank,
+                8 if rank is None else rank,
+                owned,
                 0 if tile["id"].startswith("tmdb:") else 1,
                 -popularity.get(tile["id"], 0),
                 len(title_norm),
@@ -1141,26 +1218,20 @@ class CatalogService:
                 tile["id"],
             )
 
+        if not combined and language is None and languages:
+            # Nothing at all in the profile's languages: the same search in every language.
+            return await self._search_titles(q, profile_id, want, limit, "all", source_id)
         ordered = sorted(combined.values(), key=relevance)[:limit]
-        play_here = [tile for tile in ordered if any(b["playable_in_app"] for b in tile["sources"])]
-        open_in_app = [
-            tile for tile in ordered if tile["sources"] and not any(b["playable_in_app"] for b in tile["sources"])
-        ]
-        channels: list[dict[str, Any]] = []
-        if "channel" in want:
-            chsvc = ChannelService(self._db, self.sources)
-            chsvc.image_fn = self.image_fn
-            res = await chsvc.list_channels(profile_id, q=q, language=language, source_id=source_id, limit=limit)
-            channels = res["channels"]
         return {
             "results": ordered,
             "metadata_available": metadata_available,
             "metadata_incomplete": metadata_incomplete,
             "discovery_note": note,
-            "play_here": play_here[:limit],
-            "open_in_app": open_in_app[:limit],
-            "channels": channels[:limit],
-            "attribution": ATTRIBUTION,
+            "play_here": [tile for tile in ordered if any(b["playable_in_app"] for b in tile["sources"])],
+            "open_in_app": [
+                tile for tile in ordered if tile["sources"] and not any(b["playable_in_app"] for b in tile["sources"])
+            ],
+            "count": len(combined),
         }
 
     # ------------------------------------------------------------------ lists used by home

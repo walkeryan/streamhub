@@ -1,13 +1,14 @@
 import { expect, test } from '@playwright/test'
 import { activeFilter, closeFilters, openFilters, signIn } from './helpers'
 
-test('active category and genre remain named when a search empties their facets', async ({ page }) => {
+test('active category and genre remain named when their facets come back empty', async ({ page }) => {
   await page.addInitScript(() => {
     const original = window.fetch.bind(window)
     window.fetch = async (input, init) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
-      const empty = url.searchParams.get('q') === 'zzq-no-such-title-qa'
+      // Set by the test once both filters are chosen: from then on the catalog has nothing under them.
+      const empty = sessionStorage.getItem('test.facets') === 'empty'
       if (url.pathname === '/api/v1/browse/movies/categories') {
         return Response.json(empty ? [] : [{ name: 'EN-ACTION', count: 1024 }])
       }
@@ -28,7 +29,9 @@ test('active category and genre remain named when a search empties their facets'
   await page.getByRole('button', { name: 'Genre: All genres', exact: true }).click()
   await page.getByRole('button', { name: 'Action (1,024)', exact: true }).click()
   await closeFilters(page)
-  await page.getByLabel('Search this library').fill('zzq-no-such-title-qa')
+  await expect(activeFilter(page, 'Genre: Action')).toBeVisible()
+  await page.evaluate(() => sessionStorage.setItem('test.facets', 'empty'))
+  await page.reload()
   await expect(page.getByRole('heading', { name: 'No matching titles', exact: true })).toBeVisible()
   await expect(activeFilter(page, 'Category: EN-ACTION')).toBeVisible()
   await expect(activeFilter(page, 'Genre: Action')).toBeVisible()

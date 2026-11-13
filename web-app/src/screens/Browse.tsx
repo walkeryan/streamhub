@@ -10,13 +10,13 @@ import { useAdultUnlock } from '../components/AdultUnlock'
 import { Icon } from '../components/Icon'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
 import { MediaTile, TileRow } from '../components/Tile'
-import { FocusGroup, FocusableInput } from '../nav/Focusable'
+import { FocusGroup } from '../nav/Focusable'
 import { useRestoreFocus, useGo } from '../nav/back'
 import { setFocus } from '../nav/spatial'
 import { useSession } from '../store/session'
 import { useHistoryState } from '../nav/historyState'
 import { usePhone } from '../lib/layout'
-import { LANG_NAMES, useDebounced } from '../lib/util'
+import { LANG_NAMES } from '../lib/util'
 
 const TITLES: Record<string, string> = { movies: 'Movies', shows: 'Shows', vod: 'Movies on demand', series: 'Series on demand' }
 const SORTS: Array<{ id: NonNullable<BrowseFilters['sort']>; label: string }> = [
@@ -51,8 +51,6 @@ export function Browse() {
   const setLang = (language: string) => saved.update((v) => ({ ...v, language }))
   const setCategory = (category: string) => { if (linked === null) saved.update((v) => ({ ...v, category })); else setParams(category ? { category } : {}, { replace: true }) }
   const setGenre = (genre: string) => saved.update((v) => ({ ...v, genre }))
-  const [search, setSearch] = useHistoryState(`browse:${section}:search`, '')
-  const term = useDebounced(search, 300)
   // Holds the control the Filter panel opens on. Fixed while it is open: the panel's focus bookkeeping
   // restarts if that key changes, which a change of sort would otherwise cause.
   const [sheet, setSheet] = useState<string | null>(null)
@@ -60,16 +58,17 @@ export function Browse() {
   const languages = useBrowseLanguages(section, source || undefined)
   const { offered: languageOffered, language } = languageScope(languages.data, lang, preferred)
   const [page, setPage] = useHistoryState(`browse:${section}:page`, 1)
-  const filterKey = `${section}|${source}|${sort}|${language}|${category}|${genre}|${term}`
+  const filterKey = `${section}|${source}|${sort}|${language}|${category}|${genre}`
   const [pageKey, setPageKey] = useState(filterKey)
   if (pageKey !== filterKey) { setPageKey(filterKey); setPage(1) }
-  // Shelves are the way in. Asking for anything narrower (a filter, a search, one shelf) shows the grid.
-  const filtered = !!(source || category || genre || term || sort !== defaults.sort || lang !== defaults.language)
+  // Shelves are the way in. Asking for anything narrower (a filter, one shelf) shows the grid. Finding a
+  // title by name is the search box's job, in the top bar.
+  const filtered = !!(source || category || genre || sort !== defaults.sort || lang !== defaults.language)
   // Adult titles are asked for only on a session their holder has unlocked; the server ignores the flag otherwise.
   const adult = useAdultUnlock()
   const shelves = useBrowseShelves(section, { language, ...SHELVES, ...(adult.unlocked ? { include_adult: true } : {}) }, saved.ready && !filtered)
   const onShelves = !filtered && !shelves.error && (!shelves.data || shelves.data.shelves.length > 0)
-  const filters = { source_id: source || undefined, language, q: term || undefined }
+  const filters = { source_id: source || undefined, language }
   const categories = useBrowseCategories(section, filters)
   const genres = useBrowseGenres(section, { ...filters, category: category || undefined })
   const q = useBrowse(section, { ...filters, sort, category: category || undefined, genre: genre || undefined }, page, saved.ready && !onShelves)
@@ -80,14 +79,13 @@ export function Browse() {
   const pages = Math.max(1, Math.ceil(total / pageSize))
   const gridReady = !!q.data && !q.isPlaceholderData
   const ready = saved.ready && (onShelves ? !!shelves.data : gridReady)
-  // Arrive on something to watch, not on the search field (a focused field raises the on-screen keyboard).
+  // Arrive on something to watch.
   useRestoreFocus(ready, onShelves ? 'browse:shelves' : tiles.length ? 'browse:grid' : 'browse:filter')
   const libs = (sources.data ?? []).filter((s) => s.type !== 'streaming_service' && s.enabled)
-  const reset = () => { saved.update(defaults); setSearch(''); setPage(1); unlink(); void setFocus('browse:filter') }
+  const reset = () => { saved.update(defaults); setPage(1); unlink(); void setFocus('browse:filter') }
   const kind = section === 'shows' || section === 'series' ? 'shows' : 'movies'
 
   const active: Array<{ id: string; text: string; clear: () => void }> = []
-  if (term) active.push({ id: 'search', text: `Search: ${term}`, clear: () => setSearch('') })
   if (category) active.push({ id: 'category', text: `Category: ${category}`, clear: () => setCategory('') })
   if (genre) active.push({ id: 'genre', text: `Genre: ${capital(genre)}`, clear: () => setGenre('') })
   if (source) active.push({ id: 'source', text: `Source: ${libs.find((s) => s.id === source)?.name ?? 'One source'}`, clear: () => setSource('') })
@@ -109,7 +107,6 @@ export function Browse() {
           <Chip focusKey="browse:switch:movies" pressed={kind === 'movies'} onEnter={() => { if (kind !== 'movies') go('/browse/movies', { replace: true }) }}>Movies</Chip>
           <Chip focusKey="browse:switch:shows" pressed={kind === 'shows'} onEnter={() => { if (kind !== 'shows') go('/browse/shows', { replace: true }) }}>Shows</Chip>
         </FocusGroup> : <h1 className="title-xl">{TITLES[section] ?? section}</h1>}
-        <div className="browse-search"><FocusableInput focusKey="browse:search" label="Search this library" placeholder={`Search ${(TITLES[kind] ?? 'titles').toLowerCase()}`} value={search} onChange={setSearch} inputMode="search" /></div>
         <Button focusKey="browse:filter" icon="filter" onEnter={() => setSheet(`browse:sort:${sort}`)} testId="browse-filter">Filter</Button>
       </FocusGroup>
       {filtered && <FocusGroup focusKey="browse:active" className="chip-scroll" role="group" label="Active filters">
@@ -127,7 +124,7 @@ export function Browse() {
       {shelves.data.shelves.map((s) => <TileRow key={s.name} id={`shelf:${s.name}`} title={s.name} tiles={s.items} count={s.count} seeAll={s.browse_path} />)}
     </FocusGroup> : <div className="page-pad flex gap-4" style={{ paddingTop: 0 }} data-testid="browse-loading">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} style={{ flex: 'none', width: 'var(--tile-poster-w)', height: 'var(--tile-poster-h)' }} />)}</div>) : <div className="page-pad" style={{ paddingTop: 0 }}>
       {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !gridReady ? <div className="grid-tiles">{Array.from({ length: 12 }, (_, i) => <Skeleton key={i} style={{ aspectRatio: '2/3' }} />)}</div> : !tiles.length ?
-        <Empty title="No matching titles" hint="Try another genre, category or All languages. Titles without language metadata are listed as Unknown, not English."><Button focusKey="browse:reset" onEnter={reset}>Clear filters</Button><Button focusKey="browse:all" onEnter={() => { saved.update({ ...defaults, language: 'all' }); setSearch(''); setPage(1); unlink() }}>All languages</Button><Button focusKey="browse:sources" onEnter={() => go('/sources')}>Manage sources</Button></Empty> :
+        <Empty title="No matching titles" hint="Try another genre, category or All languages. Titles without language metadata are listed as Unknown, not English."><Button focusKey="browse:reset" onEnter={reset}>Clear filters</Button><Button focusKey="browse:all" onEnter={() => { saved.update({ ...defaults, language: 'all' }); setPage(1); unlink() }}>All languages</Button><Button focusKey="browse:sources" onEnter={() => go('/sources')}>Manage sources</Button></Empty> :
         <FocusGroup focusKey="browse:grid" className="grid-tiles">{tiles.map((t) => <MediaTile key={t.id} tile={t} scope="browse" />)}</FocusGroup>}
       {pages > 1 && <FocusGroup focusKey="browse:pages" className="flex gap-3 flex-wrap items-center py-4" label="Library pages">
         <Button focusKey="browse:previous" disabled={page <= 1 || q.isFetching} onEnter={() => { setPage(page - 1); window.scrollTo({ top: 0 }) }}>Previous page</Button>

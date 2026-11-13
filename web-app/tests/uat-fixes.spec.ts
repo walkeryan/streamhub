@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { focusBarEntry, focusedLabel, signIn } from './helpers'
+import { focusBarEntry, focusedLabel, searchBox, signIn } from './helpers'
 
 const focusedKeyIn = (page: Page, testId: string) =>
   page.evaluate((id) => !!document.querySelector(`[data-testid="${id}"] .fx[data-focused="true"]`), testId)
@@ -112,27 +112,31 @@ test('UAT P1-4: Search keeps the query, results and focused result on Back', asy
   await signIn(page)
   await focusBarEntry(page, 'nav-search')
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/search/)
-  await expect(page.getByLabel('Search titles and channels')).toBeFocused()
+  await expect(searchBox(page)).toBeFocused()
   await page.keyboard.type('harbor')
-  await expect(page.getByTestId('group-play')).toBeVisible({ timeout: 8000 })
-  // Right from the field into the results, open the first result
-  await page.keyboard.press('ArrowRight')
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await expect(page.getByTestId('search-titles')).toBeVisible({ timeout: 8000 })
+  // Down from the box into the results, along to the poster, and open it
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByTestId('search-results').locator('.fx[data-focused="true"]')).toHaveCount(1)
+  for (let i = 0; i < 6 && !(await page.getByTestId('search-titles').locator('.fx[data-focused="true"]').count()); i++) await page.keyboard.press('ArrowDown')
   const label = await focusedLabel(page)
-  expect(label).toBeTruthy()
+  expect(label).toBe('Harbor Lights')
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/(title|play)\//)
+  await expect(page).toHaveURL(/\/title\//)
   await page.keyboard.press('Escape')
-  await expect(page).toHaveURL(/\/search/)
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
-  await expect(page.getByTestId('group-play')).toBeVisible()
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await expect(searchBox(page)).toHaveValue('harbor')
+  await expect(page.getByTestId('search-titles')).toBeVisible()
   await expect.poll(() => focusedLabel(page)).toBe(label)
-  // Returning from the bar preserves this profile's latest search.
+  // A query that led somewhere is offered again on the empty search page; the box itself starts empty.
   await page.goto('/')
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
+  await expect(searchBox(page)).toHaveValue('')
   await focusBarEntry(page, 'nav-search')
   await page.keyboard.press('Enter')
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('search-idle').getByRole('button', { name: 'harbor', exact: true })).toBeVisible()
 })
 
 test('UAT P1-7: failed artwork never shows a broken-image glyph', async ({ page }) => {

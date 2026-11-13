@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { focusBarEntry, signIn } from './helpers'
+import { focusBarEntry, searchBox, signIn } from './helpers'
 
 const MOVIE = 'Velvet Antarctica'
 const MOVIE_ID = 'tmdb:movie:301'
@@ -55,11 +55,11 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
 
   // Search finds a title no source has; its tile says so and opens the title page.
   await bar(page, 'nav-search')
-  await expect(page.getByLabel('Search titles and channels')).toBeFocused()
+  await expect(searchBox(page)).toBeFocused()
   await page.keyboard.type('velvet')
-  const result = page.getByTestId('group-missing').getByTestId('tile')
+  const result = page.getByTestId('search-titles').getByTestId('tile')
   await expect(result).toContainText('Not available', { timeout: 8000 })
-  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowDown')
   await expect(result).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/title\/tmdb/)

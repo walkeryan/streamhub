@@ -5,9 +5,10 @@ import { useCan } from './me'
 import { useSession } from '../store/session'
 import { mergeProgrammes } from '../lib/guideWindow'
 import { isOpenRequest, refetchMsFor, tileRequest, tilesRefetchMs } from '../lib/requests'
+import { MIN_QUERY } from '../lib/searchQuery'
 import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined } from './types'
 import type {
-  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult,
+  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult, SearchSectionName,
   Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
 } from './types'
 
@@ -42,13 +43,31 @@ export const useHome = () => useQuery({
   refetchInterval: (query) => tilesRefetchMs([...(query.state.data?.hero ?? []), ...(query.state.data?.rows ?? []).flatMap((row) => row.tiles)]),
 })
 
-export const useSearch = (q: string, filters: { language?: string; source_id?: string } = {}) =>
-  useQuery({
-    queryKey: ['search', useProfileId(), q.trim().toLowerCase().replace(/\s+/g, ' '), filters, useSession((s) => s.profile?.languages.join(','))],
-    enabled: q.trim().length > 1,
+/** A server from before the unified search sends titles and channels only: read it as the same shape. */
+function completeSearch(r: Partial<SearchResult>): SearchResult {
+  const results = r.results ?? [...(r.play_here ?? []), ...(r.open_in_app ?? [])]
+  const channels = r.channels ?? [], programmes = r.programmes ?? []
+  const all = (rows: unknown[]) => ({ count: rows.length, more: false })
+  return {
+    ...r, results, channels, programmes, play_here: r.play_here ?? [], open_in_app: r.open_in_app ?? [],
+    sections: r.sections ?? { titles: all(results), channels: all(channels), programmes: all(programmes) },
+    order: r.order ?? ['programmes', 'channels', 'titles'], attribution: r.attribution ?? 'Availability data by JustWatch',
+  }
+}
+
+/** One search across titles, channels and guide broadcasts. `expand` names the sections asked for in full
+ *  ("Show more"); the page shown so far stays up while the fuller one, or the next query, loads. */
+export const useSearch = (q: string, expand: readonly SearchSectionName[] = []) => {
+  const profile = useProfileId()
+  const key = q.trim().toLowerCase().replace(/\s+/g, ' ')
+  return useQuery<SearchResult>({
+    queryKey: ['search', profile, key, [...expand].sort().join(','), useSession((s) => s.profile?.languages.join(','))],
+    enabled: key.length >= MIN_QUERY,
     staleTime: 30_000,
-    queryFn: ({ signal }) => unwrap<SearchResult>(api.GET('/search', { signal, params: { query: { q: q.trim(), ...filters } } })),
+    placeholderData: useProfilePlaceholder<SearchResult>(),
+    queryFn: async ({ signal }) => completeSearch(await unwrap<Partial<SearchResult>>(api.GET('/search', { signal, params: { query: { q: q.trim(), ...(expand.length ? { expand: [...expand].sort().join(',') } : {}) } } }))),
   })
+}
 
 export const useTitle = (id: string | undefined) =>
   useQuery({
@@ -367,7 +386,7 @@ export const useRoomInfo = (code: string | undefined, poll = true) =>
   })
 
 /* ---------- recordings ---------- */
-const RECORDING_VIEWS = [['recordings'], ['recording-rules'], ['epg'], ['channels']] as const
+const RECORDING_VIEWS = [['recordings'], ['recording-rules'], ['epg'], ['channels'], ['search']] as const
 const refreshRecordings = (qc: ReturnType<typeof useQueryClient>) => { for (const queryKey of RECORDING_VIEWS) void qc.invalidateQueries({ queryKey }) }
 
 // The recorder starts, finishes and fails recordings on its own clock, so the Recordings screen polls;

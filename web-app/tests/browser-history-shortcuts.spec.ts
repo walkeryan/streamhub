@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { activeFilter, closeFilters, openFilters, signIn } from './helpers'
+import { activeFilter, closeFilters, openFilters, searchBox, signIn } from './helpers'
 
 test('Alt arrows leave focus alone; browser history restores filters and plain Up reaches the bar', async ({ page }) => {
   const errors: string[] = []
@@ -16,15 +16,16 @@ test('Alt arrows leave focus alone; browser history restores filters and plain U
   await closeFilters(page)
   await page.getByRole('link', { name: 'Shows', exact: true }).click()
   await expect(page).toHaveURL(/\/browse\/shows$/)
-  // The screen takes focus from the bar once its shelves are in; a field tapped before that keeps the caret
-  // and leaves the bar entry ringed, which is not what this test is about.
+  // The screen takes focus from the bar once its shelves are in.
   await expect(inBar).toHaveCount(0)
-  const search = page.getByLabel('Search this library')
+  // A text field keeps its caret through Alt+Left, and the bar does not walk to its neighbour.
+  const search = searchBox(page)
   await search.click()
   await expect(search).toBeFocused()
   await page.keyboard.press('Alt+ArrowLeft')
   await expect(search).toBeFocused()
-  await expect(inBar).toHaveCount(0)
+  await expect(page.getByTestId('nav-search')).toHaveAttribute('data-focused', 'true')
+  await expect(inBar).toHaveCount(1)
   // Headless Chrome does not execute browser-chrome accelerators. Exercise its
   // history separately; the companion test proves our handler leaves defaults intact.
   await page.goBack()
@@ -40,8 +41,8 @@ test('Alt arrows leave focus alone; browser history restores filters and plain U
 
 test('modified arrow events remain uncancelled even in a search field', async ({ page }) => {
   await signIn(page)
-  await page.getByRole('link', { name: 'Search', exact: true }).click()
-  const input = page.getByLabel('Search titles and channels')
+  const input = searchBox(page)
+  await input.click()
   await expect(input).toBeFocused()
   const outcomes = await input.evaluate((element) => ['ArrowLeft', 'ArrowRight'].map((key) => {
     const event = new KeyboardEvent('keydown', { key, code: key, altKey: true, bubbles: true, cancelable: true })
@@ -49,5 +50,5 @@ test('modified arrow events remain uncancelled even in a search field', async ({
   }))
   expect(outcomes).toEqual([{ allowed: true, prevented: false }, { allowed: true, prevented: false }])
   await expect(input).toBeFocused()
-  await expect(page.getByTestId('rail').locator('[data-focused="true"]')).toHaveCount(0)
+  await expect(page.getByTestId('rail').locator('[data-focused="true"]')).toHaveAttribute('data-testid', 'nav-search')
 })

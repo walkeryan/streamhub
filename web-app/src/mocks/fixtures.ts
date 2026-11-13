@@ -1,4 +1,4 @@
-import type { Channel, Programme, Shelf, Source, SourceBadge, Tile, Profile, Row } from '../api/types'
+import type { Channel, Programme, SearchProgramme, Shelf, Source, SourceBadge, Tile, Profile, Row } from '../api/types'
 import { backdrop, logo, poster } from './art'
 
 export const DISCLAIMER = {
@@ -78,6 +78,7 @@ export const titles = seeds.map(tileOf)
 const unavailableSeeds: Seed[] = [
   { n: 301, title: 'Velvet Antarctica', year: 2025, kind: 'movie', overview: 'A sound recordist winters alone at a research station and starts to hear the ice answer back.', genres: ['Adventure', 'Mystery'], runtime: 114, sources: [], rating: 7.6 },
   { n: 302, title: 'The Tollgate Tapes', year: 2024, kind: 'show', overview: 'A toll collector keeps every dashcam tape handed in at her booth. One of them is evidence.', genres: ['Crime'], runtime: 45, sources: [], rating: 8.1 },
+  { n: 303, title: 'Sunday League Legends', year: 2023, kind: 'show', overview: 'Five amateur sides, one muddy pitch, and the season none of them will stop talking about.', genres: ['Documentary'], runtime: 30, sources: [], rating: 7.3 },
 ]
 export const unavailable = unavailableSeeds.map(tileOf)
 // Requestable too, but found only by their id: the mock request manager fails the first and lets the second
@@ -214,6 +215,31 @@ export function withNowNext(ch: Channel): Channel {
   const list = programmesFor(ch, now - 3 * 3600_000, now + 3 * 3600_000)
   const cur = list.findIndex((p) => Date.parse(p.start) <= now && Date.parse(p.stop) > now)
   return { ...ch, is_favorite: fav.has(ch.id), now: list[cur], next: list[cur + 1] }
+}
+// One listing the repeating schedule does not have: a broadcast a day ahead, on a channel other than the one it names.
+const AHEAD = { title: 'Sunday League Live', channel: 1, inHours: 26, hours: 2 }
+/** What a search finds in the guide: titles containing the query, on now or within two days, on now first.
+ *  One entry per title and start; the channels carrying it are its feeds, lowest number first. */
+export function searchBroadcasts(q: string): SearchProgramme[] {
+  const now = Date.now()
+  const found: Array<{ p: Programme; ch: Channel }> = []
+  for (const ch of channels) for (const p of programmesFor(ch, now, now + 48 * 3600_000)) if (Date.parse(p.stop) > now && p.title.toLowerCase().includes(q)) found.push({ p, ch })
+  const on = channels[AHEAD.channel]!
+  const start = Math.ceil(now / 3600_000) * 3600_000 + AHEAD.inHours * 3600_000
+  if (AHEAD.title.toLowerCase().includes(q)) found.push({ ch: on, p: {
+    id: `${on.id}@${start}`, channel_id: on.id, start: new Date(start).toISOString(), stop: new Date(start + AHEAD.hours * 3600_000).toISOString(),
+    title: AHEAD.title, description: null, category: 'Sports', icon: null, catchup_available: false, is_sport: true, teams: [],
+  } })
+  const groups = new Map<string, Array<{ p: Programme; ch: Channel }>>()
+  for (const hit of found) groups.set(`${hit.p.title.toLowerCase()}|${hit.p.start}`, [...(groups.get(`${hit.p.title.toLowerCase()}|${hit.p.start}`) ?? []), hit])
+  return [...groups.values()].map((hits) => {
+    const feeds = [...hits].sort((a, b) => a.ch.number - b.ch.number)
+    const { p, ch } = feeds[0]!
+    return {
+      ...p, on_now: Date.parse(p.start) <= now, channel_number: ch.number, channel_name: ch.name, channel_logo: ch.logo ?? null,
+      feeds: feeds.map((f) => ({ programme_id: f.p.id, channel_id: f.ch.id, channel_number: f.ch.number, channel_name: f.ch.name, channel_logo: f.ch.logo ?? null })),
+    }
+  }).sort((a, b) => Number(b.on_now) - Number(a.on_now) || Date.parse(a.start) - Date.parse(b.start) || a.title.localeCompare(b.title))
 }
 export const channelTile = (c: Channel): Tile => ({
   id: c.id, kind: 'channel', title: c.name, subtitle: String(c.number), logo: c.logo, is_favorite: fav.has(c.id),
