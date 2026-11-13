@@ -119,6 +119,8 @@ def test_two_joins_are_one_admission_and_one_upstream_open(rig: Rig, ffmpeg: Ffm
     # One ffmpeg, one of the source's connections, one upstream session for probe and play alike.
     assert len(ffmpeg.runs) == 1 and ffmpeg.running == 1 and use(rig) == 1
     assert list(rig.c.proxy._hls) == [f"room:{code}"]
+    owner = rig.req("GET", "/auth/me").json()["user"]["id"]
+    assert [v.title for v in rig.c.proxy.user_viewers(owner)] == ["Watch room: Film"]  # tagged with who started it
     assert rig.c.proxy._pins[f"room:{code}"][0] == f"{FILM_URL}?session_id=s1"
     assert ffmpeg.arg(0, "-i") == f"{FILM_URL}?session_id=s1" and panel.unpinned == 1
     # Both members read the same session through their own grant.

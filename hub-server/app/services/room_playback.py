@@ -58,6 +58,7 @@ class RoomSession:
     title: str | None
     kind: str | None
     host_profile_id: str
+    user_id: str | None  # who started it: the proxy session is tagged with a user like any other
     start_s: int
     epoch: int = 1  # counts the session's starts; clients reload their playlist when it changes
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -141,6 +142,8 @@ class RoomPlayback:
         scope = None if room.live else RoomScope(room.code, position)
         # Once the room has its session, everyone resolves the file that session plays.
         held = self._sessions.get(room.code)
+        if held is not None and self.db is not None:
+            await require_watch(self.db, principal.permissions, held.variant_id)
         result = await self._playback.resolve(
             principal.profile_id,
             held.ref if held is not None else room.ref,
@@ -191,6 +194,7 @@ class RoomPlayback:
                     title=scope.title,
                     kind=scope.kind,
                     host_profile_id=room.host_profile_id,
+                    user_id=principal.user_id or None,
                     start_s=vod.start_s,
                 )
                 self.proxy.keep(session.key)
@@ -234,7 +238,14 @@ class RoomPlayback:
     def _viewer(self, session: RoomSession) -> Viewer:
         """The room as the source's ``source_busy`` answer names it."""
         title = f"Watch room: {session.title}" if session.title else None
-        return Viewer(session.host_profile_id, title, session.kind, session.variant_id, since=session.since)
+        return Viewer(
+            session.host_profile_id,
+            title,
+            session.kind,
+            session.variant_id,
+            since=session.since,
+            user_id=session.user_id,
+        )
 
     async def _start(self, session: RoomSession) -> HlsSession:
         """The room's session, started at its current offset if it is not running. Caller holds the room's lock."""

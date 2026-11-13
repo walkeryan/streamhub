@@ -13,6 +13,12 @@
 - **Pinned upstream sessions** (``pin``): panels that hand out a per-viewer session on redirect see
   one viewer for a probe, a play and every seek of one file, because all of them use the redirect
   target that the first request was given (see ``pin_upstream_session``). Live streams are not pinned.
+- **Watch rooms** read one HLS session that is kept (``keep``) while the room has members, so it is
+  neither reaped as idle nor evicted for another viewer; a seek stops it and starts it again under
+  the same key with a new session id (``hls_session(sid=…)``).
+- **Recordings** either subscribe to a channel's shared upstream (``Tap``) or hold a connection of
+  their own (``capture_slot``); both count against the source's limit and are named to a profile
+  it turns away. The capture itself lives in ``app.proxy.capture``.
 
 Seeking in a web VOD session is restart-at-offset. A session starts at ``start_s`` (``-ss`` before
 ``-i``) and its playlist only ever lists what ffmpeg has produced since, as an ``EVENT`` playlist

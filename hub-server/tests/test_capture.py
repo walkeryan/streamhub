@@ -163,7 +163,7 @@ class Rig:
             title=title,
             starts_at=start,
             ends_at=fields.pop("ends_at", start + timedelta(hours=1)),
-            state="recording",
+            state=fields.pop("state", "recording"),
             **fields,
         )
         async with self.api.c.db.session() as s:
@@ -523,6 +523,46 @@ async def test_archive_fetch_waits_for_a_connection_and_reports_a_failed_downloa
     assert result is not None and result.path is None
     assert result.error == "The archive download ended with an error (ffmpeg exit code 1)."
     assert rig.use == 0 and not list(rig.root.iterdir())
+
+
+# ---------------------------------------------------------------- under the recorder
+async def test_recorder_runs_a_programme_through_the_capture(rig: Rig, ffmpeg: list[Ffmpeg]) -> None:
+    recorder = rig.api.c.recorder
+    recorder.capture = rig.capture
+    recorder.min_free_gb = 0
+    now = datetime.now(UTC).replace(microsecond=0)
+    row = await rig.recording(
+        rig.channels[0], "Evening News", starts_at=now, ends_at=now + timedelta(minutes=30), state="scheduled"
+    )
+
+    async def stored() -> Recording:
+        async with rig.api.c.db.session() as s:
+            found = await s.get(Recording, row.id)
+            assert found is not None
+            return found
+
+    await recorder.tick(now)
+    assert (await stored()).state == "recording" and len(ffmpeg) == 1 and rig.use == 1
+    await recorder.tick(now + timedelta(minutes=10))
+    assert (await stored()).state == "recording" and ffmpeg[0].returncode is None
+    await recorder.tick(now + timedelta(minutes=31))  # the programme is over
+    done = await stored()
+    assert (done.state, done.error, done.size_bytes) == ("done", None, 13)
+    assert done.path is not None and done.path.startswith("Evening News (") and (rig.root / done.path).is_file()
+    assert ffmpeg[0].signals == [signal.SIGINT] and rig.use == 0
+
+    # A capture that dies is noticed on the next tick and keeps what it wrote.
+    again = await rig.recording(
+        rig.channels[0], "Late Film", starts_at=now, ends_at=now + timedelta(minutes=30), state="scheduled"
+    )
+    await recorder.tick(now)
+    ffmpeg[1].end(1)
+    await until(lambda: not rig.capture.is_running(again.id))
+    await recorder.tick(now + timedelta(minutes=1))
+    async with rig.api.c.db.session() as s:
+        failed = await s.get(Recording, again.id)
+    assert failed is not None and failed.state == "failed" and "exit code 1" in str(failed.error)
+    assert failed.path is not None and (rig.root / failed.path).is_file()
 
 
 # ---------------------------------------------------------------- wiring
