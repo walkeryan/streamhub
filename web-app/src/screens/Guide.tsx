@@ -128,7 +128,8 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
   // Put the grid where it belongs once it is drawn: on the half hour before the one now is in, or where Back left it.
   const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = ch
   useLayoutEffect(() => {
-    if (!grid || placed === key) return
+    // (While other filters load, `grid` is still the element that has just left the page: nothing to place.)
+    if (!grid || !grid.isConnected || !count || placed === key) return
     // Back to a row further down than is loaded: its page is asked for below, and the grid waits for it.
     if (view && view.row >= count && hasNextPage) return
     grid.scrollTop = (view?.row ?? 0) * ROW_REM * remPx()
@@ -169,7 +170,13 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
     window.addEventListener('keydown', byKey, true)
     return () => window.removeEventListener('keydown', byKey, true)
   }, [])
-  /** Bring a cell focused by the keyboard out from under the sticky header and channel column. */
+  const across = useRef(false) // the focus now arriving was moved by Left or Right
+  /**
+   * Bring a cell focused by the keyboard out from under the sticky header and channel column. Sideways
+   * the view moves only for Left and Right, and then by whole programmes: back to the start of the one
+   * before, on so that the next one starts at the channel column. Up and Down land on what is on at the
+   * hour in view, which needs no move (a long programme's start may be hours to the left).
+   */
   const reveal = (node: HTMLElement, programme: boolean) => {
     const el = scroller.current
     if (!el) return
@@ -179,14 +186,15 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
     else if (r.bottom > bottom) el.scrollTop += r.bottom - bottom
     if (!programme) return
     const left = box.left + parseFloat(getComputedStyle(el).getPropertyValue('--epg-ch')) * px, right = box.left + el.clientWidth
-    if (r.left < left) el.scrollLeft -= left - r.left
-    // A programme longer than the view shows its start, not its end.
-    else if (r.right > right) el.scrollLeft += Math.min(r.right - right, r.left - left)
+    const hidden = r.right <= left + 1 || r.left >= right - 1
+    // Less than a column of it showing at the right edge is not enough to read.
+    if (hidden || (across.current && (r.left < left || r.left + Math.min(r.width, COL_REM * px) > right))) el.scrollLeft += r.left - left
   }
   const above = wide ? upKey : 'guide:details'
   const actions = {
     focusCell: (c: Channel, p: Programme | null, node: HTMLElement) => {
       if (!pointer.current) reveal(node, !!p)
+      across.current = false
       // What is on now is watched from now, a later programme from its start; neither from before the edge of the view.
       if (p && !keepAnchor.current) anchor.current = Math.max(onNow(p) ? Date.now() : Date.parse(p.start), leftEdge())
       keepAnchor.current = false
@@ -199,7 +207,7 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
       if (dir === 'left' || dir === 'right') {
         const list = drawnOf(c)
         const next = id === null ? (dir === 'right' ? programmeAt(list, leftEdge()) : null) : list[list.findIndex((p) => p.id === id) + (dir === 'right' ? 1 : -1)]
-        if (next) void setFocus(cellKey(c.id, next.id))
+        if (next) { across.current = id !== null; void setFocus(cellKey(c.id, next.id)) }
         else if (id !== null && dir === 'left') void setFocus(channelKey(c.id))
         // The last programme loaded: ask for later hours; focus stays put for the next press.
         else if (id !== null && span.to < horizon) setSpan({ from: span.from, to: Math.min(horizon, span.to + EXTEND_H * HOUR_MS) })

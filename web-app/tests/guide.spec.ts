@@ -176,11 +176,13 @@ test.describe('on a 1600 by 830 window', () => {
     // The focused cell is far above the view and still drawn: focus was not recycled with its row.
     await expect(focusedCell(page)).toHaveCount(1)
     expect(await focusedRow(page)).toBe(0)
-    // Another filter starts again from the first channel, at the top.
+    // Another filter starts again from the first channel, at the top; the hour on screen stays.
+    await grid(page).evaluate((el) => { el.scrollLeft += 2 * el.querySelector('.epg-tick')!.getBoundingClientRect().width })
+    const hour = await grid(page).evaluate((el) => el.scrollLeft)
     await searchLive(page, 'Channel 99')
     await expect(page.getByText('11 channels', { exact: true })).toBeVisible()
     await expect(page.getByTestId('guide').getByRole('button', { name: '99 Fixture Channel 99', exact: true })).toBeVisible()
-    expect(await grid(page).evaluate((el) => el.scrollTop)).toBe(0)
+    expect(await grid(page).evaluate((el) => [el.scrollTop, el.scrollLeft])).toEqual([0, hour])
     await expect(page.getByTestId('guide-end')).toHaveText('End of the list · 11 channels')
   })
 
