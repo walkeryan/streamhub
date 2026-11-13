@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react'
 import { usePlayback } from './usePlayback'
 import { useChannelAudio } from './channelAudio'
+import { NO_POSTER } from './poster'
 
 /**
  * Muted inline preview for Live TV. Does not report progress. It keeps a true 16:9 picture: its width
@@ -26,7 +27,7 @@ export function Preview({ channelId, off, onTurnOn }: {
   const { state, error } = usePlayback(ref, req, { muted: true, report: false })
   return (
     <div style={{ position: 'relative', aspectRatio: '16/9', width: 'min(100%, calc((100dvh - var(--bar-h, 0px) - 19rem) * 16 / 9))', minWidth: 'min(100%, 20rem)', background: '#000', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }} data-testid="live-preview" data-state={state}>
-      <video ref={ref} muted playsInline loop aria-label="Channel preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+      <video ref={ref} muted playsInline poster={NO_POSTER} loop aria-label="Channel preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
       {(state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && channelId && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.45)', color: '#fff' }} role="status">
           {state === 'reconnecting' ? 'Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Tuning…'}

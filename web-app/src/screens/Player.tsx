@@ -11,6 +11,8 @@ import { getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { ChannelAudioPrompt, useChannelAudio } from '../player/channelAudio'
 import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
+import { NO_POSTER } from '../player/poster'
+import { SafeImg } from '../components/SafeImg'
 import { trackLabel } from '../player/audioTracks'
 import { seekableRanges } from '../player/restartSeek'
 import { Scrubber } from '../player/Scrubber'
@@ -605,13 +607,17 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       onPointerMove={(e) => { if (e.pointerType !== 'touch') poke() }} onPointerDown={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
       {/* focus target for "the video itself": Up from the control bar lands here, so no hidden button keeps focus */}
       <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>
-      <video ref={videoRef} playsInline loop={live && desc?.mime === 'video/webm'} style={{ objectFit: aspect }} data-testid="video" aria-label={title}
+      <video ref={videoRef} playsInline poster={NO_POSTER} loop={live && desc?.mime === 'video/webm'} style={{ objectFit: aspect }} data-testid="video" aria-label={title}
         onPointerDown={(e) => { pointer.current = { kind: e.pointerType, shown: chromeRef.current } }}
         onDoubleClick={() => { if (pointer.current.kind !== 'touch') fullscreen() }} onClick={onPictureClick} />
 
       {!audio.blocked && (state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }} role="status">
-          <div className="flex flex-col items-center gap-3"><span className="skel" style={{ width: 48, height: 48, borderRadius: 999 }} /><span>{state === 'reconnecting' ? 'Connection lost. Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Starting stream…'}</span></div>
+          <div className="flex flex-col items-center gap-3">
+            {/* Before the first frame the screen is the title's own artwork, not an empty black box. */}
+            {(state === 'resolving' || state === 'loading') && artwork && <SafeImg className="player-splash-art" src={artwork} alt="" fallback={null} data-testid="player-splash-art" />}
+            <span className="skel" style={{ width: 48, height: 48, borderRadius: 999 }} /><span>{state === 'reconnecting' ? 'Connection lost. Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Starting stream…'}</span>
+          </div>
         </div>
       )}
 
