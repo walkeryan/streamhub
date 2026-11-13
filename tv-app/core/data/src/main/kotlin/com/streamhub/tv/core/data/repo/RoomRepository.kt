@@ -67,6 +67,14 @@ class RoomRepository internal constructor(
 
     private val seats = ConcurrentHashMap<String, RoomSeat>()
 
+    /**
+     * The room this TV last sat in and the member token of that seat. A join of the same room (the
+     * code typed again after a dropped connection, say) offers it, so the room keeps the seat if it
+     * still holds it; a token it no longer honours, or one from before a switch of person, is ignored
+     * by the server and the join takes a new seat.
+     */
+    @Volatile private var lastSeat: Pair<String, String>? = null
+
     override suspend fun create(titleId: String): Room = api.createRoom(titleId)
     override suspend fun lookup(code: String): Room = api.room(code)
     override suspend fun close(code: String) = api.deleteRoom(code)
@@ -97,7 +105,9 @@ class RoomRepository internal constructor(
 
     private suspend fun seatIn(code: String, allowUnverifiedAudio: Boolean, memberToken: String? = null): RoomSeat {
         val server = session.current().serverUrl ?: throw ApiException(0, null, "Server URL not set")
-        val joined = api.joinRoom(code, allowUnverifiedAudio, memberToken)
+        val offered = memberToken ?: lastSeat?.takeIf { it.first.equals(code, ignoreCase = true) }?.second
+        val joined = api.joinRoom(code, allowUnverifiedAudio, offered)
+        lastSeat = code to joined.memberToken
         return RoomSeat(code, playable(joined.descriptor), joined.memberId, roomSocketUrl(server, joined.wsPath, joined.memberToken), joined.memberToken)
     }
 

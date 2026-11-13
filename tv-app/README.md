@@ -232,6 +232,9 @@ the list is shown with *Try again*. That 404 is the only allowance left for olde
     waits for that `state` (`RoomSync.streamStep`: `Same`, `Reload`, `Wait`).
   - The stream is a playlist that grows faster than it plays, so it is always opened at an exact
     position (0 included) and held at 1× (`MediaItemMapper.pinsPosition`).
+- **Coming back.** The member token of the last seat is kept for the run of the app, and a join of
+  the same room offers it, so typing the code again after a dropped connection takes the old seat up
+  when the room still has it.
 - **A member that lost its place** (a player error, a stream address that expired) asks the same
   descriptor call for its stream as it is now, twice at most before the viewer is asked; if the
   room no longer honours the seat's token (401 `room_unauthorized`, 404 `not_a_member`) it joins

@@ -210,6 +210,8 @@ class PlayerViewModel @Inject constructor(
     private var lastAutoRejoinAt = 0L
     /** Counts recoveries, so one that was superseded does not clear the state of the one that replaced it. */
     private var recoverySeq = 0
+    /** Recoveries in a row that ended with the room still on a later start of its stream than the one loaded. */
+    private var epochMisses = 0
 
     init {
         coordinator.registerActivePlayer(key) { stopCurrentPlayback() }
@@ -507,7 +509,7 @@ class PlayerViewModel @Inject constructor(
                     when {
                         room.connection == RoomConnection.Closed -> roomClosed(room.closedReason)
                         // A seek restarted the room's stream: what is playing is a start that no longer exists.
-                        RoomSync.streamStep(playingStream, room.stream) == StreamStep.Reload -> recoverRoom(auto = true)
+                        RoomSync.streamStep(playingStream, room.stream) == StreamStep.Reload -> followEpoch()
                     }
                 }
             }
@@ -554,7 +556,7 @@ class PlayerViewModel @Inject constructor(
             val stream = playingStream
             val wanted = when (RoomSync.streamStep(stream, room.stream)) {
                 // Positions on a start of the stream the room has left mean nothing: load the new one first.
-                StreamStep.Reload -> { recoverRoom(auto = true); continue }
+                StreamStep.Reload -> { followEpoch(); continue }
                 // The descriptor is from a later start than the last state: play and pause still apply,
                 // the position waits for the state that belongs to this stream.
                 StreamStep.Wait -> clock.copy(positionMs = null)
@@ -601,6 +603,20 @@ class PlayerViewModel @Inject constructor(
         val room = client.state.value
         if (!room.isHost) { flash("Only the host can do that"); return }
         viewModelScope.launch { if (!client.lock(!room.controlsLocked)) flash(ROOM_RECONNECTING) }
+    }
+
+    /**
+     * The room is on a later start of its shared stream than the one loaded here: load that one.
+     * A descriptor that keeps coming back behind the room's `state` is not chased for ever; after a
+     * few misses the viewer is asked, and "Try again" starts the count afresh.
+     */
+    private fun followEpoch() {
+        val s = _state.value
+        if (s.retrying || s.failure != null || s.roomEnded != null) return
+        if (epochMisses < MAX_EPOCH_MISSES) { recoverRoom(auto = true); return }
+        _state.update {
+            it.copy(failure = UserError("Out of step with the room", "This TV couldn't load the room's stream after it was moved. Try again, or leave and join again with the room's code.", canRetry = true), failureKeepsPlaying = false)
+        }
     }
 
     /**
@@ -835,7 +851,7 @@ class PlayerViewModel @Inject constructor(
             submitChannel(zap, archiveAction = zap.rewindAt != null)
             return
         }
-        if (seat != null) { autoRecoveries = 0; recoverRoom(auto = false); return }
+        if (seat != null) { autoRecoveries = 0; epochMisses = 0; recoverRoom(auto = false); return }
         val stale = _state.value.descriptor
         val request = currentRequest ?: stale?.let { PlaybackRequest(it.id) } ?: return
         // A film resumes where it failed; live and archive streams restart where the server puts them.
@@ -905,7 +921,9 @@ class PlayerViewModel @Inject constructor(
                     start(d)
                     if (d.live) loadChannelList(d)
                     // The room may have been seeked again while this one was loading.
-                    if (RoomSync.streamStep(playingStream, roomClient?.state?.value?.stream) != StreamStep.Reload || ++chases >= MAX_EPOCH_CHASES) break
+                    val behind = RoomSync.streamStep(playingStream, roomClient?.state?.value?.stream) == StreamStep.Reload
+                    epochMisses = if (behind) epochMisses + 1 else 0
+                    if (!behind || ++chases >= MAX_EPOCH_CHASES) break
                     fresh = rooms.descriptor(current)
                 }
                 _state.update { it.copy(retrying = false, roomCatchUp = false) }
@@ -916,8 +934,12 @@ class PlayerViewModel @Inject constructor(
             } catch (e: Exception) {
                 if (recoverySeq != mine) return@launch
                 _state.update { it.copy(retrying = false, roomCatchUp = false) }
-                if (closedReason != null) roomOver(closedReason)
-                else _state.update { it.copy(failure = ApiErrors.describe(e), failureKeepsPlaying = false) }
+                when {
+                    closedReason != null -> roomOver(closedReason)
+                    // The room went while this TV was away from it.
+                    (e as? ApiException)?.error?.code == "room_not_found" -> roomOver("not_found")
+                    else -> _state.update { it.copy(failure = ApiErrors.describe(e), failureKeepsPlaying = false) }
+                }
             }
         }
     }
@@ -952,6 +974,8 @@ class PlayerViewModel @Inject constructor(
         const val MAX_AUTO_RECOVERIES = 2
         /** Descriptor fetches in one recovery while the room keeps being seeked under it. */
         const val MAX_EPOCH_CHASES = 3
+        /** Descriptors in a row that were behind the room's stream before the viewer is asked. */
+        const val MAX_EPOCH_MISSES = 6
         /** One automatic join after a lost seat or connection per this long: a seat that keeps being dropped ends the room for this TV. */
         const val AUTO_REJOIN_SPACING_MS = 30_000L
         /** The live reconnect attempt at which a room member's stream address is fetched again. */
