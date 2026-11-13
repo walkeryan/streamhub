@@ -13,7 +13,9 @@ export function audioDescription(option: PlaybackOption): string {
   if (!option.audio_verified) return 'Audio unverified'
   // A file dubbed into many languages names three, the default first, and counts the rest: the row must fit a phone.
   const first = option.default_audio_language
-  const names = [...option.audio_languages].sort((x, y) => Number(y === first) - Number(x === first)).map(languageName)
+  // A short list keeps the file's own order; only a list that will be cut puts the default where it survives the cut.
+  const codes = option.audio_languages.length > MAX_NAMED ? [...option.audio_languages].sort((x, y) => Number(y === first) - Number(x === first)) : option.audio_languages
+  const names = codes.map(languageName)
   const tracks = names.length > MAX_NAMED ? `${names.slice(0, MAX_NAMED).join(', ')} +${names.length - MAX_NAMED} more` : names.join(', ')
   const defaultAudio = option.default_audio_language ? languageName(option.default_audio_language) : 'unverified'
   return `Verified tracks: ${tracks || 'unknown'} · Default audio: ${defaultAudio}`
