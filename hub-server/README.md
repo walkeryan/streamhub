@@ -78,6 +78,11 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
   Title language filters read `title.language`; it is a hint, never audio evidence.
 - **Adult rows** (`services/adult.py`) are left out of home, search, browse and suggestions unless the admin profile
   passes `include_adult=true`. This hides; it does not authorize access by id.
+- **Shelves** (`services/catalog.py`, `services/home.py`): `GET /browse/{section}/shelves` lists shelves with their first
+  titles, New Releases first, then by size (a shelf with nothing new in 30 days counts half). Home runs Continue
+  Watching, On Now, New Releases, up to eight shelves alternating shows and movies, the personal rows, Recently Added.
+  A `setting` row `home_shelves` (JSON list of shelf names, `shows:Name` or `movies:Name` to name one side) replaces
+  the automatic eight; nothing in the API writes it yet. The hero features New Releases, never an adult title.
 - **Disclaimer gate**: `POST /sources` with `xtream`/`m3u` → 412 until the profile accepted version 1.0 (`docs/LEGAL.md`).
 - **Secrets**: source configs are Fernet-encrypted at rest; Xtream credentials are never stored in catalog rows
   (URLs rebuilt at play time); Plex artwork goes through `/api/v1/images/{signed}` so tokens never reach clients
