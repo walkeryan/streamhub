@@ -15,6 +15,7 @@ from app.services.adult import adult_scope, require_adult
 from app.services.auth import Principal
 from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
+from app.services.search import MIN_QUERY_LENGTH, TITLE_CAP, empty_search
 from app.services.sports import sports_channels, sports_events, sports_on_now
 from app.services.sports_recordings import sports_recordings
 from app.services.visibility import require_watch
@@ -133,25 +134,32 @@ async def search(
     c: C,
     p: P,
     response: Response,
-    q: str = Query(..., min_length=1, max_length=200),
+    q: str = Query("", max_length=200),
     kinds: str | None = None,
-    limit: int = Query(40, ge=1, le=100),
+    limit: int = Query(TITLE_CAP, ge=1, le=100),
     language: str | None = None,
     source_id: str | None = None,
     include_adult: IncludeAdult = False,
+    expand: str | None = Query(None, pattern="^(titles|channels|programmes)(,(titles|channels|programmes))*$"),
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
     kind_set = {k.strip() for k in kinds.split(",") if k.strip()} if kinds else None
     q = normalized_query(q) or ""
+    if len(q) < MIN_QUERY_LENGTH:
+        # Nothing is looked up for a letter: the box is still being typed in.
+        return empty_search()
+    expanded = frozenset(expand.split(",")) if expand else frozenset()
     with listing_scope(p, include_adult):
         result = await listing_cached(
             c.db,
             p.profile_id,
             "search",
-            (q, tuple(sorted(kind_set or [])), limit, language, source_id),
-            lambda: c.catalog.search(q, p.profile_id, kind_set, limit, language=language, source_id=source_id),
+            (q, tuple(sorted(kind_set or [])), limit, language, source_id, tuple(sorted(expanded))),
+            lambda: c.catalog.search(
+                q, p.profile_id, kind_set, limit, language=language, source_id=source_id, expand=expanded
+            ),
         )
-    return await c.requests.annotate(p, result)
+    return await c.recorder.annotate(p, await c.requests.annotate(p, result))
 
 
 async def _title_rows(c: C, id: str) -> list[Any]:

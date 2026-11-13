@@ -385,6 +385,38 @@ class LanguageCount(_M):
     count: int
 
 
+class SearchFeed(_M):
+    programme_id: str
+    channel_id: str
+    channel_number: int
+    channel_name: str
+    channel_logo: str | None = None
+
+
+class SearchProgramme(Programme):
+    """A guide broadcast found by title: the programme on its first channel, and every channel carrying it."""
+
+    on_now: bool
+    channel_number: int
+    channel_name: str
+    channel_logo: str | None = None
+    feeds: list[SearchFeed]
+
+
+class SearchSection(_M):
+    count: int = 0
+    more: bool = False
+
+
+class SearchSections(_M):
+    titles: SearchSection = Field(default_factory=SearchSection)
+    channels: SearchSection = Field(default_factory=SearchSection)
+    programmes: SearchSection = Field(default_factory=SearchSection)
+
+
+SearchSectionL = Literal["programmes", "channels", "titles"]
+
+
 class SearchResults(_M):
     results: list[Tile] = Field(default_factory=list)
     metadata_available: bool = False
@@ -392,6 +424,9 @@ class SearchResults(_M):
     play_here: list[Tile]
     open_in_app: list[Tile]
     channels: list[Channel]
+    programmes: list[SearchProgramme] = Field(default_factory=list)
+    sections: SearchSections = Field(default_factory=SearchSections)
+    order: list[SearchSectionL] = Field(default_factory=list)
     attribution: str
 
 

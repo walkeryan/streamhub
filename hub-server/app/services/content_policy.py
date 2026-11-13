@@ -430,6 +430,12 @@ class ContentPolicy:
                 result["open_in_app"] = [
                     x for x in result["results"] if x["sources"] and not any(s["playable_in_app"] for s in x["sources"])
                 ]
+                # A search says how many each section found: what was left out is not counted.
+                sections = result.get("sections")
+                for name, field in (("titles", "results"), ("channels", "channels"), ("programmes", "programmes")):
+                    if isinstance(sections, dict) and name in sections and isinstance(value.get(field), list):
+                        removed = len(value[field]) - len(result[field])
+                        sections[name]["count"] = max(len(result[field]), sections[name]["count"] - removed)
             return result
 
         return clean(payload)
