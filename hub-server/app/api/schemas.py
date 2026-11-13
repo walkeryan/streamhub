@@ -176,6 +176,8 @@ class Programme(_M):
     category: str | None = None
     icon: str | None = None
     catchup_available: bool = False
+    is_sport: bool = False
+    teams: list[str] = Field(default_factory=list)
     recording_state: RecordingStateL | None = None
 
 
@@ -1012,6 +1014,7 @@ class Recording(_M):
     season: int | None = None
     episode: int | None = None
     is_sport: bool = False
+    teams: list[str] = Field(default_factory=list)
     starts_at: datetime
     ends_at: datetime
     pad_before_s: int = 0

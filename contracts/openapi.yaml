@@ -469,6 +469,8 @@ components:
         category: {type: string, nullable: true}
         icon: {type: string, nullable: true}
         catchup_available: {type: boolean, default: false}
+        is_sport: {type: boolean, description: "Always sent. The server's sports classifier says this listing is sport (from its title and category); the classifier behind /sports/now and the recorder."}
+        teams: {type: array, items: {type: string}, description: "The two sides, in title order, when is_sport and the title spells out a matchup (A vs B, A v B, A versus B, A at B, A @ B; a league prefix and trailing notes are dropped). Empty otherwise: nothing is guessed."}
         recording_state: { oneOf: [{ $ref: '#/components/schemas/RecordingState' }, { type: 'null' }], description: "State of the household's recording of this programme, if there is one. Null when recording is off." }
 
     PlaybackRecoveryStatus:
@@ -783,6 +785,7 @@ components:
         season: {type: integer, nullable: true}
         episode: {type: integer, nullable: true}
         is_sport: {type: boolean}
+        teams: {type: array, items: {type: string}, description: "As Programme.teams, from the recorded programme's title."}
         starts_at: {type: string, format: date-time, description: "listed start; capture begins pad_before_s earlier"}
         ends_at: {type: string, format: date-time, description: "listed end; capture runs pad_after_s longer"}
         pad_before_s: {type: integer}

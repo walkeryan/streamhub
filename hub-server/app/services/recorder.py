@@ -41,7 +41,7 @@ from app.services import ids, recording_policy
 from app.services.auth import Principal
 from app.services.channels import ChannelService
 from app.services.errors import Conflict, Forbidden, NotFound, ServiceError
-from app.services.sports import REPLAY, classify_sport
+from app.services.sports import REPLAY, classify_sport, split_matchup
 
 log = logging.getLogger(__name__)
 
@@ -436,6 +436,7 @@ class RecorderService:
                 "season": r.season,
                 "episode": r.episode,
                 "is_sport": r.is_sport,
+                "teams": split_matchup(r.title) if r.is_sport else [],
                 "starts_at": r.starts_at,
                 "ends_at": r.ends_at,
                 "pad_before_s": r.pad_before_s,

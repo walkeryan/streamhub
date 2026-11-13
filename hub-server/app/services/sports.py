@@ -1,17 +1,23 @@
-"""Current sports listings from actual source-scoped EPG, never inferred scores or teams."""
+"""Current sports listings from actual source-scoped EPG, never inferred scores or teams.
+
+Teams are only ever the two sides a listing's own title spells out ("A vs B", "A at B").
+"""
 
 from __future__ import annotations
 
 import re
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Any
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 
 from app.infra.models import Programme, Source
 from app.services import ids
-from app.services.channels import ChannelService
+
+if TYPE_CHECKING:  # the channel service stamps these facts on its programmes
+    from app.services.channels import ChannelService
 
 # Deliberately conservative: channel/group names and descriptions are not sports evidence.
 SPORT_RULES = [
@@ -40,6 +46,46 @@ def classify_sport(title: str, category: str | None) -> str | None:
         if pattern.search(text):
             return sport
     return None
+
+
+_VERSUS = re.compile(r"\s+(?:vs?\.?|versus)\s+", re.IGNORECASE)
+_AT = re.compile(r"\s+(?:at|@)\s+")
+# What stands before the first side ("NBA: ", "Live - ", "Tennis | ") and after the second
+# (" (Live)", " - Game 3", ": Highlights").
+_LEAD = re.compile(r"^.*(?:[:|]|\s[-–])\s+")
+_TAIL = re.compile(r"\s*(?:[(\[|]|\s[-–]\s|:\s).*$")
+_SIDE_MAX = 60
+
+
+def split_matchup(title: str) -> list[str]:
+    """The two sides a title spells out: "A vs B", "A v B", "A versus B", "A at B", "A @ B".
+
+    A plain title split, for listings already known to be sport. "at" also reads as an
+    ordinary word ("Live at the Open"), so there both sides must look like names.
+    """
+    for pattern, names in ((_VERSUS, False), (_AT, True)):
+        parts = pattern.split(title)
+        if len(parts) != 2:
+            continue
+        sides = [_LEAD.sub("", parts[0] + " ").strip(), _TAIL.sub("", parts[1]).strip()]
+        if not all(0 < len(side) <= _SIDE_MAX for side in sides) or sides[0].casefold() == sides[1].casefold():
+            continue
+        if names and not all(side[0].isupper() or side[0].isdigit() for side in sides):
+            continue
+        return sides
+    return []
+
+
+def matchup_teams(title: str, category: str | None) -> list[str]:
+    """The teams of a sports listing, when its title names both; otherwise none are guessed."""
+    return split_matchup(title) if classify_sport(title, category) is not None else []
+
+
+@lru_cache(maxsize=4096)
+def sport_facts(title: str, category: str | None) -> tuple[bool, tuple[str, ...]]:
+    """``(is_sport, teams)`` of a guide entry. Cached: a guide page repeats its listings."""
+    is_sport = classify_sport(title, category) is not None
+    return is_sport, tuple(split_matchup(title)) if is_sport else ()
 
 
 async def sports_on_now(

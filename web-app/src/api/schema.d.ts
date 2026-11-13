@@ -6065,6 +6065,10 @@ export interface components {
             icon?: string | null;
             /** @default false */
             catchup_available: boolean;
+            /** @description Always sent. The server's sports classifier says this listing is sport (from its title and category); the classifier behind /sports/now and the recorder. */
+            is_sport?: boolean;
+            /** @description The two sides, in title order, when is_sport and the title spells out a matchup (A vs B, A v B, A versus B, A at B, A @ B; a league prefix and trailing notes are dropped). Empty otherwise: nothing is guessed. */
+            teams?: string[];
             /** @description State of the household's recording of this programme, if there is one. Null when recording is off. */
             recording_state?: components["schemas"]["RecordingState"] | null;
         };
@@ -6428,6 +6432,8 @@ export interface components {
             season?: number | null;
             episode?: number | null;
             is_sport?: boolean;
+            /** @description As Programme.teams, from the recorded programme's title. */
+            teams?: string[];
             /**
              * Format: date-time
              * @description listed start; capture begins pad_before_s earlier
