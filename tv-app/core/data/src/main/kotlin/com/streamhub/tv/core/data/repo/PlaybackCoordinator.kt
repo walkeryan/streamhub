@@ -114,7 +114,7 @@ class PlaybackCoordinator @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 lastFailed = Attempt(request, preflight, expectedOwner)
-                _events.emit(PlayEvent.Error(ApiErrors.describe(e)))
+                _events.emit(PlayEvent.Error(describePlayFailure(request.id, e)))
             }
         }
     }
@@ -147,3 +147,7 @@ class PlaybackCoordinator @Inject constructor(
 
     // Channel zapping uses the player's scoped audio preflight; no unguarded direct resolver.
 }
+
+/** A failed press of Play, worded by what was asked for: a recording is refused in the server's own words. */
+internal fun describePlayFailure(id: String, e: Throwable): UserError =
+    if (id.startsWith("rec:")) ApiErrors.describeRecordingPlayback(e) else ApiErrors.describe(e)

@@ -9,6 +9,10 @@ import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.AuthTokens
 import com.streamhub.tv.core.data.model.Profile
 import com.streamhub.tv.core.data.model.SwitchableUser
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,6 +31,14 @@ sealed interface SwitchResult {
     data object PinSetupRequired : SwitchResult
     /** Too many wrong PINs; nothing is accepted for [retryAfterSeconds]. */
     data class LockedOut(val retryAfterSeconds: Int) : SwitchResult
+    /** 404: this person can no longer be picked on this TV. The list has to be read again. */
+    data object NotListed : SwitchResult
+    /**
+     * The session the switch was asked from no longer stands. [SessionEnd.Revoked]: the tokens are
+     * gone and the shell has been told to go back to pairing. [SessionEnd.Suspended]: the pairing is
+     * kept; nobody can be picked until the account is reinstated or the TV is paired again.
+     */
+    data class SessionEnded(val end: SessionEnd) : SwitchResult
     data class Failed(val error: UserError) : SwitchResult
 }
 
@@ -45,6 +57,18 @@ internal interface SwitchBackend {
     suspend fun saveProfile(original: Session, targetProfileId: String, tokens: AuthTokens)
     /** Forgets the previous person's access and reads the new person's. */
     suspend fun reloadAccess()
+    /** The session [post] was sent from is over: drops its tokens when [end] says they are dead, and tells the shell. */
+    suspend fun sessionEnded(end: SessionEnd)
+}
+
+/** "Who's watching?" as the picker screen uses it; an interface so its view model is tested against a fake. */
+interface UserSwitcher {
+    /**
+     * The people who can be picked here, or null when there is no picker: a personal device
+     * (403 `not_shared_device`) or a server too old to have the route (404). Other failures are thrown.
+     */
+    suspend fun switchable(): List<SwitchableUser>?
+    suspend fun switchTo(userId: String, pin: String?): SwitchResult
 }
 
 /**
@@ -53,40 +77,26 @@ internal interface SwitchBackend {
  * caches cleared), which the older per-profile switch in Settings goes through as well.
  */
 @Singleton
-class UserSwitchRepository internal constructor(private val backend: SwitchBackend) {
-    @Inject constructor(api: StreamHubApi, session: SessionStore, playback: PlaybackCoordinator, channels: ChannelListCache, me: MeRepository) :
-        this(DefaultSwitchBackend(api, session, playback, channels, me))
+class UserSwitchRepository internal constructor(private val backend: SwitchBackend) : UserSwitcher {
+    @Inject constructor(api: StreamHubApi, session: SessionStore, playback: PlaybackCoordinator, channels: ChannelListCache, me: MeRepository, events: SessionEvents) :
+        this(DefaultSwitchBackend(api, session, playback, channels, me, events))
 
     private val mutex = Mutex()
 
-    /** POST /auth/switch is not a route on this server: there is no picker, whatever the list call said. */
-    @Volatile private var switchRouteMissing = false
-
-    /**
-     * The people who can be picked here, or null when there is no picker: a server without the
-     * feature (404) or a personal device (403 `not_shared_device`). Other failures are thrown.
-     */
-    suspend fun switchable(): List<SwitchableUser>? {
-        if (switchRouteMissing) return null
-        return try { backend.switchable() }
+    override suspend fun switchable(): List<SwitchableUser>? =
+        try { backend.switchable() }
         catch (e: CancellationException) { throw e }
-        catch (e: ApiException) { if (e.status == 404 || e.status == 403) null else throw e }
-    }
+        catch (e: ApiException) { if (isMissingRoute(e) || e.error?.code == "not_shared_device") null else throw e }
 
-    suspend fun switchTo(userId: String, pin: String?): SwitchResult = mutex.withLock {
-        val tokens = try {
-            try { backend.post(userId, pin) }
-            catch (e: ApiException) {
-                // The switch call keeps the usual 401 handling out (a 401 here normally means the PIN),
-                // so a stale or expired session is refreshed here, once, and the call repeated.
-                if (e.status != 401 || e.error?.code !in REFRESHABLE) throw e
-                backend.refreshSession()
-                backend.post(userId, pin)
-            }
-        } catch (e: CancellationException) { throw e }
+    override suspend fun switchTo(userId: String, pin: String?): SwitchResult = mutex.withLock {
+        val tokens = try { post(userId, pin) }
+        catch (e: CancellationException) { throw e }
         catch (e: ApiException) {
-            if (isMissingRoute(e)) switchRouteMissing = true
-            return@withLock mapSwitchFailure(e)
+            val result = mapSwitchFailure(e)
+            if (result is SwitchResult.SessionEnded) {
+                try { backend.sessionEnded(result.end) } catch (c: CancellationException) { throw c } catch (_: Exception) { }
+            }
+            return@withLock result
         }
         catch (e: Exception) { return@withLock SwitchResult.Failed(ApiErrors.describe(e)) }
         try {
@@ -98,6 +108,28 @@ class UserSwitchRepository internal constructor(private val backend: SwitchBacke
         try { withTimeoutOrNull(ACCESS_WAIT_MS) { backend.reloadAccess() } }
         catch (e: CancellationException) { throw e } catch (_: Exception) { }
         SwitchResult.Ok(tokens.profile)
+    }
+
+    /**
+     * POST /auth/switch with the two repeats the contract asks for, each made once at most: after
+     * 401 `token_expired` / `session_stale` (which are about this TV's own session and are answered
+     * before any PIN is looked at) the session is refreshed first; 409 `switch_conflict` means the
+     * device or the person changed in the same moment and is simply sent again. A 401 about the PIN
+     * is never repeated: the same wrong PIN twice would cost two of the five guesses.
+     */
+    private suspend fun post(userId: String, pin: String?): AuthTokens {
+        var refreshed = false
+        var conflicted = false
+        while (true) {
+            try { return backend.post(userId, pin) }
+            catch (e: ApiException) {
+                when {
+                    e.status == 401 && e.error?.code in REFRESHABLE && !refreshed -> { refreshed = true; backend.refreshSession() }
+                    e.status == 409 && e.error?.code == "switch_conflict" && !conflicted -> conflicted = true
+                    else -> throw e
+                }
+            }
+        }
     }
 
     /** Before a legacy profile switch is authorized, while the old profile can still give back its stream. */
@@ -118,27 +150,32 @@ class UserSwitchRepository internal constructor(private val backend: SwitchBacke
 }
 
 /**
- * A 404 that says "no such route" rather than "no such person": the server's own not-found errors
- * carry a code of their own, the framework's answer for an unknown path does not.
+ * The one "server too old" answer: a 404 that says "no such route" rather than "no such person".
+ * The server's own not-found errors carry a code of their own, the framework's answer for an
+ * unknown path does not.
  */
 internal fun isMissingRoute(e: ApiException): Boolean = e.status == 404 && e.error?.code.orEmpty() in setOf("", "http_error")
 
 /** POST /auth/switch refusals, by what the person holding the remote can do about them. */
-internal fun mapSwitchFailure(e: ApiException): SwitchResult = when {
-    e.status == 429 -> SwitchResult.LockedOut(lockoutSeconds(e.retryAfterSeconds))
-    isMissingRoute(e) -> SwitchResult.Failed(
-        UserError("Can't switch people here", "This StreamHub server can't switch people from the TV yet. The TV stays signed in as it is.", canRetry = false),
-    )
-    e.status == 404 -> SwitchResult.Failed(
-        UserError("No longer here", "This person can't be picked any more. The list has been refreshed.", canRetry = false),
-    )
-    e.error?.code == "pin_required" -> SwitchResult.PinRequired
-    e.error?.code == "pin_invalid" -> SwitchResult.PinInvalid
-    e.error?.code == "pin_setup_required" -> SwitchResult.PinSetupRequired
-    e.error?.code == "not_shared_device" -> SwitchResult.Failed(
-        UserError("Not a shared TV", "This TV is signed in as one person's own device, so nobody else can be picked here. Pair it again as a shared TV to switch people.", canRetry = false),
-    )
-    else -> SwitchResult.Failed(ApiErrors.describe(e))
+internal fun mapSwitchFailure(e: ApiException): SwitchResult {
+    val code = e.error?.code
+    return when {
+        // Five wrong PINs for this person in 15 minutes; Retry-After is whole seconds.
+        e.status == 429 -> SwitchResult.LockedOut(lockoutSeconds(e.retryAfterSeconds))
+        e.status == 404 -> SwitchResult.NotListed
+        code == "pin_required" -> SwitchResult.PinRequired
+        code == "pin_invalid" -> SwitchResult.PinInvalid
+        code == "pin_setup_required" -> SwitchResult.PinSetupRequired
+        e.status == 401 && SessionEnd.ofCode(code) != null -> SwitchResult.SessionEnded(SessionEnd.ofCode(code)!!)
+        code == "not_shared_device" -> SwitchResult.Failed(
+            UserError("Not a shared TV", "This TV is signed in as one person's own device, so nobody else can be picked here. Pair it again as a shared TV to switch people.", canRetry = false),
+        )
+        // Still in conflict after the one repeat: the viewer can press again.
+        code == "switch_conflict" -> SwitchResult.Failed(
+            UserError("Couldn't switch just now", "This TV or that person's account changed at the same moment. Try again.", canRetry = true),
+        )
+        else -> SwitchResult.Failed(ApiErrors.describe(e))
+    }
 }
 
 /** Retry-After as sent, kept within a minute's guess (header missing) and an hour. */
@@ -150,6 +187,7 @@ private class DefaultSwitchBackend(
     private val playback: PlaybackCoordinator,
     private val channels: ChannelListCache,
     private val me: MeRepository,
+    private val events: SessionEvents,
 ) : SwitchBackend {
     /** The session the last [post] was sent from: the tokens it returned may only replace that one. */
     private var posted: Session? = null
@@ -170,4 +208,18 @@ private class DefaultSwitchBackend(
     override suspend fun saveProfile(original: Session, targetProfileId: String, tokens: AuthTokens) =
         session.saveSwitchedTokens(original, targetProfileId, tokens)
     override suspend fun reloadAccess() { me.clear(); me.refresh() }
+    override suspend fun sessionEnded(end: SessionEnd) {
+        // The switch call keeps the usual 401 handling out, so what that handling does for every other
+        // call is done here: dead tokens go (the server address stays), and the shell hears why.
+        val from = posted
+        posted = null
+        if (end != SessionEnd.Suspended && (from == null || !session.clearExpiredSession(from))) return
+        events.emitEnded(end)
+    }
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class UserSwitchModule {
+    @Binds abstract fun switcher(impl: UserSwitchRepository): UserSwitcher
 }

@@ -37,6 +37,8 @@ val StreamHubJson = Json {
 private val PUBLIC_PATHS = listOf(
     "/auth/login", "/auth/refresh", "/auth/device", "/auth/device/poll",
     "/disclaimer", "/themes", "/health",
+    // GET /rooms/{code}/descriptor: the member token in the query is the credential.
+    "/descriptor",
 )
 
 /**
@@ -62,15 +64,18 @@ private val KEEPS_PAIRING = setOf("user_suspended", "approval_pending")
  *    `session_stale` after a role or permission change) the refresh token is exchanged at
  *    POST /auth/refresh (marked as a refresh request so it is not itself retried), the new pair is
  *    persisted, [onTokensRefreshed] fires and the request is sent once more.
- *    If the server rejects the refresh token the session is cleared and [onSessionExpired] fires so
- *    the UI can re-pair; any other refresh failure keeps the session (see [shouldClearSession]).
+ *    If the server rejects the refresh token the session is cleared and [onSessionExpired] fires
+ *    with the server's reason (`session_revoked`, or null) so the UI can say why and re-pair. A
+ *    suspended user keeps the pairing and [onUserSuspended] fires instead; any other refresh
+ *    failure keeps the session without a word (see [shouldClearSession]).
  *  - Base URL resolved per request from the session (server URL can change at runtime).
  */
 fun createStreamHubHttpClient(
     sessionStore: SessionStore,
     debug: Boolean,
-    onSessionExpired: () -> Unit,
+    onSessionExpired: (code: String?) -> Unit,
     onTokensRefreshed: () -> Unit = {},
+    onUserSuspended: () -> Unit = {},
 ): HttpClient = HttpClient(CIO) {
     expectSuccess = false
     install(ContentNegotiation) { json(StreamHubJson) }
@@ -105,7 +110,7 @@ fun createStreamHubHttpClient(
                     return@refreshTokens original.accessToken?.let { access -> refresh?.let { BearerTokens(access,it) } }
                 }
                 if (refresh == null) {
-                    onSessionExpired(); return@refreshTokens null
+                    onSessionExpired(null); return@refreshTokens null
                 }
                 val base = original.apiBase ?: return@refreshTokens null
                 // An I/O failure here (server restarting, network down) propagates to the caller as a
@@ -117,7 +122,8 @@ fun createStreamHubHttpClient(
                 }
                 if (!resp.status.isSuccess()) {
                     val code = runCatching { StreamHubJson.decodeFromString(ApiError.serializer(), resp.bodyAsText()).code }.getOrNull()
-                    if (shouldClearSession(resp.status.value, code) && sessionStore.clearExpiredSession(original)) onSessionExpired()
+                    if (shouldClearSession(resp.status.value, code)) { if (sessionStore.clearExpiredSession(original)) onSessionExpired(code) }
+                    else if (code == "user_suspended") onUserSuspended()
                     return@refreshTokens null
                 }
                 val tokens = resp.body<AuthTokens>()

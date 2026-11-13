@@ -1,5 +1,12 @@
 package com.streamhub.tv.feature.livetv
 
+import com.streamhub.tv.core.data.model.Permissions
+import com.streamhub.tv.core.data.repo.MeRepository
+import com.streamhub.tv.core.data.repo.RoomDirectory
+import com.streamhub.tv.core.data.repo.RoomSubject
+import com.streamhub.tv.core.data.repo.WatchTogetherLauncher
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.StreamHubApi
@@ -61,6 +68,8 @@ class LiveTvViewModel @Inject constructor(
     private val session: SessionStore,
     private val prefs: ProfileFilterStore,
     recordings: RecordingsRepository,
+    rooms: RoomDirectory,
+    private val me: MeRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(LiveTvState())
     val state: StateFlow<LiveTvState> = _state.asStateFlow()
@@ -73,6 +82,17 @@ class LiveTvViewModel @Inject constructor(
         fun Programme.marked() = if (id == programme.id) copy(recordingState = state) else this
         _state.update { s -> s.copy(channels = s.channels.map { if (it.id == programme.channelId) it.copy(now = it.now?.marked(), next = it.next?.marked()) else it }) }
     }
+
+    /** "Watch together" on a channel: a live room, which has no position, only play and pause for everyone. */
+    val together = WatchTogetherLauncher(rooms, viewModelScope)
+    fun watchTogether(ch: Channel) = together.open(ch.id, ch.name, RoomSubject.Channel)
+
+    /**
+     * The signed-in user may start a watch room (rooms.create): a channel's actions offer "Watch
+     * together". Its own flow: the screen state below is replaced wholesale when the profile changes.
+     */
+    val canWatchTogether: StateFlow<Boolean> = me.state.map { it.can(Permissions.ROOMS_CREATE) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, me.can(Permissions.ROOMS_CREATE))
 
     private var profileId: String? = null
     init {

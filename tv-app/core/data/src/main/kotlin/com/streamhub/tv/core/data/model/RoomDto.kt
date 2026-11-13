@@ -3,7 +3,7 @@ package com.streamhub.tv.core.data.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/* Watch rooms (POST /rooms, GET/DELETE /rooms/{code}, POST /rooms/{code}/join). */
+/* Watch rooms (POST /rooms, GET/DELETE /rooms/{code}, POST /rooms/{code}/join, GET /rooms/{code}/descriptor). */
 
 @Serializable
 data class RoomCreate(val id: String, @SerialName("variant_id") val variantId: String? = null)
@@ -13,7 +13,15 @@ data class RoomJoinRequest(
     val client: String = "android_tv",
     /** Consent to the room's source when its audio is unverified or not in this profile's languages. */
     @SerialName("allow_unverified_audio") val allowUnverifiedAudio: Boolean = false,
-)
+    /**
+     * The token of a seat this TV already holds in the room: the join then keeps that seat (same
+     * member, a fresh token, the descriptor as it is now). A token the room no longer honours is
+     * ignored and the join takes a new seat. Left out of the request when null.
+     */
+    @SerialName("member_token") val memberToken: String? = null,
+) {
+    override fun toString(): String = "RoomJoinRequest(client=$client, allowUnverifiedAudio=$allowUnverifiedAudio, memberToken=${if (memberToken == null) "null" else "[REDACTED]"})"
+}
 
 @Serializable
 data class RoomTitle(

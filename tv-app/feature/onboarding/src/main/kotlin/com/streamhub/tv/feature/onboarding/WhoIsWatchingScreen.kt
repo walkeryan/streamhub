@@ -68,6 +68,7 @@ import kotlinx.coroutines.delay
  * their PIN. Opened from the rail it is a visit: Back returns, and the current person just closes it.
  *
  * @param onAbsent the server has no picker, or this is a personal device
+ * @param onPairAgain the signed-in account is suspended and nobody can be picked: sign this TV out and pair it afresh
  */
 @Composable
 fun WhoIsWatchingScreen(
@@ -75,6 +76,7 @@ fun WhoIsWatchingScreen(
     onDone: () -> Unit,
     onAbsent: () -> Unit,
     onBack: () -> Unit,
+    onPairAgain: () -> Unit = {},
     vm: WhoIsWatchingViewModel = hiltViewModel(),
 ) {
     val s by vm.state.collectAsStateWithLifecycle()
@@ -98,6 +100,7 @@ fun WhoIsWatchingScreen(
                     Text(error.body, style = MaterialTheme.typography.bodyLarge, color = t.textMuted, modifier = Modifier.padding(top = 8.dp).width(560.dp))
                     Row(Modifier.padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         ShButton("Try again", vm::load, Modifier.focusRequester(retry), style = ButtonStyle.Primary)
+                        if (s.canPairAgain) ShButton("Pair this TV again", onPairAgain)
                         if (gate) ShButton("Exit app", { activity?.finish() }) else ShButton("Back", onBack)
                     }
                 }

@@ -19,8 +19,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordingRulesTest {
-    private fun programme(title: String, category: String? = null, isSport: Boolean? = null, state: String? = null) =
-        Programme(id = "prog:1", channelId = "ch:s:1", start = "2026-11-13T20:00:00Z", stop = "2026-11-13T21:00:00Z", title = title, category = category, recordingState = state, isSport = isSport)
+    private fun programme(title: String, category: String? = null, isSport: Boolean = false, teams: List<String> = emptyList(), state: String? = null) =
+        Programme(id = "prog:1", channelId = "ch:s:1", start = "2026-11-13T20:00:00Z", stop = "2026-11-13T21:00:00Z", title = title, category = category, recordingState = state, isSport = isSport, teams = teams)
 
     @Test fun aRecordingRequestCarriesTheIdAndTheChannelAndStartShownOnTheGuide() {
         assertEquals(RecordRequest("prog:1", "ch:s:1", "2026-11-13T20:00:00Z"), recordRequest(programme("Evening News")))
@@ -30,33 +30,44 @@ class RecordingRulesTest {
         )
     }
 
-    @Test fun sportIsToldFromCategoryOrTitleWords() {
-        assertTrue(isSportProgramme(programme("Lakers vs Celtics", category = "Basketball")))
-        assertTrue(isSportProgramme(programme("NBA: Lakers at Celtics")))
-        assertTrue(isSportProgramme(programme("Evening Round-up", category = "Sports")))
-        assertTrue(isSportProgramme(programme("Formula 1: Grand Prix")))
-        assertFalse(isSportProgramme(programme("Evening News", category = "News")))
-        // Whole words only: a "Transport" documentary is not sport.
-        assertFalse(isSportProgramme(programme("Transport Through the Ages", category = "Documentary")))
-        assertFalse(isSportProgramme(programme("The Golfinch")))
+    @Test fun aMatchupTheServerFoundOffersOneActionPerSide() {
+        val game = programme("League: Northside vs Harbour City", isSport = true, teams = listOf("Northside", "Harbour City"))
+        assertEquals(TeamRecording.Teams(listOf("Northside", "Harbour City")), teamRecording(game))
+        // In title order, without blanks or a side named twice.
+        assertEquals(TeamRecording.Teams(listOf("Harbour City", "Northside")), teamRecording(programme("x", isSport = true, teams = listOf(" Harbour City ", "", "Northside", "Harbour City"))))
     }
 
-    @Test fun aFlagFromTheServerIsBelievedOverTheWords() {
-        assertTrue(isSportProgramme(programme("Evening News", isSport = true)))
-        assertFalse(isSportProgramme(programme("NBA Tonight", isSport = false)))
+    @Test fun sportWithoutNamedSidesAsksForTheTeam() {
+        assertEquals(TeamRecording.AskName, teamRecording(programme("Grand Prix Highlights", isSport = true)))
+        assertEquals(TeamRecording.AskName, teamRecording(programme("Evening Round-up", isSport = true, teams = listOf("  "))))
     }
 
-    @Test fun teamGuessTakesTheFirstSideOfAFixture() {
-        assertEquals("Lakers", teamGuess("Lakers vs Celtics"))
-        assertEquals("Lakers", teamGuess("NBA: Lakers vs. Celtics"))
-        assertEquals("Lakers", teamGuess("Lakers at Celtics"))
-        assertEquals("Lakers", teamGuess("Lakers @ Celtics"))
-        assertEquals("Real Madrid", teamGuess("La Liga: Real Madrid - Barcelona"))
-        assertEquals("Real Madrid", teamGuess("Real Madrid v Barcelona"))
-        // No fixture in the title: the whole title, for the viewer to trim.
-        assertEquals("Wimbledon Highlights", teamGuess("Wimbledon Highlights"))
-        assertEquals("", teamGuess("   "))
-        assertEquals(TEAM_MAX_LENGTH, teamGuess("x".repeat(200)).length)
+    @Test fun onlyTheServersFlagMakesAListingSport() {
+        // Words that sound like sport do not: the server's classifier decides, as it does for the recorder.
+        assertEquals(TeamRecording.NotOffered, teamRecording(programme("Football Focus", category = "Sports")))
+        assertEquals(TeamRecording.NotOffered, teamRecording(programme("Northside vs Harbour City")))
+        // Teams on a listing the server does not call sport are not offered either.
+        assertEquals(TeamRecording.NotOffered, teamRecording(programme("Quiz Night", teams = listOf("Reds", "Blues"))))
+        // The flag alone is enough, whatever the words.
+        assertEquals(TeamRecording.AskName, teamRecording(programme("Evening News", category = "News", isSport = true)))
+    }
+
+    @Test fun sidesAreShownAsAMatchup() {
+        assertEquals("Northside vs Harbour City", teamsLabel(listOf("Northside", "Harbour City")))
+        assertEquals("Northside", teamsLabel(listOf("Northside", " ")))
+        assertNull(teamsLabel(emptyList()))
+    }
+
+    @Test fun aRecordingWithAFilePlaysUnderItsRecId() {
+        fun recording(state: String, size: Long? = null) = Recording(id = "r9", title = "t", state = state, sizeBytes = size)
+        assertTrue(recording("done").isPlayable())
+        assertTrue(recording("done", 5_000_000).isPlayable())
+        // Failed part-way: playable only when it kept something.
+        assertTrue(recording("failed", 5_000_000).isPlayable())
+        assertFalse(recording("failed").isPlayable())
+        assertFalse(recording("failed", 0).isPlayable())
+        for (state in listOf("scheduled", "recording", "missed", "cancelled", "some_future_state")) assertFalse(state, recording(state, 9).isPlayable())
+        assertEquals("rec:r9", recording("done").playbackId())
     }
 
     @Test fun stateLabelsAndMarks() {
@@ -143,6 +154,29 @@ class RecordingRulesTest {
         assertFalse(rules.rules[0].enabled)
         val p = StreamHubJson.decodeFromString(Programme.serializer(), """{"id":"prog:1","channel_id":"c","start":"a","stop":"b","title":"t","recording_state":"scheduled"}""")
         assertEquals("scheduled", p.recordingState)
+        // A server that predates the flags: not sport, no sides.
+        assertFalse(p.isSport)
+        assertTrue(p.teams.isEmpty())
+        val game = StreamHubJson.decodeFromString(Programme.serializer(), """{"id":"prog:2","channel_id":"c","start":"a","stop":"b","title":"League: Northside at Harbour City","is_sport":true,"teams":["Northside","Harbour City"],"recording_state":null}""")
+        assertTrue(game.isSport)
+        assertEquals(listOf("Northside", "Harbour City"), game.teams)
+        val recorded = StreamHubJson.decodeFromString(Recording.serializer(), """{"id":"r3","title":"League: Northside at Harbour City","is_sport":true,"teams":["Northside","Harbour City"],"state":"done","size_bytes":123}""")
+        assertEquals(listOf("Northside", "Harbour City"), recorded.teams)
+        assertTrue(recorded.isPlayable())
         assertNull(StreamHubJson.decodeFromString(Programme.serializer(), """{"id":"prog:1","channel_id":"c","start":"a","stop":"b","title":"t","recording_state":null}""").recordingState)
+    }
+}
+
+class PlayFailureWordingTest {
+    private val refusal = ApiException(404, ApiError("not_found", "recording not found"), "recording not found")
+
+    @Test fun aRecordingIsRefusedInTheServersWords() {
+        assertEquals("Can't play this recording", describePlayFailure("rec:r9", refusal).title)
+        assertEquals("Recording not found.", describePlayFailure("rec:r9", refusal).body)
+    }
+
+    @Test fun everythingElseKeepsTheGeneralWording() {
+        assertEquals("No longer available", describePlayFailure("tmdb:movie:603", refusal).title)
+        assertEquals("No longer available", describePlayFailure("ch:s1:7", refusal).title)
     }
 }

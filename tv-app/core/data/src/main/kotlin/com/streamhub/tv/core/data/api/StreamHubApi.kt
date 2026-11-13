@@ -334,8 +334,20 @@ class StreamHubApi @Inject constructor(
     /** The join screen: title, host, members, state. 404 `room_not_found`. */
     suspend fun room(code: String): Room = get("/rooms/${id(code)}")
     /** Takes a seat; resolves playback exactly as /playback/resolve would and returns its refusals unchanged. */
-    suspend fun joinRoom(code: String, allowUnverifiedAudio: Boolean = false): RoomJoined =
-        client.post(url("/rooms/${id(code)}/join")) { setBody(RoomJoinRequest(allowUnverifiedAudio = allowUnverifiedAudio)) }.ok()
+    suspend fun joinRoom(code: String, allowUnverifiedAudio: Boolean = false, memberToken: String? = null): RoomJoined =
+        client.post(url("/rooms/${id(code)}/join")) { setBody(RoomJoinRequest(allowUnverifiedAudio = allowUnverifiedAudio, memberToken = memberToken)) }.ok()
+    /**
+     * A member's descriptor as it is now; the seat is unchanged. Authorized like the room's socket, by
+     * the member token in the query: no bearer token is sent (see PUBLIC_PATHS) and a 401 here
+     * (`room_unauthorized`) is about that token, so it is kept away from the session refresh.
+     */
+    suspend fun roomDescriptor(code: String, memberToken: String, allowUnverifiedAudio: Boolean = false): PlaybackDescriptor =
+        client.get(url("/rooms/${id(code)}/descriptor")) {
+            attributes.put(AuthCircuitBreaker, Unit)
+            parameter("member_token", memberToken)
+            parameter("client", "android_tv")
+            if (allowUnverifiedAudio) parameter("allow_unverified_audio", true)
+        }.ok()
     /** Host or administrator: closes the room for everyone. */
     suspend fun deleteRoom(code: String) = client.delete(url("/rooms/${id(code)}")).unit()
 

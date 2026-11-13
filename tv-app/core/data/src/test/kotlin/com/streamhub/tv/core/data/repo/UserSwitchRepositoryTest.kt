@@ -34,6 +34,7 @@ class UserSwitchRepositoryTest {
         override suspend fun save(tokens: AuthTokens) { log += "save:${tokens.profile.id}" }
         override suspend fun saveProfile(original: Session, targetProfileId: String, tokens: AuthTokens) { log += "saveProfile:$targetProfileId" }
         override suspend fun reloadAccess() { log += "access"; if (failAccess) throw IOException("down") }
+        override suspend fun sessionEnded(end: SessionEnd) { log += "ended:$end" }
     }
 
     @Test fun successSavesTokensClearsCachesAndReadsTheNewAccess() = runTest {
@@ -80,8 +81,49 @@ class UserSwitchRepositoryTest {
         assertTrue(offline.error.canRetry)
         val server = result(ApiException(503, null, "HTTP 503")) as SwitchResult.Failed
         assertEquals("Server problem", server.error.title)
-        val suspended = result(refusal(401, "user_suspended")) as SwitchResult.Failed
-        assertEquals("Account suspended", suspended.error.title)
+    }
+
+    @Test fun aSessionThatNoLongerStandsIsNotAPinAnswer() = runTest {
+        // Signed out elsewhere, or the session changed hands: the tokens go and the shell is told.
+        val revoked = Fake { _, _ -> throw refusal(401, "session_revoked") }
+        assertEquals(SwitchResult.SessionEnded(SessionEnd.Revoked), UserSwitchRepository(revoked).switchTo("u2", "1234"))
+        assertEquals(listOf("post:u2:1234", "ended:Revoked"), revoked.log)
+        // Suspended: about the person signed in here, so nobody can be picked; nothing is saved or released.
+        val suspended = Fake { _, _ -> throw refusal(401, "user_suspended") }
+        assertEquals(SwitchResult.SessionEnded(SessionEnd.Suspended), UserSwitchRepository(suspended).switchTo("u2", null))
+        assertEquals(listOf("post:u2:-", "ended:Suspended"), suspended.log)
+    }
+
+    @Test fun aSwitchConflictIsRepeatedOnce() = runTest {
+        var calls = 0
+        val fake = Fake { _, _ -> if (++calls == 1) throw refusal(409, "switch_conflict") else tokens }
+        assertEquals(SwitchResult.Ok(tokens.profile), UserSwitchRepository(fake).switchTo("u2", "1234"))
+        assertEquals(listOf("post:u2:1234", "post:u2:1234", "release", "save:p2", "access"), fake.log)
+        // Still in conflict: said, with Try again, and not repeated a third time.
+        val stuck = Fake { _, _ -> throw refusal(409, "switch_conflict") }
+        val result = UserSwitchRepository(stuck).switchTo("u2", null) as SwitchResult.Failed
+        assertEquals("Couldn't switch just now", result.error.title)
+        assertTrue(result.error.canRetry)
+        assertEquals(listOf("post:u2:-", "post:u2:-"), stuck.log)
+    }
+
+    @Test fun aStaleSessionAndAConflictEachGetTheirOwnRepeat() = runTest {
+        var calls = 0
+        val fake = Fake { _, _ ->
+            when (++calls) { 1 -> throw refusal(401, "session_stale"); 2 -> throw refusal(409, "switch_conflict"); else -> tokens }
+        }
+        assertEquals(SwitchResult.Ok(tokens.profile), UserSwitchRepository(fake).switchTo("u2", null))
+        assertEquals(listOf("post:u2:-", "refresh", "post:u2:-", "post:u2:-", "release", "save:p2", "access"), fake.log)
+    }
+
+    @Test fun aRefreshThatFindsTheSessionRevokedEndsIt() = runTest {
+        val fake = object : SwitchBackend by Fake({ emptyList() }, { _, _ -> throw refusal(401, "token_expired") }) {
+            val ended = mutableListOf<SessionEnd>()
+            override suspend fun refreshSession() { throw refusal(401, "session_revoked") }
+            override suspend fun sessionEnded(end: SessionEnd) { ended += end }
+        }
+        assertEquals(SwitchResult.SessionEnded(SessionEnd.Revoked), UserSwitchRepository(fake).switchTo("u2", "1234"))
+        assertEquals(listOf(SessionEnd.Revoked), fake.ended)
     }
 
     @Test fun aStaleSessionIsRefreshedAndTheSwitchRepeatedOnce() = runTest {
@@ -99,37 +141,37 @@ class UserSwitchRepositoryTest {
     }
 
     @Test fun pickerIsAbsentOnOldServersAndPersonalDevices() = runTest {
-        assertNull(UserSwitchRepository(Fake(users = { throw ApiException(404, null, "HTTP 404") }) { _, _ -> tokens }).switchable())
+        // The framework's answer for an unknown path carries no code of the server's own.
+        for (unknownRoute in listOf(ApiException(404, null, "HTTP 404"), refusal(404, "http_error"), refusal(404, ""))) {
+            assertNull(UserSwitchRepository(Fake(users = { throw unknownRoute }) { _, _ -> tokens }).switchable())
+        }
         assertNull(UserSwitchRepository(Fake(users = { throw refusal(403, "not_shared_device") }) { _, _ -> tokens }).switchable())
         val users = listOf(SwitchableUser(id = "u1", displayName = "Alex", current = true), SwitchableUser(id = "u2", displayName = "Sam", hasPin = true))
         assertEquals(users, UserSwitchRepository(Fake(users = { users }) { _, _ -> tokens }).switchable())
     }
 
     @Test fun otherPickerFailuresAreNotMistakenForNoPicker() = runTest {
-        for (failure in listOf(ApiException(503, null, "HTTP 503"), IOException("down"))) {
+        val failures = listOf(
+            ApiException(503, null, "HTTP 503"), IOException("down"),
+            // Refusals about the account or the network it is on are said, not hidden behind "no picker".
+            refusal(403, "remote_access_denied"), refusal(403, "forbidden"), refusal(401, "user_suspended"), refusal(404, "not_found"),
+        )
+        for (failure in failures) {
             try { UserSwitchRepository(Fake(users = { throw failure }) { _, _ -> tokens }).switchable(); fail("must be thrown") }
             catch (e: Exception) { assertEquals(failure, e) }
         }
     }
 
-    @Test fun aServerWithTheListButWithoutTheSwitchRouteHasNoPicker() = runTest {
-        val users = listOf(SwitchableUser(id = "u1", displayName = "Alex", current = true), SwitchableUser(id = "u2", displayName = "Sam"))
-        for (unknownRoute in listOf(ApiException(404, null, "HTTP 404"), refusal(404, "http_error"), refusal(404, ""))) {
-            val repo = UserSwitchRepository(Fake(users = { users }) { _, _ -> throw unknownRoute })
-            assertEquals(users, repo.switchable())
-            val result = repo.switchTo("u2", null) as SwitchResult.Failed
-            assertEquals("Can't switch people here", result.error.title)
-            // From now on the picker is treated as absent, so a cold-start picker lets the viewer through.
-            assertNull(repo.switchable())
-        }
-    }
-
-    @Test fun aPersonWhoIsGoneDoesNotTakeThePickerWithThem() = runTest {
+    @Test fun aPersonWhoIsGoneIsReportedAndThePickerStays() = runTest {
         val users = listOf(SwitchableUser(id = "u1", displayName = "Alex", current = true))
-        val repo = UserSwitchRepository(Fake(users = { users }) { _, _ -> throw refusal(404, "not_found") })
-        val result = repo.switchTo("u9", null) as SwitchResult.Failed
-        assertEquals("No longer here", result.error.title)
-        assertEquals(users, repo.switchable())
+        for (gone in listOf(refusal(404, "not_found"), ApiException(404, null, "HTTP 404"))) {
+            val fake = Fake(users = { users }) { _, _ -> throw gone }
+            val repo = UserSwitchRepository(fake)
+            assertEquals(SwitchResult.NotListed, repo.switchTo("u9", null))
+            // One attempt, nothing saved; the list is still there to be read again.
+            assertEquals(listOf("post:u9:-"), fake.log)
+            assertEquals(users, repo.switchable())
+        }
     }
 
     @Test fun legacyProfileSwitchCommitsThroughTheSamePath() = runTest {

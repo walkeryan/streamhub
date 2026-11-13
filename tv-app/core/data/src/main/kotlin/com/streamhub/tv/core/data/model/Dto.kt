@@ -302,8 +302,13 @@ data class Programme(
     @SerialName("catchup_available") val catchupAvailable: Boolean = false,
     /** State of the household's recording of this programme, if there is one; null also when recording is off. */
     @SerialName("recording_state") val recordingState: String? = null,
-    /** Not in the contract today: honoured if a server sends it, otherwise sport is told from title and category. */
-    @SerialName("is_sport") val isSport: Boolean? = null,
+    /** The server's sports classifier says this listing is sport; the same classifier the recorder's team rules use. */
+    @SerialName("is_sport") val isSport: Boolean = false,
+    /**
+     * The two sides, in title order, when [isSport] and the title spells out a matchup. Empty
+     * otherwise: the server guesses nothing, and neither does this app.
+     */
+    val teams: List<String> = emptyList(),
 )
 
 @Serializable
@@ -414,6 +419,17 @@ data class PlaybackDescriptor(
     @SerialName("buffer_available") val bufferAvailable: Boolean = false,
     @SerialName("preferred_audio_languages") val preferredAudioLanguages: List<String> = emptyList(),
     @SerialName("audio_language_required") val audioLanguageRequired: Boolean = false,
+    /**
+     * Set for a stream that starts part-way into its title: media time zero of the stream is this
+     * position in the title, and [durationMs] is the title's full length. On this TV that is a watch
+     * room's one shared stream (see [streamEpoch]).
+     */
+    @SerialName("start_position_ms") val startPositionMs: Long? = null,
+    /**
+     * Room descriptors only, and only when the room plays one shared stream: which start of that
+     * stream [startPositionMs] describes. Null for every other descriptor.
+     */
+    @SerialName("stream_epoch") val streamEpoch: Int? = null,
 )
 
 @Serializable

@@ -4,12 +4,14 @@ import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.ApiErrors
+import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.normalizeServerUrl
 import com.streamhub.tv.core.data.model.SwitchableUser
+import com.streamhub.tv.core.data.repo.SessionEnd
 import com.streamhub.tv.core.data.repo.SwitchResult
-import com.streamhub.tv.core.data.repo.UserSwitchRepository
+import com.streamhub.tv.core.data.repo.UserSwitcher
 import com.streamhub.tv.core.ui.theme.ThemeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -27,6 +29,11 @@ data class WhoState(
     val serverUrl: String? = null,
     /** The list could not be read; Retry is offered. */
     val loadError: UserError? = null,
+    /**
+     * The list could not be read because the account this TV is signed in as is suspended. Nobody
+     * can be picked until it is reinstated, so "Pair this TV again" is offered beside Retry.
+     */
+    val canPairAgain: Boolean = false,
     /** The person whose PIN is being asked for. */
     val pinFor: SwitchableUser? = null,
     val pinError: String? = null,
@@ -70,11 +77,16 @@ internal fun personImage(user: SwitchableUser, serverUrl: String?): String? =
     }
 
 @HiltViewModel
-class WhoIsWatchingViewModel @Inject constructor(
-    private val switcher: UserSwitchRepository,
-    private val themes: ThemeRepository,
-    private val sessions: SessionStore,
+class WhoIsWatchingViewModel internal constructor(
+    private val switcher: UserSwitcher,
+    private val serverUrl: suspend () -> String?,
+    private val applyTheme: suspend (themeId: String) -> Unit,
+    /** The clock the lockout countdown runs on; the screen reads the same one. */
+    private val nowMs: () -> Long,
 ) : ViewModel() {
+    @Inject constructor(switcher: UserSwitcher, themes: ThemeRepository, sessions: SessionStore) :
+        this(switcher, { sessions.current().serverUrl }, { themes.select(it) }, SystemClock::elapsedRealtime)
+
     private val _state = MutableStateFlow(WhoState())
     val state: StateFlow<WhoState> = _state.asStateFlow()
     private var loadJob: Job? = null
@@ -84,15 +96,21 @@ class WhoIsWatchingViewModel @Inject constructor(
     fun load() {
         loadJob?.cancel()
         // A list that is already up stays up while it is read again: taking it away would take focus with it.
-        _state.update { it.copy(loading = it.users.isEmpty(), loadError = null) }
+        _state.update { it.copy(loading = it.users.isEmpty(), loadError = null, canPairAgain = false) }
         loadJob = viewModelScope.launch {
             try {
-                val server = sessions.current().serverUrl
+                val server = serverUrl()
                 val users = switcher.switchable()
+                // null: a personal device, or a server too old to have the picker. An empty list: nobody is
+                // set up to be picked on shared TVs, so there is no question to ask either.
                 if (users.isNullOrEmpty()) { _state.update { it.copy(outcome = WhoOutcome.Absent) }; return@launch }
                 _state.update { it.copy(loading = false, users = users, serverUrl = server) }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { _state.update { it.copy(loading = false, loadError = ApiErrors.describe(e)) } }
+            catch (e: Exception) {
+                val suspended = (e as? ApiException)?.error?.code == "user_suspended"
+                // A list that could not be read again is not shown as if it were current.
+                _state.update { it.copy(loading = false, users = emptyList(), loadError = ApiErrors.describe(e), canPairAgain = suspended) }
+            }
         }
     }
 
@@ -112,7 +130,7 @@ class WhoIsWatchingViewModel @Inject constructor(
     fun submitPin(pin: String) {
         val s = _state.value
         val user = s.pinFor ?: return
-        if (s.busy || SystemClock.elapsedRealtime() < s.lockedUntilMs) return
+        if (s.busy || nowMs() < s.lockedUntilMs) return
         attempt(user, pin)
     }
 
@@ -126,7 +144,7 @@ class WhoIsWatchingViewModel @Inject constructor(
             val name = user.displayName.ifBlank { "this person" }
             when (val result = switcher.switchTo(user.id, pin)) {
                 is SwitchResult.Ok -> {
-                    try { themes.select(result.profile.themeId) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                    try { applyTheme(result.profile.themeId) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                     _state.update { it.copy(busy = false, pinFor = null, outcome = WhoOutcome.Done) }
                 }
                 SwitchResult.PinRequired -> _state.update {
@@ -144,7 +162,20 @@ class WhoIsWatchingViewModel @Inject constructor(
                 }
                 is SwitchResult.LockedOut -> _state.update {
                     it.copy(busy = false, pinFor = user, pinError = null, pinAttempt = it.pinAttempt + 1,
-                        lockedUntilMs = SystemClock.elapsedRealtime() + result.retryAfterSeconds * 1000L)
+                        lockedUntilMs = nowMs() + result.retryAfterSeconds * 1000L)
+                }
+                // Gone from the list since it was read: say so, and read the list again behind the notice.
+                SwitchResult.NotListed -> {
+                    _state.update {
+                        it.copy(busy = false, pinFor = null, notice = UserError("No longer here", "${name.replaceFirstChar(Char::uppercase)} can't be picked on this TV any more.", canRetry = false))
+                    }
+                    load()
+                }
+                is SwitchResult.SessionEnded -> _state.update {
+                    // Signed out: the shell explains and goes back to pairing, so nothing is said twice.
+                    // Suspended: the pairing is kept; explained here, then the list says the same.
+                    if (result.end == SessionEnd.Suspended) it.copy(busy = false, pinFor = null, notice = ApiErrors.sessionEnded(result.end))
+                    else it.copy(busy = false, pinFor = null)
                 }
                 // With the pad open a failure is shown in it, so a dropped connection can be retried with the same person.
                 is SwitchResult.Failed -> _state.update {
@@ -157,8 +188,8 @@ class WhoIsWatchingViewModel @Inject constructor(
 
     fun cancelPin() { if (!_state.value.busy) _state.update { it.copy(pinFor = null, pinError = null) } }
     /**
-     * The list is read again behind the acknowledged notice: the person may have gone, or the server
-     * may have turned out to have no way of switching, in which case there is no picker after all.
+     * The list is read again behind the acknowledged notice: what was refused may have changed who
+     * can be picked, or whether this TV has a picker at all (403 `not_shared_device`).
      */
     fun dismissNotice() {
         if (_state.value.notice == null) return
@@ -174,5 +205,5 @@ class WhoIsWatchingViewModel @Inject constructor(
         if (user != null) attempt(user, null)
     }
     /** The countdown reached zero. */
-    fun lockoutOver() = _state.update { if (SystemClock.elapsedRealtime() >= it.lockedUntilMs) it.copy(lockedUntilMs = 0) else it }
+    fun lockoutOver() = _state.update { if (nowMs() >= it.lockedUntilMs) it.copy(lockedUntilMs = 0) else it }
 }

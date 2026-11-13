@@ -222,6 +222,52 @@ class RoomClientTest {
         assertEquals(1000.toShort(), socket.closedWith)
     }
 
+    @Test fun keepingTheSeatDropsTheConnectionWithoutACloseFrame() = runTest {
+        // Before a join with the member token: the room must still hold the seat for that join to keep.
+        val socket = FakeSocket()
+        val client = client(Script(this, socket))
+        val job = start(client)
+        client.keepSeatOnExit()
+        job.cancel()
+        runCurrent()
+        assertNull(socket.closedWith)
+        assertTrue(socket.aborted)
+    }
+
+    @Test fun everyStateSaysWhichStartOfTheSharedStreamTheRoomIsOn() = runTest {
+        val first = FakeSocket()
+        val second = FakeSocket()
+        val client = client(Script(this, first, second))
+        start(client)
+        assertNull(client.state.value.stream)
+        first.says("""{"type":"state","playing":true,"position_ms":1000,"as_of_ms":900,"by":null,"controls_locked":false,"stream_epoch":1,"stream_start_ms":0}""")
+        runCurrent()
+        assertEquals(RoomStream(1, 0), client.state.value.stream)
+        // A seek restarts the stream; its state carries the new epoch and time zero.
+        first.says("""{"type":"state","playing":true,"position_ms":3602000,"as_of_ms":950,"by":"m1","controls_locked":false,"stream_epoch":2,"stream_start_ms":3600000}""")
+        runCurrent()
+        assertEquals(RoomStream(2, 3_600_000), client.state.value.stream)
+        assertEquals(3_602_000L, client.state.value.clock?.positionMs)
+        // A seek missed while disconnected is learned from the state the server sends on reconnect.
+        first.ends()
+        runCurrent()
+        advanceTimeBy(1_000)
+        runCurrent()
+        second.says("""{"type":"state","playing":false,"position_ms":60000,"as_of_ms":990,"by":null,"controls_locked":false,"stream_epoch":3,"stream_start_ms":60000}""")
+        runCurrent()
+        assertEquals(RoomStream(3, 60_000), client.state.value.stream)
+    }
+
+    @Test fun aRoomWithoutASharedStreamNamesNone() = runTest {
+        val socket = FakeSocket()
+        val client = client(Script(this, socket))
+        start(client)
+        socket.says("""{"type":"state","playing":true,"position_ms":1000,"as_of_ms":900,"by":null,"controls_locked":false}""")
+        runCurrent()
+        assertNull(client.state.value.stream)
+        assertEquals(1_000L, client.state.value.clock?.positionMs)
+    }
+
     @Test fun aConnectionThatGoesQuietIsDroppedWithoutLeavingAndReopened() = runTest {
         val quiet = FakeSocket()
         val next = FakeSocket()

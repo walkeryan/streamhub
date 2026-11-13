@@ -175,7 +175,11 @@ class RecordingsViewModelTest {
         assertTrue(fake.calls.isEmpty())
     }
 
-    @Test fun recordedPlaybackStaysOffUntilTheServerCanPlayRecordings() {
-        assertFalse(RECORDED_PLAYBACK_ENABLED)
+    @Test fun aGamesSidesLeadTheLineUnderItsTitle() {
+        val game = Recording(id = "g1", title = "League: Northside at Harbour City", channelName = "One", teams = listOf("Northside", "Harbour City"), state = "done")
+        assertEquals("Northside vs Harbour City · One", recordingByline(game))
+        val episode = Recording(id = "e1", title = "The Long Show", channelName = "Two", season = 2, episode = 5, subtitle = "The One After", state = "done")
+        assertEquals("Two · S2 E5 · The One After", recordingByline(episode))
+        assertEquals("", recordingByline(Recording(id = "x", state = "done")))
     }
 }

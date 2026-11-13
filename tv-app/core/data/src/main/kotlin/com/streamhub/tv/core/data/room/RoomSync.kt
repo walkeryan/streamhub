@@ -1,10 +1,30 @@
 package com.streamhub.tv.core.data.room
 
+import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import kotlin.math.abs
 
 /** The room's shared clock as last sent by the server. [positionMs] is null in a live room. */
 data class RoomClock(val playing: Boolean, val positionMs: Long?, val asOfMs: Long) {
     val live: Boolean get() = positionMs == null
+}
+
+/**
+ * The one stream a room plays to all its members, when it has one: [epoch] counts the stream's
+ * starts (a seek starts it again), and [startMs] is where in the title its media time zero is.
+ */
+data class RoomStream(val epoch: Int, val startMs: Long)
+
+/** The shared stream a room descriptor is a seat on; null for a descriptor of the member's own stream. */
+fun PlaybackDescriptor.roomStream(): RoomStream? = streamEpoch?.let { RoomStream(it, (startPositionMs ?: 0).coerceAtLeast(0)) }
+
+/** How the stream a member is playing stands to the one the room's last `state` named. */
+enum class StreamStep {
+    /** The same start of the stream, or a room without a shared stream: seek inside what is playing. */
+    Same,
+    /** The room has started its stream again since: load it again and take its new time zero. */
+    Reload,
+    /** This member's descriptor is from a later start than the last `state`: that `state` is on its way. */
+    Wait,
 }
 
 /** What this player has to do to agree with the room. */
@@ -35,10 +55,38 @@ object RoomSync {
         return base + (serverNowMs - state.asOfMs).coerceAtLeast(0)
     }
 
-    fun decide(roomState: RoomClock, serverNowMs: Long, localPositionMs: Long, localPlaying: Boolean): SyncAction {
+    /**
+     * Compares the epoch of a `state` with the one being played (the descriptor's, then the last
+     * `state`'s). A `state` without an epoch is a title each member plays for themselves, or a live
+     * channel: there is nothing to reload. Epochs only count up, so a `state` behind the descriptor
+     * is an old one whose successor has not arrived yet.
+     */
+    fun streamStep(playing: RoomStream?, said: RoomStream?): StreamStep = when {
+        said == null -> StreamStep.Same
+        playing == null || said.epoch > playing.epoch -> StreamStep.Reload
+        said.epoch < playing.epoch -> StreamStep.Wait
+        else -> StreamStep.Same
+    }
+
+    /**
+     * The player's own position for a position in the title. A shared stream's media time zero is
+     * its `stream_start_ms`, so the player is at `position_ms - stream_start_ms`; a member's own
+     * stream covers the whole title and the two are the same.
+     */
+    fun playerPosition(titlePositionMs: Long, stream: RoomStream?): Long = (titlePositionMs - (stream?.startMs ?: 0)).coerceAtLeast(0)
+
+    /** The position in the title for a position of the player: the inverse of [playerPosition]. */
+    fun titlePosition(playerPositionMs: Long, stream: RoomStream?): Long = playerPositionMs.coerceAtLeast(0) + (stream?.startMs ?: 0)
+
+    /**
+     * @param localPositionMs the player's own position, on the stream it is playing
+     * @param stream the shared stream being played, when the room has one
+     * @return [SyncAction.SeekTo] carries a position of the player (see [playerPosition]), not of the title
+     */
+    fun decide(roomState: RoomClock, serverNowMs: Long, localPositionMs: Long, localPlaying: Boolean, stream: RoomStream? = null): SyncAction {
         // A paused room stops first: every moment of playing on is a moment further from where it paused.
         if (!roomState.playing && localPlaying) return SyncAction.Pause
-        val target = positionAt(roomState, serverNowMs)
+        val target = positionAt(roomState, serverNowMs)?.let { playerPosition(it, stream) }
         if (target != null && abs(localPositionMs - target) > DRIFT_MS) return SyncAction.SeekTo(target)
         if (roomState.playing && !localPlaying) return SyncAction.Play
         return SyncAction.None

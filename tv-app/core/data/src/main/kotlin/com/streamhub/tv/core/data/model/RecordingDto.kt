@@ -30,6 +30,8 @@ data class Recording(
     val season: Int? = null,
     val episode: Int? = null,
     @SerialName("is_sport") val isSport: Boolean = false,
+    /** As Programme.teams, from the recorded programme's title. */
+    val teams: List<String> = emptyList(),
     @SerialName("starts_at") val startsAt: String = "",
     @SerialName("ends_at") val endsAt: String = "",
     val state: String = RecordingStates.SCHEDULED,

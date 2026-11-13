@@ -2,6 +2,7 @@ package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.model.ActiveStream
 import com.streamhub.tv.core.data.model.Permissions
+import com.streamhub.tv.core.data.repo.SessionEnd
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.nio.channels.UnresolvedAddressException
@@ -31,6 +32,26 @@ object ApiErrors {
         else -> UserError("Something went wrong", e.message?.takeIf { it.isNotBlank() } ?: "Try again in a moment.", canRetry = true)
     }
 
+    /**
+     * A refused `rec:<id>` playback. A recording is refused in the server's own words (one above the
+     * viewer's rating ceiling, one deleted meanwhile), and those are shown: no status code says as
+     * much. Refusals that are not about the recording keep their own wording.
+     */
+    fun describeRecordingPlayback(e: Throwable): UserError {
+        val api = e as? ApiException ?: return describe(e)
+        val general = describeApi(api)
+        val said = api.error?.message?.trim().orEmpty()
+        if (api.error?.code in NOT_ABOUT_THE_RECORDING || api.status !in 400..499 || said.isEmpty()) return general
+        val sentence = said.replaceFirstChar(Char::uppercase).let { if (it.last() in ".!?") it else "$it." }
+        return UserError("Can't play this recording", sentence, canRetry = general.canRetry)
+    }
+
+    /** Refusals of playback that say nothing about the title asked for: the account, the session, the network, the streams in use. */
+    private val NOT_ABOUT_THE_RECORDING = setOf(
+        "user_stream_limit", "source_busy", "source_limit_reached", "remote_access_denied", "user_suspended", "session_revoked",
+        "session_stale", "token_expired", "approval_pending", "forbidden", "disclaimer_required",
+    )
+
     private fun describeApi(e: ApiException): UserError {
         val error = e.error
         val detail = error?.message?.takeIf { it.isNotBlank() }
@@ -48,17 +69,20 @@ object ApiErrors {
                 canRetry = true,
             )
             "forbidden" -> UserError("Not allowed", forbiddenBody(error.missing), canRetry = false)
-            "user_suspended" -> UserError(
-                "Account suspended",
-                "This account has been suspended. Ask the owner of this StreamHub server to reinstate it.",
-                canRetry = false,
-            )
+            "user_suspended" -> sessionEnded(SessionEnd.Suspended)
+            "session_revoked" -> sessionEnded(SessionEnd.Revoked)
             "approval_pending" -> UserError(
                 "Waiting for approval",
                 "The owner of this StreamHub server hasn't approved this account yet. Try again once they have.",
                 canRetry = true,
             )
             "user_stream_limit" -> UserError("Already watching", ownStreamsBody(error.active), canRetry = true)
+            // Every call answers this away from home for a user without remote.access; so do the media URLs.
+            "remote_access_denied" -> UserError(
+                "Home network only",
+                "This account can only be used on the home network. Connect this TV to it, or ask the owner to allow watching away from home.",
+                canRetry = true,
+            )
             // Reached only when the silent refresh and its one retry did not settle it (see HttpClientFactory).
             "session_stale" -> UserError(
                 "Access updated",
@@ -89,7 +113,7 @@ object ApiErrors {
                 canRetry = false,
             )
             else -> when (e.status) {
-                401 -> UserError("Sign-in expired", "This TV is no longer signed in to the server. Pair it again to continue.", canRetry = false)
+                401 -> sessionEnded(SessionEnd.Expired)
                 403 -> UserError("Not allowed", "This profile isn't allowed to do that.", canRetry = false)
                 404 -> UserError("No longer available", "The server can't find this any more. It may have been removed from its source.", canRetry = false)
                 in 500..599 -> UserError(
@@ -102,6 +126,21 @@ object ApiErrors {
                 else -> UserError("That didn't work", detail ?: "The server refused the request (error ${e.status}).", canRetry = e.status == 408 || e.status == 409 || e.status == 429)
             }
         }
+    }
+
+    /** Why this TV's session stopped working, for the dialog shown before the picker or the pairing screen. */
+    fun sessionEnded(end: SessionEnd): UserError = when (end) {
+        SessionEnd.Expired -> UserError("Sign-in expired", "This TV is no longer signed in to the server. Pair it again to continue.", canRetry = false)
+        SessionEnd.Revoked -> UserError(
+            "Signed out",
+            "This TV was signed out on the server, or its session was handed to someone else. Pair it again to continue.",
+            canRetry = false,
+        )
+        SessionEnd.Suspended -> UserError(
+            "Account suspended",
+            "This account has been suspended. Ask the owner of this StreamHub server to reinstate it.",
+            canRetry = false,
+        )
     }
 
     /** "You don't have permission for this." and, when the server names them, what is missing. */

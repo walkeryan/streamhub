@@ -235,7 +235,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
         val failure = s.failure ?: ps.error?.takeIf { ps.reconnectAttempt == 0 && !s.retrying && !ps.audioBlocked }
             ?.let { UserError("Playback stopped", it, canRetry = true) }
         val status = when {
-            s.retrying -> "Trying again…"
+            s.retrying -> if (s.roomCatchUp) "Catching up with the room…" else "Trying again…"
             failure != null -> null
             ps.error != null -> ps.error
             s.message != null -> s.message
@@ -333,14 +333,17 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
         } else {
             Text(d?.title.orEmpty(), style = MaterialTheme.typography.headlineSmall, color = Color.White)
             d?.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(alpha = 0.8f)) }
-            if (ps.durationMs > 0) {
-                ProgressLine(ps.positionMs.toFloat() / ps.durationMs, Modifier.padding(top = 12.dp))
+            // The title's position and length: a room's shared stream starts part-way in.
+            val position = s.titlePositionMs(ps.positionMs)
+            val duration = s.titleDurationMs(ps.durationMs)
+            if (duration > 0) {
+                ProgressLine((position.toFloat() / duration).coerceIn(0f, 1f), Modifier.padding(top = 12.dp))
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                    Text(fmt(ps.positionMs), color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    Text(fmt(position), color = Color.White, style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.weight(1f))
                     Text(if (ps.isPlaying) "▶" else "❚❚", color = Color.White, style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.weight(1f))
-                    Text("-" + fmt(ps.durationMs - ps.positionMs), color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    Text("-" + fmt((duration - position).coerceAtLeast(0)), color = Color.White, style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
@@ -372,6 +375,7 @@ private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUi
     val room = s.room
     // In a room the button says what the room is doing: this player follows a moment later.
     val playing = room?.clock?.playing ?: ps.isPlaying
+    val seekable = s.canSeek(ps.seekable)
     LaunchedEffect(Unit) { withFrameNanos { }; runCatching { scrubFocus.requestFocus() } }
     Column(
         Modifier.fillMaxWidth()
@@ -384,19 +388,19 @@ private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUi
         Text(d?.title.orEmpty(), style = MaterialTheme.typography.headlineSmall, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
         d?.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Scrubber(
-            positionMs = s.scrubTargetMs ?: ps.positionMs,
-            durationMs = ps.durationMs,
+            positionMs = s.scrubTargetMs ?: s.titlePositionMs(ps.positionMs),
+            durationMs = s.titleDurationMs(ps.durationMs),
             playing = playing,
-            seekable = ps.seekable,
+            seekable = seekable,
             onSeek = vm::scrubBy,
             onToggle = vm::togglePlayPause,
             modifier = Modifier.focusRequester(scrubFocus),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ShButton(if (playing) "Pause" else "Play", vm::togglePlayPause)
-            ShButton("−10 s", { vm.scrubBy(-PlayerKeyMap.SEEK_STEP_MS) }, enabled = ps.seekable)
-            ShButton("+10 s", { vm.scrubBy(PlayerKeyMap.SEEK_STEP_MS) }, enabled = ps.seekable)
-            ShButton("Start over", vm::startOver, enabled = ps.seekable)
+            ShButton("−10 s", { vm.scrubBy(-PlayerKeyMap.SEEK_STEP_MS) }, enabled = seekable)
+            ShButton("+10 s", { vm.scrubBy(PlayerKeyMap.SEEK_STEP_MS) }, enabled = seekable)
+            ShButton("Start over", vm::startOver, enabled = seekable)
             ShButton("Audio & subtitles", vm::openMenu)
         }
         Text(
@@ -405,7 +409,7 @@ private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUi
                 room != null -> "Play, pause and seek move everyone in the room · Back to leave"
                 s.bufferTimeshift -> "Buffered history · Go Live is under Audio & subtitles"
                 d?.archiveStart != null -> "Provider archive · Go Live is under Audio & subtitles"
-                !ps.seekable -> "This stream can't be seeked"
+                !seekable -> "This stream can't be seeked"
                 else -> "◀ ▶ seek, hold to go faster · Select play/pause"
             },
             style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f),
@@ -442,7 +446,7 @@ private fun Scrubber(
         Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (playing) "▶" else "❚❚", color = Color.White, style = MaterialTheme.typography.labelLarge)
             Text(fmt(positionMs), color = Color.White, style = MaterialTheme.typography.labelLarge)
-            ProgressLine(if (durationMs > 0) positionMs.toFloat() / durationMs else 0f, Modifier.weight(1f), height = if (focused) 8.dp else 4.dp)
+            ProgressLine(if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f, Modifier.weight(1f), height = if (focused) 8.dp else 4.dp)
             if (durationMs > 0) Text("-" + fmt((durationMs - positionMs).coerceAtLeast(0)), color = Color.White, style = MaterialTheme.typography.labelLarge)
         }
     }
