@@ -17,7 +17,7 @@ import re
 import secrets
 import time
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 import jwt
@@ -28,6 +28,7 @@ from app.infra.settings import AppSettings
 from app.services.auth import AuthService
 from app.services.errors import Forbidden, Unauthorized
 from app.services.invites import TOKEN_RE, InvitesService
+from app.services.users import ExternalIdentity
 
 
 class GoogleAuthService:
@@ -39,6 +40,8 @@ class GoogleAuthService:
         # state -> (expires, browser, nonce, verifier, destination, created, fresh_required, invite)
         self.transactions: dict[str, tuple[float, str, str, str, str, float, bool, str]] = {}
         self.owner_transactions: dict[str, tuple[float, str, str, str, str, float]] = {}
+        # state -> (expires, browser, nonce, verifier, user id): a signed-in user linking Google.
+        self.link_transactions: dict[str, tuple[float, str, str, str, str]] = {}
         self.handoffs: dict[str, tuple[float, str, str, float | None, str]] = {}
 
     @property
@@ -73,8 +76,10 @@ class GoogleAuthService:
         now = time.time()
         self.transactions = {k: v for k, v in self.transactions.items() if v[0] > now}
         self.owner_transactions = {k: v for k, v in self.owner_transactions.items() if v[0] > now}
+        self.link_transactions = {k: v for k, v in self.link_transactions.items() if v[0] > now}
         self.handoffs = {k: v for k, v in self.handoffs.items() if v[0] > now}
-        if len(self.transactions) + len(self.handoffs) + len(self.owner_transactions) >= 1000:
+        held = (self.transactions, self.handoffs, self.owner_transactions, self.link_transactions)
+        if sum(len(store) for store in held) >= 1000:
             raise Unauthorized("Sign-in temporarily busy; try again later")
 
     def start(self, return_to: str, invite: str = "") -> tuple[str, str]:
@@ -122,14 +127,50 @@ class GoogleAuthService:
     def start_owner_reauth(self, challenge_id: str, created_at: float, expires_at: float) -> tuple[str, str]:
         # Separate purpose store: these states can NEVER be consumed by normal finish().
         url, browser = self.start("/")
-        from urllib.parse import parse_qs
-
         state = parse_qs(urlsplit(url).query)["state"][0]
         tx = self.transactions.pop(state)
         self.owner_transactions[state] = (expires_at, browser, tx[2], tx[3], challenge_id, created_at)
         if not tx[6]:
             url += "&" + self._fresh_query()
         return url, browser
+
+    def is_link(self, state: str) -> bool:
+        return state in self.link_transactions
+
+    def start_link(self, user_id: str) -> tuple[str, str]:
+        """Google sign-in for a signed-in user who wants this Google account linked to theirs.
+
+        A separate purpose store, like owner re-authentication: a link state never signs anyone
+        in, and a sign-in state never links.
+        """
+        url, browser = self.start("/")
+        state = parse_qs(urlsplit(url).query)["state"][0]
+        tx = self.transactions.pop(state)
+        self.link_transactions[state] = (tx[0], browser, tx[2], tx[3], user_id)
+        return url, browser
+
+    async def finish_link(self, state: str, browser: str, code: str) -> None:
+        tx = self.link_transactions.pop(state, None)
+        if (
+            not self.enabled
+            or tx is None
+            or tx[0] <= time.time()
+            or not secrets.compare_digest(tx[1], browser)
+            or not code
+        ):
+            raise Unauthorized("Sign-in expired or invalid; please start again")
+        claims = await self._claims(code, tx[3], tx[2])
+        email = str(claims.get("email") or "").strip().lower()
+        if claims.get("email_verified") is not True or not email:
+            raise Forbidden("This Google account is not authorized")
+        who = ExternalIdentity(
+            provider="google",
+            subject=str(claims["sub"]),
+            email=email,
+            name=str(claims.get("name") or "").strip(),
+            picture=str(claims.get("picture") or "")[:2048] or None,
+        )
+        await self.auth.users.link_identity(tx[4], who)
 
     @staticmethod
     def _fresh_query() -> str:

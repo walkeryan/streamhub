@@ -80,6 +80,12 @@ async def reset_password(id: str, response: Response, c: C, p: UsersAdmin) -> di
     return await c.passwords.reset(p, id)
 
 
+@router.delete("/users/{id}/methods/{method}", response_model=S.UserDetail, tags=["users"])
+async def unlink_method(id: str, method: S.SignInMethodL, c: C, p: UsersAdmin) -> dict[str, Any]:
+    """Remove one way a user signs in, and sign them out. Never the last one (409 last_method)."""
+    return await c.users.unlink_method(p, id, method)
+
+
 # ---------------------------------------------------------------- roles
 @router.get("/roles", response_model=list[S.Role], tags=["users"])
 async def list_roles(c: C, p: UsersAdmin) -> list[dict[str, Any]]:

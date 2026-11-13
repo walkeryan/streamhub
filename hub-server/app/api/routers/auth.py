@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from app.api import schemas as S
 from app.api.deps import C, Handover, P, UsersAdmin, client_ip, resolve, session_meta
 from app.infra.models import Profile as ProfileRow
+from app.services.auth import Principal
 from app.services.context import is_https, public_base
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 
@@ -294,6 +295,17 @@ async def google_callback(request: Request, c: C, state: str = "", code: str = "
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
+    if c.google_auth.is_link(state):
+        try:
+            await c.google_auth.finish_link(state, request.cookies.get("__Host-sh-google-state", ""), code)
+            outcome = "linked=google"
+        except ServiceError as exc:
+            outcome = "link_error=" + (exc.code if exc.code in ("identity_in_use", "already_linked") else "failed")
+        response = RedirectResponse(f"/settings?{outcome}", status_code=303)
+        response.delete_cookie("__Host-sh-google-state", secure=True, httponly=True, samesite="lax", path="/")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
     # Always redirect errors to a fixed page; no provider errors or credentials in the URL.
     try:
         handoff, destination = await c.google_auth.finish(
@@ -375,7 +387,10 @@ def require_same_origin(request: Request, c: C) -> None:
 async def plex_start(body: S.PlexSignInStart, request: Request, response: Response, c: C) -> dict[str, Any]:
     """Begin "Continue with Plex": answers Plex's sign-in page for the browser to open."""
     require_same_origin(request, c)
-    url, browser = await c.plex_auth.start(body.return_to, body.invite)
+    linking = await _linker(request, c) if body.link else None
+    url, browser = await c.plex_auth.start(
+        body.return_to, "" if linking else body.invite, link_user_id=linking.user_id if linking else ""
+    )
     name, secure = _plex_cookie()
     response.set_cookie(name, browser, max_age=600, secure=secure, httponly=True, samesite="lax", path="/")
     response.headers["Cache-Control"] = "no-store"
@@ -390,9 +405,45 @@ async def plex_complete(body: S.PlexSignInComplete, request: Request, response: 
     response.delete_cookie(name, secure=secure, httponly=True, samesite="lax", path="/")
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
+    token = _bearer(request) if request.headers.get("authorization") else ""
     tx = c.plex_auth.claim(body.state, request.cookies.get(name, ""))
+    if tx.link_user_id:
+        # Started by a signed-in user to link Plex to themselves: it signs nobody in.
+        await c.plex_auth.link(tx, (await resolve(request, c, token)).user_id if token else "")
+        return {"status": "linked"}
     account = await c.plex_auth.account(tx)
     return await _signed_in(request, c, await c.plex_auth.sign_in(account, tx.invite))
+
+
+# ---------------------------------------------------------------- linked sign-ins
+async def _linker(request: Request, c: C) -> Principal:
+    """The signed-in user asking to change how they sign in. Never from a shared device:
+    whoever holds the household's remote must not gain a way in as that user from anywhere."""
+    principal = await resolve(request, c, _bearer(request))
+    if principal.shared_device:
+        raise Forbidden("Sign-in methods cannot be changed on a shared device", code="shared_device")
+    return principal
+
+
+@router.post("/auth/google/link", response_model=S.PlexSignInUrl, tags=["auth"])
+async def google_link(request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Begin linking a Google account to one's own user. Google sends the browser back to
+    ``/auth/google/callback``, which lands on ``/settings?linked=google`` or ``?link_error=<code>``."""
+    require_same_origin(request, c)
+    principal = await _linker(request, c)
+    url, browser = c.google_auth.start_link(principal.user_id)
+    response.set_cookie(
+        "__Host-sh-google-state", browser, max_age=600, secure=True, httponly=True, samesite="lax", path="/"
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"auth_url": url}
+
+
+@router.delete("/auth/methods/{method}", status_code=204, tags=["auth"])
+async def unlink_own_method(method: S.SignInMethodL, c: C, p: P) -> Response:
+    """Remove one of one's own ways of signing in. Never the last one (409 last_method)."""
+    await c.users.unlink_method(p, p.user_id, method)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------- username and password

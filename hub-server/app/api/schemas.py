@@ -72,6 +72,7 @@ class LoginRequest(_M):
 class PlexSignInStart(_M):
     return_to: str = Field(default="/", max_length=64, description="/, /pair, /pair?code=XXXXXX or /settings")
     invite: str = Field(default="", max_length=64, repr=False)
+    link: bool = Field(default=False, description="signed in: link the Plex account to one's own user")
 
 
 class PlexSignInUrl(_M):

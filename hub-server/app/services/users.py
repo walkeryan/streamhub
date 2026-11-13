@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.crypto import hash_secret
@@ -882,6 +883,65 @@ class UsersService:
         if pending_notice:
             await self._webhook("user.pending", {"id": user.id, "display_name": user.display_name, "email": user.email})
         return GoogleSignIn(user, profile, created)
+
+    # ------------------------------------------------------------------ linked sign-ins
+    async def link_identity(self, user_id: str, who: ExternalIdentity) -> None:
+        """Attach a Google or Plex identity to a user who asked for it while signed in.
+
+        An identity names one user: one that already signs someone else in is refused, and so
+        is a second identity of the same provider (unlink the first).
+        """
+        column = _SUBJECT[who.provider]
+        async with self._db.session() as s:
+            user = await s.get(User, user_id)
+            if user is None or user.status != "active":
+                raise NotFound("user not found")
+            holder = (await s.execute(select(User.id).where(column == who.subject))).scalar_one_or_none()
+            if holder is not None and holder != user.id:
+                raise Conflict("That account already signs in as someone else here", code="identity_in_use")
+            mine = getattr(user, column.key)
+            if mine == who.subject:
+                return
+            if mine:
+                raise Conflict("Unlink the one that is linked first", code="already_linked")
+            setattr(user, column.key, who.subject)
+            self._carry(user, who)
+            audit(s, user.id, "user.signin_link", user.id, method=who.provider)
+            try:
+                await s.commit()
+            except IntegrityError as exc:
+                # Two users linking one identity at the same moment; the index decided.
+                raise Conflict("That account already signs in as someone else here", code="identity_in_use") from exc
+
+    async def unlink_method(self, actor: Any, user_id: str, method: str) -> dict[str, Any]:
+        """Remove one way of signing in: one's own, or anyone's with ``users.manage``.
+
+        Never the last one, for anybody: a person with no way in is suspended or removed,
+        which says so. Taken away by someone else, it also ends that person's sessions.
+        """
+        if user_id != actor.user_id and "users.manage" not in actor.permissions:
+            raise PermissionDenied(["users.manage"])
+        if user_id == actor.user_id and getattr(actor, "shared_device", False):
+            raise Forbidden("Sign-in methods cannot be changed on a shared device", code="shared_device")
+        async with self._db.session() as s:
+            user, _, _ = await self._load(s, user_id)
+            await self.guard_identity(s, actor, user)
+            held = sign_in_methods(user)
+            if method not in held:
+                raise NotFound("That sign-in method is not linked")
+            if len(held) == 1:
+                raise Conflict("The last way of signing in cannot be removed", code="last_method")
+            if method == "google":
+                user.google_subject = None
+            elif method == "plex":
+                user.plex_account_id = user.plex_username = None
+            else:
+                user.username = user.password_hash = None
+            if user.id != actor.user_id and self._sessions is not None:
+                await self._sessions.revoke_all(s, user.id)
+            audit(s, actor.user_id, "user.signin_unlink", user.id, method=method)
+            await s.commit()
+        return await self.get(user_id)
 
     @staticmethod
     async def _bootstrap_owner(

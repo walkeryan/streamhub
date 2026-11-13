@@ -182,8 +182,9 @@ class PlexAuthService:
             picture=str(data.get("thumb") or "")[:2048] or None,
         )
 
-    async def sign_in(self, account: PlexAccount, invite: str = "") -> Profile:
-        who = ExternalIdentity(
+    @staticmethod
+    def identity(account: PlexAccount) -> ExternalIdentity:
+        return ExternalIdentity(
             provider="plex",
             subject=account.id,
             email=account.email,
@@ -191,6 +192,17 @@ class PlexAuthService:
             picture=account.picture,
             handle=account.username or None,
         )
+
+    async def link(self, tx: _Transaction, user_id: str) -> None:
+        """Finish a flow a signed-in user started to link Plex: only they can, and nobody is signed in."""
+        if not user_id:
+            raise Unauthorized("Sign in to link a Plex account")
+        if not secrets.compare_digest(tx.link_user_id, user_id):
+            raise Forbidden("This link was started by someone else")
+        await self.auth.users.link_identity(user_id, self.identity(await self.account(tx)))
+
+    async def sign_in(self, account: PlexAccount, invite: str = "") -> Profile:
+        who = self.identity(account)
         result = await self.auth.users.external_sign_in(
             who,
             signup_mode=str(self._setting("signup_mode") or "approval"),

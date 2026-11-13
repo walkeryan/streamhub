@@ -1148,6 +1148,7 @@ paths:
               properties:
                 return_to: {type: string, default: /, maxLength: 64, description: "/, /pair, /pair?code=XXXXXX or /settings. Anything else is /."}
                 invite: {type: string, maxLength: 64, description: "Invite token from /invite/<token>; held server-side for the sign-in, never sent to Plex"}
+                link: {type: boolean, default: false, description: "Needs a bearer token: link the Plex account to the caller's own user instead of signing in. Not on a shared device (403 shared_device)."}
       responses:
         '200': { description: ok, content: { application/json: { schema: { type: object, required: [auth_url], properties: { auth_url: {type: string} } } } } }
   /auth/plex/complete:
@@ -1162,9 +1163,26 @@ paths:
         token good only for GET /auth/me. 401 sign_in_expired for a state that is unknown, used, older
         than ten minutes, started by another browser, or never completed at Plex; 403 invite_required
         (invite-only mode, no usable invite), 403 user_suspended, 502 plex_unavailable.
+        A flow started with link true needs the same user's bearer token here and answers status
+        "linked": the Plex account is attached to that user and nobody is signed in. 409 identity_in_use
+        when it already signs in as someone else, 409 already_linked when the user has another Plex account.
       requestBody:
         content: { application/json: { schema: { type: object, required: [state], properties: { state: {type: string, maxLength: 64, description: "The plex query parameter Plex's redirect came back with"} } } } }
-      responses: { '200': { description: ok, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}] } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}, {type: object, required: [status], properties: {status: {type: string, enum: [linked]}}}] } } } } }
+  /auth/google/link:
+    post:
+      summary: Begin linking a Google account to one's own user
+      description: >-
+        Answers Google's sign-in page. Google sends the browser back to /auth/google/callback, which
+        attaches the identity and lands on /settings?linked=google, or on /settings?link_error=<code>
+        (identity_in_use, already_linked, failed). Nobody is signed in by it. Not on a shared device.
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [auth_url], properties: { auth_url: {type: string} } } } } } }
+  /auth/methods/{method}:
+    delete:
+      summary: Remove one of one's own ways of signing in
+      description: 409 last_method for the last one, 404 when it is not linked, 403 shared_device. The device asking stays signed in.
+      parameters: [{name: method, in: path, required: true, schema: {$ref: '#/components/schemas/SignInMethod'}}]
+      responses: { '204': { description: removed } }
   /auth/me:
     get:
       summary: The caller's user, role, effective permissions and limits
@@ -1728,6 +1746,12 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"} } } } } }
       responses: { '204': { description: ok } }
+  /users/{id}/methods/{method}:
+    delete:
+      summary: Remove one way a user signs in (users.manage)
+      description: Their sessions are revoked. 409 last_method for the last one (suspend or remove the user instead). Only an owner changes an owner.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: method, in: path, required: true, schema: {$ref: '#/components/schemas/SignInMethod'}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } } }
   /users/{id}/password-reset:
     post:
       summary: Reset a user's password and answer a setup link (users.manage)
