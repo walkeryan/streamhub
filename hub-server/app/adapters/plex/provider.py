@@ -27,6 +27,7 @@ from app.domain.entities import (
     SourceType,
     StreamTarget,
     TestResult,
+    WatchState,
 )
 from app.domain.ports import AdapterContext, CatalogSink
 from app.infra.http import request_with_retry
@@ -394,6 +395,31 @@ class PlexSource:
         if not url.startswith(self.server + "/"):
             return None
         return {"X-Plex-Token": self.token, "Accept": "image/*"}
+
+    async def watch_states(self, item: CatalogItem) -> dict[str, WatchState]:
+        """WatchStateProvider: where the account behind the token is in this item, or in each episode of it.
+
+        ``viewOffset`` is the resume point and ``lastViewedAt`` when it was set. An item with a
+        view count and no offset was watched to the end.
+        """
+        path = f"/library/metadata/{item.ext_id}"
+        if item.kind == MediaKind.SHOW:
+            path += "/allLeaves"
+        elif item.kind == MediaKind.SEASON:
+            path += "/children"
+        states: dict[str, WatchState] = {}
+        for m in (await self._get(path)).get("Metadata") or []:
+            key, seen = m.get("ratingKey"), m.get("lastViewedAt")
+            if key is None or not seen:
+                continue
+            offset = int(m.get("viewOffset") or 0)
+            states[str(key)] = WatchState(
+                position_ms=offset,
+                viewed_at=datetime.fromtimestamp(int(seen), UTC),
+                watched=offset == 0 and int(m.get("viewCount") or 0) > 0,
+                duration_ms=m.get("duration"),
+            )
+        return states
 
     async def report_progress(self, item: CatalogItem, position_ms: int, duration_ms: int | None, state: str) -> None:
         params = {

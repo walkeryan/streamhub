@@ -5256,6 +5256,7 @@ export interface components {
             profile_id?: string | null;
             has_pin?: boolean;
             on_shared_devices?: boolean;
+            /** @description This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state. */
             plex_account_linked?: boolean;
             /** Format: date-time */
             created_at: string;

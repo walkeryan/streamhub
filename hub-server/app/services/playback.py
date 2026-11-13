@@ -947,6 +947,7 @@ class PlaybackResolver:
 
     # ------------------------------------------------------------------ titles
     async def _next_episode(self, profile_id: str, show: Title) -> Title:
+        await self._progress.merge_account_state(profile_id, [show])
         kids = await self._catalog.children_rows(show)
         eps = [k for k in kids if k.kind == "episode"]
         if not eps:
@@ -983,6 +984,8 @@ class PlaybackResolver:
             raise BadGateway("could not resolve stream from source") from exc
         lib = ids.lib_id(row.source_id, row.ext_id)
         keys = [hub_id, lib, *(progress_ids or [])]
+        # The one user linked to the library server's account resumes where that account is, if newer.
+        await self._progress.merge_account_state(profile_id, [row])
         p = await self._progress.get(profile_id, *keys)
         # Provider resume belongs to the shared source account, not this profile.
         resume = 0
