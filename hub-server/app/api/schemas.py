@@ -473,6 +473,7 @@ class Settings(_M):
     proxy_mode: Literal["auto", "always", "never"] = "auto"
     signup_mode: Literal["approval", "invite_only"] = "approval"
     notify_webhook_set: bool = False
+    home_networks: str | None = Field(default=None, description="system.manage only: the home networks, as CIDRs")
 
 
 class SettingsPatch(_M):
@@ -483,6 +484,7 @@ class SettingsPatch(_M):
     proxy_mode: Literal["auto", "always", "never"] | None = None
     signup_mode: Literal["approval", "invite_only"] | None = None
     notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
+    home_networks: str | None = Field(default=None, max_length=1024, description="null restores the defaults")
 
 
 class ClassificationRun(_M):

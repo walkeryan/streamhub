@@ -2,7 +2,11 @@ openapi: 3.1.0
 info:
   title: StreamHub API
   version: 1.0.0
-  description: Unified streaming hub. All clients (Android TV, web) use this contract. Base path /api/v1.
+  description: >-
+    Unified streaming hub. All clients (Android TV, web) use this contract. Base path /api/v1.
+    A user without the remote.access permission is served on the home network only (the
+    home_networks setting): from anywhere else every authenticated call answers 403
+    remote_access_denied, except GET /auth/me.
 servers:
   - url: /api/v1
 security:
@@ -702,6 +706,7 @@ components:
         signup_mode: {type: string, enum: [approval, invite_only], description: "Who may sign in with Google unasked: anyone (then waits for approval) or invitees only"}
         notify_webhook_set: {type: boolean, readOnly: true, description: "A notification webhook is stored. The address is never returned."}
         notify_webhook: {type: string, nullable: true, writeOnly: true, description: "PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it"}
+        home_networks: {type: string, nullable: true, description: "Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges)"}
     Disclaimer:
       type: object
       required: [version, text]
@@ -1022,6 +1027,7 @@ paths:
       summary: The caller's user, role, effective permissions and limits
       description: >-
         The one call a user waiting for approval may make (every other answers 403 approval_pending).
+        Also answers a user without remote.access away from the home network, where every other call is 403 remote_access_denied.
         Once approved, the response carries full tokens, once, and the pending token stops working.
       responses:
         '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }

@@ -2,11 +2,11 @@
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
-from app.api.deps import C, bearer
+from app.api.deps import C, bearer, resolve
 from app.api.routers.auth import tokens_out
 from app.services.auth import Principal
 from app.services.errors import Forbidden, Unauthorized
@@ -14,7 +14,9 @@ from app.services.errors import Forbidden, Unauthorized
 router = APIRouter(tags=["auth"])
 
 
-async def pin_principal(c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> Principal:
+async def pin_principal(
+    request: Request, c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+) -> Principal:
     if creds is None:
         raise Unauthorized("Missing bearer token")
     try:
@@ -23,7 +25,7 @@ async def pin_principal(c: C, creds: Annotated[HTTPAuthorizationCredentials | No
         # Accept an existing session for restricted exits, or pre-activation
         # owner enrollment; never turn a pending login into general API access.
         # Fully validated, minus the owner-PIN entry check this very flow exists to satisfy.
-        return await c.auth.resolve_principal(creds.credentials, owner_entry=False)
+        return await resolve(request, c, creds.credentials, owner_entry=False)
 
 
 PP = Annotated[Principal, Depends(pin_principal)]

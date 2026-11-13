@@ -28,7 +28,11 @@ async def create_theme(body: S.Theme, c: C, p: Admin) -> dict[str, Any]:
 
 @router.get("/settings", response_model=S.Settings, tags=["system"])
 async def get_settings(c: C, p: P) -> dict[str, Any]:
-    return c.app_settings.public()
+    settings = c.app_settings.public()
+    if not p.can("system.manage"):
+        # How the household's network is laid out is the administrator's to know.
+        settings["home_networks"] = None
+    return settings
 
 
 @router.patch("/settings", response_model=S.Settings, tags=["system"])

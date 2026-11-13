@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api import schemas as S
-from app.api.deps import C, P, UsersAdmin, session_meta
+from app.api.deps import C, P, UsersAdmin, resolve, session_meta
 from app.infra.models import Profile as ProfileRow
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 
@@ -152,7 +152,7 @@ async def list_profiles(request: Request, c: C) -> list[dict[str, Any]]:
         if scheme.lower() != "bearer" or not token:
             raise Unauthorized("Sign in to list profiles")
         # One person, one user: there is nobody else's profile to pick from here.
-        principal = await c.auth.resolve_principal(token)
+        principal = await resolve(request, c, token)
         return [await profile_out(c, await c.auth.get_profile(principal.profile_id))]
     return [await profile_out(c, p) for p in await c.auth.list_profiles()]
 

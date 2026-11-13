@@ -11,6 +11,7 @@ from app.infra.crypto import Crypto
 from app.infra.db import Database
 from app.infra.logging import secret_registry
 from app.infra.models import Setting
+from app.services.network import DEFAULT_HOME_NETWORKS, clean_networks
 
 DEFAULTS: dict[str, Any] = {
     "region": "US",
@@ -21,6 +22,8 @@ DEFAULTS: dict[str, Any] = {
     # Who may sign in with Google unasked: anyone (then waits for approval) or invitees only.
     "signup_mode": "approval",
     "notify_webhook": None,
+    # Where a user without remote.access may use the server from.
+    "home_networks": DEFAULT_HOME_NETWORKS,
 }
 ALLOWED = {
     "transcode_hw": {"none", "vaapi", "nvenc", "qsv"},
@@ -115,6 +118,7 @@ class SettingsService:
             "signup_mode": self.get("signup_mode"),
             # The address may embed a secret path; only whether one is set is public.
             "notify_webhook_set": bool(self.get("notify_webhook")),
+            "home_networks": self.get("home_networks") or DEFAULT_HOME_NETWORKS,
         }
 
     async def _put(self, key: str, value: Any) -> None:
@@ -142,6 +146,9 @@ class SettingsService:
             if k == "notify_webhook":
                 v = clean_webhook_url(v)
                 secret_registry.add(v)
+            if k == "home_networks":
+                # Null goes back to the defaults; anything else must be a list of networks.
+                v = DEFAULT_HOME_NETWORKS if v is None else clean_networks(v)
             await self._put(k, v)
         return self.public()
 

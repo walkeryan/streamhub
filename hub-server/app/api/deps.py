@@ -12,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.container import Container
 from app.services.auth import Principal
 from app.services.errors import Forbidden, PermissionDenied, Unauthorized
+from app.services.network import client_address, is_home
 from app.services.sessions import SessionMeta
 from app.services.visibility import require_watch, reset_watch, set_watch
 
@@ -49,26 +50,45 @@ def device_label(kind: str, agent: str) -> str | None:
     return f"{browser} on {system}" if system else browser
 
 
+def client_ip(request: Request) -> str | None:
+    """Where this request comes from: the peer, or what a trusted proxy says it forwarded for."""
+    settings = request.app.state.container.settings
+    forwarded = ",".join(request.headers.getlist("x-forwarded-for"))
+    return client_address(request.client.host if request.client else None, forwarded, settings.forwarded_allow_ips)
+
+
 def session_meta(request: Request, kind: str | None = None) -> SessionMeta:
     """What to record about the device asking for tokens. Informational: shown to its owner."""
     agent = request.headers.get("user-agent", "")
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     kind = kind or ("browser" if agent.startswith("Mozilla/") else "api")
     return SessionMeta(
         kind=kind,
         label=device_label(kind, agent),
         user_agent=agent or None,
-        ip=forwarded or (request.client.host if request.client else None),
+        ip=client_ip(request),
     )
 
 
-async def _resolve(request: Request, c: Container, token: str) -> Principal:
-    """One validation per request, however many dependencies ask."""
+def require_reachable(request: Request, c: Container, principal: Principal) -> None:
+    """Without ``remote.access`` a user is served on the home network and nowhere else."""
+    if "remote.access" in principal.permissions:
+        return
+    if not is_home(client_ip(request), str(c.app_settings.get("home_networks") or "")):
+        raise Forbidden("This account can only be used on the home network", code="remote_access_denied")
+
+
+async def resolve(request: Request, c: Container, token: str, *, owner_entry: bool = True) -> Principal:
+    """The caller behind a bearer token: validated, and allowed to be where the request comes from.
+
+    One validation per request, however many dependencies ask. ``GET /auth/me`` does not come
+    through here, so a client refused everything else can still say who is signed in and why.
+    """
     cached = getattr(request.state, "resolved", None)
     if cached is not None and cached[0] == token:
         principal: Principal = cached[1]
         return principal
-    principal = await c.auth.resolve_principal(token)
+    principal = await c.auth.resolve_principal(token, owner_entry=owner_entry)
+    require_reachable(request, c, principal)
     request.state.resolved = (token, principal)
     return principal
 
@@ -78,7 +98,7 @@ async def current_principal(
 ) -> AsyncIterator[Principal]:
     if creds is None or not creds.credentials:
         raise Unauthorized("missing bearer token")
-    principal = await _resolve(request, c, creds.credentials)
+    principal = await resolve(request, c, creds.credentials)
     request.state.principal = principal
     from app.services.content_policy import active_policy, active_principal
 
@@ -139,7 +159,7 @@ async def playback_watch_gate(request: Request, c: C) -> None:
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token:
         return  # the route's own principal dependency answers 401
-    principal = await _resolve(request, c, token)
+    principal = await resolve(request, c, token)
     refs: list[tuple[str, str | None]] = []
     # Channel ids asked for at a past moment (rewind): the policy judges what aired then.
     moments: dict[str, datetime] = {}
