@@ -74,6 +74,12 @@ object ApiErrors {
             "room_limit" -> UserError("Too many rooms", "The server is already running as many watch rooms as it allows. Try again when one has closed.", canRetry = true)
             "room_unsupported" -> UserError("Can't be watched together", "This title can't be played in a watch room on this TV.", canRetry = false)
             "content_restricted" -> UserError("Not available for this profile", "This profile isn't allowed to watch this.", canRetry = false)
+            "recording_forbidden" -> UserError("Not allowed", "This account can't schedule or remove recordings.", canRetry = false)
+            "recording_unavailable" -> UserError("Recording isn't set up", "The server has nowhere to keep recordings, or can't record this right now.", canRetry = false)
+            "programme_ended" -> UserError("Already over", "This programme has finished, so it can't be recorded.", canRetry = false)
+            "already_scheduled" -> UserError("Already being recorded", "Someone else in the household has already scheduled this programme.", canRetry = false)
+            "guide_changed" -> UserError("The guide has changed", "This programme is no longer where the guide showed it. Reload the guide and try again.", canRetry = false)
+            "rule_limit" -> UserError("Too many rules", "This profile has as many recording rules as the server allows. Remove one under Recordings first.", canRetry = false)
             "disclaimer_required" -> UserError(
                 "Legal notice not accepted",
                 "This can't play until the legal notice has been accepted for this profile. Restart StreamHub to read and accept it.",

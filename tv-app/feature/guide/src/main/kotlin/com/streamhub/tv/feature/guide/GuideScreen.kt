@@ -44,6 +44,10 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.LiveGuideFilters
 import com.streamhub.tv.core.data.model.Channel
+import com.streamhub.tv.core.data.model.RecordingStates
+import com.streamhub.tv.core.data.repo.recordingStateLabel
+import com.streamhub.tv.core.data.repo.recordingStateMark
+import com.streamhub.tv.core.ui.components.ProgrammeDialog
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.CenterMessage
 import com.streamhub.tv.core.ui.components.LoadingView
@@ -84,6 +88,9 @@ private fun Duration.toDp(): Dp = SLOT_WIDTH * (toMinutes() / 30f)
  * D-pad Left/Right moves between programme cells (focus search brings them into view), Up/Down
  * moves between channels. OK on a live programme plays the channel; OK/long-press on a past
  * programme with catch_up_available offers Catch-up; OK on a future one says when it starts.
+ * Where the viewer may schedule recordings, OK on a programme that is on air or still to come opens
+ * a dialog instead: Watch (on air), Record this, Record every new episode, Record every game for….
+ * Cells carry a mark for the household's recording of them (○ will record, ● recording, ✓ recorded).
  * Number keys on the grid tune to that channel after 2 s (or OK), as in the player.
  */
 @Composable
@@ -97,6 +104,9 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
     val hScroll = rememberScrollState()
     val density = LocalDensity.current
     var catchup by remember { mutableStateOf<Pair<Channel, GuideProgramme>?>(null) }
+    val recording by vm.recorder.availability.collectAsStateWithLifecycle()
+    val record by vm.recorder.state.collectAsStateWithLifecycle()
+    var actionsFor by remember { mutableStateOf<Pair<Channel, GuideProgramme>?>(null) }
     // Answer to a press that cannot play anything: a future programme, or a number with no channel.
     var hint by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(hint) { if (hint != null) { delay(HINT_MS); hint = null } }
@@ -145,7 +155,8 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
             if (sel != null) {
                 Text(
                     "${s.selectedChannel?.name.orEmpty()}  ·  ${HHMM.format(sel.start)}–${HHMM.format(sel.stop)}" +
-                        (sel.p.category?.let { "  ·  $it" } ?: "") + if (sel.p.catchupAvailable && sel.stop < now) "  ·  Catch-up available" else "",
+                        (sel.p.category?.let { "  ·  $it" } ?: "") + (if (sel.p.catchupAvailable && sel.stop < now) "  ·  Catch-up available" else "") +
+                        (recordingStateLabel(sel.p.recordingState)?.let { "  ·  ${recordingStateMark(sel.p.recordingState).orEmpty()} $it" } ?: ""),
                     style = MaterialTheme.typography.bodyMedium, color = t.textMuted, maxLines = 1,
                 )
                 sel.p.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = t.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis) }
@@ -187,10 +198,13 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
                                     val past = gp.stop <= now
                                     ProgrammeCell(
                                         gp.p.title, x, w, live, past, gp.p.catchupAvailable,
+                                        mark = recordingStateMark(gp.p.recordingState),
                                         modifier = if (i == 0) Modifier.leftOpensRail(LocalRailController.current) else Modifier,
                                         onFocus = { vm.select(ch, gp) },
                                         onClick = {
                                             when {
+                                                // On air or still to come, and recordings can be scheduled: offer the choices.
+                                                recording.canSchedule && !past -> { vm.recorder.reset(); actionsFor = ch to gp }
                                                 live -> launcher.play(ch.id)
                                                 past && gp.p.catchupAvailable -> catchup = ch to gp
                                                 // Not yet on air: say when, rather than doing nothing on Select.
@@ -213,6 +227,25 @@ fun GuideScreen(vm: GuideViewModel = hiltViewModel(), filters: LiveGuideFilters 
     if (typed.isNotEmpty() || caption != null) {
         ChannelNumberOverlay(typed, caption, Modifier.align(Alignment.TopEnd).padding(top = Tokens.Canvas.SafeMarginY, end = Tokens.Canvas.SafeMarginX))
     }
+    }
+
+    actionsFor?.let { (ch, opened) ->
+        // The copy in the grid, so a badge set by "Record this" shows in the dialog too.
+        val gp = s.programmes[ch.id]?.firstOrNull { it.p.id == opened.p.id } ?: opened
+        val onAir = gp.start <= now && gp.stop > now
+        val close = { actionsFor = null; vm.recorder.reset() }
+        ProgrammeDialog(
+            programme = gp.p,
+            subtitle = "${ch.name} · ${HHMM.format(gp.start)}–${HHMM.format(gp.stop)}",
+            onWatch = if (onAir) ({ close(); launcher.play(ch.id) }) else null,
+            canRecordThis = gp.stop > now && gp.p.recordingState != RecordingStates.SCHEDULED && gp.p.recordingState != RecordingStates.RECORDING,
+            busy = record.busy,
+            outcome = record.outcome,
+            onRecord = { vm.recorder.recordOnce(gp.p) },
+            onRecordSeries = { vm.recorder.recordSeries(gp.p) },
+            onRecordTeam = vm.recorder::recordTeam,
+            onDismiss = close,
+        )
     }
 
     catchup?.let { (ch, gp) ->
@@ -252,6 +285,8 @@ private fun ChannelCell(ch: Channel) {
 private fun ProgrammeCell(
     title: String, x: Dp, w: Dp, live: Boolean, past: Boolean, catchup: Boolean,
     modifier: Modifier = Modifier,
+    /** ○ will record, ● recording, ✓ recorded, ! failed: the household's recording of this programme. */
+    mark: String? = null,
     onFocus: () -> Unit, onClick: () -> Unit, onLongClick: (() -> Unit)? = null,
 ) {
     val t = LocalThemeTokens.current
@@ -268,6 +303,7 @@ private fun ProgrammeCell(
     ) { focused ->
         val fg = when { focused -> t.bg; past -> t.textMuted; else -> t.text }
         Row(Modifier.align(Alignment.CenterStart).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (mark != null) Text("$mark ", color = fg, style = MaterialTheme.typography.labelMedium)
             if (past && catchup) Text("↺ ", color = fg, style = MaterialTheme.typography.labelMedium)
             Text(title, color = fg, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }

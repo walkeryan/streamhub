@@ -10,6 +10,9 @@ import com.streamhub.tv.core.data.model.Favorite
 import com.streamhub.tv.core.data.model.LanguageCount
 import com.streamhub.tv.core.data.model.MediaKind
 import com.streamhub.tv.core.data.repo.ChannelListCache
+import com.streamhub.tv.core.data.repo.ProgrammeRecorder
+import com.streamhub.tv.core.data.repo.RecordingsRepository
+import com.streamhub.tv.core.data.model.Programme
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -57,12 +60,19 @@ class LiveTvViewModel @Inject constructor(
     private val cache: ChannelListCache,
     private val session: SessionStore,
     private val prefs: ProfileFilterStore,
+    recordings: RecordingsRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(LiveTvState())
     val state: StateFlow<LiveTvState> = _state.asStateFlow()
 
     private var loadJob: Job? = null
     private var groupsJob: Job? = null
+
+    /** The Record actions of the now/next dialog; a scheduled programme gets its mark at once. */
+    val recorder = ProgrammeRecorder(recordings, viewModelScope) { programme, state ->
+        fun Programme.marked() = if (id == programme.id) copy(recordingState = state) else this
+        _state.update { s -> s.copy(channels = s.channels.map { if (it.id == programme.channelId) it.copy(now = it.now?.marked(), next = it.next?.marked()) else it }) }
+    }
 
     private var profileId: String? = null
     init {

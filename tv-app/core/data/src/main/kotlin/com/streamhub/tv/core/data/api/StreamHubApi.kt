@@ -339,6 +339,20 @@ class StreamHubApi @Inject constructor(
     /** Host or administrator: closes the room for everyone. */
     suspend fun deleteRoom(code: String) = client.delete(url("/rooms/${id(code)}")).unit()
 
+    // ---- Recordings ----------------------------------------------------------------------------
+
+    /** The current profile's recordings (everyone's for an admin), earliest first; cancelled ones are left out. */
+    suspend fun recordings(): RecordingsResponse = get("/recordings")
+    /** 201 scheduled, or 200 when this programme was already scheduled: both answer with the recording. */
+    suspend fun record(req: RecordRequest): Recording = client.post(url("/recordings")) { setBody(req) }.ok()
+    /** Cancels an upcoming or running recording; deletes a finished one and its file. */
+    suspend fun deleteRecording(recordingId: String) = client.delete(url("/recordings/${id(recordingId)}")).unit()
+    suspend fun recordingRules(): RecordingRulesResponse = get("/recording-rules")
+    suspend fun createRecordingRule(req: RecordingRuleCreate): RecordingRule = client.post(url("/recording-rules")) { setBody(req) }.ok()
+    suspend fun patchRecordingRule(ruleId: String, patch: RecordingRulePatch): RecordingRule =
+        client.patch(url("/recording-rules/${id(ruleId)}")) { setBody(patch) }.ok()
+    suspend fun deleteRecordingRule(ruleId: String) = client.delete(url("/recording-rules/${id(ruleId)}")).unit()
+
     // ---- Favorites / watchlist / history -------------------------------------------------------
 
     suspend fun favorites(): List<Tile> = get("/favorites")

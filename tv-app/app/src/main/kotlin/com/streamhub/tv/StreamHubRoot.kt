@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +56,8 @@ import com.streamhub.tv.core.data.repo.LocalPrefs
 import com.streamhub.tv.core.data.repo.MeRepository
 import com.streamhub.tv.core.data.repo.MeState
 import com.streamhub.tv.core.data.repo.PlayEvent
+import com.streamhub.tv.core.data.repo.RecordingAvailability
+import com.streamhub.tv.core.data.repo.RecordingsRepository
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.data.repo.SessionEvents
 import com.streamhub.tv.core.ui.components.ErrorDialog
@@ -83,6 +86,7 @@ import com.streamhub.tv.feature.home.SportsScreen
 import com.streamhub.tv.feature.onboarding.OnboardingScreen
 import com.streamhub.tv.feature.onboarding.WhoIsWatchingScreen
 import com.streamhub.tv.feature.player.PlayerScreen
+import com.streamhub.tv.feature.recordings.RecordingsScreen
 import com.streamhub.tv.feature.search.JoinRoomScreen
 import com.streamhub.tv.feature.search.SearchScreen
 import com.streamhub.tv.feature.settings.SettingsScreen
@@ -93,6 +97,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -119,6 +124,7 @@ object Routes {
     const val FAVORITES = "favorites"
     const val SOURCES = "sources"
     const val SETTINGS = "settings"
+    const val RECORDINGS = "recordings"
     /** Join a watch room by its code. */
     const val JOIN_ROOM = "rooms/join"
     /** "Who's watching?" opened from the rail or Settings: Back returns. */
@@ -138,11 +144,13 @@ private val FULL_SCREEN_ROUTES = setOf(Routes.ONBOARDING, Routes.PLAYER, Routes.
  * The rail for what the signed-in user may do. The rail has no "more" area, so a destination that
  * depends on a permission sits beside the one it belongs with and is simply absent without it.
  */
-private fun railItems(access: MeState): List<RailItem> = listOfNotNull(
+private fun railItems(access: MeState, recordings: RecordingAvailability): List<RailItem> = listOfNotNull(
     RailItem(Routes.HOME, "Home", Icons.Filled.Home),
     RailItem(Routes.SEARCH, "Search", Icons.Filled.Search),
     RailItem(Routes.JOIN_ROOM, "Join a room", Icons.Filled.Group).takeIf { access.can(Permissions.ROOMS_JOIN) },
     RailItem(Routes.LIVE, "Live TV", Icons.Filled.LiveTv),
+    // Only where there is something behind it: permission to see recordings and a server that records.
+    RailItem(Routes.RECORDINGS, "Recordings", Icons.Filled.VideoLibrary).takeIf { access.can(Permissions.RECORDINGS_VIEW) && recordings.enabled },
     RailItem(Routes.SPORTS, "Sports", Icons.Filled.SportsSoccer),
     RailItem(Routes.discover(), "Discover", Icons.Filled.Search),
     RailItem(Routes.MOVIES, "Movies", Icons.Filled.Movie),
@@ -159,6 +167,7 @@ class RootViewModel @Inject constructor(
     val coordinator: PlaybackCoordinator,
     val sessionEvents: SessionEvents,
     val me: MeRepository,
+    val recordings: RecordingsRepository,
 ) : ViewModel() {
     /** null until DataStore has loaded (avoids flashing onboarding). */
     val session: StateFlow<Session?> = sessionStore.session.map<Session, Session?> { it }
@@ -186,6 +195,9 @@ class RootViewModel @Inject constructor(
     fun settleGate() { gateSettled = true }
 
     init {
+        // Whether there is a recorder behind the Recordings destination and the Record actions: asked
+        // again whenever the answer to "what may this user do" changes (start, pairing, a switch).
+        viewModelScope.launch { me.state.collectLatest { recordings.refreshAvailability() } }
         // What the signed-in user may do: read on start, forgotten when the TV is signed out.
         viewModelScope.launch {
             sessionStore.session.map { it.isPaired }.distinctUntilChanged().collect { paired ->
@@ -210,6 +222,7 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     val localAccepted = accepted ?: return ScreenBackground {}
     val sharedHint = vm.sharedHint.collectAsStateWithLifecycle().value ?: return ScreenBackground {}
     val access by vm.me.state.collectAsStateWithLifecycle()
+    val recordings by vm.recordings.availability.collectAsStateWithLifecycle()
     val nav = rememberNavController()
     var audioChoice by remember { mutableStateOf<PlayEvent.ChooseAudio?>(null) }
     var playError by remember { mutableStateOf<UserError?>(null) }
@@ -279,7 +292,7 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     }
     CompositionLocalProvider(LocalPlayLauncher provides launcher) {
         ScreenBackground {
-            AppShell(nav, start, profileName = s.profile?.name, access = access, sharedDevice = { vm.me.state.value.sharedDevice }, onGateSettled = vm::settleGate)
+            AppShell(nav, start, profileName = s.profile?.name, access = access, recordings = recordings, sharedDevice = { vm.me.state.value.sharedDevice }, onGateSettled = vm::settleGate)
             audioChoice?.let { choice ->
                 AudioSourceDialog(choice.options, onDismiss = { audioChoice = null; vm.coordinator.cancelPending() }) { variant, confirmed ->
                     audioChoice = null
@@ -305,6 +318,7 @@ private fun AppShell(
     start: String,
     profileName: String?,
     access: MeState,
+    recordings: RecordingAvailability,
     /** Asked at the moment of a press: the answer can arrive after the screen was composed. */
     sharedDevice: () -> Boolean,
     onGateSettled: () -> Unit,
@@ -384,6 +398,7 @@ private fun AppShell(
                         }
                     }
                     composable(Routes.JOIN_ROOM) { TopLevel(onTopLevelBack) { JoinRoomScreen() } }
+                    composable(Routes.RECORDINGS) { TopLevel(onTopLevelBack) { RecordingsScreen() } }
                     composable(Routes.LIVE) { TopLevel(onTopLevelBack) { LiveDestination() } }
                     composable(Routes.SPORTS) { TopLevel(onTopLevelBack) { SportsScreen(onMultiview={nav.navigate(Routes.MULTIVIEW)}) } }
                     composable(Routes.MULTIVIEW) { MultiviewScreen(onExit={nav.popBackStack()}) }
@@ -422,7 +437,7 @@ private fun AppShell(
             }
             if (showRail) {
                 LeftRail(
-                    items = remember(access) { railItems(access) },
+                    items = remember(access, recordings) { railItems(access, recordings) },
                     selectedRoute = when {
                         route == Routes.DISCOVER -> Routes.discover()
                         route == Routes.GUIDE -> Routes.LIVE

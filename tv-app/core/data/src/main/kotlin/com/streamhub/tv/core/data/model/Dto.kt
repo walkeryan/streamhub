@@ -292,6 +292,10 @@ data class Programme(
     val category: String? = null,
     val icon: String? = null,
     @SerialName("catchup_available") val catchupAvailable: Boolean = false,
+    /** State of the household's recording of this programme, if there is one; null also when recording is off. */
+    @SerialName("recording_state") val recordingState: String? = null,
+    /** Not in the contract today: honoured if a server sends it, otherwise sport is told from title and category. */
+    @SerialName("is_sport") val isSport: Boolean? = null,
 )
 
 @Serializable
