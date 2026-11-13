@@ -51,6 +51,7 @@ from app.services.media_probe import cached_probe
 from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
+from app.services.streams import requested_ref
 from app.services.tiles import row_to_channel, row_to_item
 from app.services.user_state import ProgressService
 
@@ -101,6 +102,11 @@ class StreamGrant:
     # What is playing, for the profile a busy source turns away (absent for adult titles).
     title: str | None = None
     kind: str | None = None
+    # The user behind the profile and the version of their role and limits the grant was issued
+    # under: every request made with the grant checks both again (``GrantGuard``).
+    user_id: str | None = None
+    user_version: int | None = None
+    client: str | None = None
 
 
 @dataclass(slots=True)
@@ -152,6 +158,9 @@ class StreamTokens:
                 "ss": grant.start_s,
                 "ti": grant.title,
                 "k": grant.kind,
+                "uid": grant.user_id,
+                "uv": grant.user_version,
+                "cl": grant.client,
                 "iat": int(time.time()),
                 "generation": self._generation,
             }
@@ -186,6 +195,9 @@ class StreamTokens:
             start_s=int(d.get("ss") or 0),
             title=d.get("ti"),
             kind=d.get("k"),
+            user_id=d.get("uid"),
+            user_version=d.get("uv"),
+            client=d.get("cl"),
         )
 
 
@@ -319,6 +331,31 @@ class PlaybackResolver:
     # ``StreamProxy.pin``: the probe opens the file as the viewer's playback will, so a source that
     # hands out per-viewer sessions sees one viewer and not two back to back.
     pin: Any = None
+    # ``StreamRegistry``: who is streaming what, for the per-user stream limit.
+    streams: Any = None
+
+    async def _require_slot(self) -> None:
+        """409 ``user_stream_limit`` when the caller's other devices already use every stream they may play."""
+        from app.services.content_policy import active_principal
+
+        principal = active_principal.get()
+        if self.streams is not None and principal is not None and principal.user_id:
+            await self.streams.require_slot(principal.user_id, principal.session_id, principal.limits.max_streams)
+
+    def _admit(
+        self, principal: Any, profile_id: str, ref: str, title: str | None, kind: str | None, client: str
+    ) -> None:
+        if self.streams is not None and principal is not None and principal.user_id:
+            self.streams.admit(
+                principal.user_id,
+                profile_id,
+                principal.session_id,
+                ref,
+                title=title,
+                kind=kind,
+                client=client,
+                limit=principal.limits.max_streams,
+            )
 
     async def _require_content(self, profile_id: str, ref: str, at: datetime | None = None) -> None:
         if self.content_policy is not None and self.content_policy.enabled:
@@ -341,6 +378,7 @@ class PlaybackResolver:
     ) -> dict[str, Any]:
         if rewind_at is not None and (catchup_programme_id or not hub_id.startswith("ch:")):
             raise ServiceError("Rewind requires a channel and cannot be combined with programme catch-up.")
+        requested_ref.set(catchup_programme_id or hub_id)
         policy_at = rewind_at
         if catchup_programme_id:
             await self._require_content(profile_id, catchup_programme_id)
@@ -798,6 +836,7 @@ class PlaybackResolver:
             await self._require_content(profile_id, catchup_programme_id)
             policy_at = (await self._channels.programme(catchup_programme_id)).start
         ch = await self._authorized_channel(profile_id, hub_id, at=policy_at)
+        await self._require_slot()
         src, prov = await self._sources.provider_for(ch.source_id)
         if not isinstance(prov, LiveProvider):
             raise ServiceError("source cannot play live channels")
@@ -888,6 +927,7 @@ class PlaybackResolver:
         start_position_ms: int | None = None,
     ) -> dict[str, Any]:
         await self._require_content(profile_id, ids.lib_id(row.source_id, row.ext_id))
+        await self._require_slot()
         src, prov = await self._sources.provider_for(row.source_id)
         if not isinstance(prov, PlaybackProvider):
             raise ServiceError("source cannot play titles")
@@ -1142,10 +1182,14 @@ class PlaybackResolver:
         url = target.url
         mime = target.mime
         headers = dict(target.headers)
-        if mode in (PlaybackMode.PROXY, PlaybackMode.HLS):
-            from app.services.content_policy import active_principal
+        from app.services.content_policy import active_principal
 
-            principal = active_principal.get()
+        principal = active_principal.get()
+        # Adult rows stay out of everything nobody asked for by id, a busy answer included.
+        shown = None if private else title[:80]
+        device = client if client == "android_tv" else "web"
+        self._admit(principal, profile_id, policy_ref or hub_id, shown, kind, device)
+        if mode in (PlaybackMode.PROXY, PlaybackMode.HLS):
             token = self.tokens.issue(
                 StreamGrant(
                     profile_id=profile_id,
@@ -1166,9 +1210,11 @@ class PlaybackResolver:
                     vod_width=plan.width if plan else None,
                     audio_track=plan.audio_track if plan else None,
                     start_s=plan.start_s if plan else 0,
-                    # Adult rows stay out of everything nobody asked for by id, a busy answer included.
-                    title=None if private else title[:80],
+                    title=shown,
                     kind=kind,
+                    user_id=(principal.user_id or None) if principal is not None else None,
+                    user_version=principal.user_version if principal is not None else None,
+                    client=device,
                 )
             )
             if mode == PlaybackMode.HLS:

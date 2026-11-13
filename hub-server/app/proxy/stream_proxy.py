@@ -107,6 +107,10 @@ class Viewer:
     kind: str | None = None
     ref: str | None = None  # content id, so the answer can hide what the refused profile may not see
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # The user behind the profile, the signed-in device and the kind of client, when a grant named them.
+    user_id: str | None = None
+    session_id: str | None = None
+    client: str | None = None
 
 
 HOP_HEADERS = {"content-type", "content-length", "accept-ranges", "content-range", "last-modified", "etag"}
@@ -765,6 +769,16 @@ class StreamProxy:
         for viewer in sorted(found, key=lambda v: v.since):
             unique.setdefault((viewer.profile_id, viewer.ref or viewer.title), viewer)
         return list(unique.values())
+
+    def user_viewers(self, user_id: str) -> list[Viewer]:
+        """The sessions this proxy is running for one user, on any source."""
+        found: list[Viewer] = []
+        for hls in self._hls.values():
+            found += [viewer for viewer, _ in hls.viewers.values()]
+        found += [s.viewer for s in self._http if s.viewer is not None]
+        for up in self._shared.values():
+            found += up.viewers.values()
+        return [viewer for viewer in found if viewer.user_id == user_id]
 
     def refused_at_limit(self, source_id: str, maximum: int | None) -> bool:
         """Was a stream the source just refused its last free connection, with other streams on the rest?

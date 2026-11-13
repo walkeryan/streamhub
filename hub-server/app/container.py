@@ -53,6 +53,7 @@ from app.services.services_registry import ServiceRegistryService
 from app.services.sessions import SessionsService
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
+from app.services.streams import GrantGuard, StreamRegistry
 from app.services.sync import SyncScheduler, SyncService
 from app.services.themes import ThemeService
 from app.services.user_state import (
@@ -105,6 +106,8 @@ class Container:
     home: HomeService
     active: ActiveStreams
     tokens: StreamTokens
+    streams: StreamRegistry
+    guard: GrantGuard
     playback: PlaybackResolver
     proxy: StreamProxy
     image_cache: ImageCache
@@ -193,6 +196,9 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
 
     playback.content_policy = content_policy
     playback.auth = auth
+    streams = StreamRegistry(db)
+    playback.streams = streams
+    auth.sessions.streams = streams
 
     def proxy_client(**kw: Any) -> httpx.AsyncClient:
         client: httpx.AsyncClient = http_factory(**kw)
@@ -248,6 +254,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         home=home,
         active=active,
         tokens=tokens,
+        streams=streams,
+        guard=GrantGuard(auth, content_policy, streams),
         playback=playback,
         proxy=proxy,
         image_cache=ImageCache(settings.image_cache_dir, settings.image_cache_max_mb * 1024 * 1024),

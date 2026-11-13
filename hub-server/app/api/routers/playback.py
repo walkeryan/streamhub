@@ -25,6 +25,7 @@ from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
 from app.services.playback import StreamGrant, play_key
+from app.services.streams import panes
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -74,6 +75,7 @@ async def multiview(body: S.MultiviewRequest, c: C, p: P) -> dict[str, Any]:
     generation = c.proxy.generation
     if body.recovery_generation != c.proxy.recovery_epoch:
         raise Forbidden("Start multiview again manually.", code="playback_stopped")
+    await c.streams.require_slot(p.user_id, p.session_id, p.limits.max_streams, slots=len(body.panes))
     if any(not pane.id.startswith("ch:") or pane.catchup_programme_id or pane.rewind_at for pane in body.panes):
         raise ServiceError("Multiview requires two live channels.", code="multiview_live_only")
     if body.panes[0].id == body.panes[1].id:
@@ -84,15 +86,16 @@ async def multiview(body: S.MultiviewRequest, c: C, p: P) -> dict[str, Any]:
     # Resolution performs policy/audio checks only; no playback URL is returned
     # until both producer slots have been reserved in one critical section.
     for pane in body.panes:
-        desc = await c.playback.resolve(
-            p.profile_id,
-            pane.id,
-            source_id=pane.source_id,
-            variant_id=pane.variant_id,
-            allow_unverified_audio=pane.allow_unverified_audio,
-            client="web_hls",
-            https_site=is_https.get(),
-        )
+        with panes(len(body.panes)):  # two streams on one device: neither takes the other's place
+            desc = await c.playback.resolve(
+                p.profile_id,
+                pane.id,
+                source_id=pane.source_id,
+                variant_id=pane.variant_id,
+                allow_unverified_audio=pane.allow_unverified_audio,
+                client="web_hls",
+                https_site=is_https.get(),
+            )
         if desc.get("mode") != "hls" or not desc.get("live"):
             raise Conflict("Multiview requires server-mediated live HLS.", code="multiview_unsupported")
         token = str(desc["url"]).split("/stream/", 1)[1].split("/", 1)[0]
@@ -286,6 +289,12 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
         forward_item=forward,
         aliases=aliases,
     )
+    # The player's own word on its stream: still playing (it counts toward the user's limit even
+    # when no bytes pass through this server), or stopped (it no longer does).
+    if body.state == "stopped":
+        c.streams.release(p.user_id, p.session_id, body.id)
+    else:
+        c.streams.heartbeat(p.user_id, p.session_id, body.id)
     return Response(status_code=204)
 
 
@@ -307,7 +316,7 @@ async def _grant(c: C, token: str) -> Any:
     if g is None:
         raise Unauthorized("invalid or expired stream token")
     try:
-        await c.content_policy.require_grant(g, c.auth)
+        await c.guard.require_grant(g)
         if g.pair_lease_id:
             version, session_id, content_ref = _pair_identity(g)
             await c.auth.session_valid(g.profile_id, version, session_id)
@@ -328,7 +337,9 @@ async def _grant(c: C, token: str) -> Any:
 
 
 def _viewer(g: StreamGrant) -> Viewer:
-    return Viewer(g.profile_id, g.title, g.kind, g.content_ref)
+    return Viewer(
+        g.profile_id, g.title, g.kind, g.content_ref, user_id=g.user_id, session_id=g.session_id, client=g.client
+    )
 
 
 async def _source_busy(c: C, g: StreamGrant, message: str = "Source connection limit is occupied.") -> Conflict:
@@ -407,7 +418,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
                 viewer=_viewer(g),
             )
             return OwnedStreamingResponse(
-                c.content_policy.guard_stream(g, c.auth, gen),
+                c.guard.guard_stream(g, gen),
                 owned_stream=gen,
                 media_type=ctype,
                 headers={"Cache-Control": "no-cache"},
@@ -433,7 +444,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
         log.warning("stream proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
     return OwnedStreamingResponse(
-        c.content_policy.guard_stream(g, c.auth, gen),
+        c.guard.guard_stream(g, gen),
         owned_stream=gen,
         status_code=status,
         headers=headers,
@@ -481,7 +492,7 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
         log.warning("stream segment proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
     return OwnedStreamingResponse(
-        c.content_policy.guard_stream(g, c.auth, gen),
+        c.guard.guard_stream(g, gen),
         owned_stream=gen,
         status_code=status,
         headers=headers,
@@ -595,7 +606,7 @@ async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
     path: Path = sess.workdir / name
     if not path.is_file():
         raise NotFound("segment not found")
-    await c.content_policy.require_segment(g, c.auth, path, sess.workdir / "index.m3u8")
+    await c.guard.require_segment(g, path, sess.workdir / "index.m3u8")
     return FileResponse(
         path,
         media_type="video/mp2t" if name.endswith(".ts") else "application/octet-stream",

@@ -344,7 +344,7 @@ async def test_a_reaped_session_takes_its_pin_with_it(
 
 # ---------------------------------------------------------------- one viewer, end to end
 def grant_token(api: Api, url: str, *, mode: str, live: bool) -> str:
-    return api.c.tokens.issue(StreamGrant(api.profile_id, "iptv", url, {}, mode, live, None, False))
+    return api.c.tokens.issue(StreamGrant(api.profile_id, "iptv", url, {}, mode, live, None, False, **api.identity()))
 
 
 @respx.mock(assert_all_mocked=False, assert_all_called=False)

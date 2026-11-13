@@ -64,7 +64,9 @@ async def test_real_ffmpeg_archive_window_and_seek(api, tmp_path, monkeypatch, p
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fixture_spawn)
     source = await add_source(api)
     channel = (await api.get("/channels", params={"language": "all"})).json()["channels"][0]
-    grant = StreamGrant(api.profile_id, source["id"], str(clip), {}, "hls", True, channel["id"][3:], False)
+    grant = StreamGrant(
+        api.profile_id, source["id"], str(clip), {}, "hls", True, channel["id"][3:], False, **api.identity()
+    )
     token = api.c.tokens.issue(grant)
     response = await api.post("/playback/buffer/lease", json={"stream_token": token})
     assert response.status_code == 200, response.text

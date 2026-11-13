@@ -236,10 +236,16 @@ class SessionsService:
             await s.commit()
 
     # ------------------------------------------------------------------ activity
-    async def now_playing(self, user_id: str) -> builtins.list[dict[str, Any]]:
-        """What this user is streaming right now.
+    # ``StreamRegistry``, assigned by the composition root: every stream resolved for a user.
+    streams: Any = None
 
-        Empty until the stream proxy tags its sessions with a user; the Users screen and
-        the stream-limit check read this one method.
+    async def now_playing(self, user_id: str) -> builtins.list[dict[str, Any]]:
+        """What this user is streaming right now: ``id``, ``title``, ``kind``, ``since`` and ``client`` per stream.
+
+        A stream is listed while it shows activity (see ``app.services.streams``); the Users
+        screen and the stream-limit check read the same records.
         """
-        return []
+        if self.streams is None:
+            return []
+        playing: builtins.list[dict[str, Any]] = self.streams.now_playing(user_id)
+        return playing

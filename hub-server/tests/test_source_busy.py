@@ -72,14 +72,16 @@ async def limited_source(api: Api, limit: int) -> str:
 def grant(api: Api, source_id: str, url: str, *, profile_id: str | None = None, **fields: Any) -> str:
     live = fields.pop("live", True)
     mode = fields.pop("mode", "hls")
+    viewer = {**api.identity(profile_id), **fields}
     return api.c.tokens.issue(
-        StreamGrant(profile_id or api.profile_id, source_id, url, {}, mode, live, None, False, **fields)
+        StreamGrant(profile_id or api.profile_id, source_id, url, {}, mode, live, None, False, **viewer)
     )
 
 
 async def viewer_profile(api: Api, name: str = "Guest") -> str:
     created = await api.post("/profiles", json={"name": name})
     assert created.status_code == 201, created.text
+    await api.session_for(created.json()["id"])
     return str(created.json()["id"])
 
 

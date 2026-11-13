@@ -2936,6 +2936,15 @@ export interface paths {
                         "application/json": components["schemas"]["PlaybackDescriptor"];
                     };
                 };
+                /** @description user_stream_limit: the user's other devices already play as many streams as their max_streams allows; active lists them, limit is the allowance. Resolving on a device that is already playing never counts that device's own stream: the same title is the same stream (seek, audio change, retry), another title takes its place. Also audio_selection_required and the other playback conflicts. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -2953,6 +2962,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Besides saving the position, a report keeps the stream counted as playing for the user's stream limit (playing, paused) or releases it at once (stopped). */
         post: {
             parameters: {
                 query?: never;
@@ -3014,7 +3024,14 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what */
+                /** @description session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again. */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what. user_stream_limit: this stream went quiet for 30 seconds or was replaced on its device, and the user's limit is now used by other streams. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -3058,7 +3075,14 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description source_busy, as for /stream/{token} */
+                /** @description as for /stream/{token}; segments answer the same */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description source_busy or user_stream_limit, as for /stream/{token} */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -5152,14 +5176,14 @@ export interface components {
         Error: {
             code: string;
             message: string;
-            /** @description Only on source_busy: the streams this server is running on the source, longest-running first. May be empty when something outside this server holds the connections. */
+            /** @description On source_busy: the streams this server is running on the source, longest-running first; may be empty when something outside this server holds the connections. On user_stream_limit: the user's own streams that use up their limit. */
             active?: components["schemas"]["ActiveStream"][];
-            /** @description Only on source_busy: how many connections the source allows, when known. */
+            /** @description On source_busy: how many connections the source allows, when known. On user_stream_limit: the user's max_streams. */
             limit?: number | null;
             /** @description 403 forbidden only: the permissions the caller lacks */
             missing?: components["schemas"]["Permission"][];
         };
-        /** @description One stream holding a source connection, named to the profile a busy source turned away. */
+        /** @description One stream holding a source connection, named to the profile a busy source turned away; or one of a user's own streams, on user_stream_limit. */
         ActiveStream: {
             profile_name?: string | null;
             /** @description Channel or title being watched; null for adult titles and for content the refused profile may not open. */
@@ -5240,9 +5264,18 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
         };
+        /** @description One stream a user is playing. Listed while it shows activity - bytes or a segment served, or a progress report, in the last 30 seconds - and for 30 seconds after it was resolved. */
         NowPlaying: {
+            /** @description The id that was resolved */
             id: string;
+            /** @description null for adult titles */
             title?: string | null;
+            /** @description channel, movie, episode, recording, … */
+            kind?: string | null;
+            /** Format: date-time */
+            since?: string;
+            /** @enum {string|null} */
+            client?: "web" | "android_tv" | null;
         } & {
             [key: string]: unknown;
         };

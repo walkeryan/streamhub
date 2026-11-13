@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -149,7 +150,15 @@ async def test_api_lease_requires_profile_owned_live_grant_and_stop_revokes(api,
     # Use application's recovery lifecycle but fake only its subprocess/storage capability.
     channel = (await api.get("/channels", params={"language": "all"})).json()["channels"][0]
     grant = StreamGrant(
-        api.profile_id, source["id"], "https://fixture.invalid/live", {}, "hls", True, channel["id"][3:], False
+        api.profile_id,
+        source["id"],
+        "https://fixture.invalid/live",
+        {},
+        "hls",
+        True,
+        channel["id"][3:],
+        False,
+        **api.identity(),
     )
     token = api.c.tokens.issue(grant)
     body = {"stream_token": token}
@@ -157,8 +166,9 @@ async def test_api_lease_requires_profile_owned_live_grant_and_stop_revokes(api,
     assert result.status_code == 200, result.text
     viewer = {**body, "lease_id": result.json()["lease_id"]}
     assert (await api.post("/playback/buffer/heartbeat", json={**viewer, "paused": True})).status_code == 200
-    grant.profile_id = "another-profile"
-    other_token = api.c.tokens.issue(grant)
+    # Another profile's grant, valid in itself, is not this profile's to lease with.
+    other = (await api.post("/profiles", json={"name": "Other"})).json()["id"]
+    other_token = api.c.tokens.issue(replace(grant, profile_id=other, **await api.session_for(other)))
     assert (await api.post("/playback/buffer/lease", json={"stream_token": other_token})).status_code == 403
     assert (await api.client.post("/api/v1/playback/buffer/lease", json=body)).status_code == 401
     assert (await api.post("/playback/recovery/stop", json={"confirm": True})).status_code == 200
@@ -222,7 +232,15 @@ async def test_expired_seek_does_not_restart_and_segments_bind_exact_grant(api, 
     api.c.proxy.dvr = manager
     channel = (await api.get("/channels", params={"language": "all"})).json()["channels"][0]
     grant = StreamGrant(
-        api.profile_id, source["id"], "https://fixture.invalid/live", {}, "hls", True, channel["id"][3:], False
+        api.profile_id,
+        source["id"],
+        "https://fixture.invalid/live",
+        {},
+        "hls",
+        True,
+        channel["id"][3:],
+        False,
+        **api.identity(),
     )
     token = api.c.tokens.issue(grant)
     response = await api.post("/playback/buffer/lease", json={"stream_token": token})

@@ -65,6 +65,7 @@ class Api:
         self.c = c
         self.headers: dict[str, str] = {}
         self.profile_id = ""
+        self.identities: dict[str, dict[str, Any]] = {}
 
     async def login_admin(self) -> None:
         profiles = (await self.client.get("/api/v1/profiles")).json()
@@ -96,6 +97,30 @@ class Api:
 
     async def delete(self, url: str, **kw: Any) -> httpx.Response:
         return await self.req("DELETE", url, **kw)
+
+    def identity(self, profile_id: str | None = None) -> dict[str, Any]:
+        """The viewer fields a hand-built ``StreamGrant`` needs to be served: every grant is re-validated.
+
+        The signed-in admin's, or those of a session opened with ``session_for``.
+        """
+        if profile_id is not None and profile_id != self.profile_id:
+            return self.identities[profile_id]
+        return self._identity(self.headers["Authorization"].removeprefix("Bearer "))
+
+    def _identity(self, token: str) -> dict[str, Any]:
+        p = self.c.auth.principal_from_access(token)
+        return {
+            "profile_version": p.token_version,
+            "session_id": p.session_id,
+            "user_id": p.user_id,
+            "user_version": p.user_version,
+        }
+
+    async def session_for(self, profile_id: str) -> dict[str, Any]:
+        """Sign another profile in, so grants can be built for it with ``identity``."""
+        tokens = await self.c.auth.issue(await self.c.auth.get_profile(profile_id))
+        self.identities[profile_id] = self._identity(tokens["access_token"])
+        return self.identities[profile_id]
 
     async def accept_disclaimer(self) -> None:
         r = await self.post("/disclaimer/accept", json={"version": "1.0"})

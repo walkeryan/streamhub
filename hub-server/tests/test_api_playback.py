@@ -228,6 +228,7 @@ async def test_proxy_vod_passthrough_and_hls_rewrite(api: Api, respx_mock: respx
             live=False,
             channel_key=None,
             transcode=False,
+            **api.identity(),
         )
     )
     r = await api.client.get(f"/api/v1/stream/{token}", headers={"Range": "bytes=0-9"})
