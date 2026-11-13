@@ -355,6 +355,7 @@ class PlaybackResolver:
         self.active = active
         self._probing: dict[str, asyncio.Future[dict[str, Any] | None]] = {}
         self._probe_retry: dict[str, float] = {}
+        self._recording_probes: dict[str, tuple[tuple[str, int], dict[str, Any]]] = {}
 
     content_policy: Any = None
     auth: Any = None
@@ -366,6 +367,8 @@ class PlaybackResolver:
     pin: Any = None
     # ``StreamRegistry``: who is streaming what, for the per-user stream limit.
     streams: Any = None
+    # ``RecorderService``: finished recordings play as ``rec:<id>``.
+    recorder: Any = None
 
     async def _require_slot(self) -> None:
         """409 ``user_stream_limit`` when the caller's other devices already use every stream they may play."""
@@ -427,6 +430,8 @@ class PlaybackResolver:
             raise Forbidden("External trailers require owner access", code="content_restricted")
         client = client if client in ("web", "web_hls", "android_tv") else "web"
         web = client != "android_tv"
+        if hub_id.startswith("rec:"):
+            return await self._resolve_recording(profile_id, hub_id, client, audio_track, start_position_ms)
         if not web and room is None:
             # The TV plays the file itself and switches tracks itself; the field is accepted, not used.
             audio_track = start_position_ms = None
@@ -1069,6 +1074,23 @@ class PlaybackResolver:
         probe = None
         if self._probe_applies(src, target):
             probe = await self._probe_file(row, src, target, profile_id, pin_key)
+        vod = await self._plan_vod(
+            profile_id, probe, target.duration_ms, target.resume_position_ms, audio_track, start_position_ms
+        )
+        if pin_key is not None and vod.video is None:
+            vod.video = "copy"  # a room's members share one HLS session even when a browser could play the file
+        return vod
+
+    async def _plan_vod(
+        self,
+        profile_id: str,
+        probe: dict[str, Any] | None,
+        duration_ms: int | None,
+        resume_ms: int | None,
+        audio_track: int | None,
+        start_position_ms: int | None,
+    ) -> WebVod:
+        """A probed (or unprobeable) file as a browser gets it: audio track, video plan, start offset."""
         tracks = probe_tracks({"probe": probe}) if probe else []
         if audio_track is not None and probe is not None and audio_track >= len(tracks):
             raise ServiceError("This file has no such audio track.", code="audio_track_invalid")
@@ -1079,14 +1101,11 @@ class PlaybackResolver:
             selected = wanted if wanted is not None else default_track(tracks)
         raw_video = probe.get("video") if probe else None
         video = raw_video if isinstance(raw_video, dict) else {}
-        duration_ms = target.duration_ms or (probe.get("duration_ms") if probe else None)
-        start_ms = target.resume_position_ms if start_position_ms is None else start_position_ms
+        duration_ms = duration_ms or (probe.get("duration_ms") if probe else None)
+        start_ms = resume_ms if start_position_ms is None else start_position_ms
         start_s = vod_start_s(start_ms, duration_ms)
-        plan = web_vod_plan(probe, selected)
-        if pin_key is not None and plan is None:
-            plan = "copy"  # a room's members share one HLS session even when a browser could play the file
         return WebVod(
-            video=plan,
+            video=web_vod_plan(probe, selected),
             codec=video.get("codec"),
             width=video.get("width"),
             tracks=tracks,
@@ -1094,6 +1113,98 @@ class PlaybackResolver:
             start_s=start_s,
             duration_ms=duration_ms,
         )
+
+    # ------------------------------------------------------------------ recordings
+    async def _resolve_recording(
+        self, profile_id: str, hub_id: str, client: str, audio_track: int | None, start_position_ms: int | None
+    ) -> dict[str, Any]:
+        """``rec:<recording id>``: a recording's file, to anyone who may see the recording.
+
+        The TV gets the file itself, with Range. A browser gets what it gets for any VOD file:
+        the file is probed and, since it is Matroska, served as HLS with the video copied
+        (H.264) or transcoded and one audio track encoded.
+        """
+        from app.services.content_policy import active_principal
+
+        principal = active_principal.get()
+        if self.recorder is None or principal is None:
+            raise NotFound("recording not found")
+        row, path = await self.recorder.playable(principal, hub_id.removeprefix("rec:"))
+        await self._require_slot()
+        p = await self._progress.get(profile_id, hub_id)
+        resume = 0 if p is None or p.completed else p.position_ms
+        vod: WebVod | None = None
+        probe: dict[str, Any] | None = None
+        if client != "android_tv":
+            probe = await self._probe_recording(row.id, path)
+            vod = await self._plan_vod(profile_id, probe, None, resume, audio_track, start_position_ms)
+        plan = vod if vod is not None and vod.video is not None else None
+        mode = PlaybackMode.HLS if plan is not None else PlaybackMode.PROXY
+        device = client if client == "android_tv" else "web"
+        title = row.title[:80]
+        self._admit(principal, profile_id, hub_id, title, "recording", device)
+        token = self.tokens.issue(
+            StreamGrant(
+                profile_id=profile_id,
+                content_ref=hub_id,
+                profile_version=principal.token_version,
+                session_id=principal.session_id,
+                source_id="",
+                url=hub_id,  # the file is looked up when the grant is used, never named in it
+                headers={},
+                mode=mode.value,
+                live=False,
+                channel_key=None,
+                transcode=False,
+                vod_video=plan.video if plan else None,
+                vod_codec=plan.codec if plan else None,
+                vod_width=plan.width if plan else None,
+                audio_track=plan.audio_track if plan else None,
+                start_s=plan.start_s if plan else 0,
+                title=title,
+                kind="recording",
+                user_id=principal.user_id or None,
+                user_version=principal.user_version,
+                client=device,
+            )
+        )
+        hls = mode == PlaybackMode.HLS
+        desc: dict[str, Any] = {
+            "id": hub_id,
+            "mode": mode.value,
+            "url": absolute(f"/api/v1/stream/{token}/index.m3u8" if hls else f"/api/v1/stream/{token}"),
+            "mime": "application/x-mpegURL" if hls else "video/x-matroska",
+            "headers": {},
+            "live": False,
+            "resume_position_ms": int(resume or 0),
+            "duration_ms": vod.duration_ms if vod is not None else None,
+            "audio_tracks": vod.tracks if vod is not None else [],
+            "audio_track": plan.audio_track if plan else None,
+            "start_position_ms": plan.start_s * 1000 if plan else None,
+            "title": row.title,
+            "subtitle": row.subtitle or row.channel_name or None,
+            "poster": None,
+            "channel_context": None,
+            "handoff": None,
+            "drm": None,
+        }
+        desc.update(await self._runtime_audio(profile_id, {"probe": probe} if probe else {}, consent=True))
+        return desc
+
+    async def _probe_recording(self, recording_id: str, path: Any) -> dict[str, Any] | None:
+        """Probe a recording's file once per file; ``None`` without ffprobe or when it cannot be read."""
+        if self.probe is None or not self.probe.available:
+            return None
+        stamp = (str(path), path.stat().st_size)
+        held = self._recording_probes.get(recording_id)
+        if held is not None and held[0] == stamp:
+            return held[1]
+        found: dict[str, Any] | None = await self.probe.run(str(path), {})
+        if found is not None:
+            if len(self._recording_probes) >= 256:
+                self._recording_probes.clear()
+            self._recording_probes[recording_id] = (stamp, found)
+        return found
 
     async def _runtime_audio(self, profile_id: str, extra: dict[str, Any], consent: bool) -> dict[str, Any]:
         preferred = await self._catalog.preferred_languages(profile_id, None)

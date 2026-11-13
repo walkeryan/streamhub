@@ -53,6 +53,11 @@ _slots: ContextVar[int] = ContextVar("stream_slots", default=1)
 requested_ref: ContextVar[str | None] = ContextVar("requested_ref", default=None)
 
 
+def is_recording(grant: Any) -> bool:
+    """A grant for a finished recording (``rec:<id>``): a file of this server's, not a source's stream."""
+    return grant.kind == "recording" and str(grant.content_ref or "").startswith("rec:")
+
+
 @contextmanager
 def panes(count: int) -> Iterator[None]:
     """Resolve ``count`` streams that play side by side on one device."""
@@ -310,6 +315,12 @@ class GrantGuard:
 
     async def require_grant(self, grant: Any) -> None:
         await self.viewer(grant)
+        if is_recording(grant):
+            # No source stands behind a recording. Who may see it was decided when the grant was
+            # issued, and a change to that moves the user's version, which was just checked.
+            if self._policy.enabled:
+                await self._policy.require(grant.profile_id, grant.content_ref)
+            return
         await self._policy.require_grant(grant, self._auth)
 
     async def guard_stream(self, grant: Any, stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
@@ -328,5 +339,8 @@ class GrantGuard:
                 await close()
 
     async def require_segment(self, grant: Any, path: Path, manifest: Path) -> None:
+        if is_recording(grant):
+            await self.require_grant(grant)
+            return
         await self.viewer(grant)
         await self._policy.require_segment(grant, self._auth, path, manifest)

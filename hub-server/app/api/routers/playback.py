@@ -16,14 +16,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
-from app.api.streaming import OwnedStreamingResponse
+from app.api.streaming import OwnedStreamingResponse, byte_range, file_range
 from app.domain.ports import ImageAuthProvider
 from app.proxy.stream_proxy import HlsSourceBusy, Viewer, VodPlan
 from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
 from app.services.playback import StreamGrant, play_key
-from app.services.streams import open_failed, panes, source_busy
+from app.services.streams import is_recording, open_failed, panes, source_busy
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -344,6 +344,30 @@ async def _open_failed(c: C, g: StreamGrant, exc: Exception, maximum: int | None
     return await open_failed(c, g.source_id, g.profile_id, exc, maximum, message)
 
 
+async def _recording_file(c: C, g: StreamGrant, request: Request) -> Response:
+    """A recording's file, whole or the range asked for, checked like any stream while it is sent."""
+    path = await c.recorder.stored(str(g.content_ref)[4:])
+    size = path.stat().st_size
+    asked = request.headers.get("range")
+    span = byte_range(asked, size)
+    if span is None:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
+    start, end = span
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(end - start + 1),
+        "Cache-Control": "private, no-store",
+    }
+    if asked:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(
+        c.guard.guard_stream(g, file_range(path, start, end)),
+        status_code=206 if asked else 200,
+        headers=headers,
+        media_type="video/x-matroska",
+    )
+
+
 def _proxy_url(token: str, upstream: str, c: C) -> str:
     sub = c.crypto.encrypt_json({"u": upstream, "grant": hashlib.sha256(token.encode()).hexdigest()})
     return f"/api/v1/stream/{token}/seg/{sub}"
@@ -354,6 +378,8 @@ async def stream(token: str, request: Request, c: C) -> Response:
     g = await _grant(c, token)
     if g.mode == "hls":
         return Response(status_code=307, headers={"Location": f"/api/v1/stream/{token}/index.m3u8"})
+    if is_recording(g):
+        return await _recording_file(c, g, request)
     source = await c.sources.get(g.source_id)
     maximum = c.sources.max_connections(source)
     is_hls_upstream = ".m3u8" in g.url.split("?", 1)[0].lower()
@@ -500,8 +526,9 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
         if lease_id is None or g.room or c.proxy.dvr.key != key:
             raise Gone("Buffered session expired.", code="buffer_expired")
         c.proxy.dvr.check(key, g.profile_id, lease_id)
-    source = await c.sources.get(g.source_id)
-    maximum = c.sources.max_connections(source)
+    # A recording is a file of this server's: ffmpeg reads it from disk, no source and no limit.
+    recording = await c.recorder.stored(str(g.content_ref)[4:]) if is_recording(g) else None
+    maximum = None if recording else c.sources.max_connections(await c.sources.get(g.source_id))
     try:
         if g.room:
             sess = await c.room_playback.open(g)
@@ -510,18 +537,18 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
                 c,
                 g,
                 key,
-                g.url,
+                str(recording) if recording else g.url,
                 g.headers,
                 live=g.live,
                 transcode=transcode,
-                source_id=g.source_id,
+                source_id=None if recording else g.source_id,
                 max_connections=maximum,
                 generation=g.recovery_generation,
                 pair_lease_id=g.pair_lease_id,
                 vod=vod,
                 viewer=_viewer(g),
                 # A file remuxed without a plan is one process for everyone watching it: one upstream viewer.
-                pin_key=None if g.live else vod.family if vod is not None else key,
+                pin_key=None if g.live or recording else vod.family if vod is not None else key,
             )
     except HlsSourceBusy as exc:
         raise await _source_busy(c, g, "Another stream is using this source. Stop it and retry.") from exc

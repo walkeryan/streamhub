@@ -155,6 +155,31 @@ class OwnedStream(AsyncIterator[bytes]):
             self._closed = True
 
 
+class Tap:
+    """A recording's seat on a shared upstream.
+
+    It is handed the bytes viewers are, and can never slow them: its queue is bounded like a
+    viewer's, and a recording that falls that far behind is dropped (``dropped``), not waited for.
+    While it is subscribed the upstream stays open, with viewers or without.
+    """
+
+    def __init__(self, upstream: SharedUpstream, queue: asyncio.Queue[bytes | None]) -> None:
+        self.upstream = upstream
+        self.queue = queue
+        self.dropped = False
+        self.closed = False
+
+    @property
+    def alone(self) -> bool:
+        """Nobody is watching: the upstream's connection is held for the recording only."""
+        return not self.closed and self.upstream.subscribers == len(self.upstream.taps)
+
+    def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self.upstream.unsubscribe(self.queue)
+
+
 class SharedUpstream:
     """One upstream HTTP connection broadcast to many subscribers."""
 
@@ -180,10 +205,19 @@ class SharedUpstream:
         self.closed = False
         self.source_id: str | None = None
         self.viewers: dict[asyncio.Queue[bytes | None], Viewer] = {}
+        self.taps: dict[asyncio.Queue[bytes | None], Tap] = {}
 
     @property
     def subscribers(self) -> int:
         return len(self._subs)
+
+    def tap(self, viewer: Viewer | None = None) -> Tap:
+        """Subscribe a recording (see ``Tap``). ``viewer`` is how a ``source_busy`` answer names it."""
+        q = self.subscribe()
+        tap = self.taps[q] = Tap(self, q)
+        if viewer is not None:
+            self.viewers[q] = viewer
+        return tap
 
     def subscribe(self) -> asyncio.Queue[bytes | None]:
         q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=CLIENT_QUEUE)
@@ -200,6 +234,7 @@ class SharedUpstream:
     def unsubscribe(self, q: asyncio.Queue[bytes | None]) -> None:
         self._subs.discard(q)
         self.viewers.pop(q, None)
+        self.taps.pop(q, None)
         if not self.closed and not self._subs and self._linger is None:
             loop = asyncio.get_running_loop()
             self._linger = loop.call_later(LINGER_S, self._close_if_idle)
@@ -228,6 +263,9 @@ class SharedUpstream:
                 # slow client: drop it rather than stall everyone
                 self._subs.discard(q)
                 self.viewers.pop(q, None)
+                tap = self.taps.pop(q, None)
+                if tap is not None:
+                    tap.dropped = True
                 with contextlib.suppress(asyncio.QueueFull):
                     q.get_nowait()
                     q.put_nowait(None)
@@ -330,6 +368,16 @@ class HttpSession:
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     viewer: Viewer | None = None
     pin_key: str | None = None
+
+
+@dataclass(eq=False)
+class CaptureSlot:
+    """One source connection held by a recording that reads its stream itself."""
+
+    source_id: str
+    viewer: Viewer | None = None
+    # Ends the recording and gives the slot back; called when an administrator stops all streams.
+    stop: Callable[[], Awaitable[None]] | None = None
 
 
 def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
@@ -504,6 +552,7 @@ class StreamProxy:
         self._pinning: dict[str, asyncio.Future[str]] = {}
         # HLS sessions someone answers for while nobody polls them (a watch room's): never reaped as idle.
         self._kept: set[str] = set()
+        self._captures: set[CaptureSlot] = set()
 
     def ensure_running(self, generation: int | None = None) -> None:
         if self.paused or (generation is not None and generation != self.generation):
@@ -514,7 +563,7 @@ class StreamProxy:
     def recovery_status(self) -> dict[str, Any]:
         return {
             "paused": self.paused,
-            "active_sessions": len(self._shared) + len(self._hls) + len(self._http),
+            "active_sessions": len(self._shared) + len(self._hls) + len(self._http) + len(self._captures),
             "shared_upstreams": len(self._shared),
             "hls_sessions": len(self._hls),
             "http_sessions": len(self._http),
@@ -582,6 +631,12 @@ class StreamProxy:
                     await self._stop_hls(key, expected=hls)
                 except Exception:
                     continue
+        for slot in list(self._captures):
+            if slot.stop is not None:
+                try:
+                    await slot.stop()
+                except Exception:
+                    continue  # Still counted, so the stop is not reported as complete.
         for path in list(self._cleanup_pending):
             try:
                 shutil.rmtree(path)
@@ -671,6 +726,7 @@ class StreamProxy:
             + sum(s == source_id for s in self._probes.values())
             + sum(s.source_id == source_id for s in self._http)
             + sum(s.source_id == source_id for s in self._shared.values())
+            + sum(s.source_id == source_id for s in self._captures)
             + sum(
                 source == source_id and key not in self._hls
                 for lease in self._pairs.values()
@@ -769,10 +825,12 @@ class StreamProxy:
         for up in self._shared.values():
             if up.source_id == source_id:
                 found += up.viewers.values()
-        # A player opens several connections for one title (ranges, segments): name it once.
-        unique: dict[tuple[str, str | None], Viewer] = {}
+        found += [s.viewer for s in self._captures if s.source_id == source_id and s.viewer is not None]
+        # A player opens several connections for one title (ranges, segments): name it once. A watch
+        # room or a recording of the same content is named apart, by the title it was given.
+        unique: dict[tuple[str, str | None, str | None], Viewer] = {}
         for viewer in sorted(found, key=lambda v: v.since):
-            unique.setdefault((viewer.profile_id, viewer.ref or viewer.title), viewer)
+            unique.setdefault((viewer.profile_id, viewer.ref or viewer.title, viewer.title), viewer)
         return list(unique.values())
 
     def user_viewers(self, user_id: str) -> list[Viewer]:
@@ -838,6 +896,29 @@ class StreamProxy:
             yield
         finally:
             self._probes.pop(slot, None)
+
+    # ------------------------------------------------------------------ recordings
+    def tap_shared(self, key: str, viewer: Viewer | None = None) -> Tap | None:
+        """A recording's seat on the channel's shared upstream, when viewers have one open right now."""
+        up = self._shared.get(key)
+        if up is None or up.closed or up.failed or not up.subscribers:
+            return None
+        return up.tap(viewer)
+
+    async def capture_slot(self, source_id: str, max_connections: int | None, viewer: Viewer | None) -> CaptureSlot:
+        """Hold one of the source's connections for a recording, admitted as a stream would be."""
+        async with self._hls_lock:
+            self.ensure_running()
+            capacity = max_connections or 0
+            if capacity > 0 and self._source_use(source_id) >= capacity:
+                await self._evict_idle_hls(source_id, capacity, self._clock())
+            self._admit_source(source_id, max_connections)
+            slot = CaptureSlot(source_id, viewer)
+            self._captures.add(slot)
+        return slot
+
+    def release_capture(self, slot: CaptureSlot) -> None:
+        self._captures.discard(slot)
 
     # ------------------------------------------------------------------ pinned upstream sessions
     def _pin_held(self, key: str, now: float) -> str | None:

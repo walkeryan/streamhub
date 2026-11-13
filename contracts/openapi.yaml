@@ -493,7 +493,7 @@ components:
       type: object
       required: [id]
       properties:
-        id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false)"}
+        id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false). Also rec:<recording id> for a recording that has a file (state done, or failed with what it kept): android_tv gets mode=proxy, the Matroska file itself with Range support; web gets the file probed and served as restart-at-offset HLS like any VOD file a browser cannot decode. Needs recordings.view and a recording the caller's /recordings list shows; anything else is 404. Progress is reported under the same id."}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
         variant_id: {type: string, nullable: true}
         allow_unverified_audio: {type: boolean, default: false}
@@ -723,7 +723,7 @@ components:
     RecordingState: { type: string, enum: [scheduled, recording, done, failed, missed, cancelled] }
     Recording:
       type: object
-      description: One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes.
+      description: "One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file it plays with POST /playback/resolve {id: \"rec:<id>\"}."
       required: [id, profile_id, channel_id, title, starts_at, ends_at, state, created_at, updated_at]
       properties:
         id: {type: string}

@@ -4,6 +4,7 @@
 - ``lib:<source_id>:<ext_id>``          — an item owned by one source (library/VOD/series/season/episode)
 - ``ch:<source_id>:<ext_id>``           — a live channel
 - ``prog:<int>``                         — an EPG programme (for catch-up)
+- ``rec:<recording id>``                 — a finished recording (playback and its progress only)
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ def parse(hub_id: str) -> HubId:
     parts = hub_id.split(":", 2)
     if len(parts) == 3 and parts[0] in ("tmdb", "lib", "ch"):
         return HubId(parts[0], parts[1], parts[2])
-    if len(parts) == 2 and parts[0] == "prog":
-        return HubId("prog", parts[1])
+    if len(parts) == 2 and parts[0] in ("prog", "rec") and parts[1]:
+        return HubId(parts[0], parts[1])
     raise ValueError(f"invalid id {hub_id!r}")
 
 

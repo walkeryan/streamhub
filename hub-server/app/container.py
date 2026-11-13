@@ -26,6 +26,7 @@ from app.infra.db import Database
 from app.infra.http import make_client
 from app.infra.image_cache import ImageCache
 from app.infra.settings import AppSettings
+from app.proxy.capture import Capture
 from app.proxy.dvr import DvrManager
 from app.proxy.stream_proxy import StreamProxy
 from app.services.auth import AuthService
@@ -117,6 +118,7 @@ class Container:
     room_playback: RoomPlayback
     recorder: RecorderService
     http_factory: Any
+    capture: Capture | None = None
 
 
 def build_container(settings: AppSettings, http_factory: Any = None, cache: Cache | None = None) -> Container:
@@ -171,7 +173,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     requests = RequestService(db, availability, sources, tmdb, request_manager)
     requests.content_policy = content_policy
     sync.after_catalog_sync = requests.reconcile
-    # Schedules only: the capture backend is NullCapture until one is assigned to ``recorder.capture``.
+    # Schedules only until the proxy exists: the capture backend is assigned below.
     recorder = RecorderService(
         db, channels, recordings_dir=settings.recordings_dir, min_free_gb=settings.recordings_min_free_gb
     )
@@ -216,6 +218,20 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     playback.probe = MediaProbe(settings.ffprobe_path)
     playback.probe_slot = proxy.probe_slot
     playback.pin = proxy.pin
+    playback.recorder = recorder
+    capture: Capture | None = None
+    if settings.recordings_dir:
+        # Recording is configured: captures run through the proxy's shared upstreams and admission.
+        capture = Capture(
+            proxy,
+            sources,
+            db,
+            recordings_dir=settings.recordings_dir,
+            ffmpeg=settings.ffmpeg_path,
+            min_free_gb=settings.recordings_min_free_gb,
+        )
+        recorder.capture = capture
+        streams.external.append(capture.user_streams)
     google_auth = GoogleAuthService(settings, auth, lambda: app_settings.get("signup_mode"))
     rooms = RoomHub(RoomRegistry(), RoomTokens(crypto))
     return Container(
@@ -268,6 +284,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         ),
         recorder=recorder,
         http_factory=http_factory,
+        capture=capture,
     )
 
 
@@ -295,6 +312,8 @@ async def shutdown(c: Container) -> None:
     await c.rooms.shutdown()
     await c.room_playback.shutdown()
     await c.recorder.shutdown()
+    if c.capture is not None:
+        await c.capture.shutdown()
     await c.sync.wait_idle()
     await c.proxy.shutdown()
     await c.db.dispose()

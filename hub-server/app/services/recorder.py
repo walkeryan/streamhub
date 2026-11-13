@@ -337,6 +337,39 @@ class RecorderService:
             raise NotFound("rule not found")
         return row
 
+    # ------------------------------------------------------------------ playback
+    def file_of(self, row: Recording) -> Path | None:
+        """A recording's file, while it is where the capture put it. Never anything outside RECORDINGS_DIR."""
+        if not row.path or self.recordings_dir is None:
+            return None
+        try:
+            root = self.recordings_dir.resolve()
+            target = (root / row.path).resolve()
+            return target if root in target.parents and target.is_file() else None
+        except OSError:
+            return None
+
+    async def playable(self, p: Principal, recording_id: str) -> tuple[Recording, Path]:
+        """A recording this caller may watch, and its file: what ``list`` shows them, once it has a file.
+
+        That is a finished recording, and also one that failed part-way and kept what it had.
+        """
+        self._require_view(p)
+        row = await self._owned(p, recording_id)
+        path = self.file_of(row) if row.state in ("done", "failed") else None
+        if path is None:
+            raise NotFound("recording not found")
+        return row, path
+
+    async def stored(self, recording_id: str) -> Path:
+        """The file behind a stream grant that was issued for a recording, if both are still there."""
+        async with self._db.session() as s:
+            row = await s.get(Recording, recording_id)
+        path = self.file_of(row) if row is not None else None
+        if path is None:
+            raise NotFound("recording not found")
+        return path
+
     # ------------------------------------------------------------------ reads
     async def list(self, p: Principal, *, state: str | None) -> builtins.list[Recording]:
         """The caller's recordings (everyone's for an admin), earliest first. Cancelled ones only on request."""

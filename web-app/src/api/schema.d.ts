@@ -5674,7 +5674,7 @@ export interface components {
             selection_required: boolean;
         };
         PlaybackRequest: {
-            /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false) */
+            /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false). Also rec:<recording id> for a recording that has a file (state done, or failed with what it kept): android_tv gets mode=proxy, the Matroska file itself with Range support; web gets the file probed and served as restart-at-offset HLS like any VOD file a browser cannot decode. Needs recordings.view and a recording the caller's /recordings list shows; anything else is 404. Progress is reported under the same id. */
             id: string;
             /** @description pick a specific source when a title has several */
             source_id?: string | null;
@@ -5950,7 +5950,7 @@ export interface components {
         };
         /** @enum {string} */
         RecordingState: "scheduled" | "recording" | "done" | "failed" | "missed" | "cancelled";
-        /** @description One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. */
+        /** @description One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file it plays with POST /playback/resolve {id: "rec:<id>"}. */
         Recording: {
             id: string;
             profile_id: string;
