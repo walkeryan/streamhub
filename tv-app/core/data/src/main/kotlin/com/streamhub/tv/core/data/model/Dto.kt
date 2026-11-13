@@ -10,8 +10,22 @@ import kotlinx.serialization.json.JsonObject
  * so the server can add fields without breaking older TV builds.
  */
 
+/** One stream holding a source connection, named in a `source_busy` error when the server knows it. */
 @Serializable
-data class ApiError(val code: String, val message: String)
+data class ActiveStream(
+    @SerialName("profile_name") val profileName: String? = null,
+    val title: String? = null,
+)
+
+@Serializable
+data class ApiError(
+    val code: String = "",
+    val message: String = "",
+    /** Optional on `source_busy` and `user_stream_limit`: the streams in the way right now. */
+    val active: List<ActiveStream> = emptyList(),
+    /** Optional on 403 `forbidden`: the permissions the caller lacks. */
+    val missing: List<String> = emptyList(),
+)
 
 // ---- Auth ------------------------------------------------------------------------------------
 
@@ -184,6 +198,10 @@ data class Tile(
     @SerialName("is_favorite") val isFavorite: Boolean = false,
     val sources: List<SourceBadge> = emptyList(),
     @SerialName("now_playing") val nowPlaying: Programme? = null,
+    /** The open request for this title, else its most recent closed one; null when never requested. */
+    @SerialName("request_state") val requestState: String? = null,
+    /** No in-app source, a request manager is configured and the profile may request. */
+    val requestable: Boolean = false,
 ) {
     val playableInApp: Boolean get() = sources.any { it.playableInApp }
 }
@@ -233,8 +251,12 @@ data class TitleDetail(
     val seasons: List<Tile> = emptyList(),
     val episodes: List<Tile> = emptyList(),
     val attribution: String? = null,
+    @SerialName("request_state") val requestState: String? = null,
+    val requestable: Boolean = false,
+    /** Requestable series only: season numbers a request may pick from (empty = whole series only). */
+    @SerialName("request_seasons") val requestSeasons: List<Int> = emptyList(),
 ) {
-    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying)
+    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable)
 }
 
 @Serializable
@@ -248,7 +270,22 @@ data class SearchResponse(
 )
 
 @Serializable
-data class BrowsePage(val tiles: List<Tile> = emptyList(), val page: Int = 1, val total: Int = 0)
+data class BrowsePage(
+    val tiles: List<Tile> = emptyList(),
+    val page: Int = 1,
+    val total: Int = 0,
+    /** Absent on servers older than the paging fields; [more] then falls back to the total. */
+    @SerialName("has_more") val hasMore: Boolean? = null,
+    @SerialName("page_size") val pageSize: Int? = null,
+) {
+    /** Whether another page follows this one. */
+    val more: Boolean get() = hasMore ?: (page * (pageSize ?: DEFAULT_PAGE_SIZE) < total)
+
+    companion object {
+        /** Page size of servers that do not report one. */
+        const val DEFAULT_PAGE_SIZE = 60
+    }
+}
 
 // ---- Live TV -----------------------------------------------------------------------------------
 
@@ -263,6 +300,15 @@ data class Programme(
     val category: String? = null,
     val icon: String? = null,
     @SerialName("catchup_available") val catchupAvailable: Boolean = false,
+    /** State of the household's recording of this programme, if there is one; null also when recording is off. */
+    @SerialName("recording_state") val recordingState: String? = null,
+    /** The server's sports classifier says this listing is sport; the same classifier the recorder's team rules use. */
+    @SerialName("is_sport") val isSport: Boolean = false,
+    /**
+     * The two sides, in title order, when [isSport] and the title spells out a matchup. Empty
+     * otherwise: the server guesses nothing, and neither does this app.
+     */
+    val teams: List<String> = emptyList(),
 )
 
 @Serializable
@@ -373,6 +419,17 @@ data class PlaybackDescriptor(
     @SerialName("buffer_available") val bufferAvailable: Boolean = false,
     @SerialName("preferred_audio_languages") val preferredAudioLanguages: List<String> = emptyList(),
     @SerialName("audio_language_required") val audioLanguageRequired: Boolean = false,
+    /**
+     * Set for a stream that starts part-way into its title: media time zero of the stream is this
+     * position in the title, and [durationMs] is the title's full length. On this TV that is a watch
+     * room's one shared stream (see [streamEpoch]).
+     */
+    @SerialName("start_position_ms") val startPositionMs: Long? = null,
+    /**
+     * Room descriptors only, and only when the room plays one shared stream: which start of that
+     * stream [startPositionMs] describes. Null for every other descriptor.
+     */
+    @SerialName("stream_epoch") val streamEpoch: Int? = null,
 )
 
 @Serializable
@@ -411,6 +468,17 @@ data class Settings(
     @SerialName("epg_refresh_hours") val epgRefreshHours: Int? = null,
     @SerialName("transcode_hw") val transcodeHw: String? = null,
     @SerialName("proxy_mode") val proxyMode: String? = null,
+)
+
+/** GET /app/tv: the newest TV build the server can hand out. Every field is defaulted so a partial answer decodes. */
+@Serializable
+data class TvAppRelease(
+    @SerialName("version_code") val versionCode: Int = 0,
+    @SerialName("version_name") val versionName: String = "",
+    /** Absolute, or a path on the same server. */
+    @SerialName("apk_url") val apkUrl: String = "",
+    /** Hex SHA-256 of the APK; the download is refused if it does not match. */
+    val sha256: String = "",
 )
 
 @Serializable

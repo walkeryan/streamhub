@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import tempfile
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -21,6 +22,7 @@ from app.infra.logging import redact_text
 from app.infra.models import Channel, Programme, Source, SyncRun, utcnow
 from app.services.settings_service import SettingsService
 from app.services.sources import DbCatalogSink, SourceService
+from app.services.visibility import set_watch
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +43,10 @@ class SyncService:
         self._settings = settings
         self._locks: dict[str, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Runs after every successful catalog sync (new titles may satisfy open requests).
+        self.after_catalog_sync: Callable[[], Awaitable[Any]] | None = None
+        # Runs after every successful guide refresh (recording rules match the new guide).
+        self.after_epg_refresh: Callable[[], Awaitable[Any]] | None = None
 
     def _lock(self, key: str) -> asyncio.Lock:
         return self._locks.setdefault(key, asyncio.Lock())
@@ -51,6 +57,9 @@ class SyncService:
 
     def spawn(self, source_id: str, *, with_epg: bool = True) -> None:
         async def _run() -> None:
+            # The task inherits the spawning request's context; a sync must see every row
+            # whatever that caller may watch.
+            set_watch(None)
             await self.sync_source(source_id)
             if with_epg:
                 await self.refresh_epg(source_id)
@@ -110,7 +119,7 @@ class SyncService:
                 if row.type in (SourceType.M3U.value, SourceType.XTREAM.value):
                     await self._sources.language.prepare()
                 gen = int((row.hints or {}).get("sync_gen") or 0) + 1
-                sink = DbCatalogSink(self._db, row, gen, self._sources.language)
+                sink = DbCatalogSink(self._db, row, gen, self._sources.language, self._sources.default_language(row))
                 await prov.sync(sink)
                 counts = await sink.finalize()
                 hints = dict(row.hints or {})
@@ -122,6 +131,7 @@ class SyncService:
                 await self._sources.set_status(source_id, SourceStatus.OK, last_sync=utcnow(), counts=counts)
                 await self._finish_run(run_id, True, None, counts)
                 log.info("source synced", extra={"source": source_id, **counts})
+                await self._after_catalog_sync()
                 return True
             except PermissionError as exc:
                 msg = redact_text(str(exc))
@@ -133,6 +143,15 @@ class SyncService:
                 await self._sources.set_status(source_id, SourceStatus.ERROR, error=msg)
                 await self._finish_run(run_id, False, msg, {})
             return False
+
+    async def _after_catalog_sync(self) -> None:
+        if self.after_catalog_sync is None:
+            return
+        try:
+            await self.after_catalog_sync()
+        except Exception as exc:
+            # The sync itself succeeded; the periodic job retries the follow-up.
+            log.warning("post-sync hook failed", extra={"err": redact_text(f"{type(exc).__name__}: {exc}")[:200]})
 
     # ------------------------------------------------------------------ EPG
     async def refresh_epg(self, source_id: str) -> int:
@@ -225,7 +244,17 @@ class SyncService:
                         src.counts = counts
                     await s.commit()
             await self._finish_run(run_id, True, None, {"programmes": total})
+            await self._after_epg_refresh()
             return total
+
+    async def _after_epg_refresh(self) -> None:
+        if self.after_epg_refresh is None:
+            return
+        try:
+            await self.after_epg_refresh()
+        except Exception as exc:
+            # The guide itself is in place; the next refresh runs the follow-up again.
+            log.warning("post-refresh hook failed", extra={"err": redact_text(f"{type(exc).__name__}: {exc}")[:200]})
 
     async def cleanup_epg(self) -> int:
         cutoff = datetime.now(UTC) - EPG_RETENTION
@@ -288,8 +317,19 @@ class SyncService:
 
 
 class SyncScheduler:
-    def __init__(self, sync: SyncService) -> None:
+    def __init__(
+        self,
+        sync: SyncService,
+        reconcile_requests: Callable[[], Awaitable[Any]] | None = None,
+        recorder_tick: Callable[[], Awaitable[Any]] | None = None,
+        classify: Callable[[], Awaitable[Any]] | None = None,
+        poll_requests: Callable[[], Awaitable[Any]] | None = None,
+    ) -> None:
         self._sync = sync
+        self._reconcile_requests = reconcile_requests
+        self._poll_requests = poll_requests
+        self._recorder_tick = recorder_tick
+        self._classify = classify
         self._sched: Any = None
 
     def start(self) -> None:
@@ -314,6 +354,52 @@ class SyncScheduler:
             coalesce=True,
             next_run_time=datetime.now(UTC) + timedelta(minutes=2),
         )
+        if self._reconcile_requests is not None:
+            sched.add_job(
+                self._reconcile_requests,
+                "interval",
+                minutes=5,
+                id="requests",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(minutes=1),
+            )
+        if self._poll_requests is not None:
+            from app.services.request_progress import FAST_S
+
+            # Asks the request manager only about requests that are due (a download every pass, a
+            # search every few minutes), so most passes are one query and no call.
+            sched.add_job(
+                self._poll_requests,
+                "interval",
+                seconds=FAST_S,
+                id="request-progress",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(seconds=45),
+            )
+        if self._recorder_tick is not None:
+            # Starts and stops captures, so it runs far more often than the other jobs.
+            sched.add_job(
+                self._recorder_tick,
+                "interval",
+                seconds=30,
+                id="recorder",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(seconds=30),
+            )
+        if self._classify is not None:
+            # One small batch of rating lookups a run; see ``ClassificationJob``.
+            sched.add_job(
+                self._classify,
+                "interval",
+                minutes=2,
+                id="classification",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(minutes=3),
+            )
         sched.start()
         self._sched = sched
 

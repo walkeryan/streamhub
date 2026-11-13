@@ -79,7 +79,9 @@ export const tokens = {
   },
   "rail": {
     "collapsed_w": 72,
-    "expanded_w": 240
+    "expanded_w": 240,
+    "tv_collapsed_w": 104,
+    "tv_expanded_w": 272
   },
   "themes": {
     "midnight": {

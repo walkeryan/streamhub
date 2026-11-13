@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { openDiscover, signIn } from './helpers'
 
 test('explicit activation without pointer movement restores its own dialog opener',async({page})=>{
   await signIn(page)
-  await page.getByRole('link',{name:'Movies',exact:true}).click()
+  await openDiscover(page)
   const opener=page.getByRole('button',{name:'Sort: Popular',exact:true})
   await expect(opener).toHaveAttribute('data-focused','true')
   await page.evaluate(async()=>{const path='/src/nav/spatial.ts';const {setFocus}=await import(/* @vite-ignore */path);await setFocus('rail:/')})
@@ -22,10 +22,10 @@ test('explicit activation without pointer movement restores its own dialog opene
 
 test('absolute mouse movement focuses a target even when movement deltas are zero',async({page})=>{
   await signIn(page)
-  await page.getByRole('link',{name:'Movies',exact:true}).click()
+  await openDiscover(page)
   const sort=page.getByRole('button',{name:'Sort: Popular',exact:true})
   await expect(sort).toHaveAttribute('data-focused','true')
-  const target=page.getByRole('button',{name:'Search all titles',exact:true})
+  const target=page.getByRole('button',{name:'Reset discovery filters',exact:true})
   await target.dispatchEvent('pointermove',{pointerType:'mouse',clientX:620,clientY:200,movementX:0,movementY:0})
   await expect(target).toHaveAttribute('data-focused','true')
   await page.evaluate(async()=>{const path='/src/nav/spatial.ts';const {setFocus}=await import(/* @vite-ignore */path);await setFocus('discover:sort:pick')})
@@ -34,5 +34,6 @@ test('absolute mouse movement focuses a target even when movement deltas are zer
   await target.hover()
   await expect(target).toHaveAttribute('data-focused','true')
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('search')).toBeVisible()
+  await expect(page.getByTestId('discover')).toBeVisible()
+  await expect(target).toHaveAttribute('data-focused','true')
 })

@@ -1,0 +1,8 @@
+# Optional overlay: give the dev instance an NVIDIA GPU for NVENC/NVDEC.
+#   docker compose --env-file <dev.env> -f deploy/dev/docker-compose.dev.yml -f deploy/dev/docker-compose.gpu.yml up -d
+services:
+  streamhub-dev:
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility

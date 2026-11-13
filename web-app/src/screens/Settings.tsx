@@ -1,18 +1,27 @@
 import { useAuthCapabilities } from '../api/contentPolicy'
+import { useCan, useMe } from '../api/me'
+import { absent } from '../api/client'
+import { people, usePeopleChange, useSessions, type AuthSession } from '../api/people'
+import { DEVICE_GONE, DeviceRow } from '../components/DeviceRow'
+import { deviceName } from '../lib/people'
 import { OwnerPinSettings } from '../components/OwnerPinSettings'
+import { SignInMethods } from '../components/SignInMethods'
 import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
 import { StreamRecovery } from '../components/StreamRecovery'
+import { RequestManagerSettings } from '../components/RequestManagerSettings'
+import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ok } from '../api/client'
-import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useProfiles, useSettings } from '../api/hooks'
+import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useSettings } from '../api/hooks'
 import type { Profile } from '../api/types'
 import { Button, Chip, ErrorState, Modal } from '../components/ui'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
-import { useRestoreFocus } from '../nav/back'
+import { useGo, useRestoreFocus } from '../nav/back'
+import { setFocus } from '../nav/spatial'
 import { setTheme } from '../lib/theme'
 import { LANG_NAMES } from '../lib/util'
 import { themes } from '../tokens'
@@ -20,8 +29,8 @@ import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 
 const TABS = [
-  ['profiles', 'Profiles'], ['appearance', 'Appearance'], ['languages', 'Languages'], ['rows', 'Home rows'],
-  ['parental', 'Parental'], ['playback', 'Playback'], ['about', 'About'],
+  ['profiles', 'Profile'], ['appearance', 'Appearance'], ['languages', 'Languages'], ['rows', 'Home rows'],
+  ['parental', 'Parental'], ['playback', 'Playback'], ['about', 'About'], ['devices', 'Devices'],
 ] as const
 type Tab = (typeof TABS)[number][0]
 
@@ -29,11 +38,13 @@ export function Settings() {
   const [sp, setSp] = useSearchParams()
   const tab = (TABS.find((t) => t[0] === sp.get('tab'))?.[0] ?? 'profiles') as Tab
   useRestoreFocus(true, `set:tab:${tab}`)
+  // Signed-in devices are the server's users-and-sessions model; a server without it has none to list.
+  const sessions = useMe().data !== null
   return (
     <div className="page-pad flex flex-col gap-6" data-testid="settings">
       <h1 className="display">Settings</h1>
       <FocusGroup focusKey="set:tabs" className="flex gap-2 flex-wrap" role="tablist">
-        {TABS.map(([id, label]) => <Chip key={id} focusKey={`set:tab:${id}`} pressed={tab === id} onEnter={() => setSp({ tab: id }, { replace: true })} testId={`tab-${id}`}>{label}</Chip>)}
+        {TABS.filter(([id]) => id !== 'devices' || sessions).map(([id, label]) => <Chip key={id} focusKey={`set:tab:${id}`} pressed={tab === id} onEnter={() => setSp({ tab: id }, { replace: true })} testId={`tab-${id}`}>{label}</Chip>)}
       </FocusGroup>
       <div style={{ maxWidth: '60rem' }}>
         {tab === 'profiles' && <ProfilesTab />}
@@ -43,6 +54,7 @@ export function Settings() {
         {tab === 'parental' && <ParentalTab />}
         {tab === 'playback' && <PlaybackTab />}
         {tab === 'about' && <AboutTab />}
+        {tab === 'devices' && sessions && <DevicesTab />}
       </div>
     </div>
   )
@@ -63,80 +75,62 @@ function useSaveProfile() {
     })
 }
 
-/* ------------------------------ profiles ------------------------------ */
+/* ------------------------------ profile ------------------------------ */
+/** The signed-in person: who they are, switching, and their own PIN. Everyone else is managed on the Users screen. */
 function ProfilesTab() {
   const capabilities=useAuthCapabilities()
-  const { data, error, refetch } = useProfiles()
   const me = useCurrent()
+  // A restricted profile never manages others, whatever its permissions say.
+  const manages = useCan('users') && !me.content_restricted
+  const owner = useCan('system.manage')
   const qc = useQueryClient()
+  const go = useGo()
   const toast = useUi((s) => s.toast)
-  const [name, setName] = useState('')
-  const [kids, setKids] = useState(false)
   const [pin, setPin] = useState('')
+  const [currentPin, setCurrentPin] = useState('')
   const [pinErr, setPinErr] = useState<string | null>(null)
-  const [confirm, setConfirm] = useState<Profile | null>(null)
-  const refresh = () => void qc.invalidateQueries({ queryKey: qk.profiles })
-  const addProfile = async () => {
-    if (!name.trim()) return
-    try {
-      await ok(api.POST('/profiles', { body: { id: '', name: name.trim(), is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: capabilities.data?.content_policy_enabled ? false : kids } }))
-      setName(''); setKids(false); refresh(); toast('Profile added.', 'success')
-    } catch (e) { toast(e instanceof Error ? e.message : 'Could not add the profile.', 'error') }
-  }
   const savePin = async (value: string | null) => {
     if (value !== null && !/^\d{4,8}$/.test(value)) { setPinErr('Use 4 to 8 digits.'); return }
     setPinErr(null)
-    try { await ok(api.PUT('/profiles/{id}/pin', { params: { path: { id: me.id } }, body: { pin: value } })); setPin(''); refresh(); toast(value ? 'PIN saved.' : 'PIN removed.', 'success') }
-    catch (e) { toast(e instanceof Error ? e.message : 'Could not change the PIN.', 'error') }
+    // A PIN that exists is only changed or removed by someone who knows it (or who has just signed in).
+    const body = { pin: value, ...(me.has_pin && currentPin ? { current_pin: currentPin } : {}) }
+    try { await ok(api.PUT('/profiles/{id}/pin', { params: { path: { id: me.id } }, body })); setPin(''); setCurrentPin(''); void qc.invalidateQueries({ queryKey: qk.profiles }); toast(value ? 'PIN saved.' : 'PIN removed.', 'success') }
+    catch (e) {
+      const code = (e as { code?: string }).code
+      if (code === 'current_pin_required') setPinErr('Enter your current PIN to change or remove it.')
+      else if (code === 'pin_invalid') setPinErr('That is not your current PIN.')
+      else toast(e instanceof Error ? e.message : 'Could not change the PIN.', 'error')
+    }
   }
-  if (error) return <ErrorState error={error} onRetry={() => void refetch()} />
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-3">
         <h2 className="heading">Signed in as {me.name}</h2>
+        <p className="muted">Theme and languages, on the tabs beside this one, are saved for {me.name} and nobody else.</p>
         <div className="flex gap-3 flex-wrap">
           <ProfileSwitch />
         </div>
       </section>
-      <section className="flex flex-col gap-3">
-        <h2 className="heading">Profiles</h2>
-        <FocusGroup focusKey="prof:list" className="flex flex-col gap-2">
-          {(data ?? []).map((p) => (
-            <div key={p.id} className="panel flex items-center gap-3">
-              <span className="flex-1">{p.name}{p.id === me.id ? ' (you)' : ''}<span className="label"> {p.is_admin ? ' · Admin' : ''}{p.kids ? ' · Kids' : ''}{p.has_pin ? ' · PIN' : ''}</span></span>
-              {me.is_admin && !me.content_restricted && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
-            </div>
-          ))}
-        </FocusGroup>
-      </section>
-      {me.is_admin && !me.content_restricted && (
-        <section className="flex flex-col gap-3">
-          <h2 className="heading">Add a profile</h2>
-          <div className="flex gap-3 flex-wrap items-center">
-            <div style={{ width: '16rem' }}><FocusableInput focusKey="prof:name" label="Profile name" placeholder="Name" value={name} onChange={setName} onSubmit={() => void addProfile()} /></div>
-            {capabilities.data&&!capabilities.data.content_policy_enabled&&<Chip focusKey="prof:kids" pressed={kids} onEnter={() => setKids((k) => !k)}>Kids profile</Chip>}
-            <Button focusKey="prof:add" primary icon="plus" disabled={!name.trim()} onEnter={() => void addProfile()}>Add profile</Button>
-          </div>
+      {manages && (
+        <section className="flex flex-col gap-3" data-testid="profile-users">
+          <h2 className="heading">Other people</h2>
+          <p className="muted">Who can use this StreamHub, what each of them may watch, their PINs and their devices are on the Users screen.</p>
+          <div><Button focusKey="prof:users" icon="users" onEnter={() => go('/users')} testId="open-users">Open Users</Button></div>
         </section>
       )}
+      <SignInMethods />
       <OwnerPinSettings />
-      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || me.is_admin) && <section className="flex flex-col gap-3">
+      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || owner) && <section className="flex flex-col gap-3">
         <h2 className="heading">PIN for {me.name}</h2>
         <p className="muted">{me.has_pin ? 'A PIN is required to open this profile.' : 'Anyone can open this profile. Add a PIN to lock it.'}</p>
         <div className="flex gap-3 flex-wrap items-center">
+          {me.has_pin && <div style={{ width: '12rem' }}><FocusableInput focusKey="prof:pin-current" label="Current PIN" type="password" inputMode="numeric" maxLength={8} placeholder="Current PIN" value={currentPin} onChange={setCurrentPin} onSubmit={() => void setFocus('prof:pin')} /></div>}
           <div style={{ width: '12rem' }}><FocusableInput focusKey="prof:pin" label="New PIN" type="password" inputMode="numeric" maxLength={8} placeholder="4 to 8 digits" value={pin} onChange={setPin} onSubmit={() => void savePin(pin)} /></div>
           <Button focusKey="prof:pin-save" onEnter={() => void savePin(pin)}>Save PIN</Button>
           {me.has_pin && <Button focusKey="prof:pin-clear" danger onEnter={() => void savePin(null)}>Remove PIN</Button>}
         </div>
         {pinErr && <p role="alert" style={{ color: 'var(--t-danger)' }}>{pinErr}</p>}
       </section>}
-      <Modal open={!!confirm} onClose={() => setConfirm(null)} title={`Delete ${confirm?.name ?? ''}?`} firstFocusKey="del:cancel">
-        <p>Their favorites, watchlist and resume positions are deleted too.</p>
-        <div className="flex gap-3">
-          <Button focusKey="del:cancel" onEnter={() => setConfirm(null)}>Keep profile</Button>
-          <Button focusKey="del:ok" danger icon="trash" onEnter={async () => { if (confirm) { await ok(api.DELETE('/profiles/{id}', { params: { path: { id: confirm.id } } })); refresh() } setConfirm(null) }}>Delete</Button>
-        </div>
-      </Modal>
     </div>
   )
 }
@@ -193,6 +187,8 @@ function LanguagesTab() {
 
 /* ------------------------------ home rows ------------------------------ */
 function RowsTab() {
+  // Which shelves Home has is the server's, for everyone; their order and visibility here is this browser's own.
+  const admin = useCan('settings.admin')
   const home = useHome()
   const prefs = useUi((s) => s.homePrefs)
   const setPrefs = useUi((s) => s.setHomePrefs)
@@ -208,8 +204,10 @@ function RowsTab() {
   }
   const hide = (id: string) => setPrefs({ ...prefs, hidden: prefs.hidden.includes(id) ? prefs.hidden.filter((h) => h !== id) : [...prefs.hidden, id] })
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="heading">Home rows</h2>
+    <div className="flex flex-col gap-8">
+    {admin && <HomeShelvesSettings />}
+    <section className="flex flex-col gap-3">
+      <h2 className="heading">{admin ? 'Home rows in this browser' : 'Home rows'}</h2>
       <p className="muted">Reorder or hide rows on Home. This is saved in this browser.</p>
       <FocusGroup focusKey="rows:list" className="flex flex-col gap-2">
         {rows.map((r) => (
@@ -223,6 +221,7 @@ function RowsTab() {
         {!home.data && <p className="muted">Loading rows…</p>}
       </FocusGroup>
       <div><Button focusKey="rows:reset" onEnter={() => setPrefs({ order: [], hidden: [] })}>Reset to default</Button></div>
+    </section>
     </div>
   )
 }
@@ -235,7 +234,9 @@ function ParentalTab() {
   const groups = useChannelGroups({ language: 'all', include_hidden: true })
   const [groupSearch, setGroupSearch] = useState('')
   const [groupPage, setGroupPage] = useState(0)
-  const matchingGroups = (groups.data ?? []).filter((g) => g.name.toLowerCase().includes(groupSearch.trim().toLowerCase()))
+  const matchingGroups = (groups.data ?? []).filter((g) => g.path.toLowerCase().includes(groupSearch.trim().toLowerCase()))
+  // A hidden parent hides its children whatever their own setting: showing them again is the parent's switch.
+  const hiddenParents = new Set((groups.data ?? []).filter((g) => !g.parent && g.hidden).map((g) => `${g.source_id}|${g.name}`))
   const groupPageIndex = Math.min(groupPage, Math.max(0, Math.ceil(matchingGroups.length / 40) - 1))
   const qc = useQueryClient()
   const toggleGroup = async (id: string, hidden: boolean) => { await ok(api.PATCH('/channels/groups/{id}', { params: { path: { id } }, body: { hidden } })); void qc.invalidateQueries({ queryKey: ['channel-groups'] }); void qc.invalidateQueries({ queryKey: ['channels'] }) }
@@ -253,7 +254,9 @@ function ParentalTab() {
         <p className="muted">This display preference applies to all profiles. It does not block playback or restrict access to a group.</p>
         <FocusableInput focusKey="par:search" label="Search channel groups" placeholder="Search channel groups" value={groupSearch} onChange={(v) => { setGroupSearch(v); setGroupPage(0) }} />
         <FocusGroup focusKey="par:groups" className="flex gap-2 flex-wrap">
-          {matchingGroups.slice(groupPageIndex * 40, (groupPageIndex + 1) * 40).map((g) => <Chip key={g.id} focusKey={`par:g:${g.id}`} pressed={g.hidden} onEnter={() => void toggleGroup(g.id, !g.hidden)}>{g.hidden ? 'Hidden' : 'Shown'} · {g.name}</Chip>)}
+          {matchingGroups.slice(groupPageIndex * 40, (groupPageIndex + 1) * 40).map((g) => g.parent && hiddenParents.has(`${g.source_id}|${g.parent}`)
+            ? <span key={g.id} className="chip" style={{ opacity: 0.6 }} data-testid="group-hidden-with-parent">Hidden with {g.parent} · {g.name}</span>
+            : <Chip key={g.id} focusKey={`par:g:${g.id}`} pressed={g.hidden} onEnter={() => void toggleGroup(g.id, !g.hidden)}>{g.hidden ? 'Hidden' : 'Shown'} · {g.path}</Chip>)}
           {!matchingGroups.length && <span className="muted">No matching channel groups.</span>}
         </FocusGroup>
         <div className="flex gap-3 items-center flex-wrap"><Button focusKey="par:prev" disabled={!groupPageIndex} onEnter={() => setGroupPage(groupPageIndex - 1)}>Previous</Button><span className="label">Page {groupPageIndex + 1} of {Math.max(1, Math.ceil(matchingGroups.length / 40))}</span><Button focusKey="par:next" disabled={(groupPageIndex + 1) * 40 >= matchingGroups.length} onEnter={() => setGroupPage(groupPageIndex + 1)}>Next</Button></div>
@@ -265,6 +268,7 @@ function ParentalTab() {
 /* ------------------------------ playback / server ------------------------------ */
 function PlaybackTab() {
   const { data, error, refetch } = useSettings()
+  const admin = useCan('settings.admin')
   const qc = useQueryClient()
   const toast = useUi((s) => s.toast)
   const [key, setKey] = useState('')
@@ -291,6 +295,47 @@ function PlaybackTab() {
           <Button focusKey="tmdb:save" disabled={!key.trim()} onEnter={async () => { await ok(api.PUT('/settings/tmdb_key', { body: { api_key: key.trim() } })); setKey(''); void qc.invalidateQueries({ queryKey: qk.settings }); toast('TMDB key saved.', 'success') }}>Save key</Button>
         </div>
       </section>
+      {admin && <RequestManagerSettings configured={!!data.request_manager_configured} />}
+    </div>
+  )
+}
+
+/* ------------------------------ devices ------------------------------ */
+function DevicesTab() {
+  const { data, error, refetch } = useSessions()
+  const toast = useUi((s) => s.toast)
+  const signOut = useSession((s) => s.clear)
+  const qc = useQueryClient()
+  const [renaming, setRenaming] = useState<AuthSession | null>(null)
+  const [label, setLabel] = useState('')
+  const rename = usePeopleChange((v: { sid: string; label: string }) => people.patchSession(v.sid, { label: v.label }))
+  const save = () => {
+    const s = renaming
+    if (!s || !label.trim()) return
+    rename.mutate({ sid: s.sid, label: label.trim() }, {
+      onSuccess: () => { toast('Device renamed.', 'success'); setRenaming(null) },
+      onError: (e) => { toast(absent(e) ? DEVICE_GONE : e.message, 'error'); setRenaming(null); if (absent(e)) void refetch() },
+    })
+  }
+  if (error) return <ErrorState error={error} onRetry={() => void refetch()} />
+  return (
+    <div className="flex flex-col gap-3" data-testid="devices">
+      <h2 className="heading">Where you are signed in</h2>
+      <p className="muted">Revoke signs a device out; it has to sign in again to be used.</p>
+      {!data ? <p className="muted">Loading…</p> : (
+        <FocusGroup focusKey="dev:list" className="flex flex-col gap-2">
+          {data.map((s) => <DeviceRow key={s.sid} session={s} scope="dev" rename={() => { setLabel(s.label ?? ''); setRenaming(s) }}
+            // Revoking this very device is signing out of it.
+            onRevoked={(gone) => { if (gone.current) { signOut(); qc.clear() } }} />)}
+        </FocusGroup>
+      )}
+      <Modal open={!!renaming} onClose={() => setRenaming(null)} title={`Rename ${renaming ? deviceName(renaming.label, renaming.kind, renaming.user_agent) : ''}`} firstFocusKey="devname:input">
+        <FocusableInput focusKey="devname:input" label="Device name" placeholder="Living room TV" maxLength={64} value={label} onChange={setLabel} onSubmit={save} />
+        <div className="flex gap-3 flex-wrap">
+          <Button focusKey="devname:save" primary disabled={!label.trim() || rename.isPending} onEnter={save} testId="device-rename-save">Save name</Button>
+          <Button focusKey="devname:cancel" onEnter={() => setRenaming(null)}>Cancel</Button>
+        </div>
+      </Modal>
     </div>
   )
 }

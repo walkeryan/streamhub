@@ -175,10 +175,12 @@ def test_map_series_and_episodes(client: XtreamClient) -> None:
     }
     items = map_episodes("9", info, client)
     season = items[0]
-    assert season.kind == MediaKind.SEASON and season.title == "Season One" and season.ext_id == "9:s1"
+    assert s.ext_id == "s:9" and s.extra["series_id"] == "9"
+    assert season.kind == MediaKind.SEASON and season.title == "Season One" and season.ext_id == "s:9:s1"
+    assert season.parent_ext_id == "s:9"
     eps = items[1:]
-    assert [e.ext_id for e in eps] == ["1001", "1002"]
-    assert eps[0].duration_ms == 3_000_000 and eps[0].parent_ext_id == "9:s1" and eps[1].episode_number == 2
+    assert [e.ext_id for e in eps] == ["e:1001", "e:1002"]
+    assert eps[0].duration_ms == 3_000_000 and eps[0].parent_ext_id == "s:9:s1" and eps[1].episode_number == 2
 
 
 def test_map_episodes_list_shape(client: XtreamClient) -> None:
@@ -204,7 +206,7 @@ async def test_stream_and_catchup_urls(tmp_path: Path) -> None:
     assert t.url == f"{SERVER}/live/alice/s3cret/101.ts" and t.mime == "video/mp2t" and t.live
     vod = CatalogItem(ext_id="7", kind=MediaKind.VOD, title="M", extra={"ext": "mkv"})
     assert (await src.stream_for_item(vod)).url == f"{SERVER}/movie/alice/s3cret/7.mkv"
-    ep = CatalogItem(ext_id="1001", kind=MediaKind.EPISODE, title="E", extra={"ext": "mp4"})
+    ep = CatalogItem(ext_id="e:1001", kind=MediaKind.EPISODE, title="E", extra={"ext": "mp4"})
     assert (await src.stream_for_item(ep)).url == f"{SERVER}/series/alice/s3cret/1001.mp4"
 
     start = (datetime.now(UTC) - timedelta(hours=5)).replace(second=0, microsecond=0)
@@ -277,7 +279,8 @@ async def test_full_sync_and_short_epg(tmp_path: Path) -> None:
     assert (await src.test()).ok
     sink = Sink()
     await src.sync(sink)
-    assert [c.name for c in sink.channels] == ["BBC News"] and sink.channels[0].group == "UK | News"
+    assert [c.name for c in sink.channels] == ["BBC News"] and sink.channels[0].group == "News"
+    assert sink.channels[0].extra["raw_group"] == "UK | News"  # kept for language and country inference
     assert {i.kind for i in sink.items} == {MediaKind.VOD, MediaKind.SERIES}
     assert sink.hints["max_connections"] == 1
     epg = await src.short_epg(sink.channels[0])
@@ -361,3 +364,144 @@ async def test_missing_audio_detail_does_not_fabricate_evidence(tmp_path):
     src.client.api = AsyncMock(return_value={"info": {"original_language": "en", "language": "en"}})
     item = CatalogItem(ext_id="7", kind=MediaKind.VOD, title="EN - Film", extra={"ext": "mkv"})
     assert not audio_info((await src.item_detail(item)).extra)["audio_verified"]
+
+
+MANAGER = "http://manager.example.test"
+
+
+def manager_handler(request: httpx.Request) -> httpx.Response:
+    """A panel that numbers movies, series and episodes independently, all starting at 7."""
+    q = dict(request.url.params)
+    action = q.get("action")
+    if action == "get_series_info":
+        assert q["series_id"] == "7"  # the panel never sees the namespaced id
+        return httpx.Response(
+            200,
+            json={
+                "seasons": [{"season_number": 1, "name": "Season 1"}],
+                "episodes": {"1": [{"id": "7", "episode_num": 1, "title": "Pilot", "container_extension": "mkv"}]},
+            },
+        )
+    data: Any = {
+        None: {"user_info": {"auth": 1, "status": "Active"}, "server_info": {}},
+        "get_live_categories": [],
+        "get_live_streams": [],
+        "get_vod_categories": [{"category_id": "1", "category_name": "Movies"}],
+        "get_vod_streams": [{"stream_id": 7, "name": "Lighthouse Road", "category_id": "1"}],
+        "get_series_categories": [{"category_id": "1", "category_name": "Series"}],
+        "get_series": [{"series_id": 7, "name": "Harbour Lights", "category_id": "1"}],
+        "get_vod_info": {"info": {}},
+    }[action]
+    return httpx.Response(200, json=data)
+
+
+@respx.mock
+async def test_movie_and_series_with_the_same_number_are_separate_rows(api: Any) -> None:
+    from sqlalchemy import select
+
+    from app.infra.models import Title
+    from app.services.tiles import row_to_item
+
+    respx.get(f"{MANAGER}/player_api.php").mock(side_effect=manager_handler)
+    await api.accept_disclaimer()
+    created = await api.post(
+        "/sources",
+        json={
+            "type": "xtream",
+            "name": "Manager",
+            "config": {"server_url": MANAGER, "username": "alice", "password": "s3cret"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    sid = created.json()["id"]
+    await api.c.sync.wait_idle()
+    async with api.c.db.session() as session:
+        rows = list((await session.execute(select(Title).where(Title.source_id == sid))).scalars())
+    assert {(r.kind, r.ext_id, r.title) for r in rows} == {
+        ("vod", "7", "Lighthouse Road"),
+        ("series", "s:7", "Harbour Lights"),
+    }
+
+    detail = (await api.get(f"/titles/lib:{sid}:s:7")).json()
+    assert [s["id"] for s in detail["seasons"]] == [f"lib:{sid}:s:7:s1"]
+    assert [e["id"] for e in detail["episodes"]] == [f"lib:{sid}:e:7"]
+    season = (await api.get(f"/titles/lib:{sid}:s:7:s1")).json()
+    assert [e["id"] for e in season["episodes"]] == [f"lib:{sid}:e:7"]
+
+    _, provider = await api.c.sources.provider_for(sid)
+    episode = await api.c.catalog.title_row(sid, "e:7")
+    movie = await api.c.catalog.title_row(sid, "7")
+    assert episode is not None and movie is not None
+    assert (await provider.stream_for_item(row_to_item(episode))).url == f"{MANAGER}/series/alice/s3cret/7.mkv"
+    assert (await provider.stream_for_item(row_to_item(movie))).url == f"{MANAGER}/movie/alice/s3cret/7.mp4"
+
+
+async def test_rows_stored_before_namespacing_still_resolve(tmp_path: Path) -> None:
+    from unittest.mock import AsyncMock
+
+    src = make_source(tmp_path)
+    src.client.api = AsyncMock(return_value={"episodes": {"2": [{"id": "55", "episode_num": 1, "title": "A"}]}})
+    legacy_season = CatalogItem(ext_id="9:s2", kind=MediaKind.SEASON, title="Season 2")
+    await src.children(legacy_season)
+    src.client.api.assert_awaited_once_with("get_series_info", series_id="9")
+    legacy_episode = CatalogItem(ext_id="1001", kind=MediaKind.EPISODE, title="E", extra={"ext": "mp4"})
+    assert (await src.stream_for_item(legacy_episode)).url == f"{SERVER}/series/alice/s3cret/1001.mp4"
+
+
+def test_mapping_applies_presentation(client: XtreamClient) -> None:
+    from app.adapters.xtream.presentation import PresentationConfig
+
+    config = PresentationConfig.from_config(
+        {
+            "default_language": "en",
+            "shelf_map": {"TOP MOVIES BLURAY (MULTI-SUBS)": "Staff Picks"},
+            "group_map": {"US| NFL PPV": "Game Day"},
+            "hidden_groups": ["US| NEWS ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ"],
+            "adult_categories": ["EN - LATE NIGHT"],
+        }
+    )
+    cats = {
+        "1": "NETFLIX MOVIES ⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ",
+        "2": "TOP MOVIES BLURAY (MULTI-SUBS)",
+        "3": "EN - LATE NIGHT",
+        "4": "US| SPORT ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ",
+        "5": "US| NEWS ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ",
+        "6": "US| NFL PPV",
+    }
+    movie = map_vod({"stream_id": 1, "name": "NF - Millionaire", "category_id": "1"}, cats, client, config)
+    assert movie is not None
+    assert (movie.title, movie.group, movie.quality, movie.language, movie.adult) == (
+        "Millionaire",
+        "Netflix",
+        "4K",
+        "eng",
+        False,
+    )
+    assert movie.extra["raw_title"] == "NF - Millionaire" and movie.extra["raw_category"] == cats["1"]
+    assert movie.extra["ext"] == "mp4" and movie.extra["stream_id"] == "1" and movie.extra["kids"] is False
+
+    picked = map_vod({"stream_id": 2, "name": "EN-TOP - Something (1999)", "category_id": "2"}, cats, client, config)
+    assert picked is not None and (picked.title, picked.year, picked.group) == ("Something", 1999, "Staff Picks")
+    flagged = map_vod({"stream_id": 3, "name": "DE - Night Ferry", "category_id": "1", "is_adult": "1"}, cats, client)
+    listed = map_vod({"stream_id": 4, "name": "Night Ferry", "category_id": "3"}, cats, client, config)
+    assert flagged is not None and flagged.adult and flagged.language == "deu"
+    assert listed is not None and listed.adult and listed.group == "Late Night"
+
+    series = map_series({"series_id": 5, "name": "4K-A+ - Berlin ER (2025) (DE)", "category_id": "1"}, cats, config)
+    assert series is not None
+    assert (series.ext_id, series.title, series.year, series.quality) == ("s:5", "Berlin ER", 2025, "4K")
+    unknown = map_series({"series_id": 6, "name": "Harbour Lights", "category_id": "9"}, cats)
+    assert unknown is not None and unknown.group is None and unknown.language == "und"
+
+    sport = map_live({"stream_id": 10, "name": "Sport One", "category_id": "4"}, cats, "ts", client, config)
+    assert sport is not None and sport.group == "Sports" and sport.extra["raw_group"] == cats["4"]
+    game = map_live({"stream_id": 11, "name": "Game One", "category_id": "6"}, cats, "ts", client, config)
+    assert game is not None and game.group == "Game Day"
+    assert map_live({"stream_id": 12, "name": "News One", "category_id": "5"}, cats, "ts", client, config) is None
+
+
+def test_config_summary_lists_presentation_settings(tmp_path: Path) -> None:
+    summary = make_source(tmp_path, default_language="en", hidden_groups=["US| NFL PPV"], shelf_map="bogus")
+    assert summary.config_summary()["default_language"] == "eng"
+    assert summary.config_summary()["hidden_groups"] == ["US| NFL PPV"]
+    assert summary.config_summary()["shelf_map"] == {}  # malformed settings are ignored, never fatal

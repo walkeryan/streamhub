@@ -61,9 +61,10 @@ async def test_plex_pin_flow(tmp_path: Path) -> None:
     )
     flow = PlexLinkFlow(ctx(tmp_path))
     pin = await flow.start()
-    assert pin["pin_id"] == 4242 and pin["code"] == "abcd" and "code=abcd" in pin["link_url"]
+    # The four-character code a person types at plex.tv/link; a "strong" PIN is refused there.
+    assert pin == {"pin_id": 4242, "code": "ABCD", "link_url": "https://plex.tv/link"}
     req = start.calls[0].request
-    assert req.url.params["strong"] == "true"
+    assert "strong" not in req.url.params
     assert req.headers["X-Plex-Client-Identifier"] == "cid-1" and req.headers["X-Plex-Product"] == "StreamHub"
 
     poll = respx.get("https://clients.plex.tv/api/v2/pins/4242").mock(

@@ -15,4 +15,20 @@ class MediaItemMapperTest {
     @Test fun dashByExt() = assertEquals(MimeTypes.APPLICATION_MPD, MediaItemMapper.mimeFor(d("http://a/m.mpd?x=1")))
     @Test fun liveXtreamWithoutExtIsTs() = assertEquals(MimeTypes.VIDEO_MP2T, MediaItemMapper.mimeFor(d("http://p:8080/u/p/123", live = true)))
     @Test fun vodUnknownIsNull() = assertEquals(null, MediaItemMapper.mimeFor(d("http://plex/library/parts/1/file")))
+
+    @Test fun aRoomsSharedStreamIsPinnedToItsPositionAndStartsPartWayIntoTheTitle() {
+        val shared = d("http://hub.test:8787/api/v1/stream/t/index.m3u8", mode = PlaybackMode.HLS).copy(streamEpoch = 3, startPositionMs = 600_000, durationMs = 7_200_000)
+        assertEquals(true, MediaItemMapper.pinsPosition(shared))
+        assertEquals(600_000L, MediaItemMapper.timeZeroMs(shared))
+        assertEquals(0L, MediaItemMapper.timeZeroMs(shared.copy(startPositionMs = null)))
+    }
+
+    @Test fun everyOtherStreamCoversItsWholeTitle() {
+        val own = d("http://media.test/film.mkv")
+        assertEquals(false, MediaItemMapper.pinsPosition(own))
+        assertEquals(0L, MediaItemMapper.timeZeroMs(own))
+        // start_position_ms without an epoch is not a room's shared stream.
+        assertEquals(0L, MediaItemMapper.timeZeroMs(own.copy(startPositionMs = 90_000)))
+        assertEquals(false, MediaItemMapper.pinsPosition(d("http://hub.test/ch", live = true)))
+    }
 }

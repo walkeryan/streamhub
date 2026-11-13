@@ -8,8 +8,9 @@ from typing import Any
 from fastapi import APIRouter, Response
 
 from app.api import schemas as S
-from app.api.deps import Admin, C, P
+from app.api.deps import C, P, SourcesAdmin
 from app.domain.entities import SourceStatus
+from app.services.auth import Principal
 from app.services.errors import PreconditionRequired, ServiceError
 
 router = APIRouter()
@@ -45,9 +46,17 @@ def _prep_config(c: C, type_: str, config: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
+async def _out(c: C, p: Principal, row: Any) -> dict[str, Any]:
+    """A source as this caller may see it. Where it lives (a server address on the home network,
+    the account name it signs in with) is for whoever manages sources; everyone else gets what
+    labels a title and filters a list."""
+    out = await c.sources.to_api(row)
+    return out if p.can("sources.manage") else {**out, "config_summary": {}}
+
+
 @router.get("/sources", response_model=list[S.Source], tags=["sources"])
 async def list_sources(c: C, p: P) -> list[dict[str, Any]]:
-    return [await c.sources.to_api(r) for r in await c.sources.list()]
+    return [await _out(c, p, r) for r in await c.sources.list()]
 
 
 @router.post(
@@ -57,7 +66,7 @@ async def list_sources(c: C, p: P) -> list[dict[str, Any]]:
     responses={412: {"model": S.Error, "description": "disclaimer not accepted"}},
     tags=["sources"],
 )
-async def create_source(body: S.SourceCreate, c: C, p: Admin) -> dict[str, Any]:
+async def create_source(body: S.SourceCreate, c: C, p: SourcesAdmin) -> dict[str, Any]:
     # check the gate before touching uploaded content
     if c.registry.requires_disclaimer(body.type) and not await c.disclaimer.has_accepted_current(p.profile_id):
         from app.services.errors import PreconditionFailed
@@ -81,11 +90,11 @@ async def create_source(body: S.SourceCreate, c: C, p: Admin) -> dict[str, Any]:
 
 @router.get("/sources/{id}", response_model=S.Source, tags=["sources"])
 async def get_source(id: str, c: C, p: P) -> dict[str, Any]:
-    return await c.sources.to_api(await c.sources.get(id))
+    return await _out(c, p, await c.sources.get(id))
 
 
 @router.patch("/sources/{id}", response_model=S.Source, tags=["sources"])
-async def update_source(id: str, body: S.SourcePatch, c: C, p: Admin) -> dict[str, Any]:
+async def update_source(id: str, body: S.SourcePatch, c: C, p: SourcesAdmin) -> dict[str, Any]:
     row = await c.sources.get(id)
     patch = body.model_dump(exclude_unset=True)
     patch.pop("type", None)
@@ -96,7 +105,7 @@ async def update_source(id: str, body: S.SourcePatch, c: C, p: Admin) -> dict[st
 
 
 @router.delete("/sources/{id}", status_code=204, tags=["sources"])
-async def delete_source(id: str, c: C, p: Admin) -> Response:
+async def delete_source(id: str, c: C, p: SourcesAdmin) -> Response:
     row = await c.sources.get(id)
     cfg = c.sources.decrypt_config(row)
     await c.sources.delete(id)
@@ -107,7 +116,7 @@ async def delete_source(id: str, c: C, p: Admin) -> Response:
 
 
 @router.post("/sources/{id}/sync", status_code=202, tags=["sources"])
-async def sync_source(id: str, c: C, p: Admin) -> Response:
+async def sync_source(id: str, c: C, p: SourcesAdmin) -> Response:
     row = await c.sources.get(id)
     if not c.sync.is_running(row.id):
         await c.sources.set_status(row.id, SourceStatus.SYNCING)
@@ -116,14 +125,14 @@ async def sync_source(id: str, c: C, p: Admin) -> Response:
 
 
 @router.post("/sources/{id}/test", response_model=S.TestResult, tags=["sources"])
-async def test_source(id: str, c: C, p: Admin) -> dict[str, Any]:
+async def test_source(id: str, c: C, p: SourcesAdmin) -> dict[str, Any]:
     row = await c.sources.get(id)
     res = await c.sources.provider(row).test()
     return {"ok": res.ok, "message": res.message}
 
 
 @router.post("/sources/plex/pin", response_model=S.PlexPin, tags=["sources"])
-async def plex_pin(c: C, p: Admin) -> dict[str, Any]:
+async def plex_pin(c: C, p: SourcesAdmin) -> dict[str, Any]:
     return await c.plex_link.start()
 
 
@@ -133,7 +142,7 @@ async def plex_pin(c: C, p: Admin) -> dict[str, Any]:
     responses={428: {"model": S.Error, "description": "pending"}},
     tags=["sources"],
 )
-async def plex_pin_poll(pin_id: int, c: C, p: Admin) -> list[dict[str, Any]]:
+async def plex_pin_poll(pin_id: int, c: C, p: SourcesAdmin) -> list[dict[str, Any]]:
     drafts = await c.plex_link.poll(pin_id)
     if drafts is None:
         raise PreconditionRequired("waiting for Plex link")

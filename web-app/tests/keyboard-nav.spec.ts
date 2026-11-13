@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { focusedLabel, signIn } from './helpers'
+import { focusBarEntry, focusedLabel, searchBox, signIn } from './helpers'
 
 test('keyboard only: Home -> title -> player, Escape restores focus', async ({ page }) => {
   await signIn(page)
@@ -39,17 +39,24 @@ test('keyboard only: Home -> title -> player, Escape restores focus', async ({ p
   await expect.poll(() => focusedLabel(page)).toBe(tileLabel)
 })
 
-test('keyboard only: left from the first tile opens the rail, Enter navigates, Escape collapses', async ({ page }) => {
+test('keyboard only: Up from the hero reaches the bar, Escape returns to the content, Enter navigates', async ({ page }) => {
   await signIn(page)
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowLeft') // hero Play -> rail
-  await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
-  await page.keyboard.press('ArrowDown') // Search
+  await page.keyboard.press('ArrowUp') // hero Play -> the bar, on the section being shown
+  await expect(page.getByTestId('nav-home')).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
+  await expect(page).toHaveURL(/\/$/)
+  // Arrows stop on the search box without taking the caret (no on-screen keyboard); Enter is the choice to type.
+  await focusBarEntry(page, 'nav-search')
+  await expect(searchBox(page)).not.toBeFocused()
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/search/)
-  await expect(page.getByLabel('Search titles and channels')).toBeFocused()
+  await expect(searchBox(page)).toBeFocused()
+  await expect(page).toHaveURL(/\/$/)
   await page.keyboard.type('harbor')
-  await expect(page.getByTestId('group-play')).toBeVisible({ timeout: 8000 })
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await expect(page.getByTestId('search-titles')).toBeVisible({ timeout: 8000 })
+  await expect(searchBox(page)).toBeFocused()
   await expect(page.getByTestId('justwatch-attribution')).toBeVisible()
 })
 
@@ -57,7 +64,7 @@ test('live TV: zap with digits and Backspace in the player', async ({ page }) =>
   await signIn(page)
   await page.goto('/live')
   await expect(page.getByTestId('channel-row').first()).toBeVisible()
-  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
   await page.getByTestId('channel-row').first().click()
   await expect(page).toHaveURL(/\/play\/ch/)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing', { timeout: 15_000 })
@@ -91,13 +98,13 @@ for (const key of ['Backspace', 'Escape', 'BrowserBack'] as const) {
     await expect.poll(() => new URL(page.url()).pathname).toBe(key === 'Backspace' ? first : '/live')
     if (key === 'Backspace') {
       await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
-      await page.keyboard.press('m')
+      await page.keyboard.press('s') // the settings menu (M is mute)
       await expect(page.getByTestId('player-menu')).toBeVisible()
       await page.keyboard.press('Backspace')
       await expect(page.getByTestId('player-menu')).toHaveCount(0)
       expect(new URL(page.url()).pathname).toBe(first)
     } else {
-      await expect(page.getByLabel('Search channels or number')).toBeFocused()
+      await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
     }
   })
 }

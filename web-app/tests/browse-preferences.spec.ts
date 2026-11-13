@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { signIn } from './helpers'
+import { activeFilter, openFilters, signIn } from './helpers'
 
 type Document = Record<string, unknown>
 async function backend(page: Page, documents: Record<string, Document>, beforeRead?: (id: string) => Promise<void>) {
@@ -12,6 +12,8 @@ async function backend(page: Page, documents: Record<string, Document>, beforeRe
     const original = window.fetch.bind(window)
     window.fetch = async (input, init) => {
       const req = new Request(input, init)
+      // A language row is offered only to a catalog with more than one language.
+      if (new URL(req.url).pathname === '/api/v1/browse/movies/languages') return Response.json([{ code: 'eng', name: 'English', count: 10 }, { code: 'spa', name: 'Spanish', count: 2 }])
       const match = new URL(req.url).pathname.match(/^\/api\/v1\/profiles\/([^/]+)\/prefs$/)
       if (match) {
         const state = window as unknown as { prefsBackend: (id: string, method: string, body: Record<string, unknown> | null) => Promise<Record<string, unknown>> }
@@ -29,8 +31,7 @@ test('genre and filters persist across reload and another device without replaci
   await backend(page, documents)
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
-  await page.getByRole('button', { name: 'My library', exact: true }).click()
+  await openFilters(page)
   await page.getByRole('button', { name: 'Genre: All genres', exact: true }).click()
   await page.getByRole('button', { name: 'Drama (8)', exact: true }).click()
   await page.getByRole('button', { name: 'Source: All sources', exact: true }).click()
@@ -40,6 +41,9 @@ test('genre and filters persist across reload and another device without replaci
   await expect.poll(() => documents.p2[namespace]).toEqual({ ...defaults, source: 's_plex', genre: 'drama', sort: 'year', language: 'all' })
   expect(documents.p2.unrelated).toEqual({ theme: 'keep-me' })
   await page.reload()
+  await expect(activeFilter(page, 'Genre: Drama')).toBeVisible()
+  await expect(activeFilter(page, 'Sort: Year')).toBeVisible()
+  await openFilters(page)
   await expect(page.getByRole('button', { name: 'Genre: Drama', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Year', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await page.screenshot({ path: '/tmp/streamhub-browse-saved-filters.png' })
@@ -50,12 +54,12 @@ test('genre and filters persist across reload and another device without replaci
   await backend(other, documents)
   await signIn(other)
   await other.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(other.getByTestId('discover')).toBeVisible()
-  await other.getByRole('button', { name: 'My library', exact: true }).click()
+  await expect(activeFilter(other, 'Language: All languages')).toBeVisible()
+  await openFilters(other)
   await expect(other.getByRole('button', { name: 'Genre: Drama', exact: true })).toBeVisible()
   await expect(other.getByRole('button', { name: 'Source: Den Plex', exact: true })).toBeVisible()
   await expect(other.getByRole('button', { name: 'All languages', exact: true }).first()).toHaveAttribute('aria-pressed', 'true')
-  await other.getByRole('button', { name: 'Clear filters', exact: true }).first().click()
+  await other.getByTestId('browse-filters').getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect.poll(() => documents.p2[namespace]).toEqual(defaults)
   expect(documents.p2.unrelated).toEqual({ theme: 'keep-me' })
   await context.close()
@@ -70,8 +74,6 @@ test('delayed previous-profile preferences never appear after switching profiles
   })
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
-  await page.getByRole('button', { name: 'My library', exact: true }).click()
   await expect.poll(() => pending).toBe(true)
   await page.evaluate(async () => {
     await fetch('/api/v1/disclaimer/accept', { method: 'POST', headers: { authorization: 'Bearer mock-access-p1' } })
@@ -80,9 +82,11 @@ test('delayed previous-profile preferences never appear after switching profiles
     const { profiles, DISCLAIMER } = await import(/* @vite-ignore */ fixtures)
     useSession.getState().setSession('mock-access-p1', 'mock-refresh-p1', { ...profiles[0], disclaimer_accepted_version: DISCLAIMER.version })
   })
-  await expect(page.getByRole('button', { name: 'Genre: Comedy', exact: true })).toBeVisible()
+  await expect(activeFilter(page, 'Genre: Comedy')).toBeVisible()
   release()
-  await expect(page.getByRole('button', { name: 'Genre: Drama', exact: true })).toHaveCount(0)
+  await expect(activeFilter(page, 'Genre: Drama')).toHaveCount(0)
+  await openFilters(page)
+  await expect(page.getByRole('button', { name: 'Genre: Comedy', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Year', exact: true }).click()
   await expect.poll(() => documents.p1[namespace]).toEqual({ ...defaults, genre: 'comedy', sort: 'year' })
   expect(documents.p2[namespace]).toEqual({ ...defaults, genre: 'drama' })
@@ -98,11 +102,10 @@ test('switching profiles cancels a queued preference write before PUT', async ({
   })
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
-  await page.getByRole('button', { name: 'My library', exact: true }).click()
+  await openFilters(page)
   await expect(page.getByRole('button', { name: 'Recently added', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  // Discover and library hydration can each read preferences. Gate the save's
-  // fresh read explicitly instead of assuming it is the second overall GET.
+  // Hydration reads preferences too. Gate the save's fresh read explicitly
+  // instead of assuming it is the second overall GET.
   armed = true
   await page.getByRole('button', { name: 'Year', exact: true }).click()
   await expect.poll(() => blocked).toBe(true)
@@ -114,6 +117,10 @@ test('switching profiles cancels a queued preference write before PUT', async ({
     const { profiles, DISCLAIMER } = await import(/* @vite-ignore */ fixtures)
     useSession.getState().setSession('mock-access-p1', 'mock-refresh-p1', { ...profiles[0], disclaimer_accepted_version: DISCLAIMER.version })
   })
+  // The new profile's screen starts with its own (default) filters and a closed panel.
+  await expect(page.getByTestId('browse-filters')).toHaveCount(0)
+  await expect(page.getByTestId('active-filter')).toHaveCount(0)
+  await openFilters(page)
   await expect(page.getByRole('button', { name: 'Recently added', exact: true })).toHaveAttribute('aria-pressed', 'true')
   armed = false
   for (const release of releases) release()

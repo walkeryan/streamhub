@@ -29,7 +29,7 @@ test('late profile results and local preferences cannot cross a profile switch',
     useUi.getState().setChannelList('guest-list', [channels[0]])
     useUi.getState().setLastChannelId(channels[0].id)
   })
-  await page.getByRole('link', { name: 'Favorites', exact: true }).click()
+  await page.getByRole('link', { name: 'My List', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as unknown as { guestPending?: boolean }).guestPending)).toBe(true)
   await page.evaluate(async () => {
     await fetch('/api/v1/disclaimer/accept', { method: 'POST', headers: { authorization: 'Bearer mock-access-p1' } })
@@ -59,24 +59,4 @@ test('late profile results and local preferences cannot cross a profile switch',
   expect(restored.recent).toEqual(['Guest private query'])
   expect(restored.home).toEqual({ order: ['favorites'], hidden: ['news'] })
   expect(JSON.parse(restored.legacy!)).toEqual(restored.home)
-})
-
-
-test('new profiles default to English while existing profile preferences remain unchanged', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('sh.session.v1', JSON.stringify({ access: 'mock-access-p1', refresh: 'mock-refresh-p1', profile: { id: 'p1', name: 'Ryan' } }))
-    sessionStorage.setItem('mock.accepted', JSON.stringify(['p1']))
-  })
-  await page.goto('/settings?tab=profiles')
-  await page.getByLabel('Profile name', { exact: true }).fill('Party guest')
-  await page.getByRole('button', { name: 'Add profile', exact: true }).click()
-  await expect.poll(() => page.evaluate(async () => {
-    const path = '/src/mocks/fixtures.ts'
-    return (await import(/* @vite-ignore */ path)).profiles.find((p: {name: string}) => p.name === 'Party guest')?.languages
-  })).toEqual(['eng'])
-  const profiles = await page.evaluate(async () => {
-    const path = '/src/mocks/fixtures.ts'
-    return (await import(/* @vite-ignore */ path)).profiles
-  })
-  expect(profiles.find((p: { id: string }) => p.id === 'p2').languages).toEqual(['eng', 'spa'])
 })

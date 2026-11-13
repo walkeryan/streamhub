@@ -1,6 +1,7 @@
 package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.auth.SessionStore
+import com.streamhub.tv.core.data.model.ApiError
 import com.streamhub.tv.core.data.model.AuthTokens
 import com.streamhub.tv.core.data.model.RefreshRequest
 import io.ktor.client.HttpClient
@@ -15,8 +16,10 @@ import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
+import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
@@ -34,23 +37,50 @@ val StreamHubJson = Json {
 private val PUBLIC_PATHS = listOf(
     "/auth/login", "/auth/refresh", "/auth/device", "/auth/device/poll",
     "/disclaimer", "/themes", "/health",
+    // GET /rooms/{code}/descriptor: the member token in the query is the credential.
+    "/descriptor",
 )
+
+/**
+ * Whether a failed POST /auth/refresh means this TV's pairing is gone. Only an explicit rejection of
+ * the refresh token (400/401/403) does. A restarting or overloaded server answers 5xx, a proxy in
+ * front of it 502/504, and an unreachable one not at all ([status] null): clearing the tokens then
+ * would send a working TV back through pairing after every server restart.
+ */
+internal fun shouldClearSession(status: Int?, code: String? = null): Boolean =
+    (status == 400 || status == 401 || status == 403) && code !in KEEPS_PAIRING
+
+/**
+ * Refusals that are about the person, not the token: a suspension can be lifted and an approval can
+ * arrive, and the TV should then simply work again. The call that hit them reports the reason
+ * (see ApiErrors) instead of the TV dropping back to pairing without a word.
+ */
+private val KEEPS_PAIRING = setOf("user_suspended", "approval_pending")
 
 /**
  * Ktor CIO client with:
  *  - JSON via kotlinx.serialization
- *  - Bearer auth: tokens loaded from [SessionStore]; on 401 the refresh token is exchanged at
- *    POST /auth/refresh (marked as a refresh request so it is not itself retried), new pair persisted.
- *    If refresh fails the session is cleared and [onSessionExpired] fires so the UI can re-pair.
+ *  - Bearer auth: tokens loaded from [SessionStore]; on 401 (an expired access token, or
+ *    `session_stale` after a role or permission change) the refresh token is exchanged at
+ *    POST /auth/refresh (marked as a refresh request so it is not itself retried), the new pair is
+ *    persisted, [onTokensRefreshed] fires and the request is sent once more.
+ *    If the server rejects the refresh token the session is cleared and [onSessionExpired] fires
+ *    with the server's reason (`session_revoked`, or null) so the UI can say why and re-pair. A
+ *    suspended user keeps the pairing and [onUserSuspended] fires instead; any other refresh
+ *    failure keeps the session without a word (see [shouldClearSession]).
  *  - Base URL resolved per request from the session (server URL can change at runtime).
  */
 fun createStreamHubHttpClient(
     sessionStore: SessionStore,
     debug: Boolean,
-    onSessionExpired: () -> Unit,
+    onSessionExpired: (code: String?) -> Unit,
+    onTokensRefreshed: () -> Unit = {},
+    onUserSuspended: () -> Unit = {},
 ): HttpClient = HttpClient(CIO) {
     expectSuccess = false
     install(ContentNegotiation) { json(StreamHubJson) }
+    // Watch rooms (see room/RoomClient); keep-alive is the room protocol's own ping, every 5 s.
+    install(WebSockets)
     install(HttpTimeout) {
         connectTimeoutMillis = 8_000
         requestTimeoutMillis = 20_000
@@ -80,20 +110,25 @@ fun createStreamHubHttpClient(
                     return@refreshTokens original.accessToken?.let { access -> refresh?.let { BearerTokens(access,it) } }
                 }
                 if (refresh == null) {
-                    onSessionExpired(); return@refreshTokens null
+                    onSessionExpired(null); return@refreshTokens null
                 }
                 val base = original.apiBase ?: return@refreshTokens null
+                // An I/O failure here (server restarting, network down) propagates to the caller as a
+                // network error; the stored tokens are untouched and the next request tries again.
                 val resp = client.post("$base/auth/refresh") {
                     markAsRefreshTokenRequest()
                     contentType(ContentType.Application.Json)
                     setBody(RefreshRequest(refresh))
                 }
                 if (!resp.status.isSuccess()) {
-                    if(sessionStore.clearExpiredSession(original)) onSessionExpired()
+                    val code = runCatching { StreamHubJson.decodeFromString(ApiError.serializer(), resp.bodyAsText()).code }.getOrNull()
+                    if (shouldClearSession(resp.status.value, code)) { if (sessionStore.clearExpiredSession(original)) onSessionExpired(code) }
+                    else if (code == "user_suspended") onUserSuspended()
                     return@refreshTokens null
                 }
                 val tokens = resp.body<AuthTokens>()
-                if(sessionStore.saveRefreshedTokens(original,tokens)) BearerTokens(tokens.accessToken, tokens.refreshToken) else null
+                // The request that got the 401 (session_stale, or an expired access token) is sent once more with the new pair.
+                if(sessionStore.saveRefreshedTokens(original,tokens)) { onTokensRefreshed(); BearerTokens(tokens.accessToken, tokens.refreshToken) } else null
             }
             sendWithoutRequest { request ->
                 val path = request.url.buildString().substringBefore("?")

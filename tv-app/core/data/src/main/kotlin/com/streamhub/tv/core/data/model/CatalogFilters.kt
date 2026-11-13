@@ -4,7 +4,33 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable data class CatalogFacet(val name: String, val count: Int = 0)
-@Serializable data class NativeBrowseFilters(val source: String? = null, val genre: String? = null, val language: String? = null, val sort: String = "added")
+/** [category] is the provider's own grouping (a shelf on Movies/Shows); it combines with [genre]. */
+@Serializable data class NativeBrowseFilters(val source: String? = null, val genre: String? = null, val language: String? = null, val sort: String = "added", val category: String? = null)
+
+/**
+ * Query for GET /browse/{section}. Absent values are left out so the server applies its own defaults
+ * (profile languages, "added" order); a blank search is not a search.
+ */
+fun browseParameters(
+    sourceId: String? = null, genre: String? = null, sort: String? = null, page: Int = 1,
+    language: String? = null, category: String? = null, q: String? = null,
+): Map<String, String> = buildMap {
+    sourceId?.let { put("source_id", it) }
+    genre?.let { put("genre", it) }
+    sort?.let { put("sort", it) }
+    put("page", page.coerceAtLeast(1).toString())
+    category?.let { put("category", it) }
+    language?.let { put("language", it) }
+    q?.trim()?.take(200)?.takeIf { it.isNotEmpty() }?.let { put("q", it) }
+}
+
+/** Query for the facet lists (/browse/{section}/categories and /genres): the scope their counts are taken in. */
+fun browseFacetParameters(sourceId: String? = null, language: String? = null, category: String? = null, q: String? = null): Map<String, String> = buildMap {
+    sourceId?.let { put("source_id", it) }
+    language?.let { put("language", it) }
+    category?.let { put("category", it) }
+    q?.trim()?.take(200)?.takeIf { it.isNotEmpty() }?.let { put("q", it) }
+}
 @Serializable data class NativeSportsFilters(val language: String? = null, val sport: String? = null, val date: String? = null, val status: String = "all", val query: String = "")
 @Serializable data class SportsListing(
     val id: String, val sport: String, val title: String,

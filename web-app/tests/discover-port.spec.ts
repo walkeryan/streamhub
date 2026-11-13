@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { signIn } from './helpers'
+import { openDiscover, signIn } from './helpers'
 
 async function setup(page:Page) {
   await page.addInitScript(()=>{
@@ -17,8 +17,7 @@ async function setup(page:Page) {
     }
   })
   await signIn(page)
-  await page.getByTestId('nav-movies').click()
-  await expect(page.getByTestId('discover')).toBeVisible()
+  await openDiscover(page)
   await expect(page.getByTestId('tile')).toHaveCount(1)
 }
 const requests=(page:Page)=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('discover.calls')??'[]') as string[])
@@ -30,14 +29,13 @@ test('primary discovery preserves library routes and unavailable metadata withou
   await expect(page.getByRole('button',{name:'Play',exact:true})).toHaveCount(0)
   await page.getByRole('button',{name:'My library',exact:true}).click()
   await expect(page).toHaveURL(/\/browse\/movies$/)
-  await expect(page.getByLabel('Search this library',{exact:true})).toBeVisible()
-  await expect(page.getByRole('button',{name:/Genre:/})).toBeVisible()
+  await expect(page.getByRole('button',{name:'Filter',exact:true})).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('discover')).toBeVisible()
   await expect(page.getByRole('button',{name:'My library',exact:true})).toHaveAttribute('data-focused','true')
-  await page.getByRole('button',{name:'Search all titles',exact:true}).click()
-  await expect(page).toHaveURL(/\/search(?:\?|$)/)
-  await expect(page.getByTestId('search')).toBeVisible()
+  // Titles are found with the one search box in the bar: the catalog has no search of its own.
+  await expect(page.getByTestId('discover').getByRole('button',{name:/search/i})).toHaveCount(0)
+  await expect(page.getByRole('textbox',{name:/search/i})).toHaveCount(1)
 })
 
 test('keyboard sort picker has a single focus and restores it on Back; filters survive reload',async({page})=>{
@@ -110,16 +108,18 @@ test('profile change uses its own saved discovery filters and never reuses the p
   await expect.poll(async()=> (await requests(page)).at(-1)).toContain('year=2005')
 })
 
-test('default metadata fixtures support rail navigation and source scope without filtering out titles',async({page})=>{
+test('default metadata fixtures support bar navigation and source scope without filtering out titles',async({page})=>{
   await signIn(page)
+  // Movies and Shows in the bar are the library; the metadata catalog is a step from the search page.
   await page.getByRole('link',{name:'Movies',exact:true}).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
+  await expect(page).toHaveURL(/\/browse\/movies$/)
+  await openDiscover(page)
   await expect(page.getByTestId('tile')).toHaveCount(12)
   await page.getByRole('button',{name:'Availability source: All sources',exact:true}).click()
   await page.getByRole('button',{name:'IPTV Provider',exact:true}).click()
   await expect(page.getByTestId('tile')).toHaveCount(12)
   await expect(page.getByTestId('tile').filter({hasText:'Harbor Lights'})).toContainText('Not available here')
-  await page.getByRole('link',{name:'Series',exact:true}).click()
+  await openDiscover(page,'shows')
   await expect(page.getByTestId('tile')).toHaveCount(6)
   await expect(page.getByTestId('discover')).toContainText('Synthetic metadata fixture catalog')
 })

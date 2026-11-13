@@ -1,17 +1,40 @@
-"""Current sports listings from actual source-scoped EPG, never inferred scores or teams."""
+"""Sports listings from the source-scoped guide and from event-slot channel names.
+
+Nothing is inferred: a listing is sport when its own title or category says so, teams are
+only the two sides a title spells out ("A vs B", "A at B"), and a game is live when a real
+programme or a dated slot (``app.services.event_slots``) covers this moment. A placeholder
+programme that repeats its channel's name is not a listing at all.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, time, timedelta
+from datetime import date as calendar_date
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
-from app.infra.models import Programme, Source
+from app.infra.models import Channel, Programme, Source
 from app.services import ids
-from app.services.channels import ChannelService
+from app.services.errors import ServiceError
+from app.services.event_slots import (
+    DEFAULT_SLOT_CONFIG,
+    SLOT_NAME_LIKE,
+    display_name,
+    is_placeholder,
+    network_name,
+    parse_event_slot,
+    quality_hint,
+    slot_programme_id,
+)
+
+if TYPE_CHECKING:  # the channel service stamps these facts on its programmes
+    from app.services.channels import ChannelService
 
 # Deliberately conservative: channel/group names and descriptions are not sports evidence.
 SPORT_RULES = [
@@ -30,6 +53,8 @@ SPORT_RULES = [
     ("Sports", r"\b(?:sports?|sportscenter|sportscentre|athletics|olympics)\b"),
 ]
 PATTERNS = [(name, re.compile(pattern, re.IGNORECASE)) for name, pattern in SPORT_RULES]
+# The only repeat marker the guide carries: the listing says so in its title or category.
+REPLAY = re.compile(r"\b(?:replay|rerun|encore|repeat)\b", re.IGNORECASE)
 
 
 def classify_sport(title: str, category: str | None) -> str | None:
@@ -38,6 +63,55 @@ def classify_sport(title: str, category: str | None) -> str | None:
         if pattern.search(text):
             return sport
     return None
+
+
+_VERSUS = re.compile(r"\s+(?:vs?\.?|versus)\s+", re.IGNORECASE)
+_AT = re.compile(r"\s+(?:at|@)\s+")
+# What stands before the first side ("NBA: ", "Live - ", "Tennis | ") and after the second
+# (" (Live)", " - Game 3", ": Highlights").
+_LEAD = re.compile(r"^.*(?:[:|]|\s[-–])\s+")
+_TAIL = re.compile(r"\s*(?:[(\[|]|\s[-–]\s|:\s).*$")
+_SIDE_MAX = 60
+
+
+def split_matchup(title: str) -> list[str]:
+    """The two sides a title spells out: "A vs B", "A v B", "A versus B", "A at B", "A @ B".
+
+    A plain title split, for listings already known to be sport. "at" also reads as an
+    ordinary word ("Live at the Open"), so there both sides must look like names.
+    """
+    for pattern, names in ((_VERSUS, False), (_AT, True)):
+        parts = pattern.split(title)
+        if len(parts) != 2:
+            continue
+        sides = [_LEAD.sub("", parts[0] + " ").strip(), _TAIL.sub("", parts[1]).strip()]
+        if not all(0 < len(side) <= _SIDE_MAX for side in sides) or sides[0].casefold() == sides[1].casefold():
+            continue
+        if names and not all(side[0].isupper() or side[0].isdigit() for side in sides):
+            continue
+        return sides
+    return []
+
+
+def matchup_sides(title: str) -> tuple[str | None, str | None]:
+    """``(home, away)`` of a title that spells out a matchup: the visitor comes first in "A at B"."""
+    teams = split_matchup(title)
+    if not teams:
+        return None, None
+    visiting = len(_VERSUS.split(title)) != 2
+    return (teams[1], teams[0]) if visiting else (teams[0], teams[1])
+
+
+def matchup_teams(title: str, category: str | None) -> list[str]:
+    """The teams of a sports listing, when its title names both; otherwise none are guessed."""
+    return split_matchup(title) if classify_sport(title, category) is not None else []
+
+
+@lru_cache(maxsize=4096)
+def sport_facts(title: str, category: str | None) -> tuple[bool, tuple[str, ...]]:
+    """``(is_sport, teams)`` of a guide entry. Cached: a guide page repeats its listings."""
+    is_sport = classify_sport(title, category) is not None
+    return is_sport, tuple(split_matchup(title)) if is_sport else ()
 
 
 async def sports_on_now(
@@ -84,7 +158,10 @@ async def sports_on_now(
         async for row in rows:
             scheduled_channels.add(row[0])
             kind = classify_sport(row[7], row[8])
-            if kind is None or (term and term not in f"{row[7]} {row[3]}".casefold()):
+            # Filler that repeats the channel's name would classify by the channel, not by a listing.
+            if kind is None or is_placeholder(row[7], row[3]) or parse_event_slot(row[3]) is not None:
+                continue
+            if term and term not in f"{row[7]} {row[3]}".casefold():
                 continue
             counts[kind] += 1
             if sport and sport != kind:
@@ -100,7 +177,7 @@ async def sports_on_now(
                         "start": row[9],
                         "stop": row[10],
                         "channel_id": ids.channel_id(row[1], row[2]),
-                        "channel_name": row[3],
+                        "channel_name": display_name(row[3]),
                         "channel_number": row[4],
                         "source_name": row[5],
                     }
@@ -117,12 +194,80 @@ async def sports_on_now(
     }
 
 
+# SQL prefilter for the bounded guide read. The word-boundary classifier decides afterwards.
+_KEYWORDS = (
+    "sport",
+    "football",
+    "nfl",
+    "ncaa",
+    "basketball",
+    "nba",
+    "wnba",
+    "baseball",
+    "mlb",
+    "hockey",
+    "nhl",
+    "soccer",
+    "premier league",
+    "uefa",
+    "la liga",
+    "laliga",
+    "champions league",
+    "ipl",
+    "epl",
+    "bundesliga",
+    "tennis",
+    "golf",
+    "pga",
+    "formula",
+    "nascar",
+    "indycar",
+    "motogp",
+    "cricket",
+    "rugby",
+    "boxing",
+    "ufc",
+    "martial arts",
+    "wrestling",
+    "athletics",
+    "olympics",
+)
+_SPORT_TERMS = {
+    "American football": ("nfl", "ncaa", "college football", "american football"),
+    "Basketball": ("basketball", "nba", "wnba", "ncaa"),
+    "Baseball": ("baseball", "mlb"),
+    "Hockey": ("hockey", "nhl"),
+    "Soccer": ("soccer", "premier league", "epl", "uefa", "champions league", "la liga", "laliga", "bundesliga"),
+    "Football": ("football",),
+    "Tennis": ("tennis",),
+    "Golf": ("golf", "pga"),
+    "Motorsport": ("formula", "nascar", "indycar", "motogp", "motorsport"),
+    "Cricket": ("cricket", "indian premier league", "ipl"),
+    "Rugby": ("rugby",),
+    "Combat sports": ("boxing", "ufc", "martial arts", "wrestling"),
+    "Sports": ("sport", "athletics", "olympics"),
+}
+_LIVE_LABEL = re.compile(r"(?:^live\s*[:\-]|\(live\)|\blive coverage\b)", re.IGNORECASE)
+_MATCHUP = re.compile(r"\S.+\s(?:vs?\.?|versus|@)\s.+\S", re.IGNORECASE)
+_STATUSES = {"all", "active", "current", "upcoming", "replay"}
+SCAN_CAP = 5000
+
+
+def _event_id(*parts: str) -> str:
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:24]
+
+
+def _same_title(title: str) -> str:
+    return re.sub(r"\s+", " ", title).strip().casefold()
+
+
 async def sports_events(
     channels: ChannelService,
     profile_id: str,
     *,
     date: str | None = None,
     timezone: str = "America/New_York",
+    days: int = 1,
     language: str | None = None,
     sport: str | None = None,
     status: str = "all",
@@ -131,16 +276,14 @@ async def sports_events(
     offset: int = 0,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Bounded, source-scoped EPG events. Titles are evidence, not a sports data feed."""
-    import hashlib
-    from datetime import date as calendar_date
-    from datetime import time, timedelta
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    """Bounded, source-scoped sports events of ``days`` calendar days from ``date``.
 
-    from sqlalchemy import or_
-
-    from app.services.errors import ServiceError
-
+    Two kinds of evidence, neither a sports data feed: guide programmes classified as sport,
+    and event slots whose own name carries the game. ``current`` is a programme or a slot
+    that covers this moment. A slot whose time has passed is not listed (its name stays for
+    weeks); one without a date is listed as a game channel (``kind`` ``channel``) that makes
+    no claim about when it plays.
+    """
     now = now or datetime.now(UTC)
     try:
         zone = ZoneInfo(timezone)
@@ -149,51 +292,13 @@ async def sports_events(
             raise ValueError("date outside supported guide range")
     except (ValueError, ZoneInfoNotFoundError) as exc:
         raise ServiceError("Use an ISO date and a valid IANA timezone") from exc
-    if status not in {"all", "current", "upcoming", "replay"}:
+    if status not in _STATUSES:
         raise ServiceError("Unknown sports status filter")
+    days = max(1, min(7, days))
     start = datetime.combine(day, time.min, zone).astimezone(UTC)
-    stop = datetime.combine(day + timedelta(days=1), time.min, zone).astimezone(UTC)
+    stop = datetime.combine(day + timedelta(days=days), time.min, zone).astimezone(UTC)
     eligible, _ = await channels._channel_query(profile_id, language=language)
     ch = eligible.subquery()
-    # SQL prefilter reduces the bounded read to possible sports listings. The
-    # conservative word-boundary classifier below rejects substring false positives.
-    keywords = (
-        "sport",
-        "football",
-        "nfl",
-        "ncaa",
-        "basketball",
-        "nba",
-        "wnba",
-        "baseball",
-        "mlb",
-        "hockey",
-        "nhl",
-        "soccer",
-        "premier league",
-        "uefa",
-        "la liga",
-        "laliga",
-        "champions league",
-        "ipl",
-        "epl",
-        "bundesliga",
-        "tennis",
-        "golf",
-        "pga",
-        "formula",
-        "nascar",
-        "indycar",
-        "motogp",
-        "cricket",
-        "rugby",
-        "boxing",
-        "ufc",
-        "martial arts",
-        "wrestling",
-        "athletics",
-        "olympics",
-    )
     text = func.lower(func.coalesce(Programme.category, "") + " " + Programme.title)
     query = (
         select(
@@ -209,99 +314,163 @@ async def sports_events(
             Programme.start,
             Programme.stop,
             Programme.epg_channel,
+            ch.c.number,
         )
         .join(Programme, (Programme.feed == ch.c.source_id) & (Programme.epg_channel == ch.c.epg_id))
         .join(Source, Source.id == ch.c.source_id)
-        .where(Programme.stop > start, Programme.start < stop, or_(*(text.like(f"%{word}%") for word in keywords)))
+        .where(
+            Programme.stop > start,
+            Programme.start < stop,
+            or_(*(text.like(f"%{word}%") for word in _KEYWORDS)),
+            # Filler rows are dropped before the cap; the exact comparison below collapses whitespace too.
+            func.lower(func.trim(Programme.title)) != func.lower(func.trim(ch.c.name)),
+        )
         .order_by(Programme.start, Programme.title, Programme.feed, Programme.id, ch.c.id)
     )
-    sport_terms = {
-        "American football": ("nfl", "ncaa", "college football", "american football"),
-        "Basketball": ("basketball", "nba", "wnba", "ncaa"),
-        "Baseball": ("baseball", "mlb"),
-        "Hockey": ("hockey", "nhl"),
-        "Soccer": ("soccer", "premier league", "epl", "uefa", "champions league", "la liga", "laliga", "bundesliga"),
-        "Football": ("football",),
-        "Tennis": ("tennis",),
-        "Golf": ("golf", "pga"),
-        "Motorsport": ("formula", "nascar", "indycar", "motogp", "motorsport"),
-        "Cricket": ("cricket", "indian premier league", "ipl"),
-        "Rugby": ("rugby",),
-        "Combat sports": ("boxing", "ufc", "martial arts", "wrestling"),
-        "Sports": ("sport", "athletics", "olympics"),
-    }
-    if sport:
-        if sport not in sport_terms:
-            raise ServiceError("Unknown sport filter")
-        query = query.where(or_(*(text.like(f"%{word}%") for word in sport_terms[sport])))
+    # A slot names its own sport ("Field Hockey"); only the classifier's sports narrow the guide read.
+    guide_sport = sport is None or sport in _SPORT_TERMS
+    if sport and guide_sport:
+        query = query.where(or_(*(text.like(f"%{word}%") for word in _SPORT_TERMS[sport])))
     if status == "replay":
         query = query.where(or_(*(text.like(f"%{word}%") for word in ("replay", "rerun", "encore", "repeat"))))
-    if q and q.strip():
-        term = q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        query = query.where(func.lower(Programme.title).like(f"%{term}%", escape="\\"))
+    term = (q or "").strip()
+    if term:
+        like = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.where(func.lower(Programme.title).like(f"%{like}%", escape="\\"))
     if status == "current":
         query = query.where(Programme.start <= now, Programme.stop > now)
     elif status == "upcoming":
         query = query.where(Programme.start > now)
-    cap = 5000
+    elif status == "active":
+        query = query.where(Programme.stop > now)
+    squashed = func.replace(func.replace(ch.c.name, "  ", " "), "  ", " ")
+    slot_query = (
+        select(ch.c.id, ch.c.source_id, ch.c.ext_id, ch.c.name, ch.c.language, Source.name, ch.c.number)
+        .join(Source, Source.id == ch.c.source_id)
+        # Only names that can be slots reach the parser: the cap is for them, not for every "XX | Name".
+        .where(or_(*(squashed.like(pattern) for pattern in SLOT_NAME_LIKE)))
+        .order_by(ch.c.number, ch.c.id)
+    )
     async with channels._db.session() as session:
         eligible_count = int((await session.execute(select(func.count()).select_from(ch))).scalar_one())
-        rows = list((await session.execute(query.limit(cap + 1))).all())
-    truncated = len(rows) > cap
+        rows = list((await session.execute(query.limit(SCAN_CAP + 1))).all()) if guide_sport else []
+        slot_rows = list((await session.execute(slot_query.limit(SCAN_CAP + 1))).all())
+    truncated = len(rows) > SCAN_CAP or len(slot_rows) > SCAN_CAP
+    configs = await channels._sources.slot_configs() if slot_rows else {}
     grouped: dict[str, dict[str, Any]] = {}
     scheduled: set[int] = set()
-    for row in rows[:cap]:
+
+    def feed(row: Any, programme_id: str, number: int) -> dict[str, Any]:
+        return {
+            "programme_id": programme_id,
+            "channel_id": ids.channel_id(row[1], row[2]),
+            "channel_name": display_name(row[3]),
+            "channel_number": number,
+            "quality": quality_hint(row[3]),
+            "source_id": row[1],
+            "source_name": row[5],
+            "language": row[4] if row[4] and row[4] != "und" else None,
+            "language_verified": False,
+        }
+
+    for row in rows[:SCAN_CAP]:
         kind = classify_sport(row[7], row[8])
-        if kind is None:
+        # A slot channel is scheduled by its name alone, and filler is no listing.
+        if kind is None or is_placeholder(row[7], row[3]) or parse_event_slot(row[3]) is not None:
             continue
         scheduled.add(row[0])
         label = f"{row[7]} {row[8] or ''}"
-        replay = bool(re.search(r"\b(?:replay|rerun|encore|repeat)\b", label, re.I))
-        live = not replay and bool(re.search(r"(?:^live\s*[:\-]|\(live\)|\blive coverage\b)", label, re.I))
+        replay = bool(REPLAY.search(label))
         if status == "replay" and not replay:
             continue
         # Only explicit matchups with identical title and exact schedule are
         # grouped across sources. Generic studio shows retain source/EPG identity.
-        matchup = bool(re.search(r"\S.+\s(?:vs?\.?|versus|@)\s.+\S", row[7], re.I))
-        identity = "|".join(
-            [
-                re.sub(r"\s+", " ", row[7]).strip().casefold(),
-                kind,
-                row[9].isoformat(),
-                row[10].isoformat(),
-                str(replay),
-                "matchup" if matchup else f"{row[1]}:{row[11]}",
-            ]
+        matchup = bool(_MATCHUP.search(row[7]))
+        event_id = _event_id(
+            _same_title(row[7]),
+            kind,
+            row[9].isoformat(),
+            row[10].isoformat(),
+            str(replay),
+            "matchup" if matchup else f"{row[1]}:{row[11]}",
         )
-        event_id = hashlib.sha256(identity.encode()).hexdigest()[:24]
+        home, away = matchup_sides(row[7])
         event = grouped.setdefault(
             event_id,
             {
                 "id": event_id,
+                "kind": "event",
                 "title": row[7],
                 "sport": kind,
+                "league": None,
+                "home": home,
+                "away": away,
                 "start": row[9],
                 "stop": row[10],
                 "status": "upcoming" if row[9] > now else "current" if row[10] > now else "ended",
                 "replay": replay,
-                "live_evidence": live,
+                "live_evidence": not replay and bool(_LIVE_LABEL.search(label)),
                 "grouping_evidence": "matching_title_and_time" if matchup else "same_source_programme",
                 "feeds": [],
             },
         )
-        event["feeds"].append(
+        event["feeds"].append(feed(row, ids.prog_id(row[6]), row[12]))
+
+    folded = term.casefold()
+    for row in slot_rows[:SCAN_CAP]:
+        slot = parse_event_slot(row[3])
+        if slot is None:
+            continue
+        config = configs.get(row[1], DEFAULT_SLOT_CONFIG)
+        state = slot.state(now, config)
+        window = slot.window(config)
+        replay = bool(REPLAY.search(f"{slot.title} {slot.sport or ''}"))
+        if state == "ended" or (status == "replay" and not replay):
+            continue
+        if window is None:
+            # No date in the name: a game channel, offered with today's events and never called live.
+            if status not in ("all", "active") or not start <= now < stop:
+                continue
+            window = (start, stop)
+        elif (
+            not (window[1] > start and window[0] < stop)
+            or (status == "current" and state != "live")
+            or (status == "upcoming" and state != "upcoming")
+        ):
+            continue
+        if folded and folded not in f"{slot.title} {slot.channel_name} {slot.sport or ''}".casefold():
+            continue
+        kind = slot.sport or classify_sport(f"{slot.title} {slot.network}", None) or "Sports"
+        scheduled.add(row[0])
+        dated = state != "unscheduled"
+        # Two channels carrying one game: same title, same sport, same kick-off.
+        event_id = _event_id("slot", _same_title(slot.title), kind, window[0].isoformat() if dated else "undated")
+        event = grouped.setdefault(
+            event_id,
             {
-                "programme_id": ids.prog_id(row[6]),
-                "channel_id": ids.channel_id(row[1], row[2]),
-                "channel_name": row[3],
-                "source_id": row[1],
-                "source_name": row[5],
-                "language": row[4] if row[4] and row[4] != "und" else None,
-                "language_verified": False,
-            }
+                "id": event_id,
+                "kind": "event" if dated else "channel",
+                "title": slot.title,
+                "sport": kind,
+                "league": slot.network,
+                "home": slot.home,
+                "away": slot.away,
+                "start": window[0],
+                "stop": window[1],
+                "status": {"live": "current", "upcoming": "upcoming"}.get(state, "unscheduled"),
+                "replay": replay,
+                "live_evidence": state == "live" and not replay,
+                "grouping_evidence": "matching_title_and_time",
+                "feeds": [],
+            },
         )
-    counts = Counter(event["sport"] for event in grouped.values())
-    events = [event for event in grouped.values() if not sport or event["sport"] == sport]
+        event["feeds"].append(feed(row, slot_programme_id(row[0], window[0] if dated else None), row[6]))
+
+    listed = sorted(grouped.values(), key=lambda e: (e["kind"] != "event", e["start"], e["title"].casefold(), e["id"]))
+    for event in listed:
+        event["feeds"].sort(key=lambda f: (f["channel_number"], f["channel_id"]))
+    counts = Counter(event["sport"] for event in listed)
+    events = [event for event in listed if not sport or event["sport"] == sport]
     limit, offset = max(1, min(100, limit)), max(0, offset)
     return {
         "as_of": now,
@@ -314,4 +483,53 @@ async def sports_events(
         "sports": [{"name": name, "count": count} for name, count in sorted(counts.items())],
         "coverage": {"eligible_channels": eligible_count, "channels_with_sports_schedule": len(scheduled)},
         "truncated": truncated,
+    }
+
+
+async def sports_channels(
+    channels: ChannelService,
+    profile_id: str,
+    *,
+    language: str | None = None,
+    q: str | None = None,
+    limit: int = 40,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Always-on sports networks: channels a sports group or their own name puts there.
+
+    Event slots are left to ``sports_events``. ``now`` is a real guide entry or nothing.
+    """
+    eligible, _ = await channels._channel_query(profile_id, language=language, q=q)
+    label = func.lower(func.coalesce(Channel.group_override, Channel.group_name) + " " + Channel.name)
+    query = eligible.where(or_(*(label.like(f"%{word}%") for word in _KEYWORDS))).order_by(Channel.number, Channel.id)
+    async with channels._db.session() as session:
+        rows = list((await session.execute(query.limit(SCAN_CAP + 1))).scalars())
+    networks = [
+        row
+        for row in rows[:SCAN_CAP]
+        if parse_event_slot(row.name) is None
+        and classify_sport(row.name, row.group_override or row.group_name) is not None
+    ]
+    limit, offset = max(1, min(100, limit)), max(0, offset)
+    page = networks[offset : offset + limit]
+    listed = await channels.to_api(page, profile_id)
+    return {
+        "channels": [
+            {
+                "channel_id": item["id"],
+                "channel_name": network_name(row.name),
+                "channel_number": item["number"],
+                "logo": item["logo"],
+                "group": item["group"],
+                "quality": quality_hint(row.name),
+                "language": item["language"] if item["language"] != "und" else None,
+                "source_id": item["source_id"],
+                "now": item["now"],
+            }
+            for row, item in zip(page, listed, strict=True)
+        ],
+        "total": len(networks),
+        "limit": limit,
+        "offset": offset,
+        "truncated": len(rows) > SCAN_CAP,
     }

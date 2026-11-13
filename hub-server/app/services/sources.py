@@ -7,12 +7,15 @@ import hashlib
 import logging
 import secrets
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 
+from app.adapters.language.country import group_country
+from app.adapters.language.inferrer import lang_from_category, normalise_code
 from app.domain.entities import (
     IPTV_SOURCE_TYPES,
     CatalogItem,
@@ -21,6 +24,7 @@ from app.domain.entities import (
     SourceStatus,
     SourceType,
 )
+from app.domain.groups import split_group_path
 from app.domain.ports import LanguageInferrer, SourceProvider
 from app.infra.crypto import Crypto
 from app.infra.db import Database
@@ -28,6 +32,7 @@ from app.infra.logging import secret_registry
 from app.infra.models import Channel, ChannelGroup, Source, Title
 from app.services.disclaimer import DisclaimerService
 from app.services.errors import NotFound, PreconditionFailed, ServiceError
+from app.services.event_slots import SlotConfig
 from app.services.ids import normalise_title
 from app.services.registry import SourceRegistry, UnknownSourceType
 
@@ -35,6 +40,7 @@ log = logging.getLogger(__name__)
 
 LAZY_GEN = -1  # rows fetched lazily (seasons/episodes, details) — never swept by sync
 CHANNEL_OFFSET_STEP = 1000
+IDENTIFIER_COLUMNS = ("tmdb_id", "imdb_id")  # a sync may replace these, never clear them
 
 
 def new_id() -> str:
@@ -60,6 +66,7 @@ class SourceService:
         self._disclaimer = disclaimer
         self.language = language
         self._providers: dict[str, tuple[Any, SourceProvider]] = {}
+        self._slot_configs: dict[str, tuple[str, SlotConfig]] = {}  # per call it would be a config decrypt
 
     # ------------------------------------------------------------------ config
     def decrypt_config(self, row: Source) -> dict[str, Any]:
@@ -94,6 +101,35 @@ class SourceService:
         cfg = self.decrypt_config(row)
         return str(cfg.get("proxy") or "auto")
 
+    def proxied_image_headers(self, row: Source) -> dict[str, str] | None:
+        """Request headers for fetching this source's artwork on a client's behalf.
+
+        ``None`` unless the source is ``proxy: "always"``: only then are clients assumed
+        unable to reach the provider's hosts, artwork included.
+        """
+        cfg = self.decrypt_config(row)
+        if str(cfg.get("proxy") or "auto") != "always":
+            return None
+        agent = cfg.get("user_agent")
+        return {"Accept": "image/*", **({"User-Agent": str(agent)} if agent else {})}
+
+    def default_language(self, row: Source) -> str | None:
+        """Language (ISO 639-3) assumed for this source's titles when nothing more specific is known."""
+        value = self.decrypt_config(row).get("default_language")
+        return normalise_code(value) if isinstance(value, str) else None
+
+    def slot_config(self, row: Source) -> SlotConfig:
+        """Where this source's event-slot names keep their clock, and how long a game is taken to last."""
+        hit = self._slot_configs.get(row.id)
+        if hit is not None and hit[0] == row.config_enc:
+            return hit[1]
+        config = SlotConfig.from_config(self.decrypt_config(row))
+        self._slot_configs[row.id] = (row.config_enc, config)
+        return config
+
+    async def slot_configs(self) -> dict[str, SlotConfig]:
+        return {row.id: self.slot_config(row) for row in await self.list()}
+
     def max_connections(self, row: Source) -> int | None:
         cfg = self.decrypt_config(row)
         v = cfg.get("max_connections") or (row.hints or {}).get("max_connections")
@@ -119,6 +155,8 @@ class SourceService:
             summary = self.provider(row).config_summary()
         except Exception:
             summary = {}
+        if row.type != SourceType.STREAMING_SERVICE.value:
+            summary = {**summary, "default_language": self.default_language(row), **self.slot_config(row).summary()}
         return {
             "id": row.id,
             "type": row.type,
@@ -197,9 +235,8 @@ class SourceService:
         elif st == SourceType.JELLYFIN:
             if not cfg.get("server_url"):
                 raise ServiceError("jellyfin config needs server_url")
-        elif st == SourceType.PLEX:
-            if not cfg.get("server_url") and not cfg.get("token"):
-                raise ServiceError("plex sources are created via /sources/plex/pin")
+        elif st == SourceType.PLEX and not cfg.get("server_url") and not cfg.get("token"):
+            raise ServiceError("plex sources are created via /sources/plex/pin")
 
     async def update(self, source_id: str, patch: dict[str, Any]) -> Source:
         async with self._db.session() as s:
@@ -293,14 +330,23 @@ class SourceService:
 class DbCatalogSink:
     """CatalogSink implementation used during a sync run."""
 
-    def __init__(self, db: Database, source: Source, gen: int, language: LanguageInferrer) -> None:
+    def __init__(
+        self,
+        db: Database,
+        source: Source,
+        gen: int,
+        language: LanguageInferrer,
+        default_language: str | None = None,
+    ) -> None:
         self._db = db
         self._source = source
         self._gen = gen
         self._lang = language
+        self._default_language = default_language
         self._offset = int((source.hints or {}).get("channel_offset") or 0)
         self._groups: dict[str, str] = {}
         self._group_overrides: dict[str, str | None] = {}
+        self._group_sorts: dict[str, int] = {}
         self._group_sort = 0
         self.hints: dict[str, Any] = {}
         self.channel_count = 0
@@ -314,6 +360,7 @@ class DbCatalogSink:
             rows = (await s.execute(select(ChannelGroup).where(ChannelGroup.source_id == self._source.id))).scalars()
             for g in rows:
                 self._group_overrides[g.name] = g.language_override
+                self._group_sorts[g.name] = g.sort
                 self._group_sort = max(self._group_sort, g.sort)
         self._loaded = True
 
@@ -329,14 +376,28 @@ class DbCatalogSink:
             gname = ch.group or "Uncategorized"
             gid = self._groups.get(gname)
             if gid is None:
-                gid = group_id(sid, gname)
-                self._groups[gname] = gid
-                self._group_sort += 1
-                group_rows.append(
-                    {"id": gid, "source_id": sid, "name": gname, "sort": self._group_sort, "sync_gen": self._gen}
-                )
+                # "Parent / Child": the parent is a group too, with or without channels of its own, so
+                # that hiding or sorting it has a row to live on. It is met first and so sorts first.
+                parent = split_group_path(gname)[0]
+                for name in (parent, gname) if parent else (gname,):
+                    if name not in self._groups:
+                        self._groups[name] = group_id(sid, name)
+                        # A child stored before parents had rows keeps its place, and its new parent takes
+                        # that place too instead of the end of the list. (A stored row keeps its own sort.)
+                        sort = self._group_sorts.get(gname)
+                        if sort is None:
+                            self._group_sort += 1
+                            sort = self._group_sort
+                        row = {"id": self._groups[name], "source_id": sid, "name": name, "sort": sort}
+                        group_rows.append({**row, "sync_gen": self._gen})
+                gid = self._groups[gname]
             self.channel_count += 1
-            guess = self._lang.infer(ch)
+            # An adapter that cleaned the group name keeps the provider's own in raw_group;
+            # that is the one carrying the language and country tags.
+            raw_group = ch.extra.get("raw_group")
+            tagged = raw_group if isinstance(raw_group, str) and raw_group != gname else None
+            guess = self._lang.infer(replace(ch, group=tagged) if tagged else ch)
+            country = ch.tvg_country or (group_country(tagged)[0] if tagged else None)
             index = int(ch.extra.get("index") or self.channel_count)
             number_auto = self._offset + (ch.number if ch.number else index)
             data = {
@@ -360,7 +421,7 @@ class DbCatalogSink:
                     "group_name": gname,
                     "tvg_id": ch.tvg_id,
                     "epg_id": ch.tvg_id,
-                    "country": (ch.tvg_country or None),
+                    "country": country,
                     "number_auto": number_auto,
                     "number": number_auto,
                     "language": guess.code,
@@ -407,6 +468,8 @@ class DbCatalogSink:
         rows = []
         for it in items:
             self.item_counts[it.kind.value] = self.item_counts.get(it.kind.value, 0) + 1
+            if it.language is None:
+                it.language = self._default_language or lang_from_category(it.group)
             rows.append(item_row(self._source.id, it, self._gen))
         if rows:
             await upsert_titles(self._db, rows)
@@ -452,6 +515,9 @@ def item_row(source_id: str, it: CatalogItem, gen: int) -> dict[str, Any]:
         "tmdb_id": it.tmdb_id,
         "imdb_id": it.imdb_id,
         "group_name": it.group,
+        "language": normalise_code(it.language) or "und",
+        "quality": it.quality,
+        "adult": it.adult,
         "parent_ext_id": it.parent_ext_id,
         "season_number": it.season_number,
         "episode_number": it.episode_number,
@@ -472,6 +538,17 @@ async def upsert_titles(db: Database, rows: list[dict[str, Any]]) -> None:
             ex = stmt.excluded
             cols = [c for c in chunk[0] if c not in ("source_id", "ext_id")]
             set_ = {c: getattr(ex, c) for c in cols}
+            # List endpoints often omit ids that a detail call found later. Erasing them
+            # would change the title's hub id and orphan its favorites and progress.
+            for c in IDENTIFIER_COLUMNS:
+                set_[c] = func.coalesce(getattr(ex, c), getattr(Title, c))
+            # ``extra`` is the source's word and is replaced whole, except the media probe:
+            # that came from the file itself and costs an upstream connection to learn again.
+            kept = func.json_extract(Title.extra, "$.probe")
+            set_["extra"] = case(
+                (kept.is_(None), ex.extra),
+                else_=func.json_set(ex.extra, "$.probe", func.json(kept)),
+            )
             if chunk[0]["sync_gen"] == LAZY_GEN:
                 # lazy refresh must not demote a synced row to LAZY or drop sync-only data
                 set_.pop("sync_gen", None)
@@ -484,7 +561,7 @@ async def upsert_titles(db: Database, rows: list[dict[str, Any]]) -> None:
 async def apply_overrides(db: Database, source_id: str | None = None) -> None:
     """Recompute effective number/language/epg for channels from overrides."""
     async with db.session() as s:
-        q = select(ChannelGroup).where(ChannelGroup.language_override.is_not(None))
+        q = select(ChannelGroup)
         if source_id:
             q = q.where(ChannelGroup.source_id == source_id)
         groups = list((await s.execute(q)).scalars())
@@ -497,11 +574,19 @@ async def apply_overrides(db: Database, source_id: str | None = None) -> None:
         await s.execute(
             update(Channel).where(*cond, Channel.epg_override.is_not(None)).values(epg_id=Channel.epg_override)
         )
-        # group language overrides (unless the channel has its own override)
-        for g in groups:
+        # group language overrides (unless the channel has its own override). A parent's reaches the
+        # children ("Parent / Child") that set none; parents go first so a child's own override wins.
+        for g in sorted(groups, key=lambda g: split_group_path(g.name)[0] is not None):
+            if g.language_override is None:
+                continue
+            inherit = [
+                c.id
+                for c in groups
+                if c.source_id == g.source_id and c.language_override is None and split_group_path(c.name)[0] == g.name
+            ]
             await s.execute(
                 update(Channel)
-                .where(Channel.group_id == g.id, Channel.language_override.is_(None))
+                .where(Channel.group_id.in_([g.id, *inherit]), Channel.language_override.is_(None))
                 .values(language=g.language_override, language_source="user")
             )
         # channel language overrides

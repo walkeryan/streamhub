@@ -20,7 +20,7 @@ class AudioLanguagePolicyTest {
     }
     @Test fun absentRuntimeTracksKeepSuccessfulPreflightWithoutLanguageVerificationClaim() {
         assertEquals(RuntimeAudioDecision.Unobservable,runtimeAudioDecision(true,listOf("eng"),0,emptyList(),false))
-        assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(true,listOf("eng"),1,listOf(null),false))
+        assertEquals(RuntimeAudioDecision.Unobservable,runtimeAudioDecision(true,listOf("eng"),1,listOf(null),false))
         assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(true,listOf("eng"),1,listOf("fra"),false))
         assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(true,listOf("eng"),1,listOf("en"),false))
     }
@@ -33,7 +33,7 @@ class AudioLanguagePolicyTest {
         assertTrue(needsRuntimeAudioCheck(false,listOf("eng")))
         assertFalse(needsRuntimeAudioCheck(false,emptyList()))
         assertEquals(RuntimeAudioDecision.Unobservable,runtimeAudioDecision(false,listOf("eng"),0,emptyList(),false))
-        assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(false,listOf("eng"),1,listOf(null),false))
+        assertEquals(RuntimeAudioDecision.Unobservable,runtimeAudioDecision(false,listOf("eng"),1,listOf(null),false))
         assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,listOf("eng"),1,listOf("en"),false))
         assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,emptyList(),0,emptyList(),false))
     }
@@ -43,7 +43,7 @@ class AudioLanguagePolicyTest {
         fun decision(epoch:Long,group:Any,language:String?)=runtimeAudioDecision(false,listOf("eng"),1,listOf(language),approval.accepts(epoch,group,0))
         assertEquals(RuntimeAudioDecision.Allowed,decision(1,original,"fra"))
         assertEquals(RuntimeAudioDecision.Blocked,decision(1,replacement,"fra"))
-        assertEquals(RuntimeAudioDecision.Blocked,decision(1,replacement,null))
+        assertEquals(RuntimeAudioDecision.Unobservable,decision(1,replacement,null))
         assertEquals(RuntimeAudioDecision.Blocked,decision(2,original,"fra"))
         approval.clear();assertEquals(RuntimeAudioDecision.Blocked,decision(1,original,"fra"))
         assertEquals(RuntimeAudioDecision.Allowed,runtimeAudioDecision(false,emptyList(),1,listOf("fra"),false))
@@ -58,5 +58,17 @@ class AudioLanguagePolicyTest {
         assertFalse(approval.accepts(1,replacement,0))
         assertFalse(approval.accepts(1,original,1))
         approval.clear();assertFalse(approval.accepts(1,original,0))
+    }
+
+    @Test fun oneUntaggedSelectedTrackPlaysAsUnknownWithoutWeakeningKnownForeignGuard() {
+        listOf<String?>(null,"","und").forEach { language ->
+            assertEquals(RuntimeAudioDecision.Unobservable,runtimeAudioDecision(true,listOf("eng"),1,listOf(language),false))
+        }
+        assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(true,listOf("eng"),1,listOf("fra"),false))
+        assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(true,listOf("eng"),2,listOf(null),false))
+        assertEquals(RuntimeAudioDecision.Blocked,runtimeAudioDecision(true,listOf("eng"),1,emptyList(),false))
+        assertEquals(1,preferredAudioIndex(listOf("eng"),listOf("fra","en")))
+        assertNull(preferredAudioIndex(listOf("eng"),listOf("fra",null)))
+        assertFalse(preferredAudioSelected(listOf("eng"),listOf(null)))
     }
 }

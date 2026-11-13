@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.domain.entities import PlaybackMode
 from app.infra.models import Channel, Programme, Title
+from app.services.network import DEFAULT_HOME_NETWORKS
 from app.services.playback import decide_mode
 from tests.conftest import FIXTURES, Api, add_m3u
 
@@ -228,6 +229,7 @@ async def test_proxy_vod_passthrough_and_hls_rewrite(api: Api, respx_mock: respx
             live=False,
             channel_key=None,
             transcode=False,
+            **api.identity(),
         )
     )
     r = await api.client.get(f"/api/v1/stream/{token}", headers={"Range": "bytes=0-9"})
@@ -434,11 +436,20 @@ async def test_settings(api: Api) -> None:
     s = (await api.get("/settings")).json()
     assert s == {
         "tmdb_api_key_set": False,
+        "request_manager_configured": False,
         "region": "US",
         "sleep_timer_min": None,
         "epg_refresh_hours": 12,
         "transcode_hw": "none",
         "proxy_mode": "auto",
+        "signup_mode": "approval",
+        "plex_sign_in": True,
+        "password_sign_in": True,
+        "plex_friends_auto_approve": False,
+        "notify_webhook_set": False,
+        "home_networks": DEFAULT_HOME_NETWORKS,
+        "home_shelves": [],
+        "home_shelves_unknown": [],
     }
     s = (await api.patch("/settings", json={"region": "gb", "sleep_timer_min": 60, "transcode_hw": "vaapi"})).json()
     assert s["region"] == "GB" and s["sleep_timer_min"] == 60 and s["transcode_hw"] == "vaapi"

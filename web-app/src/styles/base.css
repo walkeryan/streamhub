@@ -7,8 +7,9 @@ html {
   background: var(--t-bg);
   color: var(--t-text);
   -webkit-text-size-adjust: 100%;
-  /* focus-driven scrollIntoView keeps the focused control inside the TV safe area, not flush with the edge */
-  scroll-padding-block: calc(var(--safe-y) + 0.5rem);
+  /* focus-driven scrollIntoView keeps the focused control clear of the top bar and inside the TV safe area,
+     not flush with the edge */
+  scroll-padding-block: calc(var(--bar-h) + 0.5rem) calc(var(--safe-y) + 0.5rem);
 }
 @media (max-width: 720px) { html { font-size: 15px; scroll-padding-block: 1rem 4.5rem; } }
 body {
@@ -78,6 +79,30 @@ h1, h2, h3, p { margin: 0; }
   font-size: var(--text-label); font-weight: 500; white-space: nowrap;
 }
 .chip[aria-pressed='true'] { background: var(--t-accent); color: var(--t-accent-text); font-weight: 600; }
+/* A button among chips (Live TV's search and Options icons, the guide's Watch and Record) takes their height and shape. */
+.btn.btn-chip { min-height: 2.125rem; padding: 0 0.875rem; border-radius: var(--radius-pill); font-size: var(--text-label); gap: 0.375rem; }
+/* A chip that drops its choices down (ChipMenu) and names the one in force, shortened when it is long. */
+/* (The choice follows the name as one phrase: its own leading space, not the chip's gap, separates them.) */
+.chip-menu-choice { max-width: 12rem; margin-left: -0.375rem; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+/* The list is drawn over the page and placed from the chip's box; the scrim under it only takes the click that closes it. */
+.chip-menu-scrim { position: fixed; inset: 0; z-index: 80; }
+.chip-menu {
+  position: fixed; max-width: calc(100vw - 1rem); max-height: 24rem; overflow-y: auto; overscroll-behavior: contain; padding: 0.25rem;
+  border-radius: var(--radius-md); background: var(--t-surface); border: 1px solid var(--surface-edge); box-shadow: 0 1rem 3rem rgba(0, 0, 0, .36);
+  scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--t-text) 28%, transparent) transparent;
+}
+.chip-menu-list { display: flex; flex-direction: column; gap: 0.125rem; }
+.chip-menu-item {
+  display: grid; grid-template-columns: 1rem minmax(0, 1fr) auto; align-items: center; gap: 0.625rem;
+  min-height: 2.5rem; padding: 0 0.75rem; border-radius: var(--radius-sm); font-weight: 500; white-space: nowrap;
+}
+.chip-menu-item svg { visibility: hidden; color: var(--t-accent); }
+.chip-menu-item[aria-checked='true'] { font-weight: 600; }
+.chip-menu-item[aria-checked='true'] svg { visibility: visible; }
+/* The ring is drawn inside the entry: the list clips what leaves it. */
+.chip-menu-item.fx[data-focused='true'] { outline-offset: calc(-1 * var(--focus-border)); box-shadow: none; background: color-mix(in srgb, var(--t-accent) 12%, var(--t-surface)); }
+.dialog .chip-menu-item { min-height: 3rem; background: var(--t-surface-alt); border-radius: var(--radius-md); }
+.dialog .chip-menu-list { gap: 0.5rem; }
 
 .field {
   display: flex; align-items: center; min-height: 2.75rem; padding: 0 0.875rem; border-radius: var(--radius-md);
@@ -100,44 +125,97 @@ h1, h2, h3, p { margin: 0; }
 @keyframes skel { to { background-position: -200% 0; } }
 
 /* ---------- shell ---------- */
-/* collapsed rail = TV safe margin + 56 dp of icons (≈104 dp), so rail items sit inside the 48/27 dp safe area.
-   Web-only override of tokens.rail.collapsed_w (72) until the shared token is updated with the Android rail. */
-:root { --rail-collapsed: calc(var(--safe-x) + 3.5rem); }
-.shell { display: block; min-height: 100dvh; }
-.main { margin-left: var(--rail-collapsed); min-height: 100dvh; }
+/* Wide screens: one bar across the top, its entries inside the 48/27 dp safe area and its surface bleeding to the
+   edges. --bar-h is what that bar takes from the top of every screen: nothing on a phone, whose bar is at the bottom.
+   (tokens.rail.* in the shared design tokens describe the TV app's left rail; nothing here reads them.) */
+:root { --bar-h: calc(var(--safe-y) + 2.5625rem); }
+@media (max-width: 720px) { :root { --bar-h: 0rem; } }
+.shell { display: block; min-height: 100dvh; padding-top: var(--bar-h); }
+.main { min-height: calc(100dvh - var(--bar-h)); }
 @media (max-width: 720px) {
-  .main { margin-left: 0; padding-bottom: 4rem; }
+  .main { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
 }
 .page-pad { padding: var(--safe-y) var(--safe-x); }
 @media (max-width: 720px) { .page-pad { padding: 1rem; } }
+/* Under the bar a screen is already inside the top safe margin: it gives that room back to its content. */
+@media (min-width: 721px) { .main .page-pad { padding-top: 1rem; } }
 
-/* rail */
-.rail {
-  position: fixed; inset: 0 auto 0 0; z-index: 40; width: var(--rail-collapsed);
-  /* background stays full-bleed; items are inset to the safe area */
-  display: flex; flex-direction: column; gap: 0.125rem;
-  padding: var(--safe-y) 0.25rem var(--safe-y) var(--safe-x);
-  background: var(--t-bg);
-  border-right: 1px solid color-mix(in srgb, var(--t-text) 8%, transparent);
-  transition: width var(--dur-base) var(--ease), background-color var(--dur-base) var(--ease);
-  overflow: hidden;
-}
-.rail[data-expanded='true'] { width: var(--rail-expanded); background: var(--t-surface); box-shadow: 0 0 2.5rem rgba(0,0,0,0.45); }
-.rail-item { display: flex; align-items: center; gap: 1rem; flex: none; height: 2.75rem; padding: 0 0.875rem; border-radius: var(--radius-md); color: var(--t-text-muted); white-space: nowrap; }
+/* navigation (.rail: the classes, test ids and focus keys keep the name of the left rail this replaced) */
+.rail { position: fixed; z-index: 40; display: flex; background: var(--t-surface); }
+.rail-item { display: flex; align-items: center; flex: none; border-radius: var(--radius-md); color: var(--t-text-muted); white-space: nowrap; }
 .rail-item svg { flex: none; }
-.rail-item .lbl { opacity: 0; transition: opacity var(--dur-fast) var(--ease); font-weight: 500; }
-.rail[data-expanded='true'] .rail-item .lbl { opacity: 1; }
-.rail-item[aria-current='page'] { color: var(--t-text); background: color-mix(in srgb, var(--t-accent) 18%, transparent); }
-.rail-item[aria-current='page'] svg { color: var(--t-accent); }
-@media (max-width: 720px) {
-  .rail, .rail[data-expanded='true'] {
-    inset: auto 0 0 0; width: 100%; height: 3.75rem; flex-direction: row; padding: 0.25rem 0.5rem;
-    border-right: 0; border-top: 1px solid color-mix(in srgb, var(--t-text) 10%, transparent); overflow-x: auto; background: var(--t-surface); box-shadow: none;
+.rail-item .lbl { font-weight: 500; }
+.rail-item[aria-current='page'] { color: var(--t-text); }
+/* Wide: wordmark, the places to watch by name, then Search, More and the profile at the far end. Nothing opens on
+   hover or focus and nothing slides over the screen. The row may not wrap: a tablet closes the gaps first, then
+   gives up the wordmark. */
+@media (min-width: 721px) {
+  .rail {
+    --rail-pad: 0.875rem;
+    inset: 0 0 auto 0; height: var(--bar-h); align-items: flex-start; gap: 0.25rem;
+    padding: var(--safe-y) var(--safe-x) 0;
+    border-bottom: 1px solid var(--surface-edge);
   }
-  .rail-item { padding: 0 0.75rem; flex: none; }
-  .rail-item .lbl { display: none; }
-  .rail .spacer { display: none; }
+  .rail-brand { margin-right: 1.5rem; font-size: var(--text-heading); font-weight: 700; line-height: 2.25rem; letter-spacing: -0.01em; white-space: nowrap; cursor: pointer; }
+  .rail-gap { flex: 1; min-width: 0.5rem; }
+  .rail-item { height: 2.25rem; padding: 0 var(--rail-pad); }
+  .rail-icon { width: 2.25rem; padding: 0; justify-content: center; }
+  .rail-icon + .rail-icon { margin-left: 0.25rem; }
+  /* icons are drawn in pixels; here they keep pace with the names beside them on a TV */
+  .rail-icon svg { width: 1.375rem; height: 1.375rem; }
+  /* the whole height of the bar above and below an entry takes the click or the tap */
+  .rail-item::before { content: ''; position: absolute; inset: calc(-1 * var(--safe-y)) 0 -0.3125rem; }
+  /* the current section: full-strength text over an accent line (the focus ring is a different shape) */
+  .rail-item[aria-current='page']::after { content: ''; position: absolute; inset: auto var(--rail-pad) 0.0625rem; height: 0.1875rem; border-radius: 999px; background: var(--t-accent); }
+  .rail-icon[aria-current='page']::after { inset-inline: 0.375rem; }
+  .rail-icon[aria-current='page'] svg { color: var(--t-accent); }
+  /* The search box: the magnifier and a short field. It takes room from the gap beside it when it is in
+     use and gives way before any name in the row does; it never pushes one off. */
+  .rail-search {
+    display: flex; align-items: center; gap: 0.5rem; flex: 0 1 14rem; min-width: 2.25rem; height: 2.25rem; padding: 0 0.625rem; margin-right: 0.25rem;
+    border-radius: var(--radius-pill); background: var(--t-surface-alt); border: 1px solid var(--surface-edge); color: var(--t-text-muted);
+    cursor: text; transition: flex-basis var(--dur-fast) var(--ease), outline-color var(--dur-focus) var(--ease);
+  }
+  .rail-search.fx[data-focused='true'] { transform: none; box-shadow: none; }
+  .rail-search[data-open], .rail-search[data-filled] { color: var(--t-text); }
+  .rail-search[data-open] { flex-basis: 20rem; }
+  .rail-search[aria-current='page'] svg { color: var(--t-accent); }
+  .rail-search svg { flex: none; width: 1.25rem; height: 1.25rem; }
+  .rail-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; font-size: var(--text-label); }
+  .rail-search input::placeholder { color: var(--t-text-muted); opacity: 0.8; }
+  .rail-search-clear { display: grid; place-items: center; flex: none; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--t-text-muted); cursor: pointer; }
+  .rail-search-clear:hover { color: var(--t-text); }
+  .rail-search-clear svg { width: 1rem; height: 1rem; }
 }
+@media (min-width: 721px) and (max-width: 1000px) {
+  .rail { --rail-pad: 0.625rem; gap: 0; }
+  .rail-brand { margin-right: 0.75rem; }
+  /* No room for a field beside eight entries: the magnifier alone, until the box is in use. Then it opens
+     over the row, and closes when the caret leaves it. */
+  .rail-search:not([data-open]) { flex: none; width: 2.25rem; padding: 0; justify-content: center; border-color: transparent; background: transparent; cursor: pointer; }
+  .rail-search:not([data-open]) input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .rail-search:not([data-open]) .rail-search-clear { display: none; }
+  .rail-search:not([data-open]) svg { width: 1.375rem; height: 1.375rem; }
+  .rail-search:not([data-open])[data-filled] svg { color: var(--t-accent); }
+  .rail-search[data-open] { position: absolute; z-index: 6; inset: var(--safe-y) var(--safe-x) auto; margin: 0; background: var(--t-surface-alt); }
+}
+@media (min-width: 721px) and (max-width: 800px) { .rail-brand { display: none; } }
+/* Phone: a bottom bar of five, each an icon over its name. */
+@media (max-width: 720px) {
+  .rail {
+    inset: auto 0 0 0; width: 100%; height: calc(3.75rem + env(safe-area-inset-bottom)); flex-direction: row; gap: 0;
+    padding: 0.25rem 0.25rem calc(0.25rem + env(safe-area-inset-bottom));
+    border-top: 1px solid color-mix(in srgb, var(--t-text) 10%, transparent); overflow: hidden;
+  }
+  .rail-item { flex: 1 1 0; min-width: 0; height: 100%; flex-direction: column; justify-content: center; gap: 0.125rem; padding: 0; }
+  .rail-item .lbl { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 0.6875rem; line-height: 1.2; }
+  .rail-item[aria-current='page'] { background: color-mix(in srgb, var(--t-accent) 18%, transparent); box-shadow: inset 0 0.1875rem var(--t-accent); }
+  .rail-item[aria-current='page'] svg { color: var(--t-accent); }
+}
+.menu-item { display: flex; align-items: center; gap: 0.875rem; min-height: 3rem; padding: 0 1rem; border-radius: var(--radius-md); background: var(--t-surface-alt); font-weight: 600; }
+.menu-item svg { flex: none; }
+.menu-item[aria-current='page'] { box-shadow: inset 0.1875rem 0 var(--t-accent); }
+.menu-item[aria-current='page'] svg { color: var(--t-accent); }
 
 /* ---------- rows & tiles ---------- */
 .row-scroll {
@@ -148,6 +226,19 @@ h1, h2, h3, p { margin: 0; }
 @media (max-width: 720px) { .row-scroll { padding-inline: 1rem; scroll-padding-inline: 1rem; } }
 .row-title { padding: 0 var(--safe-x); font-size: var(--text-heading); font-weight: 600; line-height: 1.3; }
 @media (max-width: 720px) { .row-title { padding-inline: 1rem; } }
+.tile-row { margin-bottom: 0.25rem; }
+/* Where height is scarce (a phone, any landscape screen) rows use four fifths of the poster token and a
+   tighter band, so the first screen of Home, Movies and Shows carries three rows rather than two. */
+@media (max-width: 720px), (min-aspect-ratio: 4/3) {
+  .tile-row { --tile-poster-w: 7.5rem; --tile-poster-h: 11.25rem; }
+  .tile-row .row-scroll { padding-block: 0.75rem; }
+}
+/* "See all" closes a row in the shape of its neighbours. */
+.tile-more { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.375rem; padding: 0.5rem; background: var(--t-surface-alt); color: var(--t-text); font-weight: 600; text-align: center; }
+/* chips that scroll sideways instead of wrapping into a wall */
+.chip-scroll { display: flex; gap: 0.5rem; align-items: center; overflow-x: auto; scrollbar-width: none; padding: 0.375rem; margin: -0.375rem; scroll-padding-inline: 0.375rem; }
+.chip-scroll::-webkit-scrollbar { display: none; }
+.chip-scroll > * { flex: none; }
 
 .tile { flex: none; border-radius: var(--radius-md); overflow: hidden; background: var(--t-surface); }
 .tile-poster { width: var(--tile-poster-w); height: var(--tile-poster-h); }
@@ -168,6 +259,30 @@ h1, h2, h3, p { margin: 0; }
 .badge-play { background: var(--t-accent); color: var(--t-accent-text); }
 .tile-badges { position: absolute; right: 0.375rem; top: 0.375rem; max-width: calc(100% - 0.75rem); display: flex; gap: 0.25rem; }
 .tile-badges .badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Search results: a title that plays here carries a tick, like the status mark of a request manager. */
+.tile-check { position: absolute; right: 0.375rem; top: 0.375rem; width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: 50%; background: var(--t-success); color: #06210f; box-shadow: 0 0.0625rem 0.25rem rgba(0, 0, 0, .45); }
+.tile-check svg { stroke-width: 3; }
+/* A request's status (components/RequestStatus.tsx): the phase chip, and while downloading a bar that fills. */
+.request-status { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.request-status-line { display: flex; align-items: center; gap: 0.25rem 0.5rem; flex-wrap: wrap; min-width: 0; }
+.request-chip { gap: 0.25rem; flex: none; }
+/* Tinted from the text colour, so the chip keeps its outline on a panel, on the page and over a backdrop alike. */
+.request-status .request-chip { height: 1.5rem; padding: 0 0.625rem; border-radius: var(--radius-pill); font-size: 0.75rem; background: color-mix(in srgb, var(--t-text) 14%, transparent); }
+.request-status .request-chip.badge-ok { background: color-mix(in srgb, var(--t-success) 30%, var(--t-surface-alt)); }
+.request-status .request-chip.badge-warn { background: color-mix(in srgb, var(--t-danger) 30%, var(--t-surface-alt)); }
+.request-progress { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.request-progress-text { flex: none; font-variant-numeric: tabular-nums; }
+.request-bar { flex: 1 1 8rem; min-width: 4rem; max-width: 24rem; height: 0.5rem; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--t-text) 22%, transparent); overflow: hidden; }
+.request-bar > i { display: block; height: 100%; min-width: 0.5rem; border-radius: inherit; background: var(--t-accent); transition: width var(--dur-slow) var(--ease); }
+/* No percentage to show: a third of the bar travels along it. */
+.request-bar[data-indeterminate] > i { width: 35%; animation: request-bar-travel 1.6s ease-in-out infinite; }
+@keyframes request-bar-travel { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
+@media (prefers-reduced-motion: reduce) {
+  /* Standing still, it must not read as a third done: the whole track, dimmed. */
+  .request-bar[data-indeterminate] > i { width: 100%; opacity: 0.45; animation: none; }
+}
+/* On a poster: along the bottom edge, clear of the rounded corners. */
+.request-tile-bar { position: absolute; left: 0.375rem; right: 0.375rem; bottom: 0.375rem; max-width: none; min-width: 0; height: 0.3125rem; background: color-mix(in srgb, var(--t-bg) 70%, transparent); }
 
 /* hero */
 .hero { position: relative; height: min(62dvh, 40rem); min-height: 22rem; overflow: hidden; }
@@ -183,14 +298,28 @@ h1, h2, h3, p { margin: 0; }
 }
 .hero-body { position: absolute; z-index: 2; left: var(--safe-x); bottom: 2rem; max-width: min(38rem, 80%); display: flex; flex-direction: column; gap: 0.75rem; }
 @media (max-width: 720px) { .hero-body { left: 1rem; right: 1rem; max-width: none; } .hero { height: 52dvh; } }
-.display { font-size: var(--text-display); line-height: 1.08; font-weight: 700; letter-spacing: -0.015em; text-wrap: balance; }
-.title-xl { font-size: var(--text-title); line-height: 1.2; font-weight: 600; }
+/* Headings keep room under the baseline. Fonts with deep descenders (the system font on Windows among
+   them) draw g, j, p, y below a tight line box, and anything that clips or sits right under the heading
+   (a two-line clamp, a row of chips) cut them off. Clipping happens at the padding edge, so the padding
+   is what saves them. */
+.display { font-size: var(--text-display); line-height: 1.16; padding-bottom: 0.12em; font-weight: 700; letter-spacing: -0.015em; text-wrap: balance; }
+.title-xl { font-size: var(--text-title); line-height: 1.25; padding-bottom: 0.1em; font-weight: 600; }
 .heading { font-size: var(--text-heading); font-weight: 600; line-height: 1.3; }
 @media (max-width: 720px) { .display { font-size: 2rem; } }
 
 /* modal */
 .scrim { position: fixed; inset: 0; z-index: 80; background: var(--t-overlay); display: grid; place-items: center; padding: 1rem; backdrop-filter: blur(0.5rem); }
 .dialog { background: var(--t-surface); border-radius: var(--radius-lg); padding: 1.5rem; width: min(34rem, 100%); max-height: 88dvh; overflow: auto; box-shadow: 0 1.5rem 4rem rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 1rem; }
+
+/* Sheets: on a phone a menu or filter rises from the bottom edge; on wide screens a panel docks right. */
+@media (max-width: 720px) {
+  .scrim-sheet, .scrim-panel { place-items: end stretch; padding: 0; }
+  .dialog-sheet, .dialog-panel { width: 100%; max-height: 86dvh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding: 1.25rem 1rem calc(1.25rem + env(safe-area-inset-bottom)); }
+}
+@media (min-width: 721px) {
+  .scrim-panel { place-items: stretch end; padding: 0; }
+  .dialog-panel { width: min(28rem, 100%); max-height: none; border-radius: var(--radius-lg) 0 0 var(--radius-lg); padding: var(--safe-y) var(--safe-x) var(--safe-y) 1.5rem; }
+}
 
 /* toasts */
 .toasts { position: fixed; z-index: 90; right: var(--safe-x); bottom: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; max-width: min(28rem, calc(100vw - 2rem)); }
@@ -202,15 +331,36 @@ h1, h2, h3, p { margin: 0; }
 /* grid */
 .grid-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-poster-w), 1fr)); gap: 1.25rem var(--tile-gap); padding: 1rem 0.5rem; }
 .grid-tiles .tile { width: auto; aspect-ratio: 2/3; height: auto; }
-.search-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; align-items: start; }
-.search-controls { min-width: 0; }
-@media (min-width: 1024px) {
-  .search-layout { grid-template-columns: 22rem minmax(0, 1fr); }
+/* Search results: one page of up to three sections. Broadcasts and channels are short rows in as many
+   columns as fit, so a full section stays a few lines tall above the posters. */
+.search-page { display: flex; flex-direction: column; gap: 1rem; min-height: 20rem; }
+.search-page-field { max-width: 32rem; }
+.search-sections { display: flex; flex-direction: column; gap: 1.75rem; padding-bottom: 2rem; }
+.search-section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+[data-testid='search-results'][data-stale] { opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
+.search-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(22rem, 100%), 1fr)); gap: 0.5rem; }
+.search-row {
+  display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; min-height: 3.5rem; padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md); background: var(--t-surface); border: 1px solid var(--surface-edge);
 }
+.search-row[data-focused='true'] { background-color: color-mix(in srgb, var(--t-accent) 12%, var(--t-surface)); }
+.search-row-copy { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.search-row-title { font-weight: 600; }
+.search-row-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.search-row-line > :first-child { flex: none; }
+.search-row-when { color: var(--t-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.search-row-number { color: var(--t-text-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+.search-grid { padding: 0; }
+.search-tile { position: relative; min-width: 0; }
+.search-kind { position: absolute; left: 0.375rem; top: 0.375rem; z-index: 6; pointer-events: none; }
+.search-more { display: flex; }
+.search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; padding: 0.5rem 0; }
 
 /* player */
 .player { position: fixed; inset: 0; background: #000; color: #fff; z-index: 60; overflow: hidden; }
 .player video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; }
+/* What the player shows while a stream starts: the title's poster or the channel's logo, modest and centred. */
+.player-splash-art { max-width: min(40vw, 22rem); max-height: 42dvh; object-fit: contain; border-radius: var(--radius-lg); box-shadow: 0 1rem 3rem rgba(0, 0, 0, .5); }
 .player-ui { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; justify-content: space-between; opacity: 0; transition: opacity var(--dur-base) var(--ease); pointer-events: none; }
 .player-ui[data-show='true'] { opacity: 1; pointer-events: auto; }
 .player-ui .top { padding: var(--safe-y) var(--safe-x) 1.5rem; background: linear-gradient(to bottom, rgba(0,0,0,.7), transparent); display: flex; gap: 1rem; align-items: center; }
@@ -225,15 +375,99 @@ h1, h2, h3, p { margin: 0; }
 .numpad { position: absolute; z-index: 5; top: 2rem; right: var(--safe-x); font-size: var(--text-display); font-weight: 700; background: rgba(8,10,16,.75); padding: .25rem 1.25rem; border-radius: var(--radius-md); }
 
 /* guide */
-/* scroll-padding = sticky channel column + time header, so a focused cell is never hidden underneath them */
-.epg { --col: 13rem; position: relative; scroll-padding: 2rem 0 0 13rem; }
-.epg-cell { position: absolute; top: 0.25rem; bottom: 0.25rem; border-radius: var(--radius-sm); background: var(--t-surface-alt); padding: 0.25rem 0.625rem; overflow: clip; font-size: var(--text-label); display: flex; align-items: center; }
-.epg-label { position: sticky; left: 13.75rem; display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
+/* The guide takes what the window has left under the Live TV header and scrolls inside itself, both ways; the page
+   does not scroll. Every row is --epg-row tall, so only the rows near the view are drawn, each placed by its index
+   (ROW_REM in GuideRow.tsx is the same number). The time header and the channel column stay put; scroll-padding
+   keeps a focused cell out from under them. */
+.epg-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.epg-skel { flex: 1; min-height: 12rem; }
+.epg {
+  --col: 13rem; --epg-ch: 13rem; --epg-row: 3rem; --epg-head: 2rem;
+  position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  border-radius: var(--radius-md); background: var(--t-surface);
+  scroll-padding: var(--epg-head) 0 0 var(--epg-ch);
+  scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--t-text) 28%, transparent) transparent;
+}
+.epg-canvas, .epg-rows { position: relative; }
+.epg-head { position: sticky; top: 0; z-index: 20; display: flex; height: var(--epg-head); background: var(--t-surface); }
+/* The corner over the channel column is the way back to the current time. */
+.epg-corner { position: sticky; left: 0; z-index: 1; flex: none; width: var(--epg-ch); padding: 0.1875rem 0.25rem; background: var(--t-surface); }
+.epg-now { display: flex; align-items: center; gap: 0.5rem; height: 100%; padding: 0 0.625rem; border-radius: var(--radius-sm); background: var(--t-surface-alt); border: 1px solid var(--surface-edge); font-size: var(--text-label); font-weight: 600; }
+.epg-now i { width: 0.125rem; height: 0.875rem; border-radius: 999px; background: var(--t-danger); }
+.epg-tick { flex: none; padding-left: 0.5rem; border-left: 1px solid color-mix(in srgb, var(--t-text) 12%, transparent); line-height: var(--epg-head); white-space: nowrap; }
+.epg-row { position: absolute; left: 0; right: 0; display: flex; height: var(--epg-row); }
+/* Above the now-line, which is above the cells. */
+.epg-chan { position: sticky; left: 0; z-index: 16; flex: none; width: var(--epg-ch); padding: 0.1875rem 0.25rem; background: var(--t-surface); }
+.epg-chan > .fx { display: flex; align-items: center; gap: 0.5rem; height: 100%; padding: 0 0.5rem; border-radius: var(--radius-md); }
+.epg-num { flex: none; min-width: 1.75rem; text-align: right; }
+.epg-name { min-width: 0; font-size: var(--text-label); font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.epg-chan .logo-block { flex: none; }
+/* A phone gives the schedule the width: the channel column keeps number and logo, the name is in the cell labels. */
+@media (max-width: 720px) {
+  .epg { --epg-ch: 6rem; }
+  .epg-name { display: none; }
+  .epg-chan > .fx { gap: 0.375rem; padding: 0 0.25rem; }
+  .epg-num { min-width: 1.25rem; }
+}
+.epg-track { position: relative; flex: 1; border-top: 1px solid color-mix(in srgb, var(--t-text) 8%, transparent); }
+.epg-none { position: sticky; left: calc(var(--epg-ch) + 0.5rem); display: inline-block; padding: 0 0.5rem; line-height: var(--epg-row); }
+.epg-cell { position: absolute; top: 0.1875rem; bottom: 0.1875rem; border-radius: var(--radius-sm); background: var(--t-surface-alt); padding: 0.125rem 0.625rem; overflow: clip; font-size: var(--text-label); line-height: 1.3; display: flex; align-items: center; }
+.epg-label { position: sticky; left: calc(var(--epg-ch) + 0.75rem); display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .epg-cell[data-now='true'] { background: color-mix(in srgb, var(--t-accent) 24%, var(--t-surface-alt)); }
 /* secondary text must stay ≥4.5:1: past cells get a quieter background instead of opacity, and the time label on
    the accent-tinted "now" cell uses the full text colour */
 .epg-cell[data-past='true'] { background: var(--t-surface); color: var(--t-text-muted); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t-text) 10%, transparent); }
 .epg-cell[data-now='true'] .label { color: var(--t-text); }
+.epg-nowline { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--t-danger); z-index: 15; pointer-events: none; }
+/* Under the last row: more channels on the way, or the end of the list. It stays in view however far the hours are scrolled. */
+.epg-foot { position: absolute; left: 0; right: 0; height: 2rem; }
+.epg-foot > span { position: sticky; left: 0.75rem; display: inline-flex; align-items: center; gap: 0.5rem; height: 100%; }
+/* The focused programme. Wide screens: beside the header, every line with a fixed share of a fixed height, so
+   moving over programmes never moves the grid. Narrower: one line over the grid that opens a sheet. */
+.epg-details { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 2.125rem auto minmax(0, 1fr); column-gap: 0.75rem; align-items: center; padding: 0 0.25rem 0 1.25rem; border-left: 1px solid var(--surface-edge); }
+.epg-details-actions { display: flex; gap: 0.5rem; }
+.epg-details-meta, .epg-details-text, .epg-details-hint { grid-column: 1 / -1; }
+.epg-details-text { align-self: start; margin-top: 0.1875rem; line-height: 1.35; }
+.epg-details-hint { grid-row: 1 / -1; }
+.epg-details-line { flex: none; display: flex; align-items: center; gap: 0.5rem; min-width: 0; height: 2rem; margin-bottom: 0.5rem; padding: 0 0.75rem; border-radius: var(--radius-sm); background: var(--t-surface); border: 1px solid var(--surface-edge); font-size: var(--text-label); }
+.epg-details-line svg { flex: none; color: var(--t-text-muted); }
+
+/* Live TV: one compact header over both views (title, view switch, search and Options, then the groups), so that
+   the guide or the list of channels under it keeps the window: the screen is as tall as the window and what is
+   under the header scrolls inside itself. Search is an icon until asked for; what is rarely changed is in Options. */
+.live-screen { padding: 0.5rem var(--safe-x) 2rem; }
+.live-screen[data-view] { display: flex; flex-direction: column; height: calc(100dvh - var(--bar-h)); padding-bottom: 0.5rem; overflow: hidden; }
+.live-head { flex: none; display: flex; gap: 1.5rem; margin-bottom: 0.5rem; }
+.live-head-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 0.5rem; }
+.live-bar { display: flex; align-items: center; gap: 0.75rem; min-width: 0; min-height: 2.125rem; }
+.live-bar > * { flex: none; }
+.live-tools { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.live-search { width: 16rem; max-width: 100%; }
+.live-search .field { min-height: 2.125rem; border-radius: var(--radius-pill); }
+.live-search .field input { padding: 0; }
+.btn.btn-chip.btn-icon { width: 2.125rem; padding: 0; }
+.btn.btn-chip svg { width: 1rem; height: 1rem; }
+/* A choice in Options that is not the usual one: a dot on the button, and its name in the note beside it. */
+.live-changed::after { content: ''; position: absolute; top: 0.25rem; right: 0.25rem; width: 0.4375rem; height: 0.4375rem; border-radius: 999px; background: var(--t-accent); }
+.live-note { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-note span + span::before { content: ' · '; }
+@media (min-width: 1100px) {
+  /* The details panel sets the header's height. Channels keeps it, so switching views moves nothing in the header. */
+  .live-head { min-height: 6rem; }
+  .live-head-side { flex: 0 0 min(46%, 42rem); min-width: 0; height: 6rem; }
+}
+@media (max-width: 720px) {
+  .live-screen { padding: 0.75rem 1rem 1rem; }
+  /* .main keeps the bottom bar's height free under every screen. */
+  .live-screen[data-view] { height: calc(100dvh - 4rem - env(safe-area-inset-bottom)); padding-bottom: 0.25rem; }
+  /* Title, switch and the two icons share the first line; an open search field takes the next one. */
+  .live-bar { flex-wrap: wrap; gap: 0.5rem; }
+  .live-tools { margin-left: auto; max-width: 100%; }
+  .live-tools:has(.live-search) { flex: 1 1 100%; }
+  .live-search { flex: 1; width: auto; }
+  /* No room for the note: the guide's last row has the count, Options the choices. Screen readers still get it. */
+  .live-note { position: absolute; width: 1px; height: 1px; flex: none; clip: rect(0 0 0 0); }
+}
 
 /* channel row */
 .chan-row { display: grid; grid-template-columns: 3rem 3.25rem 1fr; gap: 0.75rem; align-items: center; padding: 0.5rem 0.75rem; border-radius: var(--radius-md); background: var(--t-surface); }
@@ -245,9 +479,29 @@ h1, h2, h3, p { margin: 0; }
 /* theme preview swatches */
 .theme-card { border-radius: var(--radius-lg); padding: 0.75rem; background: var(--t-surface); }
 
-/* Keep large catalog controls compact and channel rows visible on narrow screens. */
-.live-catalog-layout { grid-template-columns: minmax(0, 28rem) minmax(0, 1fr); }
-@media (max-width: 767px) {
+/* Live TV's Channels view: the list takes the height the window has left under the header and scrolls inside
+   itself, like the guide; the preview beside it stays put. Every row is --chan-row from the next (ROW_REM in
+   Channels.tsx is the same number), so only the rows near the view are drawn, each placed by its index. The list
+   is padded by what a focused row's ring needs, and reaches that far past its column, so the ring is not clipped. */
+.live-catalog-layout { flex: 1; min-height: 0; display: grid; gap: 1.5rem; grid-template: minmax(0, 1fr) / minmax(0, 28rem) minmax(0, 1fr); }
+.live-catalog-layout[data-preview='false'] { grid-template-columns: minmax(0, 1fr); }
+.chan-list {
+  --chan-row: 4rem;
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0.375rem 0.625rem; margin: -0.375rem -0.625rem;
+  scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--t-text) 28%, transparent) transparent;
+}
+.chan-list-canvas { position: relative; }
+.chan-list .chan-row { position: absolute; left: 0; right: 0; height: calc(var(--chan-row) - 0.5rem); }
+.chan-list-foot { position: absolute; left: 0.75rem; right: 0; display: flex; align-items: center; gap: 0.5rem; height: 2rem; }
+.chan-list-skel { display: flex; flex-direction: column; gap: 0.5rem; overflow: hidden; }
+.chan-list-skel .skel { flex: none; height: 3.5rem; }
+/* A dense row: number, logo, name over what is on; its progress is a hairline along the bottom edge. */
+.chan-row-dense { padding-block: 0.25rem; }
+.chan-row-progress { position: absolute; left: 0.75rem; right: 0.75rem; bottom: 0.1875rem; }
+.chan-row-progress > * { height: 0.125rem; }
+.live-catalog-preview { display: flex; flex-direction: column; gap: 0.75rem; align-items: flex-start; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+/* The phone layout leaves the preview out altogether; this covers the frame between a resize and that render. */
+@media (max-width: 720px) {
   .live-catalog-layout { grid-template-columns: minmax(0, 1fr); }
   .live-catalog-preview { display: none; }
 }
@@ -272,7 +526,6 @@ h1, h2, h3, p { margin: 0; }
 .field { box-shadow: inset 0 1px 2px rgba(0, 0, 0, .12); }
 .field:focus-within { outline: var(--focus-border) solid var(--t-focus-ring); outline-offset: 0.125rem; }
 .rail { background-image: linear-gradient(180deg, var(--surface-sheen), transparent 65%); }
-.rail-item[aria-current='page'] { box-shadow: inset 0.1875rem 0 var(--t-accent); }
 .scrim { backdrop-filter: none; -webkit-backdrop-filter: none; }
 .dialog { box-shadow: 0 1rem 3rem rgba(0, 0, 0, .36); }
 .osd { border: 1px solid rgba(255, 255, 255, .18); box-shadow: var(--surface-shadow); }
@@ -282,7 +535,7 @@ h1, h2, h3, p { margin: 0; }
 .tile .cap { color: #fff; background: linear-gradient(to top, rgba(5, 8, 14, .96), rgba(5, 8, 14, .64) 65%, transparent); }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .rail, .rail[data-expanded='true'], .dialog {
+  .rail, .dialog {
     background-color: color-mix(in srgb, var(--t-surface) 94%, transparent);
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
@@ -290,7 +543,7 @@ h1, h2, h3, p { margin: 0; }
 }
 /* Remote/TV surfaces remain solid: no moving-video backdrop sampling. */
 @media (hover: none) and (pointer: coarse), (min-width: 1800px), (prefers-reduced-transparency: reduce) {
-  .rail, .rail[data-expanded='true'], .dialog {
+  .rail, .dialog {
     background-color: var(--t-surface);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -298,16 +551,20 @@ h1, h2, h3, p { margin: 0; }
 }
 @media (prefers-contrast: more) {
   :root { --surface-edge: var(--t-text-muted); }
-  .rail, .rail[data-expanded='true'], .dialog { background-color: var(--t-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .rail, .dialog { background-color: var(--t-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .fx[data-focused='true'] { outline-width: 0.25rem; }
 }
 
 /* Programme-first discovery: wide artwork, persistent metadata and one remote
    target per card. Art falls back to real channel branding or neutral initials. */
-.home-destinations { display: flex; flex-wrap: wrap; gap: .625rem; padding: 1rem var(--safe-x) .25rem; overflow-x: auto; scroll-padding-inline: var(--safe-x); }
-.home-destinations .btn { flex: none; min-width: 6.5rem; }
-.home-discovery .hero { height: min(38dvh, 25rem); min-height: 17rem; }
-.home-discovery .hero-body { bottom: 1.5rem; }
+/* Notices sit above the billboard; each is one row: open the title, or dismiss. */
+.home-notices { display: flex; flex-direction: column; gap: .5rem; padding: 1rem var(--safe-x) 0; }
+.notice { display: flex; align-items: center; gap: .75rem; padding: .5rem .75rem; }
+.notice-open { flex: 1; min-width: 0; padding: .5rem .625rem; border-radius: var(--radius-md); }
+/* The billboard introduces Home without owning it: rows start inside the first screen. */
+.home-discovery .hero { height: clamp(14rem, 32dvh, 20rem); min-height: 0; }
+.home-discovery .hero-body { bottom: 1.25rem; gap: 0.5rem; }
+.home-discovery .hero-body .display { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .feature-card { display: block; min-width: 0; border-radius: var(--radius-lg); background: var(--t-surface); overflow: hidden; }
 .feature-row .feature-card { flex: 0 0 clamp(17rem, 27vw, 24rem); }
 .feature-art { aspect-ratio: 16 / 9; position: relative; overflow: hidden; background: var(--t-surface-alt); }
@@ -323,26 +580,176 @@ h1, h2, h3, p { margin: 0; }
 .feature-grid article { min-width: 0; }
 .feature-grid .feature-card { height: 100%; }
 @media (max-width: 720px) {
-  .home-destinations { padding-inline: 1rem; scroll-padding-inline: 1rem; }
-  .home-discovery .hero { height: 19rem; min-height: 19rem; }
+  .home-notices { padding-inline: 1rem; }
+  .home-discovery .hero { height: 14rem; }
   .feature-row .feature-card { flex-basis: min(19rem, 82vw); }
   .feature-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 }
 @media (prefers-reduced-motion: reduce) { .feature-card[data-focused='true'] { transform: none; } }
 .feature-copy > .badge { align-self: flex-start; }
 
-/* EPG event rails: one remote target per event, explicit feeds in a modal. */
-.sports-events-section { margin-block: 2rem; }
-.sports-event-rail { display: flex; gap: 1.4rem; overflow-x: auto; padding: .55rem .45rem 1rem; scroll-padding-inline: .5rem; }
-.sports-event-item { flex: 0 0 clamp(15rem, 22vw, 20rem); min-width: 0; }
-.sports-event-card { display: flex; flex-direction: column; min-height: 18rem; border-radius: 1.3rem; background: var(--t-surface); border: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); overflow: hidden; }
-.sports-event-card[data-focused='true'] { outline-width: .3rem; outline-offset: .15rem; }
-.sports-event-header { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 1rem; }
-.sports-event-title { padding: .8rem 1.2rem 1.5rem; font-size: 1.45rem; font-weight: 750; line-height: 1.3; flex: 1; overflow-wrap: anywhere; }
-.sports-event-footer { display: flex; gap: .5rem; justify-content: space-between; padding: 1rem 1.2rem; border-top: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); background: color-mix(in srgb, var(--t-surface) 86%, var(--t-text)); }
-.sports-event-caption { padding: .65rem .2rem 0; line-height: 1.6; }
-.sports-live-badge { background: #9b1232; color: white; }
-.sports-feed-option { padding: .8rem 0; border-bottom: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); display: flex; flex-direction: column; gap: .5rem; }
-@media (max-width: 540px) { .sports-event-item { flex-basis: min(17rem, 82vw); } }
-.sports-compact-toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: .75rem; }
-.sports-filter-summary { min-width: 0; overflow-wrap: anywhere; }
+/* Sports: live games as cards, what is coming as a timetable by day, then the always-on networks.
+   Everything is a grid or a column, so nothing scrolls sideways; a long name is cut with an ellipsis
+   (two lines on a live card) and never widens its card or a sheet. */
+.sports { display: flex; flex-direction: column; gap: 1.5rem; }
+.sports-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem 1rem; flex-wrap: wrap; }
+.sports-tools { display: flex; align-items: center; gap: 0.75rem; min-width: 0; max-width: 100%; }
+.sports-bar { display: flex; flex-direction: column; gap: 0.75rem; }
+.sports-chips, .sports-days { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.sports-days .btn-icon { min-height: 2.125rem; height: 2.125rem; width: 2.125rem; border-radius: var(--radius-pill); }
+.sports-days .label { padding-left: 0.25rem; }
+.sports-section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.sports-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); gap: 1rem; }
+.sports-grid-tight { gap: 0.625rem; }
+.sports-card, .sports-row, .sports-chan, .sports-feed { background: var(--t-surface); border: 1px solid var(--surface-edge); min-width: 0; }
+.sports-card { display: flex; flex-direction: column; gap: 0.375rem; min-height: 9.5rem; padding: 1rem; border-radius: var(--radius-lg); }
+.sports-card-top { display: flex; align-items: center; gap: 0.375rem; min-width: 0; }
+.sports-card-top .badge { flex: none; }
+.sports-card-sport { flex: 1; min-width: 0; text-align: right; }
+.sports-card-title { flex: 1; font-size: var(--text-heading); font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sports-live { background: var(--t-danger); color: #fff; letter-spacing: 0.04em; }
+.sports-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 24rem), 1fr)); gap: 0.5rem 1rem; min-width: 0; }
+.sports-list > .sports-day-head { grid-column: 1 / -1; }
+[data-testid='sports-picker'] .sports-list { grid-template-columns: minmax(0, 1fr); }
+.sports-day-head { text-transform: uppercase; letter-spacing: 0.06em; padding-top: 0.25rem; }
+.sports-row { display: grid; grid-template-columns: 5.25rem minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; padding: 0.625rem 1rem; border-radius: var(--radius-md); }
+.sports-row-time { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sports-row-main { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.sports-row-title { font-weight: 600; }
+.sports-chan, .sports-feed { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; border-radius: var(--radius-md); }
+.sports-chan > .sports-row-main:first-child, .sports-feed > .sports-row-main:first-child { grid-column: 1 / 3; }
+.sports-feed { min-height: 3.5rem; padding: 0.625rem 1rem; }
+.sports-quiet { padding: 0.75rem 1rem; border-radius: var(--radius-md); background: color-mix(in srgb, var(--t-text) 6%, transparent); color: var(--t-text-muted); }
+.sports-sheet-when { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: var(--text-heading); font-weight: 600; }
+/* The game's name heads its sheet: wrapped inside the sheet, three lines at most. */
+[data-testid='sports-picker'] > .title-xl, [data-testid='sports-sheet'] > .title-xl { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+[data-testid='sports-picker'] .btn, [data-testid='sports-sheet'] .btn { max-width: 100%; }
+@media (max-width: 540px) {
+  .sports { gap: 1.25rem; }
+  .sports-row { grid-template-columns: 4.5rem minmax(0, 1fr) auto; padding-inline: 0.75rem; }
+}
+
+/* Movies and Shows: the title and Filter on one band (on a phone the Movies/Shows switch, with Filter at
+   the end of its line), then content. */
+.browse-head { display: flex; flex-direction: column; gap: 0.75rem; padding-bottom: 0.75rem; }
+.browse-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
+.browse-switch { display: flex; gap: 0.5rem; }
+@media (max-width: 720px) { .browse-bar { justify-content: space-between; } }
+
+/* Title page: poster beside the text on wide screens; on a phone a small poster beside the name,
+   then the overview and one row of primary actions. */
+.title-page { padding-top: max(var(--safe-y), 4rem); }
+/* Under the top bar the page needs less room above the poster than it does alone (a room's join screen). */
+@media (min-width: 721px) { .main .title-page { padding-top: 2.5rem; } }
+.title-top { display: grid; justify-content: start; grid-template-columns: max-content minmax(0, 44rem); grid-template-areas: 'poster head' 'poster body'; grid-template-rows: auto 1fr; gap: 1rem 2rem; }
+.title-poster { grid-area: poster; position: relative; width: calc(var(--tile-poster-w) * 1.4); height: calc(var(--tile-poster-h) * 1.4); }
+.title-head { grid-area: head; }
+.title-body { grid-area: body; }
+.title-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; }
+.title-actions .btn { padding: 0 0.875rem; overflow: hidden; }
+.title-actions .btn-icon { padding: 0; }
+/* Play, Watch together, My List and More share the one row. */
+.title-actions[data-together='true'] { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.title-choice { justify-content: space-between; min-height: 3.25rem; text-align: left; white-space: normal; }
+/* One source in the audio and version sheet: a name line and a detail line, each truncated. */
+.source-choice { flex-direction: column; align-items: stretch; justify-content: center; gap: 0.125rem; height: auto; min-height: 3.5rem; padding-block: 0.5rem; text-align: left; min-width: 0; }
+.source-choice > span { display: block; min-width: 0; max-width: 100%; }
+/* A dialog scrolls down, never sideways: content that is too wide is the content's bug to truncate. */
+.dialog { overflow-x: hidden; }
+.dialog .btn { max-width: 100%; }
+@media (max-width: 720px) {
+  .title-page { padding-top: 1.5rem; }
+  .title-top { justify-content: stretch; grid-template-columns: max-content minmax(0, 1fr); grid-template-areas: 'poster head' 'body body'; grid-template-rows: auto auto; gap: 1rem; align-items: end; }
+  .title-poster { width: 7.5rem; height: 11.25rem; }
+  .title-head { gap: 0.5rem; }
+  .title-head .display { font-size: var(--text-title); }
+}
+
+/* ---------- watch rooms ---------- */
+/* Share sheet: the QR code beside the code and link; stacked on a phone. */
+.room-share { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1.25rem; align-items: center; }
+.room-qr { width: 9rem; height: 9rem; border-radius: var(--radius-md); background: #fff; padding: 0.375rem; flex: none; }
+.room-qr img { width: 100%; height: 100%; }
+.room-code { font-size: var(--text-title); font-weight: 700; letter-spacing: 0.2em; font-variant-numeric: tabular-nums; }
+.room-link { font-size: var(--text-label); overflow-wrap: anywhere; user-select: all; }
+.room-code-field input { font-size: var(--text-title); font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; }
+@media (max-width: 720px) { .room-share { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; } }
+/* Join screen: the title page's layout without the shell around it. */
+.room-join { position: relative; min-height: 100dvh; }
+.room-join-art { position: absolute; inset: 0 0 auto 0; height: min(70dvh, 44rem); overflow: hidden; }
+/* Members: on the join screen and, over the video, in the player's top bar. */
+.room-member { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 1.75rem; padding: 0 0.625rem; border-radius: var(--radius-pill); background: var(--t-surface-alt); font-size: var(--text-label); font-weight: 600; white-space: nowrap; }
+.room-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.375rem; margin-left: auto; max-width: 60%; color: #fff; }
+.room-strip .room-member { background: rgba(8,10,16,.72); border: 1px solid rgba(255,255,255,.18); color: #fff; }
+.room-strip .room-member[data-me='true'] { border-color: rgba(255,255,255,.55); }
+.room-buffering { display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 500; opacity: 0.85; }
+.room-buffering i, .room-waiting i { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: currentColor; flex: none; animation: room-pulse 1s var(--ease) infinite alternate; }
+@keyframes room-pulse { from { opacity: 0.25; } to { opacity: 1; } }
+.room-waiting { position: absolute; z-index: 4; left: 50%; top: 42%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 0.75rem; max-width: calc(100% - 2rem); padding: 0.875rem 1.25rem; border-radius: var(--radius-lg); background: rgba(8,10,16,.86); border: 1px solid rgba(255,255,255,.18); color: #fff; font-size: var(--text-heading); font-weight: 600; }
+.room-waiting i { width: 0.75rem; height: 0.75rem; }
+/* A phone keeps back and title on one row: the members are a count that opens their list. */
+.room-count { margin-left: auto; flex: none; }
+.room-count .btn { min-height: 2.5rem; padding: 0 0.875rem; gap: 0.375rem; }
+.room-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.room-list li { display: flex; align-items: center; gap: 0.5rem; min-height: 2.75rem; border-bottom: 1px solid var(--surface-edge); font-weight: 600; }
+.room-list li:last-child { border-bottom: 0; }
+.room-list li .truncate { min-width: 0; }
+
+/* ---------- recordings ---------- */
+.rec-badge { gap: 0.25rem; flex: none; }
+.rec-badge i { width: 0.4375rem; height: 0.4375rem; border-radius: 999px; background: currentColor; }
+.rec-badge[data-state='recording'] { background: var(--t-danger); color: #fff; }
+.rec-badge[data-state='failed'], .rec-badge[data-state='missed'] { box-shadow: inset 0 0 0 1px var(--t-danger); }
+.rec-badge[data-state='scheduled'] i { background: var(--t-danger); }
+.rec-row { display: flex; align-items: center; gap: 0.75rem 1rem; flex-wrap: wrap; }
+/* On a phone the text keeps the row and the actions go under it. */
+.rec-row > :first-child { flex-basis: 16rem; }
+/* A choice with a line of explanation under its name. */
+.rec-choice { justify-content: flex-start; height: auto; padding-block: 0.5rem; text-align: left; white-space: normal; }
+/* A choice in the Record dialog that needs a word from the viewer. */
+.rec-option { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border-radius: var(--radius-md); background: color-mix(in srgb, var(--t-text) 5%, transparent); }
+.epg-label .rec-badge { align-self: flex-start; }
+/* People: sign-in, users, roles, who's watching. */
+.wait-steps { margin: 0; padding-left: 1.25rem; list-style: decimal; display: flex; flex-direction: column; gap: 0.5rem; }
+/* PIN entry: the digits are dots, the keypad is three across. */
+.pin-dots { display: flex; align-items: center; justify-content: center; gap: 0.625rem; min-height: 2.75rem; border-radius: var(--radius-md); background: var(--t-surface-alt); }
+.pin-dots i { width: 0.75rem; height: 0.75rem; border-radius: 999px; background: var(--t-text); }
+.pin-pad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; width: min(17rem, 100%); margin-inline: auto; }
+.pin-key { min-height: 3.25rem; padding: 0; font-size: var(--text-heading); }
+/* A switch: the box says on or off, the row carries its name, meaning and source. */
+.toggle { display: flex; align-items: center; gap: 0.75rem; flex: 1; min-width: 0; min-height: 3rem; padding: 0.5rem 0.75rem; border-radius: var(--radius-md); background: var(--t-surface-alt); border: 1px solid var(--surface-edge); }
+.toggle-box { flex: none; width: 1.375rem; height: 1.375rem; border-radius: var(--radius-sm); display: grid; place-items: center; border: 0.125rem solid var(--t-text-muted); color: var(--t-accent-text); }
+.toggle[aria-pressed='true'] .toggle-box { background: var(--t-accent); border-color: var(--t-accent); }
+.toggle-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr)); gap: 0.5rem; }
+.toggle-row { display: flex; align-items: stretch; gap: 0.5rem; min-width: 0; }
+.toggle-row > .btn { min-height: 0; }
+/* People, roles, invites, devices: one row each, stacking on a phone. */
+.person-row { display: flex; align-items: center; gap: 0.875rem; flex-wrap: wrap; }
+.person-row .who { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; }
+/* a row that is itself the link keeps its status and chevron on its one line */
+.person-link { flex-wrap: nowrap; }
+.person-link .who { flex-basis: 0; }
+.row-end { flex: none; display: flex; align-items: center; gap: 0.5rem; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.badge-warn { background: color-mix(in srgb, var(--t-danger) 30%, var(--t-surface-alt)); }
+.badge-ok { background: color-mix(in srgb, var(--t-success) 30%, var(--t-surface-alt)); }
+.audit-row { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; padding: 0.75rem 1rem; }
+.avatar-pick { border-radius: 999px; padding: 0.1875rem; }
+.avatar-pick[aria-pressed='true'] { box-shadow: 0 0 0 0.1875rem var(--t-accent); }
+.device-row, .history-row { padding: 0.625rem 0.75rem; border-radius: var(--radius-md); background: var(--t-surface-alt); border: 1px solid var(--surface-edge); }
+/* Who's watching?: the whole screen, under dialogs and toasts. */
+.who-screen { position: fixed; inset: 0; z-index: 70; overflow: auto; background: var(--t-bg); display: grid; place-items: center; padding: var(--safe-y) var(--safe-x); }
+@media (max-width: 720px) { .who-screen { padding: 1.5rem 1rem; } }
+.who-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 1.5rem; }
+.who-card { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; width: 9.5rem; padding: 1rem 0.5rem; border-radius: var(--radius-lg); text-align: center; }
+.who-face { position: relative; display: block; }
+.who-lock { position: absolute; right: -0.125rem; bottom: -0.125rem; width: 1.875rem; height: 1.875rem; border-radius: 999px; display: grid; place-items: center; background: var(--t-surface-alt); color: var(--t-text); border: 0.125rem solid var(--t-bg); }
+.who-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 720px) { .who-grid { gap: 0.5rem; } .who-card { width: 8.75rem; } }
+/* On Now: the logo keeps to its box, the words to theirs. */
+.channel-card { position: absolute; inset: 0; display: grid; grid-template-columns: 34% minmax(0, 1fr); align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem 0.625rem 0.5rem; }
+.channel-logo { position: relative; align-self: stretch; min-width: 0; border-radius: var(--radius-sm); overflow: hidden; background: rgba(0,0,0,.35); font-size: var(--text-heading); }
+.channel-logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 0.375rem; }
+.channel-copy { min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; color: #fff; }
+.channel-name { font-size: var(--text-label); font-weight: 700; }
+.channel-now { font-size: var(--text-label); font-weight: 500; line-height: 1.3; }

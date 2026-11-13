@@ -11,7 +11,7 @@ import type { SourceBadge, Tile } from '../api/types'
 export function Button(p: {
   focusKey?: string; icon?: string; children?: ReactNode; onEnter?: () => void; primary?: boolean; ghost?: boolean; danger?: boolean
   disabled?: boolean; pressed?: boolean; label?: string; className?: string; testId?: string; onFocus?: () => void; onBlur?: () => void
-  iconOnly?: boolean; scroll?: boolean
+  iconOnly?: boolean; scroll?: boolean; title?: string
 }) {
   return (
     <Focusable
@@ -22,6 +22,7 @@ export function Button(p: {
       aria-pressed={p.pressed}
       data-testid={p.testId}
       scroll={p.scroll}
+      title={p.title}
       onFocus={p.onFocus}
       onBlur={p.onBlur}
       className={cn('btn', p.primary && 'btn-primary', p.ghost && 'btn-ghost', p.danger && 'btn-danger', p.iconOnly && 'btn-icon', p.className)}
@@ -32,9 +33,9 @@ export function Button(p: {
   )
 }
 
-export function Chip(p: { focusKey?: string; children: ReactNode; pressed?: boolean; onEnter: () => void; testId?: string }) {
+export function Chip(p: { focusKey?: string; children: ReactNode; pressed?: boolean; onEnter: () => void; testId?: string; label?: string }) {
   return (
-    <Focusable focusKey={p.focusKey} onEnter={p.onEnter} aria-pressed={p.pressed} data-testid={p.testId} className="chip fx-flat">
+    <Focusable focusKey={p.focusKey} onEnter={p.onEnter} aria-pressed={p.pressed} data-testid={p.testId} label={p.label} className="chip fx-flat">
       {p.children}
     </Focusable>
   )
@@ -90,13 +91,16 @@ export function Empty({ title, hint, children }: { title: string; hint?: string;
   )
 }
 
-export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+export function ErrorState({ error, onRetry, children }: { error: unknown; onRetry?: () => void; children?: ReactNode }) {
   const msg = error instanceof Error ? error.message : 'Something went wrong.'
   return (
     <div className="flex flex-col items-start gap-3 py-12" role="alert">
       <h2 className="title-xl">Could not load this screen</h2>
       <p className="muted">{msg}</p>
-      {onRetry && <Button focusKey="retry" primary icon="refresh" onEnter={onRetry}>Try again</Button>}
+      <FocusGroup className="flex gap-3 flex-wrap">
+        {onRetry && <Button focusKey="retry" primary icon="refresh" onEnter={onRetry}>Try again</Button>}
+        {children}
+      </FocusGroup>
     </div>
   )
 }
@@ -106,8 +110,12 @@ export function Attribution({ text = 'Availability data by JustWatch' }: { text?
 }
 
 let modalSeq = 0
-/** Modal dialog: traps Back, restores focus to the opener on close. Children should contain Focusables. */
-export function Modal(p: { open: boolean; onClose: () => void; title: string; children: ReactNode; firstFocusKey: string; wide?: boolean }) {
+/** Modal dialog: traps Back, restores focus to the opener on close. Children should contain Focusables.
+ *  `sheet` rises from the bottom edge on a phone; `panel` does too, and docks to the right on wide screens. */
+export function Modal(p: {
+  open: boolean; onClose: () => void; title: string; children: ReactNode; firstFocusKey: string; wide?: boolean
+  variant?: 'sheet' | 'panel'; testId?: string
+}) {
   const [id] = useState(() => `modal-${++modalSeq}`)
   useBackHandler(() => { p.onClose() }, p.open)
   useOverlayFocus(p.open, p.firstFocusKey)
@@ -118,8 +126,9 @@ export function Modal(p: { open: boolean; onClose: () => void; title: string; ch
   }, [p.open])
   if (!p.open) return null
   return createPortal(
-    <div className="scrim" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && p.onClose()}>
-      <FocusGroup focusKey={id} boundary className="dialog" role="dialog" label={p.title} style={p.wide ? { width: 'min(46rem,100%)' } : undefined}>
+    <div className={cn('scrim', p.variant && `scrim-${p.variant}`)} role="presentation" onMouseDown={(e) => e.target === e.currentTarget && p.onClose()}>
+      <FocusGroup focusKey={id} boundary className={cn('dialog', p.variant && `dialog-${p.variant}`)} role="dialog" label={p.title} data-testid={p.testId}
+        style={p.wide ? { width: 'min(46rem,100%)' } : undefined}>
         <h2 className="title-xl">{p.title}</h2>
         {p.children}
       </FocusGroup>

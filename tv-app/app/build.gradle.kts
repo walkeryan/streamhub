@@ -31,8 +31,8 @@ android {
         applicationId = "com.streamhub.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 4
-        versionName = "1.1.2"
+        versionCode = 6
+        versionName = "1.1.4"
     }
 
     buildTypes {
@@ -90,6 +90,8 @@ dependencies {
     implementation(project(":feature:favorites"))
     implementation(project(":feature:sources"))
     implementation(project(":feature:settings"))
+    implementation(project(":feature:recordings"))
+    implementation(project(":feature:requests"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

@@ -28,6 +28,7 @@ async def test_large_local_recommendation_benchmark(api):
                         tmdb_id=i + 10000,
                         genres=["Action"],
                         group_name="English",
+                        language="eng",
                     )
                     for i in range(start, start + 2000)
                 ],

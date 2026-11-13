@@ -24,6 +24,8 @@ export interface FocusableProps {
   title?: string
   forceFocus?: boolean
   data?: Record<string, string | boolean | undefined>
+  /** Further aria-* attributes (a slider's value, a menu button's state), without the prefix. */
+  aria?: Record<string, string | number | boolean | undefined>
 }
 
 export interface FocusableHandle { focus: () => void; el: HTMLElement | null }
@@ -69,7 +71,9 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       data-testid={p['data-testid']}
       title={p.title}
       data-focused={focused}
+      data-focus-key={focusKey}
       {...Object.fromEntries(Object.entries(p.data ?? {}).map(([k, v]) => [`data-${k}`, v]))}
+      {...Object.fromEntries(Object.entries(p.aria ?? {}).map(([k, v]) => [`aria-${k}`, v]))}
       className={cn('fx', p.className)}
       style={p.style}
       onClick={async () => {
@@ -159,7 +163,7 @@ export function FocusableInput(p: {
 }) {
   const local = useRef<HTMLInputElement>(null)
   const inputRef = p.inputRef ?? local
-  const { ref, focused } = useFocusable({
+  const { ref, focused, focusKey } = useFocusable({
     focusKey: p.focusKey,
     onFocus: () => {
       inputRef.current?.focus({ preventScroll: true })
@@ -180,7 +184,7 @@ export function FocusableInput(p: {
     if (e.key === 'Backspace') e.nativeEvent.stopPropagation()
   }
   return (
-    <div ref={ref} data-focused={focused} className={cn('fx field', p.className)}>
+    <div ref={ref} data-focused={focused} data-focus-key={focusKey} className={cn('fx field', p.className)}>
       <input
         ref={inputRef}
         tabIndex={-1}

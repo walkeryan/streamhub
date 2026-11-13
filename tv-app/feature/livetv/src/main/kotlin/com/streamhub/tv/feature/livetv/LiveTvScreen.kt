@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -67,14 +68,25 @@ import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShTextField
 import com.streamhub.tv.core.ui.components.programmeProgress
+import com.streamhub.tv.core.ui.components.ProgrammeDialog
+import com.streamhub.tv.core.ui.components.WatchTogetherDialog
+import com.streamhub.tv.core.data.model.Programme
+import com.streamhub.tv.core.data.model.RecordingStates
+import com.streamhub.tv.core.data.repo.recordingStateMark
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
+import com.streamhub.tv.core.ui.input.ChannelNumberOverlay
+import com.streamhub.tv.core.ui.input.channelNumberKeys
+import com.streamhub.tv.core.ui.input.rememberChannelNumberState
 import com.streamhub.tv.core.ui.theme.LocalReducedMotion
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -90,6 +102,10 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
     DisposableEffect(Unit) { onDispose { vm.stopPreview() } }
+    val recording by vm.recorder.availability.collectAsStateWithLifecycle()
+    val record by vm.recorder.state.collectAsStateWithLifecycle()
+    // Channel id and programme id of the now/next entry whose actions are open.
+    var actionsFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     var groupsOpen by remember { mutableStateOf(false) }
     var restoreGroupFocus by remember { mutableStateOf(false) }
     val groupOpener = remember { FocusRequester() }
@@ -120,6 +136,32 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
         // A failed handoff leaves normal directional navigation available for the next key.
         enterChannelsWhenReady = false
     }
+    // Number keys on the channel list: same rules as in the player (2 s commit, Select commits at once).
+    // The channel is tuned, as a typed number is everywhere on a TV; when its row is on this page focus
+    // moves to it first, so Back from the player returns there.
+    val scope = rememberCoroutineScope()
+    val numberFocus = remember { FocusRequester() }
+    var numberTarget by remember { mutableStateOf<String?>(null) }
+    var numberMessage by remember { mutableStateOf<String?>(null) }
+    val number = rememberChannelNumberState { n ->
+        scope.launch {
+            val ch = vm.channelByNumber(n)
+            if (ch == null) {
+                numberMessage = "No channel $n"
+                delay(2_000)
+                if (numberMessage == "No channel $n") numberMessage = null
+            } else {
+                val index = s.channels.indexOfFirst { it.id == ch.id }
+                if (index >= 0) {
+                    numberTarget = ch.id
+                    runCatching { channelListState.scrollToItem(index + 1) } // item 0 is the page navigation
+                    withFrameNanos { }
+                    runCatching { numberFocus.requestFocus() }
+                }
+                launcher.play(ch.id)
+            }
+        }
+    }
     val choices = remember(s.groups) { groupChoices(s.groups) }
     LaunchedEffect(groupsOpen) {
         if (!groupsOpen && restoreGroupFocus) {
@@ -128,6 +170,30 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
             restoreGroupFocus = false
         }
     }
+    actionsFor?.let { (channelId, programmeId) ->
+        val ch = s.channels.firstOrNull { it.id == channelId }
+        val programme = listOfNotNull(ch?.now, ch?.next).firstOrNull { it.id == programmeId }
+        val close = { actionsFor = null; vm.recorder.reset() }
+        // The list was reloaded under the dialog and the programme is no longer in it: nothing left to act on.
+        if (ch == null || programme == null) LaunchedEffect(Unit) { close() } else {
+            val onAir = programme.id == ch.now?.id
+            ProgrammeDialog(
+                programme = programme,
+                subtitle = "${ch.name} · ${hhmm(programme.start)}–${hhmm(programme.stop)}",
+                onWatch = if (onAir) ({ close(); launcher.play(ch.id) }) else null,
+                canRecordThis = !hasEnded(programme.stop) && programme.recordingState != RecordingStates.SCHEDULED && programme.recordingState != RecordingStates.RECORDING,
+                busy = record.busy,
+                outcome = record.outcome,
+                onRecord = { vm.recorder.recordOnce(programme) },
+                onRecordSeries = { vm.recorder.recordSeries(programme) },
+                onRecordTeam = vm.recorder::recordTeam,
+                onDismiss = close,
+            )
+        }
+    }
+    val together by vm.together.state.collectAsStateWithLifecycle()
+    val canWatchTogether by vm.canWatchTogether.collectAsStateWithLifecycle()
+    together?.let { WatchTogetherDialog(it, onStart = vm.together::start, onRetry = vm.together::retry, onCancel = vm.together::cancel) }
     if (groupsOpen) GroupDrawer(
         groups = s.groups, selected = s.selectedGroup,
         loading = s.groupsLoading, error = s.groupsError,
@@ -197,7 +263,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                     else -> PivotScroll(leadingOffset = 72.dp) {
                         LazyColumn(
                             state = channelListState,
-                            modifier = Modifier.fillMaxSize().focusRestorer(),
+                            modifier = Modifier.fillMaxSize().channelNumberKeys(number).focusRestorer(),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                             contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
                         ) {
@@ -215,6 +281,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                                     onLongClick = { vm.toggleFavorite(ch) },
                                     modifier = Modifier
                                         .then(if (index == 0) Modifier.focusRequester(firstChannel) else Modifier)
+                                        .then(if (ch.id == numberTarget) Modifier.focusRequester(numberFocus) else Modifier)
                                         .leftOpensRail(rail).onFocusChanged { if (it.isFocused) vm.onChannelFocused(ch) },
                                 )
                             }
@@ -231,20 +298,65 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                     if (s.previewChannelId == null) {
                         Text("Focus a channel for details", color = t.textMuted, modifier = Modifier.align(Alignment.Center), style = MaterialTheme.typography.bodyLarge)
                     }
+                    val typed = number.entry
+                    if (typed.isNotEmpty() || numberMessage != null) ChannelNumberOverlay(
+                        typed,
+                        if (typed.isNotEmpty()) ChannelNumberEntry.match(typed, s.channels) { it.number }?.name else numberMessage,
+                        Modifier.align(Alignment.TopEnd).padding(12.dp),
+                    )
                 }
                 val ch = s.channels.firstOrNull { it.id == s.previewChannelId }
                 if (ch != null) {
                     Text("${ch.number}  ${ch.name}", style = MaterialTheme.typography.titleMedium, color = t.text, modifier = Modifier.padding(top = 12.dp))
-                    ch.now?.let { Text("Now  ${hhmm(it.start)}–${hhmm(it.stop)}  ${it.title}", style = MaterialTheme.typography.bodyMedium, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    // Where recordings can be scheduled, now and next are rows Select opens (Watch · Record…);
+                    // otherwise they are the plain lines they always were.
+                    ch.now?.let { NowNextLine("Now  ${hhmm(it.start)}–${hhmm(it.stop)}", it, t.text, recording.canSchedule) { vm.recorder.reset(); actionsFor = ch.id to it.id } }
                     ch.now?.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = t.textMuted, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp)) }
-                    ch.next?.let { Text("Next ${hhmm(it.start)}  ${it.title}", style = MaterialTheme.typography.bodyMedium, color = t.textMuted, maxLines = 1, modifier = Modifier.padding(top = 4.dp)) }
-                    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ShButton("Watch", { launcher.play(ch.id) })
-                        ShButton(if (ch.isFavorite) "Remove favorite" else "Add favorite", { vm.toggleFavorite(ch) })
+                    ch.next?.let { NowNextLine("Next ${hhmm(it.start)}", it, t.textMuted, recording.canSchedule) { vm.recorder.reset(); actionsFor = ch.id to it.id } }
+                    // The channel's actions. A row that scrolls with focus: three buttons are wider than the
+                    // pane, and none of them may reach into the overscan margin.
+                    LazyRow(
+                        Modifier.fillMaxWidth().padding(top = 4.dp).focusRestorer(),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        item("watch") { ShButton("Watch", { launcher.play(ch.id) }) }
+                        // A live room: everyone on the same channel, with play and pause for all.
+                        if (canWatchTogether) item("together") { ShButton("Watch together", { vm.watchTogether(ch) }) }
+                        item("favorite") { ShButton(if (ch.isFavorite) "Remove favorite" else "Add favorite", { vm.toggleFavorite(ch) }) }
                     }
                 }
             }
         }
+    }
+}
+
+/** Whether a programme's stop time has passed; an unreadable time counts as not yet. */
+internal fun hasEnded(stopIso: String, now: java.time.Instant = java.time.Instant.now()): Boolean =
+    runCatching { ZonedDateTime.parse(stopIso).toInstant() <= now }.getOrDefault(false)
+
+/**
+ * One of the two programme lines beside the channel list. [selectable] makes it a row Select opens;
+ * the mark in front says whether the household is recording it.
+ */
+@Composable
+private fun NowNextLine(lead: String, programme: Programme, color: androidx.compose.ui.graphics.Color, selectable: Boolean, onSelect: () -> Unit) {
+    val text = "$lead  ${recordingStateMark(programme.recordingState)?.let { "$it " }.orEmpty()}${programme.title}"
+    if (!selectable) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+        return
+    }
+    val t = LocalThemeTokens.current
+    FocusSurface(
+        onClick = onSelect,
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(36.dp),
+        shape = RoundedCornerShape(Tokens.Radius.Sm),
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        focusedContainerColor = t.surfaceAlt,
+        scaleOnFocus = false,
+        glow = false,
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 8.dp))
     }
 }
 

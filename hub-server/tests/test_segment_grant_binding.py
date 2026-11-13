@@ -34,7 +34,7 @@ def ctx() -> Any:
         tokens=SimpleNamespace(verify=lambda _: grant, ttl_s=300),
         sources=SimpleNamespace(get=AsyncMock(return_value=object()), max_connections=Mock(return_value=1)),
         proxy=SimpleNamespace(ensure_running=Mock(), generation=0, passthrough=AsyncMock(), fetch_text=AsyncMock()),
-        content_policy=SimpleNamespace(require_grant=AsyncMock()),
+        guard=SimpleNamespace(require_grant=AsyncMock()),
         auth=object(),
     )
 
@@ -64,13 +64,13 @@ async def test_matching_segment_guarded_during_body(ctx: Any) -> None:
         yield b"first"
         yield b"revoked"
 
-    async def guard(grant: Any, auth: Any, upstream: Any):
+    async def guard(grant: Any, upstream: Any):
         async for chunk in upstream:
             if chunk == b"revoked":
                 raise Forbidden("session revoked")
             yield chunk
 
-    ctx.content_policy.guard_stream = Mock(side_effect=guard)
+    ctx.guard.guard_stream = Mock(side_effect=guard)
     ctx.proxy.passthrough.return_value = (200, {}, body())
     sub = _proxy_url("original", "https://fixture.invalid/video.ts", ctx).rsplit("/", 1)[1]
     response = await stream_segment("original", sub, request(), ctx)
@@ -78,7 +78,7 @@ async def test_matching_segment_guarded_during_body(ctx: Any) -> None:
     assert await anext(iterator) == b"first"
     with pytest.raises(Forbidden):
         await anext(iterator)
-    ctx.content_policy.guard_stream.assert_called_once()
+    ctx.guard.guard_stream.assert_called_once()
 
 
 async def test_nested_playlist_retains_parent_binding(ctx: Any) -> None:

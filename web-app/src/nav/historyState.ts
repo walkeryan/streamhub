@@ -19,6 +19,10 @@ export function useHistoryState<T>(field: string, initial: T): [T, Dispatch<SetS
     entries.set(entry.key, entry.value)
     if (entries.size > 500) entries.delete(entries.keys().next().value!)
   }, [entry])
-  const update = useCallback<Dispatch<SetStateAction<T>>>((next) => setEntry((previous) => ({ ...previous, value: typeof next === 'function' ? (next as (value: T) => T)(previous.value) : next })), [])
+  // (An update to the value it already has is no change: a list reporting its scroll position sets it every frame.)
+  const update = useCallback<Dispatch<SetStateAction<T>>>((next) => setEntry((previous) => {
+    const value = typeof next === 'function' ? (next as (value: T) => T)(previous.value) : next
+    return Object.is(value, previous.value) ? previous : { ...previous, value }
+  }), [])
   return [entry.value, update]
 }

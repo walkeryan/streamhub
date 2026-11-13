@@ -2,7 +2,25 @@ openapi: 3.1.0
 info:
   title: StreamHub API
   version: 1.0.0
-  description: Unified streaming hub. All clients (Android TV, web) use this contract. Base path /api/v1.
+  description: >-
+    Unified streaming hub. All clients (Android TV, web) use this contract. Base path /api/v1.
+    A user without the remote.access permission is served on the home network only (the
+    home_networks setting): from anywhere else every authenticated call answers 403
+    remote_access_denied, except GET /auth/me. The signed media URLs follow the user they were
+    issued to: /stream/{token}... and, for artwork the hub serves itself, /images/{token} answer
+    the same 403 away from home.
+    "Home" is judged from the client address: the connection's peer, or what a reverse proxy named in
+    FORWARDED_ALLOW_IPS forwarded for. A request that carries a forwarding header (X-Forwarded-For,
+    Forwarded, CF-Connecting-IP, X-Real-IP, True-Client-IP) from a peer that is not such a proxy is
+    never home.
+    Every unauthenticated auth route is limited per client address (429 rate_limited with Retry-After
+    in whole seconds). Access and refresh tokens are read from the Authorization header and request
+    bodies only, never from a query string; the only credentials in URLs are the signed media grants
+    (/stream/{token}, /images/{token}) and a watch room's member_token.
+    Every response carries X-Content-Type-Options nosniff, Referrer-Policy same-origin (no-referrer on
+    sign-in redirects), X-Frame-Options DENY with frame-ancestors 'none', and Strict-Transport-Security
+    when a trusted proxy reports HTTPS. /api/docs and /api/openapi.json are served only when the
+    server runs with API_DOCS_ENABLED=true.
 servers:
   - url: /api/v1
 security:
@@ -11,7 +29,234 @@ components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:
-    Error: { type: object, properties: { code: {type: string}, message: {type: string} }, required: [code, message] }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        active: {type: array, items: {$ref: '#/components/schemas/ActiveStream'}, description: "On source_busy: the streams this server is running on the source, longest-running first; may be empty when something outside this server holds the connections. On user_stream_limit: the user's own streams that use up their limit."}
+        limit: {type: integer, nullable: true, description: "On source_busy: how many connections the source allows, when known. On user_stream_limit: the user's max_streams."}
+        missing: {type: array, items: {$ref: '#/components/schemas/Permission'}, description: "403 forbidden only: the permissions the caller lacks"}
+    ActiveStream:
+      type: object
+      description: One stream holding a source connection, named to the profile a busy source turned away; or one of a user's own streams, on user_stream_limit.
+      properties:
+        profile_name: {type: string, nullable: true}
+        title: {type: string, nullable: true, description: "Channel or title being watched; null for adult titles and for content the refused profile may not open. A watch room's shared stream is named \"Watch room: <title>\" (profile_name is the host), a recording on a connection of its own \"Recording: <title>\"."}
+        kind: {type: string, nullable: true, description: "channel, movie, episode, …; null whenever title is."}
+        since: {type: string, format: date-time, description: When this stream's connection was opened.}
+
+    Permission:
+      type: string
+      enum: [watch.library, watch.vod, watch.live, watch.adult, rooms.join, rooms.create, recordings.view, recordings.schedule, requests.create, requests.auto_approve, requests.approve, remote.access, users.invite, users.manage, sources.manage, system.manage]
+    Limits:
+      type: object
+      required: [max_streams, rating_ceiling_movie, rating_ceiling_tv, allow_unrated]
+      properties:
+        max_streams: {type: integer, nullable: true, description: "Concurrent streams; null = no limit"}
+        rating_ceiling_movie: {type: string, nullable: true, enum: [G, PG, PG-13, R, NC-17, null]}
+        rating_ceiling_tv: {type: string, nullable: true, enum: [TV-Y, TV-Y7, TV-G, TV-PG, TV-14, TV-MA, null]}
+        allow_unrated: {type: boolean}
+    LimitsInput:
+      type: object
+      additionalProperties: false
+      description: Only the fields present are set. Null lifts that limit; on a user an empty object clears every override.
+      properties:
+        max_streams: {type: integer, nullable: true, minimum: 1, maximum: 100}
+        rating_ceiling_movie: {type: string, nullable: true}
+        rating_ceiling_tv: {type: string, nullable: true}
+        allow_unrated: {type: boolean}
+    RoleRef:
+      type: object
+      required: [id, name, builtin]
+      properties: { id: {type: string}, name: {type: string}, builtin: {type: boolean} }
+    Role:
+      type: object
+      required: [id, name, builtin, editable, permissions, limits, on_shared_devices, user_count, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        builtin: {type: boolean}
+        editable: {type: boolean, description: False for the Owner role}
+        permissions: {type: array, items: {$ref: '#/components/schemas/Permission'}}
+        limits: {$ref: '#/components/schemas/Limits'}
+        on_shared_devices: {type: boolean, description: Users with this role appear in the picker on shared household devices}
+        user_count: {type: integer}
+        updated_at: {type: string, format: date-time}
+    RoleInput:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+        permissions: {type: array, items: {$ref: '#/components/schemas/Permission'}}
+        limits: {$ref: '#/components/schemas/LimitsInput'}
+        on_shared_devices: {type: boolean}
+    User:
+      type: object
+      required: [id, kind, display_name, status, created_at]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [google, plex, password, managed], description: "How this user came to be. What they can sign in with now is sign_in_methods."}
+        display_name: {type: string}
+        email: {type: string, nullable: true}
+        picture: {type: string, nullable: true}
+        avatar: {type: string, nullable: true}
+        status: {type: string, enum: [pending, active, suspended]}
+        role_id: {type: string, nullable: true, description: Null while pending}
+        role_name: {type: string, nullable: true}
+        profile_id: {type: string, nullable: true, description: The profile holding this user's viewer state}
+        has_pin: {type: boolean}
+        on_shared_devices: {type: boolean}
+        plex_account_linked: {type: boolean, description: "This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state."}
+        username: {type: string, nullable: true, description: "The name of username-and-password sign-in, lower case"}
+        plex_username: {type: string, nullable: true, description: "The Plex account this user signs in with. No Plex token is kept for it."}
+        sign_in_methods: {type: array, items: {$ref: '#/components/schemas/SignInMethod'}, description: "The ways this user can sign in from anywhere. Empty for a managed user, who is entered on the household's devices."}
+        created_at: {type: string, format: date-time}
+        approved_at: {type: string, format: date-time, nullable: true}
+        last_seen_at: {type: string, format: date-time, nullable: true}
+    SignInMethod: {type: string, enum: [google, plex, password]}
+    NowPlaying:
+      type: object
+      required: [id]
+      additionalProperties: true
+      description: One stream a user is playing. Listed while it shows activity - bytes or a segment served, or a progress report, in the last 30 seconds - and for 30 seconds after it was resolved.
+      properties:
+        id: {type: string, description: The id that was resolved}
+        title: {type: string, nullable: true, description: null for adult titles}
+        kind: {type: string, nullable: true, description: "channel, movie, episode, recording, …"}
+        since: {type: string, format: date-time}
+        client: {type: string, nullable: true, enum: [web, android_tv, null]}
+    UserListItem:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          required: [now_playing]
+          properties:
+            now_playing: {type: array, items: {$ref: '#/components/schemas/NowPlaying'}}
+    AuthSession:
+      type: object
+      required: [sid, user_id, kind, shared_device, created_at, last_seen_at, current]
+      properties:
+        sid: {type: string}
+        user_id: {type: string}
+        kind: {type: string, enum: [browser, tv, api]}
+        label: {type: string, nullable: true}
+        user_agent: {type: string, nullable: true}
+        ip: {type: string, nullable: true}
+        shared_device: {type: boolean}
+        created_at: {type: string, format: date-time}
+        last_seen_at: {type: string, format: date-time}
+        current: {type: boolean, description: The session making this request}
+    SwitchableUser:
+      type: object
+      required: [id, display_name, avatar, picture, role_name, has_pin, current]
+      properties:
+        id: {type: string}
+        display_name: {type: string}
+        avatar: {type: string, nullable: true}
+        picture: {type: string, nullable: true}
+        role_name: {type: string}
+        has_pin: {type: boolean}
+        current: {type: boolean, description: The user this device is signed in as}
+    Switched:
+      allOf:
+        - $ref: '#/components/schemas/AuthTokens'
+        - type: object
+          required: [user]
+          properties:
+            user:
+              description: The user now on the device. Every field of a picker entry and of /auth/me's user.
+              allOf:
+                - $ref: '#/components/schemas/User'
+                - type: object
+                  required: [current]
+                  properties:
+                    current: {type: boolean, enum: [true]}
+    UserDetail:
+      allOf:
+        - $ref: '#/components/schemas/UserListItem'
+        - type: object
+          required: [grants, denials, limit_overrides, permissions, limits, sessions, history]
+          properties:
+            grants: {type: array, items: {$ref: '#/components/schemas/Permission'}}
+            denials: {type: array, items: {$ref: '#/components/schemas/Permission'}}
+            limit_overrides: {type: object, additionalProperties: true}
+            on_shared_devices_override: {type: boolean, nullable: true}
+            permissions: {type: array, items: {$ref: '#/components/schemas/Permission'}, description: Effective set}
+            limits: {$ref: '#/components/schemas/Limits'}
+            sessions: {type: array, items: {$ref: '#/components/schemas/AuthSession'}}
+            history:
+              type: array
+              items:
+                type: object
+                required: [ref_id, position_ms, completed, updated_at]
+                properties:
+                  ref_id: {type: string}
+                  kind: {type: string, nullable: true}
+                  position_ms: {type: integer}
+                  duration_ms: {type: integer, nullable: true}
+                  completed: {type: boolean}
+                  updated_at: {type: string, format: date-time}
+    Me:
+      type: object
+      required: [status, user, role, permissions, limits, shared_device, adult_unlocked, tokens]
+      properties:
+        status: {type: string, enum: [pending, active, suspended]}
+        user: {$ref: '#/components/schemas/User'}
+        role: {allOf: [{$ref: '#/components/schemas/RoleRef'}], nullable: true}
+        permissions: {type: array, items: {$ref: '#/components/schemas/Permission'}}
+        limits: {$ref: '#/components/schemas/Limits'}
+        shared_device: {type: boolean}
+        adult_unlocked: {type: boolean}
+        tokens: {allOf: [{$ref: '#/components/schemas/AuthTokens'}], nullable: true, description: "Set once: when a user who was waiting for approval has been approved"}
+    PendingApproval:
+      type: object
+      required: [status, pending_token, user]
+      properties:
+        status: {type: string, enum: [pending]}
+        pending_token: {type: string, description: Authorizes GET /auth/me and nothing else}
+        user: {type: object, properties: {display_name: {type: string}, email: {type: string, nullable: true}}}
+    Invite:
+      type: object
+      required: [id, role_id, created_at, expires_at, max_uses, uses, state]
+      properties:
+        id: {type: string}
+        role_id: {type: string}
+        role_name: {type: string, nullable: true}
+        created_by_user_id: {type: string, nullable: true}
+        created_by_name: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        max_uses: {type: integer}
+        uses: {type: integer}
+        state: {type: string, enum: [open, used, expired, revoked]}
+        display_name: {type: string, nullable: true, description: "Who the invite is for, when it was made for one person (\"Add person\"). The new user starts under this name."}
+        user_id: {type: string, nullable: true, description: "Set on a password setup link (POST /users/{id}/password-reset): the one user whose password it sets. Such a link admits nobody and is ignored by Google and Plex sign-in."}
+    SetupLink:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url: {type: string, description: "/invite/<token>. The token is shown this once and stored only as a hash."}
+        expires_at: {type: string, format: date-time}
+    InviteCreated:
+      allOf:
+        - $ref: '#/components/schemas/Invite'
+        - type: object
+          required: [url]
+          properties:
+            url: {type: string, description: "/invite/<token>. The token is shown this once and stored only as a hash."}
+    AuditEntry:
+      type: object
+      required: [id, at, action, detail]
+      properties:
+        id: {type: integer}
+        at: {type: string, format: date-time}
+        action: {type: string, description: "user.approve, user.role_change, user.suspend, role.update, invite.create, session.revoke, session.switch, session.update, ..."}
+        actor_user_id: {type: string, nullable: true}
+        actor_name: {type: string, nullable: true}
+        target_user_id: {type: string, nullable: true}
+        target_name: {type: string, nullable: true}
+        detail: {type: object, additionalProperties: true}
 
     AuthTokens:
       type: object
@@ -111,7 +356,7 @@ components:
         last_sync: {type: string, format: date-time, nullable: true}
         counts: { type: object, additionalProperties: {type: integer} }
         service_key: {type: string, nullable: true, description: "for streaming_service: netflix, hulu, …"}
-        config_summary: { type: object, additionalProperties: true, description: "never includes secrets" }
+        config_summary: { type: object, additionalProperties: true, description: "Never includes secrets. Where the source lives (server address, account name) is here only for a caller with sources.manage; for everyone else it is empty." }
     SourceCreate:
       type: object
       required: [type, name, config]
@@ -132,7 +377,7 @@ components:
     PlexPin:
       type: object
       required: [pin_id, code, link_url]
-      properties: { pin_id: {type: integer}, code: {type: string}, link_url: {type: string} }
+      properties: { pin_id: {type: integer}, code: {type: string, description: "The four-character code to type at link_url"}, link_url: {type: string, description: "https://plex.tv/link"} }
 
     MediaKind: { type: string, enum: [movie, show, season, episode, channel, vod, series] }
     SourceBadge:
@@ -162,6 +407,9 @@ components:
         is_favorite: {type: boolean, default: false}
         sources: { type: array, items: { $ref: '#/components/schemas/SourceBadge' } }
         now_playing: { $ref: '#/components/schemas/Programme', nullable: true }
+        request_state: { oneOf: [{ $ref: '#/components/schemas/RequestState' }, { type: 'null' }], description: "Open request for this title, else its most recent closed one; null when never requested." }
+        request_progress: { oneOf: [{ $ref: '#/components/schemas/TileRequestProgress' }, { type: 'null' }], description: "What that same request is doing right now; set exactly when request_state is. The stored answer: a tile never makes the server ask the request manager." }
+        requestable: {type: boolean, description: "TMDB-identified, no in-app source, a request manager is configured and the profile may request. Independent of request_state: show the state instead while a request is open."}
     Row:
       type: object
       required: [id, title, tiles]
@@ -170,6 +418,20 @@ components:
         title: {type: string}
         layout: {type: string, enum: [poster, landscape, hero, channel], default: poster}
         tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+        browse_path: {type: string, nullable: true, description: "Client route for the row's \"See all\" (a shelf row: /browse/{section}?category=...). Null when the row has no fuller listing."}
+    Shelf:
+      type: object
+      required: [name, count, items, browse_path]
+      properties:
+        name: {type: string, description: "Category name computed at sync, e.g. New Releases."}
+        count: {type: integer, description: "Distinct titles on the shelf for this profile, language and adult scope."}
+        items: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+        browse_path: {type: string, description: "Client route listing the whole shelf."}
+    ShelfList:
+      type: object
+      required: [shelves]
+      properties:
+        shelves: { type: array, items: { $ref: '#/components/schemas/Shelf' } }
     TitleDetail:
       allOf:
         - $ref: '#/components/schemas/Tile'
@@ -182,6 +444,7 @@ components:
             seasons: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             episodes: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             attribution: {type: string, description: "e.g. 'Availability data by JustWatch'"}
+            request_seasons: {type: array, items: {type: integer}, description: "Requestable series only: season numbers a request may pick from (empty = whole series only)."}
 
     DiscoveryPage:
       type: object
@@ -202,7 +465,7 @@ components:
         source_id: {type: string}
         ext_id: {type: string}
         number: {type: integer}
-        name: {type: string}
+        name: {type: string, description: "As shown. An event-slot channel (a provider name such as \"(XX) (NETWORK 001) | Sport: Away at Home (date time)\") is called by its network and number, \"NETWORK 001\"; ids, numbers and search still follow the stored name."}
         logo: {type: string, nullable: true}
         group: {type: string}
         language: {type: string, description: "ISO 639-3 or 'und'"}
@@ -212,17 +475,26 @@ components:
         epg_id: {type: string, nullable: true}
         catchup_days: {type: integer, default: 0}
         is_favorite: {type: boolean}
-        now: { $ref: '#/components/schemas/Programme', nullable: true }
-        next: { $ref: '#/components/schemas/Programme', nullable: true }
+        now: { $ref: '#/components/schemas/Programme', nullable: true, description: "Null without guide data. A placeholder programme that only repeats the channel's name is not guide data and is never sent, here or in /epg. On an event-slot channel this is the game in its name while that game is live (see Programme.id)." }
+        next: { $ref: '#/components/schemas/Programme', nullable: true, description: "As now. On an event-slot channel: the game in its name until it starts." }
     ChannelGroup:
       type: object
-      required: [id, source_id, name, channel_count, hidden]
-      properties: { id: {type: string}, source_id: {type: string}, name: {type: string}, channel_count: {type: integer}, hidden: {type: boolean}, language_override: {type: string, nullable: true} }
+      description: "A channel group of one source. Groups have two levels: a source names a child `Parent / Child`. GET /channels/groups lists each top-level group followed by its children; clients that show one level list the rows whose parent is null."
+      required: [id, source_id, name, path, channel_count, hidden]
+      properties:
+        id: {type: string, description: "Stable for a source and a path. A parent has an id whether or not any channel is in it directly."}
+        source_id: {type: string}
+        name: {type: string, description: "The group's own name: for a child, the part after the parent."}
+        parent: {type: string, nullable: true, description: "The parent's name; null for a top-level group."}
+        path: {type: string, description: "`Parent / Child`, or the name of a top-level group. Channel.group carries this."}
+        channel_count: {type: integer, description: "A parent counts its own channels and its children's."}
+        hidden: {type: boolean, description: "True when the group is hidden or its parent is."}
+        language_override: {type: string, nullable: true, description: "A parent's also applies to its children that set none."}
     Programme:
       type: object
       required: [id, channel_id, start, stop, title]
       properties:
-        id: {type: string}
+        id: {type: string, description: "prog:<n> for a guide entry. prog:slot-<channel row>-<start, epoch seconds> for the game of an event-slot channel: it has no guide entry and no catch-up, and can be recorded like any other programme while the channel still announces it."}
         channel_id: {type: string}
         start: {type: string, format: date-time}
         stop: {type: string, format: date-time}
@@ -231,6 +503,62 @@ components:
         category: {type: string, nullable: true}
         icon: {type: string, nullable: true}
         catchup_available: {type: boolean, default: false}
+        is_sport: {type: boolean, description: "Always sent. The server's sports classifier says this listing is sport (from its title and category); the classifier behind /sports/now and the recorder."}
+        teams: {type: array, items: {type: string}, description: "The two sides, in title order, when is_sport and the title spells out a matchup (A vs B, A v B, A versus B, A at B, A @ B; a league prefix and trailing notes are dropped). Empty otherwise: nothing is guessed."}
+        recording_state: { oneOf: [{ $ref: '#/components/schemas/RecordingState' }, { type: 'null' }], description: "State of the household's recording of this programme, if there is one. Null when recording is off." }
+
+    SearchResults:
+      type: object
+      required: [results, play_here, open_in_app, channels, programmes, sections, order, attribution]
+      properties:
+        results: {type: array, items: {$ref: '#/components/schemas/Tile'}, description: "Titles, best first: exact title, title prefix, word prefix, contains, then every word in any order; at equal rank what plays here comes before what opens in another app, and that before a title known from metadata alone."}
+        metadata_available: {type: boolean}
+        discovery_note: {type: string}
+        play_here: { type: array, items: { $ref: '#/components/schemas/Tile' }, description: "The results a source of the hub plays." }
+        open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' }, description: "The results that only open in another app." }
+        channels: { type: array, items: { $ref: '#/components/schemas/Channel' }, description: "By number (the exact number first) or name: whole name, start of the name, start of a word, then anywhere in it. The name is compared without quality marks or a country tag." }
+        programmes: { type: array, items: { $ref: '#/components/schemas/SearchProgramme' }, description: "Guide broadcasts whose title matches, on now first, then by start. Placeholder programmes (a title that repeats the channel's name) are never listed." }
+        discovered: { type: array, items: {type: string}, description: "Ids of the results that metadata discovery added: titles the hub's own search (discover=false) does not list. Always empty without discovery." }
+        sections:
+          type: object
+          required: [titles, channels, programmes]
+          description: "How many each section found, and whether it has more than were returned (ask again with expand)."
+          properties:
+            titles: {$ref: '#/components/schemas/SearchSection'}
+            channels: {$ref: '#/components/schemas/SearchSection'}
+            programmes: {$ref: '#/components/schemas/SearchSection'}
+        order: {type: array, items: {type: string, enum: [programmes, channels, titles]}, description: "The order to show the sections in. Broadcasts, channels, titles; channels first when the query is a channel's number or whole name."}
+        attribution: {type: string}
+
+    SearchSection:
+      type: object
+      required: [count, more]
+      properties:
+        count: {type: integer}
+        more: {type: boolean}
+
+    SearchProgramme:
+      description: "One broadcast: a programme as the guide lists it on the first channel carrying it (lowest number), and every channel that carries the same title at the same start as a feed. Can be recorded like any Programme."
+      allOf:
+        - $ref: '#/components/schemas/Programme'
+        - type: object
+          required: [on_now, channel_number, channel_name, feeds]
+          properties:
+            on_now: {type: boolean}
+            channel_number: {type: integer}
+            channel_name: {type: string, description: "As shown: see Channel.name."}
+            channel_logo: {type: string, nullable: true}
+            feeds:
+              type: array
+              items:
+                type: object
+                required: [programme_id, channel_id, channel_number, channel_name]
+                properties:
+                  programme_id: {type: string}
+                  channel_id: {type: string}
+                  channel_number: {type: integer}
+                  channel_name: {type: string}
+                  channel_logo: {type: string, nullable: true}
 
     PlaybackRecoveryStatus:
       type: object
@@ -257,6 +585,55 @@ components:
       required: [confirm]
       properties:
         confirm: {type: boolean, const: true}
+    AudioTrack:
+      type: object
+      description: One audio stream of a VOD file, read from the file itself by a media probe.
+      required: [index]
+      properties:
+        index: {type: integer, description: Position among the file's audio streams; the value to send as audio_track.}
+        language: {type: string, default: und, description: ISO 639-2 code, or und when the file does not say.}
+        codec: {type: string, nullable: true, description: "ffmpeg codec name, e.g. ac3, eac3, aac, dts"}
+        channels: {type: integer, nullable: true}
+        title: {type: string, nullable: true}
+        default: {type: boolean, default: false}
+    MediaInfo:
+      type: object
+      description: >
+        What is playing and how it reaches this client, for a player's stream information panel. The file's
+        facts come from the media probe (the one that finds its audio tracks), the delivery from what the
+        server planned for this stream. A field the server does not know is left out, not sent as null.
+        Never a URL, a host name or a credential: the source is named as its owner named it.
+      required: [delivery]
+      properties:
+        source_name: {type: string, nullable: true, description: "The owner's name for the source; for a recording, the channel it was recorded from."}
+        container: {type: string, nullable: true, description: "ffprobe format name of the file, e.g. matroska, mov, mpegts"}
+        bitrate_kbps: {type: integer, nullable: true, description: Overall bit rate of the file.}
+        video:
+          type: object
+          nullable: true
+          description: The file's video stream.
+          properties:
+            codec: {type: string, nullable: true, description: "ffmpeg codec name, e.g. h264, hevc, av1"}
+            width: {type: integer, nullable: true}
+            height: {type: integer, nullable: true}
+            frame_rate: {type: number, nullable: true, description: Frames per second.}
+            dynamic_range: {type: string, nullable: true, enum: [sdr, hdr10, hlg], description: From the stream's transfer characteristic.}
+        audio:
+          type: object
+          nullable: true
+          description: "The audio track that plays: the one the server encoded (audio_track), else the file's default."
+          properties:
+            codec: {type: string, nullable: true, description: "Codec in the file; a remux or a transcode delivers it as AAC stereo."}
+            channels: {type: integer, nullable: true}
+            language: {type: string, nullable: true, description: ISO 639-2 code.}
+        delivery:
+          type: string
+          enum: [direct, remux, transcode]
+          description: "direct: the file or feed as it is (played from the source or passed through this server). remux: repackaged as HLS with the video copied; a film's audio track is encoded to AAC. transcode: the video is encoded as well."
+        encoder: {type: string, nullable: true, enum: [hardware, software], description: "transcode only: what the server planned to encode the video with. A hardware encoder that fails to start falls back to software for that session without this changing."}
+        output_width: {type: integer, nullable: true, description: Width of the picture as delivered.}
+        output_height: {type: integer, nullable: true, description: Height of the picture as delivered.}
+        max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "The quality cap in force for this stream (PlaybackRequest.max_height); left out when none was asked for or the file is no taller than it."}
     PlaybackOption:
       type: object
       required: [variant_id, source_id, source_name, provider_label, audio_languages, audio_verified, audio_evidence, preferred_audio_available]
@@ -272,7 +649,9 @@ components:
         audio_verified: {type: boolean}
         audio_evidence: {type: string}
         language_hint: {type: string, nullable: true}
-        preferred_audio_available: {type: boolean}
+        preferred_audio_available: {type: boolean, description: True when the default track, or any selectable track of a probed file, is in a preferred language.}
+        audio_tracks: {type: array, items: {$ref: '#/components/schemas/AudioTrack'}, description: Tracks of a probed file; empty when the source reported its own audio or the file has not been probed.}
+        preferred_audio_track: {type: integer, nullable: true, description: Index of the first track in a preferred language.}
     PlaybackOptions:
       type: object
       required: [id, preferred_languages, options, selection_required]
@@ -286,7 +665,7 @@ components:
       type: object
       required: [id]
       properties:
-        id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false)"}
+        id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false). Also rec:<recording id> for a recording that has a file (state done, or failed with what it kept): android_tv gets mode=proxy, the Matroska file itself with Range support; web gets the file probed and served as restart-at-offset HLS like any VOD file a browser cannot decode. Needs recordings.view and a recording the caller's /recordings list shows; anything else is 404. Progress is reported under the same id."}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
         variant_id: {type: string, nullable: true}
         allow_unverified_audio: {type: boolean, default: false}
@@ -294,6 +673,9 @@ components:
         companion_id: {type: string, nullable: true, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
+        audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255, description: "Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself."}
+        start_position_ms: {type: integer, nullable: true, minimum: 0, description: "Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced)."}
+        max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height."}
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
@@ -378,6 +760,11 @@ components:
         audio_verified: {type: boolean}
         audio_evidence: {type: string, enum: [unknown, audio_track_metadata, media_probe]}
         default_audio_language: {type: string, nullable: true}
+        audio_tracks: {type: array, items: {$ref: '#/components/schemas/AudioTrack'}, description: Tracks of the probed file (web VOD only).}
+        audio_track: {type: integer, nullable: true, description: The one track the server encoded into this stream; null when the client receives the file's own tracks.}
+        start_position_ms: {type: integer, nullable: true, description: "Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms."}
+        stream_epoch: {type: integer, nullable: true, description: "Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor."}
+        media_info: {allOf: [{$ref: '#/components/schemas/MediaInfo'}], nullable: true, description: "What is playing and how it is delivered; null for mode=handoff. Informational: nothing in playback depends on it."}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
@@ -387,7 +774,7 @@ components:
         buffer_available: {type: boolean, default: false}
         archive_start: {type: string, format: date-time, nullable: true}
         archive_end: {type: string, format: date-time, nullable: true}
-        resume_position_ms: {type: integer, default: 0}
+        resume_position_ms: {type: integer, default: 0, description: "Where to start. In a room descriptor (join or GET /rooms/{code}/descriptor) this is the room's position when the descriptor was built, for every kind of title, never the member's own history."}
         duration_ms: {type: integer, nullable: true}
         title: {type: string}
         subtitle: {type: string, nullable: true}
@@ -462,15 +849,276 @@ components:
       type: object
       properties:
         tmdb_api_key_set: {type: boolean}
+        request_manager_configured: {type: boolean, description: "A request manager URL and API key are stored. The key is never returned."}
         region: {type: string}
         sleep_timer_min: {type: integer, nullable: true}
         epg_refresh_hours: {type: integer}
         transcode_hw: {type: string, enum: [none, vaapi, nvenc, qsv]}
         proxy_mode: {type: string, enum: [auto, always, never]}
+        signup_mode: {type: string, enum: [approval, invite_only], description: "Who may sign in with Google or Plex unasked: anyone (then waits for approval) or invitees only"}
+        plex_sign_in: {type: boolean, description: "Offer \"Continue with Plex\" (system.manage to change). Default true."}
+        password_sign_in: {type: boolean, description: "Offer username and password sign-in (system.manage to change). Default true."}
+        plex_friends_auto_approve: {type: boolean, description: "Default false. When true and a Plex server is linked, a first Plex sign-in by an account that server is shared with (the linking account's friends at plex.tv, fetched with the stored token, cached for five minutes, nobody on any error) is an active user with the Friend role at once, in either signup_mode. Never the Owner role."}
+        notify_webhook_set: {type: boolean, readOnly: true, description: "A notification webhook is stored. The address is never returned."}
+        notify_webhook: {type: string, nullable: true, writeOnly: true, description: "PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it"}
+        home_networks: {type: string, nullable: true, description: "Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges)"}
+        home_shelves: {type: array, nullable: true, maxItems: 24, items: {type: string, maxLength: 200}, description: "The shelves Home shows after New Releases, in order (at most 12 are shown). An entry is a shelf (category) name, or movies:Name / shows:Name for one side only. Empty: Home chooses its shelves. Stored trimmed, without blanks or repeats. Null for callers without system.manage; PATCH null or [] clears it."}
+        home_shelves_unknown: {type: array, nullable: true, readOnly: true, items: {type: string}, description: "The entries of home_shelves that name no shelf of an enabled source right now. They are kept (the shelf may arrive with a later sync) and skipped by Home. Null for callers without system.manage."}
     Disclaimer:
       type: object
       required: [version, text]
       properties: { version: {type: string}, text: {type: string} }
+
+    RequestState: { type: string, enum: [pending_approval, approved, sent, available, declined, failed] }
+    RequestPhase:
+      type: string
+      enum: [requested, approved, searching, downloading, importing, partially_available, available, declined, failed, stalled, unknown]
+      description: |
+        What is happening to a requested title, as last reported by the request manager. Never ahead of what an answer showed.
+        requested: waiting for approval here. approved: approved here, the request manager has not taken it yet (or holds it for
+        an approval of its own). searching: the request manager has it and nothing is in its download queue. downloading: its
+        download queue has an unfinished item for the title. importing: every queue item has finished and the title is not
+        available yet. partially_available: series only, some of the requested seasons can be watched. stalled: every unfinished
+        download reports a problem, or a running download's bytes (or a finished download's import) have not moved for 30
+        minutes. unknown: the request manager did not answer, or its answer could not be read; last_phase has the phase before.
+    RequestProgress:
+      type: object
+      required: [phase]
+      properties:
+        phase: { $ref: '#/components/schemas/RequestPhase' }
+        last_phase: { oneOf: [{ $ref: '#/components/schemas/RequestPhase' }, { type: 'null' }], description: "Only with phase unknown: the last phase that was known." }
+        percent: {type: integer, minimum: 0, maximum: 100, nullable: true, description: "Only while downloading: bytes done over bytes total across the title's queue items, rounded down. Null when a size is missing: show an indeterminate bar."}
+        eta: {type: string, format: date-time, nullable: true, description: "Only while downloading: when the last queue item is due. Null unless every unfinished item gives a time that is still ahead."}
+        detail: {type: string, nullable: true, description: "Short plain text for beside the phase: \"2 of 8 episodes\", \"Queued\", \"Paused\", why it is stalled or failed, or the decline note. Never a file name, release name, host or URL."}
+        checked_at: {type: string, format: date-time, nullable: true, description: "When the request manager last answered for this request; for a request it is not asked about (requested, approved, closed), when it reached that state."}
+    TileRequestProgress:
+      type: object
+      required: [phase]
+      description: The part of RequestProgress a poster needs.
+      properties:
+        phase: { $ref: '#/components/schemas/RequestPhase' }
+        percent: {type: integer, minimum: 0, maximum: 100, nullable: true}
+    MediaRequest:
+      type: object
+      required: [id, profile_id, media_type, tmdb_id, title_id, title, state, progress, created_at, updated_at]
+      properties:
+        id: {type: string}
+        profile_id: {type: string}
+        profile_name: {type: string}
+        media_type: {type: string, enum: [movie, tv]}
+        tmdb_id: {type: integer}
+        title_id: {type: string, description: "hub id of the requested title, e.g. tmdb:movie:603"}
+        title: {type: string}
+        year: {type: integer, nullable: true}
+        poster: {type: string, nullable: true}
+        seasons: {type: array, items: {type: integer}, nullable: true, description: "tv only; null = whole series"}
+        state: { $ref: '#/components/schemas/RequestState' }
+        progress: { $ref: '#/components/schemas/RequestProgress' }
+        note: {type: string, nullable: true, description: "Decline reason, or why an approved request has not reached the request manager yet."}
+        decided_by_profile_id: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Notice:
+      type: object
+      required: [id, kind, title, created_at]
+      properties:
+        id: {type: string}
+        kind: {type: string, description: "request_available | request_declined"}
+        title: {type: string}
+        body: {type: string}
+        ref_id: {type: string, nullable: true, description: "hub id the notice is about"}
+        created_at: {type: string, format: date-time}
+        read_at: {type: string, format: date-time, nullable: true}
+    RecordingState: { type: string, enum: [scheduled, recording, done, failed, missed, cancelled] }
+    Recording:
+      type: object
+      description: "One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file (has_file) it plays with POST /playback/resolve {id: \"rec:<id>\"}."
+      required: [id, profile_id, channel_id, title, starts_at, ends_at, state, created_at, updated_at]
+      properties:
+        id: {type: string}
+        profile_id: {type: string}
+        profile_name: {type: string}
+        rule_id: {type: string, nullable: true, description: "the rule that scheduled it; null when scheduled by hand"}
+        channel_id: {type: string}
+        channel_name: {type: string}
+        title: {type: string}
+        subtitle: {type: string, nullable: true}
+        season: {type: integer, nullable: true}
+        episode: {type: integer, nullable: true}
+        is_sport: {type: boolean}
+        teams: {type: array, items: {type: string}, description: "As Programme.teams, from the recorded programme's title."}
+        starts_at: {type: string, format: date-time, description: "listed start; capture begins pad_before_s earlier"}
+        ends_at: {type: string, format: date-time, description: "listed end; capture runs pad_after_s longer"}
+        pad_before_s: {type: integer}
+        pad_after_s: {type: integer}
+        state: { $ref: '#/components/schemas/RecordingState' }
+        error: {type: string, nullable: true, description: "why it failed or was missed"}
+        size_bytes: {type: integer, nullable: true, description: "what the capture wrote. Not whether it can be played: see has_file"}
+        has_file: {type: boolean, description: "There is a file that POST /playback/resolve {id: \"rec:<id>\"} would play now: the recording is done, or failed and kept what it had captured, and that file is still on the server. False while scheduled or recording, and for a file since removed. Always sent."}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    RecordingRule:
+      type: object
+      required: [id, profile_id, kind, match, new_only, enabled, created_at]
+      properties:
+        id: {type: string}
+        profile_id: {type: string}
+        profile_name: {type: string}
+        kind: {type: string, enum: [series, team, keyword], description: "series = same title; team = a sports listing naming the team; keyword = title contains the text"}
+        match: {type: string}
+        channel_id: {type: string, nullable: true, description: "null = any channel"}
+        channel_name: {type: string, nullable: true}
+        new_only: {type: boolean, description: "skip listings marked as repeats and episodes already recorded"}
+        keep: {type: integer, nullable: true, description: "finished recordings to keep, oldest deleted first; null = all"}
+        enabled: {type: boolean}
+        created_at: {type: string, format: date-time}
+    RequestManagerSettings:
+      type: object
+      required: [api_key_set]
+      properties:
+        url: {type: string, nullable: true}
+        api_key_set: {type: boolean}
+
+    RoomCreate:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string, description: "title or channel id (lib:, tmdb:, ch:). A channel makes a live room. A show or season makes a room on one of its episodes (see POST /rooms)."}
+        variant_id: {type: string, nullable: true, description: "source variant every member plays; validated when a member joins, and for a show when the room is created"}
+        audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255}
+    RoomJoin:
+      type: object
+      properties:
+        client: {type: string, enum: [android_tv, web], default: web}
+        prefer_hls: {type: boolean, default: false}
+        recovery_generation: {type: string, nullable: true, maxLength: 64, description: "As in PlaybackRequest. Required for web clients."}
+        allow_unverified_audio: {type: boolean, default: false, description: "Consent to the room's variant_id when its audio is unverified or not this profile's preference."}
+        member_token: {type: string, nullable: true, maxLength: 2048, description: "The token of a seat this session already holds in this room. The join then keeps that seat (same member_id, a fresh member_token, the descriptor as it is now) instead of adding a member. A token that is expired, another session's or another room's, or whose seat the room has dropped, is ignored: the join takes a new seat."}
+    RoomTitle:
+      type: object
+      required: [id, kind, title]
+      properties:
+        id: {type: string}
+        kind: { $ref: '#/components/schemas/MediaKind' }
+        title: {type: string, description: "for an episode, the episode's own title"}
+        subtitle: {type: string, nullable: true, description: "for an episode, its show where known and its number: \"<show> · S01E02\", or \"S01E02\""}
+        year: {type: integer, nullable: true}
+        poster: {type: string, nullable: true}
+        backdrop: {type: string, nullable: true}
+    RoomMember:
+      type: object
+      required: [id, name, host, buffering]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        host: {type: boolean}
+        buffering: {type: boolean}
+    RoomState:
+      type: object
+      required: [playing, position_ms, as_of_ms]
+      description: "The room clock. While playing, the position now is position_ms + (server time now - as_of_ms); paused, it is position_ms."
+      properties:
+        playing: {type: boolean}
+        position_ms: {type: integer, nullable: true, description: "null in a live room: a channel has no position"}
+        as_of_ms: {type: integer, description: "server epoch ms at which position_ms was true"}
+    Room:
+      type: object
+      required: [code, join_path, id, live, host_name, is_host, controls_locked, max_members, members, state, server_ms, title]
+      properties:
+        code: {type: string, description: "six characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789; accepted in either case"}
+        join_path: {type: string, description: "web path of the join screen: /room/<code>"}
+        id: {type: string, description: "the title or channel the room watches: what every member plays. Never a show or a season: a room created from one names the episode it is on (see POST /rooms), so this can differ from the id the room was created with"}
+        live: {type: boolean}
+        variant_id: {type: string, nullable: true, description: "in a room created from a show with a variant named, the episode's id"}
+        audio_track: {type: integer, nullable: true}
+        host_name: {type: string}
+        is_host: {type: boolean, description: "the current profile created the room"}
+        controls_locked: {type: boolean, description: "only the host's play, pause and seek apply"}
+        waiting_for: {type: string, nullable: true, description: "member the room is paused for while they buffer"}
+        max_members: {type: integer}
+        members: {type: array, items: { $ref: '#/components/schemas/RoomMember' }}
+        state: { $ref: '#/components/schemas/RoomState' }
+        server_ms: {type: integer, description: "server epoch ms when this response was built"}
+        title: { $ref: '#/components/schemas/RoomTitle' }
+    RoomJoined:
+      type: object
+      required: [member_token, member_id, expires_in_seconds, ws_path, descriptor]
+      description: |
+        A seat in the room. Open the room WebSocket at `ws_path` with `?member_token=<member_token>`
+        (the access token never goes in a URL). A member who has not been heard from on the socket for
+        20 s is dropped and must join again; until then the same token reconnects and is resynchronised.
+
+        All messages are JSON objects with a `type`.
+
+        Client to server:
+        - `ping {t}`: clock sync and keep-alive; send one at least every 10 s. Answered with `pong {t, server_ms}`.
+        - `play`, `pause`, `seek {position_ms}`: become the room state for everyone. `position_ms` is an integer of at least 0.
+        - `buffering {on}`: this member's player is stalled (true) or has recovered (false).
+        - `lock {on}`: host only. While locked, only the host's play, pause and seek apply.
+
+        Server to client:
+        - `pong {t, server_ms}`: to the sender only. `t` is echoed; `server_ms` is server epoch ms.
+        - `state {playing, position_ms, as_of_ms, by, controls_locked}`: the room clock (see RoomState).
+          `by` is the member who caused it, or null when the room did. A member more than 1000 ms from
+          the room position seeks to it. Any `state` clears a `waiting` notice.
+          In a room that plays one shared stream, every `state` also carries `stream_epoch` and
+          `stream_start_ms` (see below); in other rooms the two fields are absent.
+        - `members {members: RoomMember[]}`: sent whenever someone joins, leaves or starts or stops buffering.
+        - `waiting {name}`: the room is paused for this member. It resumes when they recover or after 15 s.
+        - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
+          `host_only`, `live_no_seek`, `bad_message`.
+        - `closed {reason}`: the last message before the server closes the socket: `expired`, `deleted`,
+          `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized`,
+          `remote_access_denied` (4401), `not_found`, `not_a_member` (4404).
+          `remote_access_denied` is the socket's form of the API's 403 of that name: the member's
+          user lacks remote.access and the socket was opened from outside home_networks. The seat
+          is not taken away by it. POST /rooms/{code}/join and GET /rooms/{code}/descriptor answer
+          403 remote_access_denied in the same situation.
+
+        On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
+        Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
+        connection keeps the seat until the 20 s silence rule applies.
+
+        One shared stream. A title from a source that limits its connections (or is always proxied)
+        is played to the whole room from a single upstream: every member's `descriptor` is an HLS
+        URL of their own onto the same stream, whatever their client, with `start_position_ms`
+        (media time zero of the stream) and `stream_epoch` set. The stream uses one of the source's
+        connections however many members watch, and is released when the last member leaves or the
+        room closes. A seek restarts it at the new position before the seek's `state` is sent. That
+        `state` carries the new `stream_epoch` and `stream_start_ms`: a client whose epoch differs
+        reloads the same playlist URL (the descriptor's `url` does not change) and treats
+        `stream_start_ms` as its new time zero; segments of an earlier epoch answer 403 with code
+        `stream_epoch_stale` (the status the stream routes use for media they refuse; the code is
+        what tells this refusal from the others), which a member who missed the `state` answers by
+        asking GET /rooms/{code}/descriptor. `stream_epoch` only ever increases within a room: it
+        counts every start of the room's stream, also one made after the room stood empty and its
+        stream was released, so a greater epoch is always the later stream and no epoch is ever
+        reused; it need not increase by one. A seek to
+        a position the running stream already starts at (positions are floored to 5 s) keeps the
+        epoch, and the client seeks within what it is playing. The stream's audio is the room's
+        `audio_track`, else the first member's preferred or default track; `audio_track` in the
+        descriptor says which. Titles from other sources are resolved per member, and live channels
+        share the proxy's upstream as any two viewers of a channel do: for both, `stream_epoch` is
+        null and `state` carries neither field.
+
+        Reloading after a seek. `state` is the whole signal; there is no separate message.
+        - `state` carries `stream_epoch` (shared stream): compare it with the epoch the client is
+          playing (the descriptor's, then the last `state`'s). Different: reload the playlist URL it
+          already has and take `stream_start_ms` as media time zero, so the player position is
+          `position_ms - stream_start_ms`. Same: seek inside what is playing.
+        - `state` carries no `stream_epoch` (a library title each member plays for themselves): there
+          is nothing to reload. The member's own stream covers the whole title; seek the player to
+          `position_ms`. `state` alone suffices.
+        - A live room has no position: `position_ms` is null and only `playing` applies.
+        A client that lost its place (a player error, an expired stream URL, a reconnect after a
+        missed `state`) asks GET /rooms/{code}/descriptor for its descriptor as it is now, or joins
+        again with its `member_token`; neither changes its seat.
+      properties:
+        member_token: {type: string, description: "valid 2 h, for this room and member only"}
+        member_id: {type: string}
+        expires_in_seconds: {type: integer}
+        ws_path: {type: string, description: "/api/v1/rooms/<code>/ws"}
+        descriptor: { $ref: '#/components/schemas/PlaybackDescriptor' }
 
     SportsListing:
       type: object
@@ -516,10 +1164,12 @@ components:
       required: [channel_id, channel_name, source_id, source_name, programme_id, language_verified]
       properties:
         channel_id: {type: string}
-        channel_name: {type: string}
+        channel_name: {type: string, description: "As shown: Channel.name"}
+        channel_number: {type: integer, nullable: true}
+        quality: {type: string, nullable: true, enum: [4K, UHD, FHD, HD, SD, null], description: "Picture quality the provider's channel name advertises, in plain or superscript letters; null when it names none."}
         source_id: {type: string}
         source_name: {type: string}
-        programme_id: {type: string}
+        programme_id: {type: string, description: "Programme.id of this event on this channel; pass it with channel_id and the event's start to POST /recordings."}
         language: {type: string, nullable: true}
         language_verified: {type: boolean}
     SportsEvent:
@@ -527,15 +1177,41 @@ components:
       required: [id, title, sport, start, stop, status, replay, live_evidence, grouping_evidence, feeds]
       properties:
         id: {type: string}
-        title: {type: string}
-        sport: {type: string}
+        kind: {type: string, enum: [event, channel], default: event, description: "event = a guide programme classified as sport, or a dated event slot. channel = a game channel: an event slot whose name carries no date. It is listed with today's events and makes no claim about when it plays: status is unscheduled, start and stop are the bounds of the listed days."}
+        title: {type: string, description: "The event without provider decoration: for an event slot the text after its sport (\"Away at Home\"), for a guide programme its title."}
+        sport: {type: string, description: "The classifier's sport for a guide programme; for an event slot the sport its name gives (\"Field Hockey\", \"Men's Soccer\")."}
+        league: {type: string, nullable: true, description: "Network or league label of an event slot (\"NETWORK\" of \"(NETWORK 001) | …\"); null for a guide programme."}
+        home: {type: string, nullable: true, description: "With away: the two sides when the title is exactly \"A at B\" / \"A @ B\" (B is home) or \"A vs B\" / \"A v B\" (A is home). Null otherwise: nothing is guessed."}
+        away: {type: string, nullable: true}
         start: {type: string, format: date-time}
-        stop: {type: string, format: date-time}
-        status: {type: string, enum: [current, upcoming, ended]}
+        stop: {type: string, format: date-time, description: "For an event slot: start plus the source's event_duration_minutes (default 210)."}
+        status: {type: string, enum: [current, upcoming, ended, unscheduled], description: "current = airing now by a real guide programme or a dated event slot inside its window. An event slot whose window has passed is not listed at all. unscheduled only with kind channel."}
         replay: {type: boolean}
-        live_evidence: {type: boolean}
+        live_evidence: {type: boolean, description: "The guide labels the programme live, or a dated event slot is inside its window."}
         grouping_evidence: {type: string}
-        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}}
+        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}, description: "Channels carrying the event, lowest channel number first. Two event slots with the same title, sport and start are one event."}
+    SportsChannel:
+      type: object
+      required: [channel_id, channel_name, channel_number, group, source_id]
+      properties:
+        channel_id: {type: string}
+        channel_name: {type: string, description: "The network's name without its country tag and quality marks"}
+        channel_number: {type: integer}
+        logo: {type: string, nullable: true}
+        group: {type: string}
+        quality: {type: string, nullable: true, enum: [4K, UHD, FHD, HD, SD, null]}
+        language: {type: string, nullable: true}
+        source_id: {type: string}
+        now: { $ref: '#/components/schemas/Programme', nullable: true, description: "What the guide says is on; null without real guide data." }
+    SportsChannelsPage:
+      type: object
+      required: [channels, total, limit, offset, truncated]
+      properties:
+        channels: {type: array, items: {$ref: '#/components/schemas/SportsChannel'}}
+        total: {type: integer}
+        limit: {type: integer}
+        offset: {type: integer}
+        truncated: {type: boolean}
     SportsRecording:
       type: object
       required: [title_id, title, source_id, source_name, sport, originally_available_at, duration_ms, audio_languages, audio_verified, language_hint, kind, live]
@@ -589,10 +1265,183 @@ components:
             channels_with_sports_schedule: {type: integer}
 
 paths:
+  /auth/config:
+    get:
+      security: []
+      summary: What a sign-in screen has to know before anyone is signed in
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required, plex_enabled, password_enabled, profiles_enabled]
+                properties:
+                  google_enabled: {type: boolean}
+                  plex_enabled: {type: boolean, description: "\"Continue with Plex\" is offered"}
+                  password_enabled: {type: boolean, description: "Username and password sign-in is offered"}
+                  google_required: {type: boolean, description: "GOOGLE_AUTH_REQUIRED: the household profile picker (GET /profiles without a token, POST /auth/login) is closed everywhere, the home network included. People sign in with Google, Plex or a username and password; a TV pairs."}
+                  profiles_enabled: {type: boolean, description: "The profile picker is open to this request: it comes from the home network and google_required is false. Elsewhere a sign-in screen shows the other ways in instead of profile tiles."}
+                  content_policy_enabled: {type: boolean}
+                  owner_pin_configured: {type: boolean}
+                  owner_pin_setup_required: {type: boolean}
+                  signup_mode: {type: string, enum: [approval, invite_only], description: "As in /settings"}
+  /auth/google/start:
+    get:
+      security: []
+      summary: Begin Google sign-in (any Google account)
+      parameters:
+        - { name: return_to, in: query, schema: {type: string, default: /} }
+        - { name: invite, in: query, schema: {type: string, maxLength: 64}, description: "Invite token from /invite/<token>; held server-side for the sign-in" }
+      responses: { '303': { description: Redirect to Google } }
   /auth/google/complete:
     post:
       security: []
-      responses: { '200': { description: Google identity handoff; owner PIN required before owner tokens when enabled, content: { application/json: { schema: { oneOf: [{$ref: '#/components/schemas/AuthTokens'}, {$ref: '#/components/schemas/PendingOwnerLogin'}] } } } } }
+      description: >-
+        Active user: tokens, with status "active". Unknown user in approval mode: status "pending"
+        and a token good only for GET /auth/me. Owner PIN regime: PendingOwnerLogin.
+      responses: { '200': { description: Google identity handoff, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}, {$ref: '#/components/schemas/PendingOwnerLogin'}] } } } } }
+  /auth/plex/start:
+    post:
+      security: []
+      summary: Begin "Continue with Plex"
+      description: >-
+        The server opens a strong PIN at plex.tv and answers Plex's own sign-in page
+        (https://app.plex.tv/auth#?clientID=…&code=…&forwardUrl=…). The browser goes there; Plex sends it
+        back to return_to with ?plex=<state> added. The PIN is bound to this browser by an HttpOnly,
+        SameSite=Lax cookie that lives ten minutes, and its id never leaves the server. Nothing is
+        registered with Plex for this. 403 plex_disabled when the method is off, 502 plex_unavailable
+        when plex.tv cannot be reached.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                return_to: {type: string, default: /, maxLength: 64, description: "/, /pair, /pair?code=XXXXXX or /settings. Anything else is /."}
+                invite: {type: string, maxLength: 64, description: "Invite token from /invite/<token>; held server-side for the sign-in, never sent to Plex"}
+                link: {type: boolean, default: false, description: "Needs a bearer token: link the Plex account to the caller's own user instead of signing in. Not on a shared device (403 shared_device)."}
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [auth_url], properties: { auth_url: {type: string} } } } } }
+  /auth/plex/complete:
+    post:
+      security: []
+      summary: Finish "Continue with Plex" in the browser that started it
+      description: >-
+        Reads the PIN, asks plex.tv whose token it yields (account id, username, confirmed e-mail, avatar)
+        and discards the token: it is never stored or logged. The user is the Plex account id, never the
+        e-mail: an unknown account whose address matches another user's is a new user, not that one.
+        Answers as /auth/google/complete does: tokens with status "active", or status "pending" with a
+        token good only for GET /auth/me. 401 sign_in_expired for a state that is unknown, used, older
+        than ten minutes, started by another browser, or never completed at Plex; 403 invite_required
+        (invite-only mode, no usable invite), 403 user_suspended, 502 plex_unavailable.
+        A flow started with link true needs the same user's bearer token here and answers status
+        "linked": the Plex account is attached to that user and nobody is signed in. 409 identity_in_use
+        when it already signs in as someone else, 409 already_linked when the user has another Plex account.
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [state], properties: { state: {type: string, maxLength: 64, description: "The plex query parameter Plex's redirect came back with"} } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}, {type: object, required: [status], properties: {status: {type: string, enum: [linked]}}}] } } } } }
+  /auth/google/link:
+    post:
+      summary: Begin linking a Google account to one's own user
+      description: >-
+        Answers Google's sign-in page. Google sends the browser back to /auth/google/callback, which
+        attaches the identity and lands on /settings?linked=google, or on /settings?link_error=<code>
+        (identity_in_use, already_linked, failed). Nobody is signed in by it. Not on a shared device.
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [auth_url], properties: { auth_url: {type: string} } } } } } }
+  /auth/methods/{method}:
+    delete:
+      summary: Remove one of one's own ways of signing in
+      description: 409 last_method for the last one, 404 when it is not linked, 403 shared_device. The device asking stays signed in.
+      parameters: [{name: method, in: path, required: true, schema: {$ref: '#/components/schemas/SignInMethod'}}]
+      responses: { '204': { description: removed } }
+  /auth/me:
+    get:
+      summary: The caller's user, role, effective permissions and limits
+      description: >-
+        The one call a user waiting for approval may make (every other answers 403 approval_pending).
+        Also answers a user without remote.access away from the home network, where every other call is 403 remote_access_denied.
+        Once approved, the response carries full tokens, once, and the pending token stops working.
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { description: "session_revoked | session_stale (refresh) | user_suspended | token_expired" }
+  /auth/sessions:
+    get:
+      summary: The caller's signed-in devices
+      parameters: [{ name: user_id, in: query, schema: {type: string}, description: Another user's sessions; needs users.manage }]
+      responses: { '200': { description: live sessions, most recently seen first, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AuthSession' } } } } } }
+  /auth/sessions/{sid}:
+    patch:
+      summary: Relabel a device, or mark it a shared household device
+      description: >-
+        A label is its user's to change (anyone's with users.manage). shared_device needs users.manage,
+        on one's own device too; marking records the caller as the device's owner, unmarking clears it.
+      parameters: [{name: sid, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { shared_device: {type: boolean}, label: {type: string, maxLength: 128, description: empty clears it} } } } } }
+      responses:
+        '200': { description: the session as it now is, content: { application/json: { schema: { $ref: '#/components/schemas/AuthSession' } } } }
+        '403': { description: "forbidden (shared_device without users.manage) | owner_required" }
+        '404': { description: not found }
+    delete:
+      summary: Sign a device out (one's own; anyone's with users.manage)
+      parameters: [{name: sid, in: path, required: true, schema: {type: string}}]
+      responses: { '204': { description: revoked; its next request answers 401 }, '404': { description: not found } }
+  /auth/switchable:
+    get:
+      summary: "Who's watching? The users a shared device can be handed to"
+      description: >-
+        Active users whose role (or own override) has on_shared_devices, owners and family first,
+        then by name. Only a shared-device session may ask.
+        A shared device whose current user has been suspended is not stranded: while its session
+        itself stands (not revoked), this route and POST /auth/switch keep answering for it, and
+        POST /auth/refresh keeps renewing its tokens so the two stay reachable after the access
+        token expires. Every other route, /auth/me included, answers 401 user_suspended, with a
+        renewed token as with the old one. The suspended user is not listed, so no entry has
+        current true.
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [users], properties: { users: { type: array, items: { $ref: '#/components/schemas/SwitchableUser' } } } } } } }
+        '401': { description: "token_expired | session_stale | session_revoked (signed out, or the device has been handed over since this token was issued). user_suspended only on a device that is not shared." }
+        '403': { description: not_shared_device }
+  /auth/switch:
+    post:
+      summary: Hand a shared device to another user
+      description: >-
+        Keeps the device's session and re-binds it to the target, with fresh tokens; the previous
+        user's tokens for this device stop working. A target with a PIN needs it. A target with
+        more access than the current user must have one. Switching to oneself hands nothing over
+        and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the
+        current user's PIN is verified (pin_invalid when wrong, counted against the same five
+        guesses), and a user without a PIN has nothing to check.
+        When the current user has been suspended the device can still be handed over (see
+        GET /auth/switchable): to anyone listed, by the same PIN rules, a target's access being
+        compared with what the suspended user held. The suspended user is not a target (404),
+        and their tokens for this device stop working with the hand-over like anyone's.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "null or absent: no PIN offered"} } } } } }
+      responses:
+        '200': { description: switched, content: { application/json: { schema: { $ref: '#/components/schemas/Switched' } } } }
+        '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. user_suspended only on a device that is not shared." }
+        '403': { description: not_shared_device }
+        '404': { description: not a user this device can switch to (a suspended user included) }
+        '409': { description: "pin_setup_required (the target has more access and no PIN) | switch_conflict (retry)" }
+        '429': { description: "rate_limited: five wrong PINs for this target in 15 minutes. Retry-After is whole seconds (an integer), as on every 429 of this API." }
+  /auth/adult-unlock:
+    post:
+      summary: Open the adult category on this session for four hours
+      description: >-
+        Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true. The same two
+        conditions hold wherever an adult title is named by its id: GET /titles/{id}, POST /playback/resolve,
+        POST /playback/multiview, GET /playback/options and /playback/rewind, and creating, showing or joining
+        a watch room on one answer 403 with missing [watch.adult], or 403 adult_locked for a session that
+        holds the permission but is not unlocked.
+      requestBody: { content: { application/json: { schema: { type: object, required: [pin], properties: { pin: {type: string, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
+      responses:
+        '200': { description: unlocked, content: { application/json: { schema: { type: object, required: [adult_unlocked_until], properties: { adult_unlocked_until: {type: string, format: date-time} } } } } }
+        '403': { description: "forbidden (missing watch.adult) | pin_invalid" }
+        '409': { description: pin_setup_required }
+        '429': { description: Attempt limit; respect Retry-After }
+  /auth/adult-lock:
+    post: { summary: Close the adult category on this session again, responses: { '204': { description: ok } } }
   /auth/owner-pin/start:
     post:
       requestBody: { content: { application/json: { schema: { type: object, required: [profile_id, action], properties: { profile_id: {type: string}, action: {type: string, enum: [login, profile_switch, admin]} } } } } }
@@ -627,7 +1476,7 @@ paths:
   /profiles/{id}/content-policy:
     get:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      responses: { '200': { description: Admin-only content policy, content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
+      responses: { '200': { description: Content policy (users.manage), content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicy' } } } } }
     put:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: X-Owner-Action, in: header, required: true, schema: {type: string}, description: One-use proof bound to current owner session and this target profile}]
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ContentPolicyInput' } } } }
@@ -635,26 +1484,98 @@ paths:
   /auth/login:
     post:
       security: []
-      summary: Profile login (password for admin, PIN for profiles)
+      summary: Profile login on the home network (password for admin, PIN for profiles)
+      description: >-
+        A household convenience, answered only for a request from the home network and never under
+        GOOGLE_AUTH_REQUIRED. From anywhere else it is 403 home_network_only before anything is looked
+        up: the same answer for every profile id, real or not.
       requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string}, pin: {type: string, nullable: true}, password: {type: string, nullable: true} } } } } }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
+  /auth/password:
+    post:
+      security: []
+      summary: Sign in with a username and a password
+      description: >-
+        A wrong username and a wrong password are one answer: 401 invalid_credentials, the same body, and
+        the same work (an unknown name is verified against a stand-in hash). Guessing is throttled by
+        username and by client address: five attempts for a name, twenty from an address, in fifteen
+        minutes, then a lock of 60 seconds that doubles each time up to an hour, and a ceiling of 300
+        failures in five minutes for everyone. A refused attempt is 429 rate_limited with Retry-After,
+        whoever the name belongs to. 403 password_disabled when the method is off. A suspended user is
+        told so (401 user_suspended) only after the right password.
+      requestBody: { content: { application/json: { schema: { type: object, required: [username, password], properties: { username: {type: string, maxLength: 64}, password: {type: string, maxLength: 256, writeOnly: true} } } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }
+        '401': { description: "invalid_credentials | user_suspended" }
+        '429': { description: "rate_limited; Retry-After is whole seconds" }
+    put:
+      summary: Change one's own password, or set a first one
+      description: >-
+        With a password already set, current_password is required (403 wrong_password, throttled like a
+        sign-in) and every other session of the user is revoked. Without one, this links a password to the
+        account: username is required unless the user has one (409 username_taken, 400 invalid_username).
+        A username is 3 to 32 of a-z 0-9 . - _ and is stored lower case. A password has at least 10
+        characters, does not contain the username and is not one of the most common (400 weak_password).
+        Not on a shared device (403 shared_device).
+      requestBody: { content: { application/json: { schema: { type: object, required: [new_password], properties: { current_password: {type: string, nullable: true, writeOnly: true}, new_password: {type: string, maxLength: 256, writeOnly: true}, username: {type: string, nullable: true, maxLength: 64} } } } } }
+      responses: { '204': { description: ok } }
+  /auth/invite/lookup:
+    post:
+      security: []
+      summary: What the page behind an invite or setup link shows
+      description: The token travels in the body. Every link that cannot be used (unknown, used, expired, revoked) answers the same valid false.
+      requestBody: { content: { application/json: { schema: { type: object, required: [token], properties: { token: {type: string, maxLength: 64} } } } } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid, setup]
+                properties:
+                  valid: {type: boolean}
+                  display_name: {type: string, nullable: true}
+                  username: {type: string, nullable: true, description: "A setup link for someone who already has a username: it is kept"}
+                  setup: {type: boolean, description: "A password setup link for one existing user rather than an invitation"}
+  /auth/invite/accept:
+    post:
+      security: []
+      summary: Accept an invite, or use a setup link, by choosing a username and a password
+      description: >-
+        An invite makes a new active user with the invite's role and signs them in. A setup link sets the
+        password of the user it names (who keeps a username they already have). Nothing is spent unless it
+        goes through: 400 invalid_username, 400 weak_password and 409 username_taken leave the link good.
+        403 invite_invalid for any link that cannot be used.
+      requestBody: { content: { application/json: { schema: { type: object, required: [token, username, password], properties: { token: {type: string, maxLength: 64}, username: {type: string, maxLength: 64}, password: {type: string, maxLength: 256, writeOnly: true} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
   /auth/refresh:
-    post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
+    post: { security: [], summary: "Exchange a refresh token for a new pair; refresh tokens rotate", description: "Every refresh answers a new refresh token and makes the presented one the previous one. The previous one is still honoured for 60 seconds (two tabs, or a retried request, refreshing at once) and answers the current pair without rotating again. A token older than that being presented means a copy is being replayed: the session is revoked (401 session_revoked) for whoever holds it, and the device signs in again. A client stores the new refresh token before it uses the new access token.", requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
   /auth/device:
     post: { security: [], summary: TV starts pairing; shows user_code, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceCode' } } } } } }
+  /auth/device/lookup:
+    post:
+      summary: What is asking to pair under a code, shown before it is approved
+      description: >-
+        A link with a code in it is how someone else's device gets signed in as the person who approves
+        it, so the approval screen says what is asking: the address and user agent the request for the
+        code came from. Signs nothing in. 404 for a code that is unknown, expired, used or already approved.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_code], properties: { user_code: {type: string, maxLength: 64} } } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [user_code, expires_in], properties: { user_code: {type: string}, ip: {type: string, nullable: true}, user_agent: {type: string, nullable: true}, expires_in: {type: integer} } } } } }
   /auth/device/poll:
     post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { device_code: {type: string} } } } } }, responses: { '200': { description: approved, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }, '428': { description: pending } } }
   /auth/device/approve:
-    post: { summary: Logged-in user approves a TV code (web), requestBody: { content: { application/json: { schema: { type: object, properties: { user_code: {type: string}, profile_id: {type: string} } } } } }, responses: { '204': { description: ok } } }
+    post: { summary: Logged-in user approves a TV code (web), requestBody: { content: { application/json: { schema: { type: object, properties: { user_code: {type: string}, profile_id: {type: string}, shared_device: {type: boolean, default: false, description: "Pair it as a shared household device (Who's watching?). true needs users.manage"} } } } } }, responses: { '204': { description: ok }, '403': { description: forbidden (shared_device without users.manage) } } }
 
   /profiles:
-    get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } } } } }
+    get: { security: [], summary: "The household's profiles, for the picker on the home network", description: "Without a token: the list on the home network; 404 from anywhere else (which says nothing about what exists); 401 under GOOGLE_AUTH_REQUIRED. With a token: the list on the home network, otherwise the caller's own profile only.", responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } } } } }
     post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '201': { description: created } } }
   /profiles/{id}:
     patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '200': { description: ok } } }
     delete: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
   /profiles/{id}/pin:
-    put: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true} } } } } }, responses: { '204': { description: ok } } }
+    put: { summary: "Set or clear a profile's PIN (the older route; see PUT /users/{id}/pin for the rule on changing one's own)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }, responses: { '204': { description: ok } } }
 
   /profiles/{id}/home_layout:
     get: { summary: Per-profile Home row order / hidden rows, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
@@ -696,13 +1617,16 @@ paths:
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { hero: { type: array, items: { $ref: '#/components/schemas/Tile' } }, rows: { type: array, items: { $ref: '#/components/schemas/Row' } } } } } } } }
   /search:
     get:
+      summary: "One search across everything the caller may watch: titles (movies and shows; a series by its name, never a row per episode), live channels, and guide broadcasts that are on now or start within 48 hours. Each section is capped and counted. A query shorter than two characters returns every list empty."
       parameters:
-        - { name: q, in: query, required: true, schema: {type: string} }
-        - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind"} }
-        - { name: limit, in: query, schema: {type: integer, default: 40} }
-        - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
+        - { name: q, in: query, schema: {type: string, default: ""}, description: "Diacritics, punctuation, case and a leading article are ignored, and \"&\" is \"and\". A year after the title (\"the mill 2023\") narrows titles to that year. A number also finds the channel with that number." }
+        - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind, plus programme for guide broadcasts. Omitted = movies, shows, channels and broadcasts; episodes only when asked for."} }
+        - { name: limit, in: query, schema: {type: integer, default: 40}, description: "Cap of the titles section." }
+        - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages first: a section that finds nothing in them is answered from every language instead. all = all; und = unknown; a language named here is taken at its word."} }
         - { name: source_id, in: query, schema: {type: string} }
-      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { results: {type: array, items: {$ref: '#/components/schemas/Tile'}}, metadata_available: {type: boolean}, discovery_note: {type: string}, play_here: { type: array, items: { $ref: '#/components/schemas/Tile' } }, open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' } }, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } }, attribution: {type: string} } } } } } }
+        - { name: expand, in: query, schema: {type: string, description: "csv of titles, channels, programmes: return those sections in full (up to 100 each) instead of capped. The rows of a capped section are the first rows of the expanded one."} }
+        - { name: discover, in: query, schema: {type: boolean, default: true}, description: "false = only what the hub holds (its own titles, channels and broadcasts): no remote metadata provider is asked, so the answer is quick, and metadata_available still says whether discovery exists. A client shows that answer first and adds the titles named in the full answer's discovered list when it arrives. With discovery, all remote lookups of one search share a budget of about 2.5 s; past it the answer goes out with what has arrived. A provider's answer for a query is kept for a few minutes." }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResults' } } } } }
   /playback/buffer/lease:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BufferLeaseRequest'}}}}
@@ -729,6 +1653,7 @@ paths:
       parameters:
         - {name: id, in: query, required: true, schema: {type: string}}
         - {name: source_id, in: query, schema: {type: string}}
+      description: Source variants of a title and their audio. A VOD file whose source reports no audio tracks is probed once (up to ten seconds, cached for thirty days) so its tracks can be listed.
       responses: {'200': {description: Available source variants and audio evidence, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackOptions'}}}}}
   /titles/{id}:
     get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }
@@ -768,6 +1693,18 @@ paths:
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [name, count], properties: {name: {type: string}, count: {type: integer}}} } } } } }
+  /browse/{section}/shelves:
+    get:
+      summary: Shelves of a section with their first titles, in one call
+      description: New Releases first, then by size (a shelf with nothing new in 30 days counts half). Items put titles with a poster first, then newest. Same language, profile policy and adult scope as /browse/{section}.
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string} }
+        - { name: limit_rows, in: query, schema: {type: integer, minimum: 1, maximum: 40, default: 12} }
+        - { name: limit_items, in: query, schema: {type: integer, minimum: 1, maximum: 40, default: 20} }
+        - { name: include_adult, in: query, schema: {type: boolean, default: false, description: "Admin profile only: also list titles marked adult. Ignored for other profiles."} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/ShelfList' } } } } }
   /browse/{section}/genres:
     get:
       summary: Actual metadata genres with scoped distinct title counts
@@ -789,7 +1726,7 @@ paths:
       parameters:
         - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
-        - { name: group, in: query, schema: {type: string} }
+        - { name: group, in: query, schema: {type: string, description: "A ChannelGroup id or path. A top-level group includes its children, except children hidden on their own. A child is named by its id, its path (`Parent / Child`) or its bare name while only one path ends in that name. The named group is listed even when hidden. An unknown or ambiguous name matches nothing."} }
         - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3. Omitted = the profile's languages. Present but empty (`language=`) or `all` = all languages (the TV's All chip)."} }
         - { name: favorites, in: query, schema: {type: boolean} }
         - { name: q, in: query, schema: {type: string} }
@@ -809,7 +1746,7 @@ paths:
         - { name: include_hidden, in: query, schema: {type: boolean, default: false} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChannelGroup' } } } } } }
   /channels/groups/{id}:
-    patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { hidden: {type: boolean}, language_override: {type: string, nullable: true}, sort: {type: integer} } } } } }, responses: { '200': { description: ok } } }
+    patch: { summary: "Hide, sort or set the language of a group. Hiding a parent hides its children without changing their own setting, so a child hidden alone stays hidden when the parent is shown again.", parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { hidden: {type: boolean}, language_override: {type: string, nullable: true}, sort: {type: integer} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/ChannelGroup' } } } } } }
   /channels/languages:
     get: { summary: Languages present with counts, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { type: object, properties: { code: {type: string}, name: {type: string}, count: {type: integer} } } } } } } } }
   /channels/{id}:
@@ -833,19 +1770,39 @@ paths:
     get:
       parameters:
         - {in: query, name: date, schema: {type: string, format: date}}
-        - {in: query, name: timezone, schema: {type: string, default: America/New_York}}
-        - {in: query, name: status, schema: {type: string, enum: [all, current, upcoming, replay], default: all}}
+        - {in: query, name: timezone, schema: {type: string, default: America/New_York}, description: "The viewer's zone: it decides which calendar day date means."}
+        - {in: query, name: days, schema: {type: integer, minimum: 1, maximum: 7, default: 1}, description: Calendar days listed, from date}
+        - {in: query, name: status, schema: {type: string, enum: [all, active, current, upcoming, replay], default: all}, description: "active = current, upcoming and game channels (everything but ended)"}
         - {in: query, name: language, schema: {type: string}}
-        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string, maxLength: 80}, description: "A name from the page's sports list; an unknown one matches nothing."}
         - {in: query, name: q, schema: {type: string, maxLength: 200}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
       responses:
         '200':
-          description: Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio.
+          description: >-
+            Sports guide programmes and event-slot channels, grouped conservatively, by start. A programme that only
+            repeats its channel's name is a placeholder and never an event. An event slot's embedded time is read in its
+            source's event_timezone (source config, IANA name, default UTC).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SportsEventsPage'}
+  /sports/channels:
+    get:
+      tags: [live]
+      summary: Always-on sports networks
+      description: Channels a sports group or their own name marks as sport and that are not event slots, by channel number.
+      parameters:
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsChannelsPage'}
   /sports:
     get:
       tags: [live]
@@ -878,20 +1835,20 @@ paths:
         '200': {description: ok, content: {application/json: {schema: {type: object, required: [generation], properties: {generation: {type: string}}}}}}
   /playback/recovery:
     get:
-      summary: Admin-only Streamhub-owned playback status
+      summary: Streamhub-owned playback status (system.manage)
       responses:
         '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryStatus'}}}}
         '403': {description: Admin required}
   /playback/recovery/stop:
     post:
-      summary: Admin-only stop owned sessions and pause new playback until resumed
+      summary: Stop owned sessions and pause new playback until resumed (system.manage)
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryConfirmation'}}}}
       responses:
         '200': {description: Stop result including partial failures, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryResult'}}}}
         '403': {description: Admin required}
   /playback/recovery/resume:
     post:
-      summary: Admin-only allow new playback; old stream tokens remain revoked
+      summary: Allow new playback; old stream tokens remain revoked (system.manage)
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryConfirmation'}}}}
       responses:
         '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackRecoveryStatus'}}}}
@@ -916,13 +1873,35 @@ paths:
         '401': {description: Authentication required}
         '403': {description: Lease belongs to another profile or session}
   /playback/resolve:
-    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } } } }
+    post:
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } }
+        '409': { description: "user_stream_limit: the user's other devices already play as many streams as their max_streams allows; active lists them, limit is the allowance. Resolving on a device that is already playing never counts that device's own stream: the same title is the same stream (seek, audio change, retry), another title takes its place. Also audio_selection_required and the other playback conflicts.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /playback/progress:
-    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok }, '403': {description: Captured profile mismatch or content access denied} } }
+    post:
+      description: Besides saving the position, a report keeps the stream counted as playing for the user's stream limit (playing, paused) or releases it at once (stopped).
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }
+      responses: { '204': { description: ok }, '403': {description: Captured profile mismatch or content access denied} }
   /stream/{token}:
-    get: { security: [], summary: Proxied/remuxed stream (token is short-lived and profile-bound), parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: stream } } }
+    get:
+      security: []
+      summary: Proxied/remuxed stream (token is short-lived and profile-bound)
+      parameters: [{name: token, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': { description: stream }
+        '403': { description: "remote_access_denied: the user the token was issued to lacks remote.access and the request comes from outside home_networks. content_restricted: the content policy no longer admits it for them." }
+        '401': { description: "session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again. The code alone tells them apart, as on API calls, with no need to ask /auth/me. session_stale: only the URL is out of date (the user's role, overrides or limits changed since it was issued) and the session stands; refresh the tokens and resolve again. session_revoked: the session it was issued to is signed out, or, on a shared device, was handed to another user; that user's tokens answer the same. unauthorized: the token is not a stream token of this server or is past its lifetime, which says nothing about the session; resolve again." }
+        '409': { description: "source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what. user_stream_limit: this stream went quiet for 30 seconds or was replaced on its device, and the user's limit is now used by other streams.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /stream/{token}/index.m3u8:
-    get: { security: [], parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: hls playlist } } }
+    get:
+      security: []
+      parameters: [{name: token, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': { description: hls playlist }
+        '401': { description: "as for /stream/{token}; segments answer the same" }
+        '403': { description: "as for /stream/{token}; segments answer the same. A segment (or nested playlist) URL also answers stream_epoch_stale: it belongs to an earlier stream_epoch of a watch room's shared stream, which a seek has since restarted. The member's playlist URL is still good: reload it, and ask GET /rooms/{code}/descriptor for the current stream_epoch and start_position_ms. This playlist URL itself never answers it. Any other segment that is not of the grant's stream answers forbidden." }
+        '409': { description: "source_busy or user_stream_limit, as for /stream/{token}", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /favorites:
     get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
@@ -937,6 +1916,100 @@ paths:
   /history:
     get: { summary: Recently watched, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
 
+  /users:
+    get:
+      summary: Everyone (users.manage)
+      parameters: [{ name: status, in: query, schema: {type: string, enum: [pending, active, suspended]} }]
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/UserListItem' } } } } } }
+    post:
+      summary: Add a managed user, one without a Google identity (users.manage)
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: {type: string, minLength: 1, maxLength: 64}, avatar: {type: string, nullable: true}, role_id: {type: string, default: family}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
+      responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } } }
+  /users/{id}:
+    get:
+      summary: One user with effective access, devices and recent history (users.manage)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } } }
+    patch:
+      summary: Change a user (users.manage)
+      description: >-
+        Nobody changes their own role, grants, denials or limits (403 self_edit). Only an owner assigns the
+        Owner role, grants users.manage / sources.manage / system.manage, or changes an owner (403
+        owner_required). The last active owner cannot be demoted (409 last_owner).
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: {type: string}, avatar: {type: string, nullable: true}, role_id: {type: string}, grants: {type: array, items: {$ref: '#/components/schemas/Permission'}}, denials: {type: array, items: {$ref: '#/components/schemas/Permission'}}, limits: {$ref: '#/components/schemas/LimitsInput'}, on_shared_devices: {type: boolean, nullable: true, description: "null follows the role"}, plex_account_linked: {type: boolean, description: "This user is the owner of the Plex account behind the server's Plex token. At most one user: setting it on one clears it on the others (each change is audited)"} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } } }
+    delete:
+      summary: Remove a user and their viewer state (users.manage)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '204': { description: removed }, '409': { description: last_owner } }
+  /users/{id}/approve:
+    post:
+      summary: Approve a waiting user with a role (users.manage)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { type: object, required: [role_id], properties: { role_id: {type: string} } } } } }
+      responses: { '200': { description: active, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: not_pending } }
+  /users/{id}/deny:
+    post: { summary: Refuse and remove a waiting user (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: removed }, '409': { description: not_pending } } }
+  /users/{id}/suspend:
+    post: { summary: "Suspend an active user; their sessions answer 401 user_suspended, except that a shared device they are the current user of can still be handed over (GET /auth/switchable, POST /auth/switch) (users.manage)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: suspended, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: "last_owner | not_active" } } }
+  /users/{id}/reinstate:
+    post: { summary: Reinstate a suspended user (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: active, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: not_suspended } } }
+  /users/{id}/pin:
+    put:
+      summary: Set or clear a user's PIN (one's own; anyone's with users.manage)
+      description: >-
+        Changing or clearing one's own existing PIN needs proof that this is still its owner: current_pin
+        (403 pin_invalid when wrong; five guesses in fifteen minutes, then 429), or current_password, or a
+        sign-in made in the last ten minutes. Otherwise 403 current_pin_required. A first PIN needs nothing;
+        someone else's is a user manager's to set. PUT /profiles/{id}/pin asks the same.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }
+      responses: { '204': { description: ok } }
+  /users/{id}/methods/{method}:
+    delete:
+      summary: Remove one way a user signs in (users.manage)
+      description: Their sessions are revoked. 409 last_method for the last one (suspend or remove the user instead). Only an owner changes an owner.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: method, in: path, required: true, schema: {$ref: '#/components/schemas/SignInMethod'}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } } }
+  /users/{id}/password-reset:
+    post:
+      summary: Reset a user's password and answer a setup link (users.manage)
+      description: >-
+        The password stops working and every session of that user is revoked at once (the caller's own
+        device stays when resetting oneself). The answer is a one-time link, good for 72 hours, where that
+        person chooses a new password; an earlier setup link for them stops working. Also how someone
+        without a password gets one. Only an owner resets an owner; 409 not_active for a pending user.
+        There is no e-mail recovery and no self-registration.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SetupLink' } } } } }
+  /roles:
+    get: { summary: Roles with their permissions and limits (users.manage), responses: { '200': { description: built-ins first, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Role' } } } } } } }
+    post: { summary: Create a custom role (users.manage), requestBody: { content: { application/json: { schema: { allOf: [{$ref: '#/components/schemas/RoleInput'}], required: [name] } } } }, responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Role' } } } } } }
+  /roles/{id}:
+    patch:
+      summary: Edit a role; every member gets the change on their next request (users.manage)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoleInput' } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Role' } } } }, '409': { description: role_fixed (the Owner role) } }
+    delete: { summary: Remove a custom role nobody holds (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: removed }, '409': { description: "role_builtin | role_in_use" } } }
+  /invites:
+    get: { summary: "Invites: one's own; all with users.manage (users.invite)", responses: { '200': { description: newest first; never includes a token, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Invite' } } } } } } }
+    post:
+      summary: Create an invite link for a role (users.invite)
+      description: The role may be no wider than the inviter's own access, and is never the Owner role (403 invite_role_too_wide).
+      requestBody: { content: { application/json: { schema: { type: object, required: [role_id], properties: { role_id: {type: string}, expires_in_hours: {type: integer, minimum: 1, maximum: 720, default: 72}, max_uses: {type: integer, minimum: 1, maximum: 50, default: 1}, name: {type: string, maxLength: 64, nullable: true, description: "Add a person: who the invite is for. Used once (max_uses must be 1). They accept it with Google, with Plex, or by choosing a username and password."} } } } } }
+      responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/InviteCreated' } } } } }
+  /invites/{id}:
+    delete: { summary: Revoke an invite (its creator; anyone's with users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: revoked } } }
+  /audit:
+    get:
+      summary: Who changed what about whom, newest first (users.manage)
+      parameters:
+        - { name: user_id, in: query, schema: {type: string}, description: Entries about or by this user }
+        - { name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } } } } } }
+
   /themes:
     get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Theme' } } } } } } }
     post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Theme' } } } }, responses: { '201': { description: created } } }
@@ -945,6 +2018,171 @@ paths:
     patch: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } }, responses: { '200': { description: ok } } }
   /settings/tmdb_key:
     put: { requestBody: { content: { application/json: { schema: { type: object, properties: { api_key: {type: string} } } } } }, responses: { '204': { description: ok } } }
+  /settings/classification/run:
+    post:
+      summary: Run one batch of rating lookups now (system.manage)
+      description: >-
+        A background job looks up TMDB certifications for catalog titles a batch at a time, so a
+        user with a rating ceiling is not waiting on first views. This runs the next batch at once.
+        Without a TMDB key it does nothing.
+      responses:
+        '200': { description: what the batch did, content: { application/json: { schema: { type: object, required: [classified, failed, remaining], properties: { classified: {type: integer}, failed: {type: integer}, remaining: {type: integer, description: Titles with a TMDB id still lacking fresh rating evidence} } } } } }
+  /settings/request_manager:
+    get: { summary: The API key is write-only (system.manage), responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RequestManagerSettings' } } } } } }
+    put:
+      summary: Seerr-compatible request manager, Overseerr / Jellyseerr / Seerr (system.manage)
+      description: Omit api_key to keep the stored key for the same server; a different server or a null url drops it.
+      requestBody: { content: { application/json: { schema: { type: object, properties: { url: {type: string, nullable: true}, api_key: {type: string, nullable: true} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RequestManagerSettings' } } } } }
+  /settings/request_manager/test:
+    post: { summary: Checks the stored URL and API key (system.manage), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [ok, message], properties: { ok: {type: boolean}, message: {type: string} } } } } } } }
+
+  /requests:
+    get:
+      parameters:
+        - { name: scope, in: query, schema: {type: string, enum: [mine, all], default: mine, description: "all requires permission to approve"} }
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/RequestState' } }
+      description: "Serves each request's stored progress. Stale ones (older than their phase's interval: 15 s while downloading or importing, 3 min otherwise) are refreshed first, at most 8 per call and for at most 4 s; the rest stay as stored until the server's own polling reaches them."
+      responses: { '200': { description: newest first, content: { application/json: { schema: { type: object, required: [requests], properties: { requests: { type: array, items: { $ref: '#/components/schemas/MediaRequest' } }, can_approve: {type: boolean, description: "The current profile may approve or decline requests and list scope=all."} } } } } } }
+    post:
+      summary: Ask for a title no source has
+      requestBody: { content: { application/json: { schema: { type: object, required: [media_type, tmdb_id], properties: { media_type: {type: string, enum: [movie, tv]}, tmdb_id: {type: integer}, seasons: {type: array, items: {type: integer}, nullable: true, description: "tv only; omitted = whole series"} } } } } }
+      responses:
+        '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }
+        '200': { description: an open request for this title already exists, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }
+        '409': { description: "already_available | request_manager_unconfigured | metadata_unavailable" }
+  /requests/{id}:
+    get:
+      summary: One request, for its requester or whoever may approve requests
+      description: Serves the stored progress, refreshed first when it is older than its phase's interval.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }, '403': { description: request_forbidden }, '404': { description: not found } }
+  /requests/{id}/refresh:
+    post:
+      summary: Ask the request manager about this request now
+      description: "For its requester or whoever may approve requests. A sent request is asked about at once (at most every 5 s; sooner calls return the stored progress); an approved request that has not reached the request manager is sent again; any other request is returned as it is."
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: the request as it is now, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }, '403': { description: request_forbidden }, '404': { description: not found } }
+  /requests/{id}/approve:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { note: {type: string, nullable: true} } } } } }, responses: { '200': { description: approved and, when the request manager accepted it, sent, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }, '409': { description: already decided } } }
+  /requests/{id}/decline:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { note: {type: string, nullable: true} } } } } }, responses: { '200': { description: declined; the requester gets a notice, content: { application/json: { schema: { $ref: '#/components/schemas/MediaRequest' } } } }, '409': { description: already decided } } }
+  /notices:
+    get: { summary: Notices for the current profile; unread first, responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [notices], properties: { notices: { type: array, items: { $ref: '#/components/schemas/Notice' } } } } } } } } }
+  /notices/{id}/read:
+    post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Notice' } } } } } }
+
+  /rooms:
+    post:
+      summary: Create a watch room for a title or channel
+      description: >-
+        The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+        A room is on one thing. Made from a show (or a season) it is on one episode: the one
+        POST /playback/resolve would start for the creator now (their next unwatched episode, of the
+        variant named or of the one resolve would pick), chosen once, here. Room.id is that episode's
+        id, Room.title describes the episode, and every member plays it whatever their own history
+        with the show; a variant_id naming a variant of the show comes back as the episode's id.
+        The episode does not change for the life of the room.
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomCreate' } } } }
+      responses:
+        '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '403': { description: "content_restricted, or not allowed to create rooms" }
+        '404': { description: "unknown title; a show with no episode to play; a variant_id that is not a variant of the show" }
+        '409': { description: room_limit }
+  /rooms/{code}:
+    get:
+      summary: The join screen (title, host, members, state)
+      parameters: [{name: code, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '403': { description: "content_restricted: the current profile may not watch the room's title" }
+        '404': { description: room_not_found }
+    delete:
+      summary: Close the room (host or administrator)
+      parameters: [{name: code, in: path, required: true, schema: {type: string}}]
+      responses: { '204': { description: "closed; connected members receive a closed message with reason deleted" }, '403': { description: not the host }, '404': { description: room_not_found } }
+  /rooms/{code}/join:
+    post:
+      summary: Take a seat in the room
+      description: Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). Every call adds a member unless the body carries the member_token of a seat the caller already holds, which is then kept. The member starts at the room's position (descriptor.resume_position_ms). A room has at most 8 members and expires after 30 minutes with none.
+      parameters: [{name: code, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoin' } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoined' } } } }
+        '403': { description: "remote_access_denied (as on every call of a user without remote.access away from the home network), content_restricted and the other /playback/resolve refusals" }
+        '404': { description: "room_not_found, or the room's title or variant is not available to this profile" }
+        '409': { description: "room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them)" }
+  /rooms/{code}/descriptor:
+    get:
+      security: []
+      summary: A member's playback descriptor as it is now
+      description: >-
+        Authorized like the room WebSocket, by the member token in the query (no bearer token). The
+        seat is unchanged. In a room that plays one shared stream the descriptor has the playlist URL
+        the member already holds (a new one only once that URL's grant has expired or their session
+        changed) with the current stream_epoch and start_position_ms; for a title each member plays
+        for themselves it is a freshly resolved descriptor. resume_position_ms is the room's position
+        now. Resolved for the member's access as it stands now, with the refusals of the join.
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+        - {name: member_token, in: query, required: true, schema: {type: string, maxLength: 2048}}
+        - {name: client, in: query, schema: {type: string, enum: [android_tv, web], default: web}}
+        - {name: prefer_hls, in: query, schema: {type: boolean, default: false}}
+        - {name: recovery_generation, in: query, schema: {type: string, maxLength: 64}, description: "As in PlaybackRequest. Required for web clients."}
+        - {name: allow_unverified_audio, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } }
+        '401': { description: "room_unauthorized: not a member token of this room, or expired. session_revoked | user_suspended: the session the seat was taken with no longer stands." }
+        '403': { description: "remote_access_denied, a missing rooms.join or watch.* permission, content_restricted and the other /playback/resolve refusals" }
+        '404': { description: "room_not_found, or not_a_member: the room dropped this seat (20 s of silence); join again" }
+        '409': { description: "as for the join, except room_full" }
+  /recordings:
+    get:
+      summary: The current profile's recordings (everyone's for a holder of users.manage), earliest first
+      description: A user under a rating ceiling sees, plays and manages only recordings whose programme was rated within it when it was scheduled.
+      parameters:
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/RecordingState' }, description: "omitted = every state except cancelled" }
+      responses: { '200': { description: "enabled is false, and the list empty, until the server has a recordings directory", content: { application/json: { schema: { type: object, required: [enabled, recordings], properties: { enabled: {type: boolean}, can_schedule: {type: boolean, description: "The current profile may schedule, cancel and delete."}, recordings: { type: array, items: { $ref: '#/components/schemas/Recording' } } } } } } } }
+    post:
+      summary: Record one programme
+      description: Programme ids change whenever the guide is refreshed. Send channel_id and start as shown on the guide and the server finds the programme by those if the id no longer names it.
+      requestBody: { content: { application/json: { schema: { type: object, required: [programme_id], properties: { programme_id: {type: string}, channel_id: {type: string, nullable: true, description: "omitted = the lowest-numbered channel carrying the programme"}, start: {type: string, format: date-time, nullable: true} } } } } }
+      responses:
+        '201': { description: scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
+        '200': { description: this programme was already scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
+        '403': { description: recording_forbidden }
+        '409': { description: "recording_unavailable | programme_ended | already_scheduled (by another profile) | guide_changed" }
+  /recordings/{id}:
+    delete: { summary: Cancel an upcoming or running recording; delete a finished one and its file, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
+  /recording-rules:
+    get: { summary: The current profile's rules (everyone's for a holder of users.manage), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }
+    post:
+      summary: Record every matching programme, now and after each guide refresh
+      requestBody: { content: { application/json: { schema: { type: object, required: [kind, match], properties: { kind: {type: string, enum: [series, team, keyword]}, match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean, default: false}, keep: {type: integer, nullable: true} } } } } }
+      responses:
+        '201': { description: created; matching programmes are scheduled at once, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }
+        '200': { description: the profile already has this rule, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }
+        '403': { description: recording_forbidden }
+        '409': { description: "recording_unavailable | rule_limit" }
+  /recording-rules/{id}:
+    patch:
+      summary: Edit, disable or enable a rule
+      description: Fields left out are kept. Disabling a rule, or changing what it matches, drops the upcoming recordings it scheduled.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean}, keep: {type: integer, nullable: true}, enabled: {type: boolean} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }, '409': { description: recording_unavailable } }
+    delete: { summary: Remove a rule and the upcoming recordings it scheduled; finished ones stay, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
+
+  /app/tv:
+    get:
+      security: []
+      summary: The newest TV app build this server hands out
+      description: >-
+        Read from tv-release.json beside the APK in the web client's downloads directory (format in
+        hub-server/README.md). apk_url is a path on this server.
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [version_code, version_name, apk_url, sha256], properties: { version_code: {type: integer}, version_name: {type: string}, apk_url: {type: string, description: "/downloads/<file>"}, sha256: {type: string, description: 64 lower-case hex digits} } } } } }
+        '404': { description: No release is published here (no manifest, or an invalid one) }
   /health:
     get: { security: [], responses: { '200': { description: ok } } }
   /about:

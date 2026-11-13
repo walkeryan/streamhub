@@ -20,6 +20,13 @@ interface SessionState {
   setSession: (access: string, refresh: string, profile: Profile) => void
   setProfile: (profile: Profile) => void
   clear: () => void
+  /** Why the server ended the last session, for the sign-in screen. Gone at the next sign-in. Never persisted. */
+  notice: string | null
+  /** Sign out because the server said so, keeping the explanation. */
+  end: (notice: string) => void
+  /** The server answered 403 remote_access_denied: this user is served on the home network only. Never persisted. */
+  away: boolean
+  setAway: (away: boolean) => void
 }
 
 function load(): Pick<SessionState, 'access' | 'refresh' | 'profile'> {
@@ -35,18 +42,24 @@ function load(): Pick<SessionState, 'access' | 'refresh' | 'profile'> {
   return { access: null, refresh: null, profile: null }
 }
 
+/** The session as this browser last stored it, which another tab may have done since this one loaded. */
+export const storedSession = load
+
 const persist = (s: Pick<SessionState, 'access' | 'refresh' | 'profile'>) =>
   lsSet(KEY, s.access && s.refresh && s.profile ? JSON.stringify({ access: s.access, refresh: s.refresh, profile: s.profile }) : null)
 
 export const useSession = create<SessionState>((set, get) => ({
   ...load(),
   generation: 0,
+  notice: null,
+  away: false,
+  setAway: (away) => { if (get().away !== away) set({ away }) },
   refreshSession: (access, refresh, profile, expectedRefresh, expectedGeneration) => {
     if (get().generation !== expectedGeneration || get().refresh !== expectedRefresh || get().profile?.id !== profile.id) return false
     set({ access, refresh, profile }); persist(get()); return true
   },
   setSession: (access, refresh, profile) => {
-    set({ access, refresh, profile, generation: get().generation + 1 })
+    set({ access, refresh, profile, generation: get().generation + 1, notice: null, away: false })
     persist(get())
   },
   setProfile: (profile) => {
@@ -54,7 +67,11 @@ export const useSession = create<SessionState>((set, get) => ({
     persist(get())
   },
   clear: () => {
-    set({ access: null, refresh: null, profile: null, generation: get().generation + 1 })
+    set({ access: null, refresh: null, profile: null, generation: get().generation + 1, away: false })
     persist(get())
+  },
+  end: (notice) => {
+    get().clear()
+    set({ notice })
   },
 }))

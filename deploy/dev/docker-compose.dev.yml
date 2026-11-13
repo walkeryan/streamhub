@@ -1,0 +1,26 @@
+# Dev instance: the published image with this checkout bind-mounted over it.
+# No image build needed; the server reloads on source changes and the web app
+# is served from web-app/dist (run `npm run build` in web-app after UI edits).
+#
+#   docker compose --env-file <your dev .env> -f deploy/dev/docker-compose.dev.yml up -d
+services:
+  streamhub-dev:
+    image: ${STREAMHUB_DEV_IMAGE:-ghcr.io/walkeryan/streamhub:latest}
+    container_name: streamhub-dev
+    env_file: ${DEV_ENV_FILE:?set DEV_ENV_FILE to the env file passed with --env-file}
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8787", "--proxy-headers", "--reload", "--reload-dir", "/app/app"]
+    ports:
+      - "${DEV_PORT:-8788}:8787"
+    volumes:
+      - ${REPO_DIR:?set REPO_DIR to the checkout as the Docker host sees it}/hub-server:/app
+      - ${REPO_DIR}/web-app/dist:/app/web-dist:ro
+      - ${DEV_CONFIG_DIR:?set DEV_CONFIG_DIR}:/config
+    tmpfs:
+      - /transcode
+    # The default bridge: no per-project network, so hosts that have run out
+    # of address pools can still start it.
+    network_mode: bridge
+    restart: unless-stopped

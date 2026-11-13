@@ -4,13 +4,20 @@ import { playbackOptions } from '../api/hooks'
 import type { PlaybackOption } from '../api/types'
 import { useSession } from '../store/session'
 import { Button, Modal } from '../components/ui'
-import { LANG_NAMES } from '../lib/util'
+import { languageName } from '../lib/util'
 import type { PlaybackReq } from './usePlayback'
+
+const MAX_NAMED = 3
 
 export function audioDescription(option: PlaybackOption): string {
   if (!option.audio_verified) return 'Audio unverified'
-  const tracks = option.audio_languages.map((code) => LANG_NAMES[code] ?? code).join(', ')
-  const defaultAudio = option.default_audio_language ? LANG_NAMES[option.default_audio_language] ?? option.default_audio_language : 'unverified'
+  // A file dubbed into many languages names three, the default first, and counts the rest: the row must fit a phone.
+  const first = option.default_audio_language
+  // A short list keeps the file's own order; only a list that will be cut puts the default where it survives the cut.
+  const codes = option.audio_languages.length > MAX_NAMED ? [...option.audio_languages].sort((x, y) => Number(y === first) - Number(x === first)) : option.audio_languages
+  const names = codes.map(languageName)
+  const tracks = names.length > MAX_NAMED ? `${names.slice(0, MAX_NAMED).join(', ')} +${names.length - MAX_NAMED} more` : names.join(', ')
+  const defaultAudio = option.default_audio_language ? languageName(option.default_audio_language) : 'unverified'
   return `Verified tracks: ${tracks || 'unknown'} · Default audio: ${defaultAudio}`
 }
 
@@ -40,10 +47,10 @@ export function ChannelAudioPrompt({ audio, onChoose, onCancel }: {
       <p role="alert">Audio could not be checked. No new stream has started.</p>
       <Button focusKey="channel-audio:retry" onEnter={() => void audio.query.refetch()}>Retry audio check</Button>
     </> : <>
-      <p>Preferred audio: {audio.query.data?.preferred_languages.map((code) => LANG_NAMES[code] ?? code).join(', ') || 'All languages'}. A provider name or language hint does not prove spoken audio.</p>
+      <p>Preferred audio: {audio.query.data?.preferred_languages.map(languageName).join(', ') || 'All languages'}. A provider name or language hint does not prove spoken audio.</p>
       <p className="label">Choosing a source below explicitly accepts its listed audio for this playback. Cancel leaves this playback request without starting a new stream.</p>
       {audio.query.data?.options.map((option) => <Button key={option.variant_id} focusKey={`channel-audio:${option.variant_id}`} onEnter={() => onChoose(option, option.variant_id !== audio.query.data?.automatic_variant_id)}>
-        <span>Play {option.source_name} · {audioDescription(option)}{option.language_hint ? ` · Provider hint: ${LANG_NAMES[option.language_hint] ?? option.language_hint}` : ''}<br /><span className="label">{option.provider_label}</span></span>
+        <span>Play {option.source_name} · {audioDescription(option)}{option.language_hint ? ` · Provider hint: ${languageName(option.language_hint)}` : ''}<br /><span className="label">{option.provider_label}</span></span>
       </Button>)}
       {!audio.query.data?.options.length && <p>No authorized channel source is available.</p>}
     </>}

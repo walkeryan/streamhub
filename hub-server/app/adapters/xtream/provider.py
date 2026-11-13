@@ -5,6 +5,11 @@
 - stream URLs /{live|movie|series}/{user}/{pass}/{id}.{ext}
 - catch-up via timeshift.php (tv_archive / tv_archive_duration)
 
+Panels number movies, series and episodes independently, while catalog rows are
+unique per (source, ext_id). Series, seasons and episodes therefore carry a kind
+prefix (``s:<series>``, ``s:<series>:s<n>``, ``e:<episode>``); movies and channels
+keep the panel's bare id. The prefix never reaches the panel.
+
 Credentials only ever appear in playback URLs handed to the PlaybackResolver; the
 config summary and logs are redacted.
 """
@@ -19,6 +24,7 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 
 from app.adapters.xtream import fields as F
+from app.adapters.xtream.presentation import PresentationConfig, Presented
 from app.domain.entities import (
     CatalogItem,
     ChannelInfo,
@@ -44,6 +50,35 @@ _MIME = {
     "mkv": "video/x-matroska",
     "avi": "video/x-msvideo",
 }
+DEFAULT_PRESENTATION = PresentationConfig()
+SERIES_PREFIX = "s:"
+EPISODE_PREFIX = "e:"
+
+
+def series_ext_id(series_id: str) -> str:
+    return f"{SERIES_PREFIX}{series_id}"
+
+
+def season_ext_id(series_id: str, season_no: int) -> str:
+    return f"{SERIES_PREFIX}{series_id}:s{season_no}"
+
+
+def episode_ext_id(episode_id: str) -> str:
+    return f"{EPISODE_PREFIX}{episode_id}"
+
+
+def panel_series_id(item: CatalogItem) -> str:
+    """Bare series id for a series or season row, including rows stored before namespacing."""
+    known = item.extra.get("series_id")
+    if known:
+        return str(known)
+    return item.ext_id.removeprefix(SERIES_PREFIX).split(":")[0]
+
+
+def panel_stream_id(item: CatalogItem) -> str:
+    if item.kind == MediaKind.EPISODE:
+        return item.ext_id.removeprefix(EPISODE_PREFIX)
+    return item.ext_id
 
 
 class XtreamError(Exception):
@@ -145,12 +180,23 @@ def _as_list(data: Any) -> list[dict[str, Any]]:
     return []
 
 
-def map_live(row: dict[str, Any], cats: dict[str, str], output: str, client: XtreamClient) -> ChannelInfo | None:
+def map_live(
+    row: dict[str, Any],
+    cats: dict[str, str],
+    output: str,
+    client: XtreamClient,
+    presentation: PresentationConfig = DEFAULT_PRESENTATION,
+) -> ChannelInfo | None:
+    """``None`` for an unusable row and for a channel whose group is hidden by config."""
     sid = F.as_str(F.first(row, "stream_id", "id", "streamId", "num"))
     if not sid:
         return None
-    name = F.as_str(F.first(row, "name", "title", "stream_name")) or f"Channel {sid}"
     cat_id = F.as_str(F.first(row, "category_id", "categoryId"))
+    raw_group = cats.get(cat_id or "") or F.as_str(row.get("category_name")) or "Uncategorized"
+    group = presentation.group(raw_group)
+    if group is None:
+        return None
+    name = F.as_str(F.first(row, "name", "title", "stream_name")) or f"Channel {sid}"
     archive = F.as_bool(F.first(row, "tv_archive", "tvArchive", "archive") or 0)
     days = F.as_int(F.first(row, "tv_archive_duration", "archive_duration", "tvArchiveDuration"), 0) or 0
     ext = output if output in ("ts", "m3u8") else "ts"
@@ -159,62 +205,93 @@ def map_live(row: dict[str, Any], cats: dict[str, str], output: str, client: Xtr
         name=name,
         stream_url=None,  # rebuilt at playback time; never persist credentials in catalog rows
         logo=F.as_str(F.first(row, "stream_icon", "icon", "logo", "cover")),
-        group=cats.get(cat_id or "") or F.as_str(row.get("category_name")) or "Uncategorized",
+        group=group,
         tvg_id=F.as_str(F.first(row, "epg_channel_id", "epg_id", "tvg_id")),
         tvg_name=name,
         number=F.as_int(F.first(row, "num", "number")),
         catchup_days=days if archive else 0,
         catchup_type="xtream" if archive else None,
         headers={"User-Agent": client.ua} if client.ua else {},
-        extra={"stream_id": sid, "ext": ext, "added": F.as_int(row.get("added"))},
+        # Language and country inference read the provider's own group name, tags included.
+        extra={"stream_id": sid, "ext": ext, "added": F.as_int(row.get("added")), "raw_group": raw_group},
     )
 
 
-def map_vod(row: dict[str, Any], cats: dict[str, str], client: XtreamClient) -> CatalogItem | None:
+def _raw_extra(shown: Presented, name: str) -> dict[str, Any]:
+    """The provider's own names survive presentation, for hints and for re-deriving later."""
+    return {"raw_title": name, "raw_category": shown.raw_category, "kids": shown.kids}
+
+
+def map_vod(
+    row: dict[str, Any],
+    cats: dict[str, str],
+    client: XtreamClient,
+    presentation: PresentationConfig = DEFAULT_PRESENTATION,
+) -> CatalogItem | None:
     sid = F.as_str(F.first(row, "stream_id", "id", "streamId", "vod_id"))
     if not sid:
         return None
     name = F.as_str(F.first(row, "name", "title", "o_name")) or f"VOD {sid}"
     ext = F.as_str(F.first(row, "container_extension", "extension", "ext")) or "mp4"
     cat_id = F.as_str(F.first(row, "category_id", "categoryId"))
+    shown = presentation.title(
+        name,
+        cats.get(cat_id or "") or "",
+        year=F.as_int(row.get("year")) or F.year_from(row.get("releaseDate"), row.get("release_date")),
+        is_adult=F.as_bool(row.get("is_adult") or 0),
+    )
     return CatalogItem(
         ext_id=sid,
         kind=MediaKind.VOD,
-        title=name,
-        year=F.as_int(row.get("year")) or F.year_from(row.get("releaseDate"), row.get("release_date"), name),
+        title=shown.title,
+        year=shown.year or F.year_from(name),
         poster=F.as_str(F.first(row, "stream_icon", "cover", "movie_image", "icon", "cover_big")),
         rating=F.as_float(F.first(row, "rating", "rating_5based")),
         tmdb_id=F.tmdb_from(row),
         imdb_id=F.imdb_from(row),
-        group=cats.get(cat_id or "") or None,
+        group=shown.shelf or None,
         genres=F.genres_from(row.get("genre")),
         added_at=F.as_epoch(row.get("added")),
         headers={"User-Agent": client.ua} if client.ua else {},
-        extra={"ext": ext, "stream_id": sid, **provider_audio_extra(row.get("audio"))},
+        extra={"ext": ext, "stream_id": sid, **_raw_extra(shown, name), **provider_audio_extra(row.get("audio"))},
+        language=shown.language,
+        quality=shown.quality,
+        adult=shown.adult,
     )
 
 
-def map_series(row: dict[str, Any], cats: dict[str, str]) -> CatalogItem | None:
+def map_series(
+    row: dict[str, Any], cats: dict[str, str], presentation: PresentationConfig = DEFAULT_PRESENTATION
+) -> CatalogItem | None:
     sid = F.as_str(F.first(row, "series_id", "id", "seriesId"))
     if not sid:
         return None
     name = F.as_str(F.first(row, "name", "title")) or f"Series {sid}"
     backdrop = row.get("backdrop_path")
     cat_id = F.as_str(F.first(row, "category_id", "categoryId"))
+    shown = presentation.title(
+        name,
+        cats.get(cat_id or "") or "",
+        year=F.year_from(row.get("releaseDate"), row.get("release_date"), row.get("year")),
+        is_adult=F.as_bool(row.get("is_adult") or 0),
+    )
     return CatalogItem(
-        ext_id=sid,
+        ext_id=series_ext_id(sid),
         kind=MediaKind.SERIES,
-        title=name,
-        year=F.year_from(row.get("releaseDate"), row.get("release_date"), row.get("year"), name),
+        title=shown.title,
+        year=shown.year or F.year_from(name),
         overview=F.as_str(F.first(row, "plot", "description", "overview")),
         poster=F.as_str(F.first(row, "cover", "stream_icon", "cover_big")),
         backdrop=F.as_str(backdrop),
         rating=F.as_float(F.first(row, "rating", "rating_5based")),
         genres=F.genres_from(row.get("genre")),
         tmdb_id=F.tmdb_from(row),
-        group=cats.get(cat_id or "") or None,
+        group=shown.shelf or None,
         added_at=F.as_epoch(F.first(row, "last_modified", "added")),
-        extra={"series_id": sid},
+        extra={"series_id": sid, **_raw_extra(shown, name)},
+        language=shown.language,
+        quality=shown.quality,
+        adult=shown.adult,
     )
 
 
@@ -233,12 +310,13 @@ def map_episodes(series_id: str, info: dict[str, Any], client: XtreamClient) -> 
         smeta = seasons_meta.get(str(season_no), {})
         out.append(
             CatalogItem(
-                ext_id=f"{series_id}:s{season_no}",
+                ext_id=season_ext_id(series_id, season_no),
                 kind=MediaKind.SEASON,
                 title=F.as_str(smeta.get("name")) or f"Season {season_no}",
                 poster=F.as_str(F.first(smeta, "cover", "cover_big")),
-                parent_ext_id=series_id,
+                parent_ext_id=series_ext_id(series_id),
                 season_number=season_no,
+                extra={"series_id": series_id},
             )
         )
         for ep in _as_list(eps):
@@ -251,19 +329,24 @@ def map_episodes(series_id: str, info: dict[str, Any], client: XtreamClient) -> 
             dur_s = F.as_int(F.first(einfo, "duration_secs", "durationSecs"))
             out.append(
                 CatalogItem(
-                    ext_id=eid,
+                    ext_id=episode_ext_id(eid),
                     kind=MediaKind.EPISODE,
                     title=F.as_str(F.first(ep, "title", "name")) or f"Episode {ep.get('episode_num')}",
                     overview=F.as_str(F.first(einfo, "plot", "description")),
                     poster=F.as_str(F.first(einfo, "movie_image", "cover_big", "cover")),
                     rating=F.as_float(einfo.get("rating")),
-                    parent_ext_id=f"{series_id}:s{season_no}",
+                    parent_ext_id=season_ext_id(series_id, season_no),
                     season_number=F.as_int(ep.get("season"), season_no),
                     episode_number=F.as_int(F.first(ep, "episode_num", "episode", "num")),
                     duration_ms=dur_s * 1000 if dur_s else None,
                     added_at=F.as_epoch(ep.get("added")),
                     headers={"User-Agent": client.ua} if client.ua else {},
-                    extra={"ext": ext, "series_id": series_id, **provider_audio_extra(einfo.get("audio"))},
+                    extra={
+                        "ext": ext,
+                        "series_id": series_id,
+                        "stream_id": eid,
+                        **provider_audio_extra(einfo.get("audio")),
+                    },
                 )
             )
     return out
@@ -275,6 +358,7 @@ class XtreamSource:
         self._cfg = config
         self._ctx = ctx
         self.output = str(config.get("output") or "ts").lower()
+        self.presentation = PresentationConfig.from_config(config)
         self.client = XtreamClient(
             ctx,
             str(config.get("server_url") or ""),
@@ -293,6 +377,7 @@ class XtreamSource:
             "refresh_hours": int(self._cfg.get("refresh_hours") or 24),
             "proxy": self._cfg.get("proxy", "auto"),
             "max_connections": self._cfg.get("max_connections"),
+            **self.presentation.summary(),
         }
 
     def secrets(self) -> list[str]:
@@ -326,7 +411,7 @@ class XtreamSource:
         live_cats = _cat_map(await self.client.api("get_live_categories"))
         batch: list[ChannelInfo] = []
         for row in _as_list(await self.client.api("get_live_streams")):
-            ch = map_live(row, live_cats, self.output, self.client)
+            ch = map_live(row, live_cats, self.output, self.client, self.presentation)
             if ch:
                 batch.append(ch)
             if len(batch) >= BATCH:
@@ -339,7 +424,7 @@ class XtreamSource:
             vod_cats = _cat_map(await self.client.api("get_vod_categories"))
             items: list[CatalogItem] = []
             for row in _as_list(await self.client.api("get_vod_streams")):
-                it = map_vod(row, vod_cats, self.client)
+                it = map_vod(row, vod_cats, self.client, self.presentation)
                 if it:
                     items.append(it)
                 if len(items) >= BATCH:
@@ -352,7 +437,7 @@ class XtreamSource:
             ser_cats = _cat_map(await self.client.api("get_series_categories"))
             items = []
             for row in _as_list(await self.client.api("get_series")):
-                it = map_series(row, ser_cats)
+                it = map_series(row, ser_cats, self.presentation)
                 if it:
                     items.append(it)
                 if len(items) >= BATCH:
@@ -364,7 +449,7 @@ class XtreamSource:
     # ---- detail
     async def item_detail(self, item: CatalogItem) -> CatalogItem:
         if item.kind == MediaKind.VOD:
-            info = await self.client.api("get_vod_info", vod_id=item.ext_id)
+            info = await self.client.api("get_vod_info", vod_id=panel_stream_id(item))
             if isinstance(info, dict):
                 raw = info.get("info")
                 i: dict[str, Any] = raw if isinstance(raw, dict) else {}
@@ -386,7 +471,7 @@ class XtreamSource:
         return item
 
     async def children(self, item: CatalogItem) -> list[CatalogItem]:
-        series_id = str(item.extra.get("series_id") or item.ext_id).split(":")[0]
+        series_id = panel_series_id(item)
         info = await self.client.api("get_series_info", series_id=series_id)
         if not isinstance(info, dict):
             return []
@@ -450,7 +535,7 @@ class XtreamSource:
     async def stream_for_item(self, item: CatalogItem) -> StreamTarget:
         ext = str(item.extra.get("ext") or "mp4")
         kind = "series" if item.kind == MediaKind.EPISODE else "movie"
-        url = self.client.stream_url(kind, item.ext_id, ext)
+        url = self.client.stream_url(kind, panel_stream_id(item), ext)
         return StreamTarget(
             url=url,
             mime=_MIME.get(ext, "video/mp4"),

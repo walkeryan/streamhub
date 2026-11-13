@@ -46,13 +46,57 @@ import com.streamhub.tv.core.ui.theme.LocalReducedMotion
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 
-data class RailItem(val route: String, val label: String, val icon: ImageVector)
+/** The three stretches of the rail, top to bottom; a thin line separates one from the next. */
+enum class RailGroup {
+    /** The places most visits start from. */
+    Primary,
+    /** Everything else there is to open, each only for someone who may use it. */
+    Secondary,
+    /** Settings; the avatar sits below it. */
+    System,
+}
+
+data class RailItem(val route: String, val label: String, val icon: ImageVector, val group: RailGroup = RailGroup.Primary)
+
+/** The rail's destinations, by what they are rather than where they lead (the shell maps them to routes). */
+enum class RailSlot { Home, Search, LiveTv, Movies, Shows, MyList, Sports, Discover, JoinRoom, Recordings, Requests, Sources, Settings }
+
+/** What decides which secondary destinations the signed-in user is shown. */
+data class RailAccess(
+    /** `rooms.join` */
+    val joinRoom: Boolean = false,
+    /** `recordings.view`, on a server that records */
+    val recordings: Boolean = false,
+    /** `requests.create` */
+    val requests: Boolean = false,
+)
+
+/**
+ * The rail from top to bottom, which is also its D-pad order: Home, Search, Live TV, Movies, Shows,
+ * My List; then the secondary destinations; then Settings (the avatar follows it). A destination
+ * the user may not use is absent, never greyed out. Pure, so the order and the gating are unit-tested.
+ */
+object RailOrder {
+    private val PRIMARY = listOf(RailSlot.Home, RailSlot.Search, RailSlot.LiveTv, RailSlot.Movies, RailSlot.Shows, RailSlot.MyList)
+
+    fun slots(access: RailAccess): List<Pair<RailSlot, RailGroup>> = buildList {
+        PRIMARY.forEach { add(it to RailGroup.Primary) }
+        add(RailSlot.Sports to RailGroup.Secondary)
+        add(RailSlot.Discover to RailGroup.Secondary)
+        if (access.joinRoom) add(RailSlot.JoinRoom to RailGroup.Secondary)
+        if (access.recordings) add(RailSlot.Recordings to RailGroup.Secondary)
+        if (access.requests) add(RailSlot.Requests to RailGroup.Secondary)
+        add(RailSlot.Sources to RailGroup.Secondary)
+        add(RailSlot.Settings to RailGroup.System)
+    }
+}
 
 /**
  * Rail geometry. Items are inset to the TV safe area (BRIEF UAT #3: nothing interactive outside
- * 48/27 dp); only the rail background bleeds to the screen edge. tokens.json still says 72/240 dp,
- * which predates the safe-area inset (72 dp minus a 48 dp margin leaves no room for a 44 dp item),
- * so the shell uses these widths instead of Tokens.Rail.
+ * 48/27 dp); only the rail background bleeds to the screen edge. The widths come from the
+ * `rail.tv_*` tokens: `rail.collapsed_w` / `expanded_w` (72/240 dp) are the web rail, which has no
+ * overscan margin, and 72 dp minus a 48 dp margin would leave no room for a 44 dp item.
+ * RailMetricsTest keeps the tokens and this arithmetic in step.
  */
 object RailMetrics {
     /** Width of a rail item (icon button) when collapsed. */
@@ -60,14 +104,15 @@ object RailMetrics {
     /** Gap between the items and the content edge. */
     val InnerGutter = 12.dp
     /** SafeMarginX (48) + item (44) + gutter (12) = 104 dp. Content is offset by this. */
-    val CollapsedW = Tokens.Canvas.SafeMarginX + ItemW + InnerGutter
-    /** Expanded width keeps the 240 dp token's label room (240 − 72 + 104). */
-    val ExpandedW = Tokens.Rail.ExpandedW + (CollapsedW - Tokens.Rail.CollapsedW)
+    val CollapsedW = Tokens.Rail.TvCollapsedW
+    /** The web rail's label room (240 − 72) beside the TV's collapsed width: 272 dp. */
+    val ExpandedW = Tokens.Rail.TvExpandedW
 }
 
 /**
  * Collapsible left rail. Icons only when collapsed ([RailMetrics.CollapsedW]), icon+label when expanded.
- * Expands while any item has focus. Right/Back hands focus back to content via [onExit].
+ * Expands while any item has focus. Right hands focus back to content via [onExit]; Back is left to
+ * the shell (see BackPolicy).
  * Rendered as an overlay over content (content is laid out with collapsed width offset), so
  * expanding never shifts layout.
  */
@@ -105,22 +150,21 @@ fun LeftRail(
             .onFocusChanged { onExpandedChange(it.hasFocus) }
             .focusRestorer(requesters.getOrElse(selectedIndex) { FocusRequester.Default })
             .focusGroup()
+            // Back is deliberately not handled here: it reaches the shell's BackPolicy like any other
+            // Back press, which knows the rail is open and moves on (Home, then exit) instead of
+            // handing focus back to content, where the next Back would only reopen the rail.
             .onPreviewKeyEvent { e ->
-                when {
-                    e.key == Key.Back -> {
-                        // Consume both edges so the KeyUp can't reach a screen BackHandler and re-open us.
-                        if (e.type == KeyEventType.KeyDown) onExit()
-                        true
-                    }
-                    e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight -> { onExit(); true }
-                    else -> false
-                }
+                if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight) { onExit(); true } else false
             },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         // Keep every destination reachable at TV logical heights as the menu grows.
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement=Arrangement.spacedBy(6.dp)) {
         items.forEachIndexed { i, item ->
+            // Where one stretch of the rail ends and the next begins: a line, not a gap that looks like a missing item.
+            if (i > 0 && items[i - 1].group != item.group) {
+                Box(Modifier.fillMaxWidth().padding(vertical = 2.dp).height(1.dp).background(t.textMuted.copy(alpha = 0.3f)))
+            }
             val req = if (i == selectedIndex) firstItemRequester else requesters[i]
             RailButton(
                 item = item,

@@ -9,6 +9,7 @@ from typing import Any
 from app.domain.entities import CatalogItem, ChannelInfo, MediaKind, SourceType
 from app.infra.models import Channel, Progress, Source, Title
 from app.services import ids
+from app.services.event_slots import display_name
 
 ImageFn = Callable[[Source | None, str | None, str | None], str | None]
 TOP_LEVEL_KINDS = {"movie", "show", "vod", "series"}
@@ -40,6 +41,9 @@ def row_to_item(row: Title) -> CatalogItem:
         stream_url=extra.pop("stream_url", None),
         headers=dict(extra.pop("headers", {}) or {}),
         extra=extra,
+        language=row.language,
+        quality=row.quality,
+        adult=bool(row.adult),
     )
 
 
@@ -70,7 +74,9 @@ def hub_id_for_title(row: Title) -> str:
     return ids.lib_id(row.source_id, row.ext_id)
 
 
-def badge_for_source(src: Source, *, in_app: bool, kind: str | None = None) -> dict[str, Any]:
+def badge_for_source(
+    src: Source, *, in_app: bool, kind: str | None = None, quality: str | None = None
+) -> dict[str, Any]:
     if kind is None:
         kind = "library" if src.type in LIBRARY_TYPES else "vod" if src.type in IPTV_TYPES else "flatrate"
     return {
@@ -79,7 +85,7 @@ def badge_for_source(src: Source, *, in_app: bool, kind: str | None = None) -> d
         "name": src.name,
         "playable_in_app": in_app,
         "kind": kind,
-        "quality": None,
+        "quality": quality,
     }
 
 
@@ -92,12 +98,15 @@ def sort_badges(badges: list[dict[str, Any]], sources: dict[str, Source]) -> lis
             src.priority if src else 999,
         )
 
-    seen: set[str] = set()
+    seen: dict[str, dict[str, Any]] = {}
     out = []
     for b in sorted(badges, key=key):
-        if b["source_id"] in seen:
+        first = seen.get(b["source_id"])
+        if first is not None:
+            # One badge per source; a source holding several editions shows the best one.
+            first["quality"] = first.get("quality") or b.get("quality")
             continue
-        seen.add(b["source_id"])
+        seen[b["source_id"]] = b
         out.append(b)
     return out
 
@@ -146,7 +155,7 @@ class TileContext:
             "rating": row.rating,
             "progress_pct": self.progress_pct(hub, lib),
             "is_favorite": hub in self.favorites or lib in self.favorites,
-            "sources": [badge_for_source(src, in_app=self.is_in_app(src.type))] if src else [],
+            "sources": [badge_for_source(src, in_app=self.is_in_app(src.type), quality=row.quality)] if src else [],
             "now_playing": None,
         }
 
@@ -168,15 +177,16 @@ class TileContext:
     def channel_tile(self, ch: Channel, now: dict[str, Any] | None = None) -> dict[str, Any]:
         src = self.sources.get(ch.source_id)
         cid = ids.channel_id(ch.source_id, ch.ext_id)
+        logo = self.image(src, ch.logo, cid)
         return {
             "id": cid,
             "kind": "channel",
-            "title": ch.name,
+            "title": display_name(ch.name),
             "subtitle": f"{ch.number}" if ch.number else None,
             "year": None,
-            "poster": ch.logo,
+            "poster": logo,
             "backdrop": None,
-            "logo": ch.logo,
+            "logo": logo,
             "rating": None,
             "progress_pct": None,
             "is_favorite": cid in self.favorites,

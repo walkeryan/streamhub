@@ -75,8 +75,33 @@ export function DisclaimerGate({ onAccepted, onExit, overlay }: { onAccepted: ()
   )
 }
 
+/* ------------------------------ away from home ------------------------------ */
+/**
+ * A user without remote.access, away from the home network: the server answers nothing but /auth/me,
+ * so this stands in for the whole app. Try again asks once more (the device may be home by now).
+ */
+export function AwayFromHome({ name, onSignOut }: { name: string; onSignOut: () => void }) {
+  const setAway = useSession((s) => s.setAway)
+  const qc = useQueryClient()
+  useEffect(() => { const id = window.setTimeout(() => void setFocus('away:retry'), 50); return () => window.clearTimeout(id) }, [])
+  return (
+    <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="away-from-home">
+      <FocusGroup focusKey="away" boundary className="flex flex-col gap-5" style={{ width: 'min(38rem, 100%)' }}>
+        <h1 className="display">Only on the home network</h1>
+        <p role="alert">This account can only be used on the home network, and this device is somewhere else.</p>
+        <p className="muted">Signed in as {name}. Connect to the home network and try again, or ask the person who runs this StreamHub to let you watch away from home.</p>
+        <div className="flex gap-3 flex-wrap">
+          <Button focusKey="away:retry" primary icon="refresh" onEnter={() => { setAway(false); void qc.invalidateQueries() }} testId="away-retry">Try again</Button>
+          <Button focusKey="away:out" onEnter={() => { onSignOut(); qc.clear() }}>Sign out</Button>
+        </div>
+      </FocusGroup>
+    </main>
+  )
+}
+
 /* ------------------------------ profile picker / login ------------------------------ */
-export function ProfilePicker() {
+/** `embedded`: under the ways to sign in on the sign-in screen, where it is one section and does not take the cursor. */
+export function ProfilePicker({ embedded }: { embedded?: boolean } = {}) {
   const { data: profiles, error, refetch } = useProfiles()
   const setSession = useSession((s) => s.setSession)
   const qc = useQueryClient()
@@ -85,27 +110,31 @@ export function ProfilePicker() {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => { if (profiles) { const id = window.setTimeout(() => void setFocus(`profile:${profiles[0]?.id}`), 50); return () => window.clearTimeout(id) } }, [profiles])
+  useEffect(() => { if (profiles && !embedded) { const id = window.setTimeout(() => void setFocus(`profile:${profiles[0]?.id}`), 50); return () => window.clearTimeout(id) } }, [profiles, embedded])
 
   const login = async (p: Profile, s?: string) => {
     setBusy(true); setErr(null)
     try {
-      const t = await unwrap<AuthTokens>(api.POST('/auth/login', { body: { profile_id: p.id, ...(p.is_admin ? { password: s ?? null } : { pin: s ?? null }) } }))
+      const t = await unwrap<AuthTokens>(api.POST('/auth/login', { body: { profile_id: p.id, ...(p.has_password ? { password: s ?? null } : { pin: s ?? null }) } }))
       setSession(t.access_token, t.refresh_token, t.profile)
       qc.clear()
       setPending(null); setSecret('')
     } catch (e) {
-      setErr(e instanceof ApiError && e.status === 401 ? (p.is_admin ? 'That password is not right.' : 'That PIN is not right.') : e instanceof Error ? e.message : 'Sign-in failed.')
+      // A profile with no PIN that the server will not open on a tap: its person signs in for themselves, or manages the server.
+      const tapRefused = !p.has_password && !p.has_pin ? `${p.name} cannot be opened by choosing the profile. Sign in another way, or have a PIN set for it.` : null
+      setErr(e instanceof ApiError && e.status === 401 ? tapRefused ?? (p.has_password ? 'That password is not right.' : 'That PIN is not right.') : e instanceof Error ? e.message : 'Sign-in failed.')
     } finally { setBusy(false) }
   }
   const choose = (p: Profile) => {
-    if (p.is_admin || p.has_pin) { setPending(p); setSecret(''); setErr(null) } else void login(p)
+    // Which secret a profile signs in with is what the server says it has: a password, a PIN, or neither.
+    if (p.has_password || p.has_pin) { setPending(p); setSecret(''); setErr(null) } else void login(p)
   }
 
   return (
-    <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="profile-picker">
-      <FocusGroup focusKey="picker" className="flex flex-col items-center gap-8">
-        <h1 className="display" style={{ textAlign: 'center' }}>Who is watching?</h1>
+    <main style={embedded ? { display: 'grid', placeItems: 'center' } : { minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="profile-picker">
+      <FocusGroup focusKey="picker" className={embedded ? 'flex flex-col items-center gap-4' : 'flex flex-col items-center gap-8'}>
+        {embedded ? <h2 className="heading" style={{ textAlign: 'center' }}>At home? Pick a profile</h2> : <h1 className="display" style={{ textAlign: 'center' }}>Who is watching?</h1>}
+        {err && !pending && <p role="alert" data-testid="profile-refused">{err}</p>}
         {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : !profiles ? <p className="muted">Loading profiles…</p> : (
           <div className="flex gap-6 flex-wrap justify-center">
             {profiles.map((p) => (
@@ -116,11 +145,11 @@ export function ProfilePicker() {
           </div>
         )}
       </FocusGroup>
-      <Modal open={!!pending} onClose={() => setPending(null)} title={pending ? (pending.is_admin ? `Password for ${pending.name}` : `PIN for ${pending.name}`) : ''} firstFocusKey="login:input">
+      <Modal open={!!pending} onClose={() => setPending(null)} title={pending ? (pending.has_password ? `Password for ${pending.name}` : `PIN for ${pending.name}`) : ''} firstFocusKey="login:input">
         {pending && (
           <>
-            <FocusableInput focusKey="login:input" label={pending.is_admin ? 'Password' : 'PIN'} type="password" value={secret}
-              inputMode={pending.is_admin ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
+            <FocusableInput focusKey="login:input" label={pending.has_password ? 'Password' : 'PIN'} type="password" value={secret}
+              inputMode={pending.has_password ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
             {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
             <div className="flex gap-3">
               <Button focusKey="login:go" primary disabled={busy || !secret} onEnter={() => void login(pending, secret)}>Sign in</Button>

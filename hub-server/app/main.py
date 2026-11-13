@@ -8,25 +8,85 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api.routers import auth, catalog, owner_pin, playback, sources, system
+from app.api.deps import playback_watch_gate
+from app.api.routers import (
+    auth,
+    catalog,
+    owner_pin,
+    playback,
+    recordings,
+    requests,
+    rooms,
+    sources,
+    system,
+    users,
+)
 from app.container import Container, build_container, shutdown, startup
 from app.infra.logging import configure_logging
 from app.infra.settings import APP_VERSION, AppSettings
 from app.services.context import is_https, public_base
-from app.services.errors import ServiceError
+from app.services.errors import PermissionDenied, ServiceError
+from app.services.network import is_trusted_proxy, vouched_for
 
 log = logging.getLogger(__name__)
 API_PREFIX = "/api/v1"
 
+# On every response. A response that set one of these itself (a stricter referrer policy on a
+# sign-in redirect, the web app's own content policy) keeps what it set.
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+}
+HSTS = "max-age=31536000"
+# For the web app's HTML, written against what the built app loads: its own scripts and one
+# stylesheet (React sets inline style attributes), posters and channel logos from wherever the
+# sources keep them, the QR code and icons as data: URLs, video through Media Source Extensions
+# (blob:) or straight from a source when it is not proxied, the players' blob: workers, and the
+# API and room socket. A trailer on YouTube opens in a new tab and needs nothing here.
+WEB_APP_CSP = "; ".join(
+    (
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob: https: http:",
+        "media-src 'self' data: blob: https: http:",
+        "connect-src 'self' data: blob: https: http: ws: wss:",
+        "worker-src 'self' blob:",
+        "font-src 'self' data:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    )
+)
 
-def _err(status: int, code: str, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
-    return JSONResponse({"code": code, "message": message}, status_code=status, headers=headers)
+
+def secure(response: Response, https: bool) -> Response:
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    if https:
+        # Only over HTTPS as a trusted proxy reports it: on plain HTTP the header means nothing,
+        # and a client must not be able to make the server pin itself.
+        response.headers.setdefault("Strict-Transport-Security", HSTS)
+    return response
+
+
+def _err(
+    status: int,
+    code: str,
+    message: str,
+    headers: dict[str, str] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> JSONResponse:
+    return JSONResponse({**(extra or {}), "code": code, "message": message}, status_code=status, headers=headers)
 
 
 def create_app(
@@ -53,9 +113,10 @@ def create_app(
         version=APP_VERSION,
         description="Unified streaming hub. Base path /api/v1.",
         lifespan=lifespan,
-        docs_url="/api/docs",
+        # The whole API described to whoever asks: only where the operator asked for it.
+        docs_url="/api/docs" if settings.api_docs_enabled else None,
         redoc_url=None,
-        openapi_url="/api/openapi.json",
+        openapi_url="/api/openapi.json" if settings.api_docs_enabled else None,
     )
     app.state.container = c
 
@@ -70,13 +131,19 @@ def create_app(
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
-        host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
-        prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+        # What the outside world calls this server is a trusted proxy's to say, and nobody else's:
+        # these build the links and redirects handed out and decide which cookies are Secure.
+        peer, port = (request.client.host, request.client.port) if request.client else (None, None)
+        trusted = vouched_for(port) or is_trusted_proxy(peer, settings.forwarded_allow_ips)
+        said = request.headers if trusted else {}
+        proto = said.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+        host = said.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
+        prefix = said.get("x-forwarded-prefix", "").rstrip("/")
         t1 = public_base.set(f"{proto}://{host.split(',')[0].strip()}{prefix}")
         t2 = is_https.set(proto == "https")
+        request.state.https = proto == "https"
         try:
-            return await call_next(request)
+            return secure(await call_next(request), proto == "https")
         finally:
             public_base.reset(t1)
             is_https.reset(t2)
@@ -86,7 +153,11 @@ def create_app(
         headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
         if exc.status == 429 and hasattr(exc, "retry_after"):
             headers = {"Retry-After": str(exc.retry_after)}
-        return _err(exc.status, exc.code, exc.message, headers)
+        if isinstance(exc, PermissionDenied):
+            return JSONResponse(
+                {"code": exc.code, "message": exc.message, "missing": exc.missing}, status_code=exc.status
+            )
+        return _err(exc.status, exc.code, exc.message, headers, exc.extra)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_req: Request, exc: RequestValidationError) -> JSONResponse:
@@ -99,12 +170,26 @@ def create_app(
         return _err(exc.status_code, "http_error", str(exc.detail))
 
     @app.exception_handler(Exception)
-    async def unhandled(_req: Request, exc: Exception) -> JSONResponse:
+    async def unhandled(request: Request, exc: Exception) -> Response:
         log.exception("unhandled error")
-        return _err(500, "internal_error", "internal server error")
+        # Answered outside the middleware above, so the headers are put on here.
+        https = bool(getattr(request.state, "https", False))
+        return secure(_err(500, "internal_error", "internal server error"), https)
 
-    for r in (auth.router, owner_pin.router, sources.router, catalog.router, playback.router, system.router):
+    for r in (
+        auth.router,
+        owner_pin.router,
+        sources.router,
+        catalog.router,
+        system.router,
+        requests.router,
+        users.router,
+        rooms.router,
+        recordings.router,
+    ):
         app.include_router(r, prefix=API_PREFIX)
+    # The resolver knows nothing of permissions: what a caller may play is settled before it runs.
+    app.include_router(playback.router, prefix=API_PREFIX, dependencies=[Depends(playback_watch_gate)])
 
     _mount_web(app, settings.web_dist)
     return app
@@ -120,14 +205,14 @@ def _mount_web(app: FastAPI, dist: Path) -> None:
             return _err(404, "not_found", "no such endpoint")
         if not index.is_file():
             if full_path == "":
-                return JSONResponse({"name": "StreamHub", "version": APP_VERSION, "api": "/api/docs"})
+                return JSONResponse({"name": "StreamHub", "version": APP_VERSION})
             return _err(404, "not_found", "web client not installed")
         root = dist.resolve()
         candidate = (dist / full_path).resolve()
         if full_path and candidate.is_file() and root in candidate.parents:
             cache = "public, max-age=31536000, immutable" if "/assets/" in f"/{full_path}" else "no-cache"
             return FileResponse(candidate, headers={"Cache-Control": cache})
-        return FileResponse(index, headers={"Cache-Control": "no-cache"})
+        return FileResponse(index, headers={"Cache-Control": "no-cache", "Content-Security-Policy": WEB_APP_CSP})
 
 
 _app: FastAPI | None = None

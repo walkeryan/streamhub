@@ -6,18 +6,19 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from starlette.requests import Request
 
 from app.api.routers.playback import image_proxy
 from app.infra.crypto import Crypto
 from app.services.auth import Principal
 from app.services.content_policy import active_principal
 from app.services.errors import Forbidden
-from app.services.image_grants import image_payload, validate_image_grant
+from app.services.image_grants import UNBOUND_TTL, image_payload, validate_image_grant
 
 
 @pytest.fixture
 def ctx() -> Any:
-    policy = SimpleNamespace(enabled=True, require=AsyncMock())
+    policy = SimpleNamespace(enabled=True, applies_to=lambda principal: True, require=AsyncMock())
     ptoken = active_principal.set(Principal("kid", False, True, 4, "kid-session"))
     payload = image_payload("plex", "https://fixture.invalid/art", "lib:plex:17", policy)
     active_principal.reset(ptoken)
@@ -34,7 +35,14 @@ def ctx() -> Any:
         sources=SimpleNamespace(provider_for=AsyncMock(return_value=(None, prov))),
         http_factory=Mock(return_value=client),
         client=client,
+        # The fixture's kid has no ``remote.access``: the artwork is fetched from the home network.
+        settings=SimpleNamespace(forwarded_allow_ips=""),
+        app_settings=SimpleNamespace(get=lambda key: None),
     )
+
+
+def request(peer: str = "192.168.1.20") -> Request:
+    return Request({"type": "http", "headers": [], "client": (peer, 40000)})
 
 
 async def test_exact_library_and_session_validated(ctx: Any) -> None:
@@ -63,7 +71,7 @@ async def test_invalid_binding_rejected(ctx: Any, change: dict[str, Any]) -> Non
 async def test_legacy_rejected_before_fetch(ctx: Any) -> None:
     token = ctx.crypto.sign_json({"s": "plex", "u": "https://fixture.invalid/art"})
     with pytest.raises(Forbidden):
-        await image_proxy(token, ctx)
+        await image_proxy(token, request(), ctx)
     ctx.sources.provider_for.assert_not_called()
     ctx.http_factory.assert_not_called()
 
@@ -71,19 +79,19 @@ async def test_legacy_rejected_before_fetch(ctx: Any) -> None:
 async def test_revoked_session_rejected_before_fetch(ctx: Any) -> None:
     ctx.auth.session_valid.side_effect = Forbidden("revoked")
     with pytest.raises(Forbidden):
-        await image_proxy(ctx.crypto.sign_json(ctx.payload), ctx)
+        await image_proxy(ctx.crypto.sign_json(ctx.payload), request(), ctx)
     ctx.http_factory.assert_not_called()
 
 
 async def test_policy_change_while_fetching_rejected(ctx: Any) -> None:
     ctx.content_policy.require.side_effect = [None, Forbidden("content restricted")]
     with pytest.raises(Forbidden):
-        await image_proxy(ctx.crypto.sign_json(ctx.payload), ctx)
+        await image_proxy(ctx.crypto.sign_json(ctx.payload), request(), ctx)
     assert ctx.auth.session_valid.await_count == 2
 
 
 async def test_enabled_artwork_private_and_rechecked(ctx: Any) -> None:
-    response = await image_proxy(ctx.crypto.sign_json(ctx.payload), ctx)
+    response = await image_proxy(ctx.crypto.sign_json(ctx.payload), request(), ctx)
     assert response.body == b"fixture-image"
     assert response.headers["cache-control"] == "private, no-store"
     assert ctx.auth.session_valid.await_count == 2
@@ -91,10 +99,41 @@ async def test_enabled_artwork_private_and_rechecked(ctx: Any) -> None:
 
 async def test_disabled_preserves_legacy_artwork(ctx: Any) -> None:
     ctx.content_policy.enabled = False
-    token = ctx.crypto.sign_json({"s": "plex", "u": "https://fixture.invalid/art"})
-    response = await image_proxy(token, ctx)
+    unbound = image_payload("plex", "https://fixture.invalid/art", None, None)
+    assert unbound is not None and set(unbound) == {"s", "u", "x"}
+    response = await image_proxy(ctx.crypto.sign_json(unbound), request(), ctx)
     assert response.headers["cache-control"] == "public, max-age=86400"
     ctx.auth.session_valid.assert_not_called()
+
+
+async def test_an_unbound_grant_has_a_lifetime(ctx: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Artwork signed for nobody in particular is still not a URL that works for ever."""
+    ctx.content_policy.enabled = False
+    now = 1_900_000_000.0
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: now)
+    grant = image_payload("plex", "https://fixture.invalid/art", None, None)
+    assert grant is not None
+    # Good for one to two weeks, and the same URL all week so a browser can keep its copy.
+    assert UNBOUND_TTL <= grant["x"] - now <= 2 * UNBOUND_TTL
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: now + 3600)
+    assert image_payload("plex", "https://fixture.invalid/art", None, None) == grant
+    token = ctx.crypto.sign_json(grant)
+    assert (await image_proxy(token, request(), ctx)).status_code == 200
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: grant["x"] + 1)
+    with pytest.raises(Forbidden):
+        await image_proxy(token, request(), ctx)
+    ctx.client.get.reset_mock()
+    # One minted before grants had a lifetime, or with one made up, is refused before any fetch.
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: now)
+    for forged in (
+        {"s": "plex", "u": "https://fixture.invalid/art"},
+        {"s": "plex", "u": "https://fixture.invalid/art", "x": now + 10 * UNBOUND_TTL},
+        {"s": "plex", "u": "https://fixture.invalid/art", "x": "never"},
+        {"s": "plex", "u": "https://fixture.invalid/art", "x": True},
+    ):
+        with pytest.raises(Forbidden):
+            await image_proxy(ctx.crypto.sign_json(forged), request(), ctx)
+    ctx.client.get.assert_not_called()
 
 
 def test_enabled_mint_without_principal_or_exact_ref_omits_artwork(ctx: Any) -> None:
@@ -146,3 +185,12 @@ def test_catalog_factory_carries_exact_reference(ctx: Any) -> None:
         assert image(src, "https://fixture.invalid/art", None) is None
     finally:
         active_principal.reset(token)
+
+
+async def test_home_only_artwork_is_refused_elsewhere_before_anything_is_checked(ctx: Any) -> None:
+    assert ctx.payload["home"] is True
+    with pytest.raises(Forbidden) as caught:
+        await image_proxy(ctx.crypto.sign_json(ctx.payload), request("203.0.113.9"), ctx)
+    assert caught.value.code == "remote_access_denied"
+    ctx.auth.session_valid.assert_not_called()
+    ctx.http_factory.assert_not_called()

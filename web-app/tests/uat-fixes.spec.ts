@@ -1,14 +1,20 @@
 import { expect, test, type Page } from '@playwright/test'
-import { focusedLabel, signIn } from './helpers'
+import { focusBarEntry, focusedLabel, searchBox, signIn } from './helpers'
 
 const focusedKeyIn = (page: Page, testId: string) =>
   page.evaluate((id) => !!document.querySelector(`[data-testid="${id}"] .fx[data-focused="true"]`), testId)
+
+const barFocus = (page: Page) => page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')
+/** Right along the control bar until the Audio button has focus: the buttons are icons, named by their labels. */
+async function walkToAudio(page: Page) {
+  for (let i = 0; i < 10 && (await barFocus(page).getAttribute('aria-label')) !== 'Audio'; i++) await page.keyboard.press('ArrowRight')
+}
 
 async function openLiveChannel(page: Page) {
   await signIn(page)
   await page.goto('/live')
   await expect(page.getByTestId('channel-row').first()).toBeVisible()
-  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
   await page.getByTestId('channel-row').first().click()
   await expect(page).toHaveURL(/\/play\/ch/)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing', { timeout: 15_000 })
@@ -34,10 +40,8 @@ test('UAT P1-2: live player control bar is reachable and usable with the D-pad',
   await expect.poll(() => focusedLabel(page)).toMatch(/Pause|Play/)
   const before = path()
   // Left/Right move between buttons and do not zap; Enter activates the focused button
-  for (let i = 0; i < 6 && !/Audio/.test((await page.locator('[data-testid="player-bar"] .fx[data-focused="true"]').textContent()) ?? ''); i++) {
-    await page.keyboard.press('ArrowRight')
-  }
-  await expect(page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')).toContainText('Audio and subtitles')
+  await walkToAudio(page)
+  await expect(barFocus(page)).toHaveAttribute('aria-label', 'Audio')
   expect(path()).toBe(before)
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('player-menu')).toBeVisible()
@@ -89,14 +93,12 @@ test('closing Audio restores focus immediately and cannot steal the next Up acti
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowDown')
   await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(true)
-  for (let i = 0; i < 6 && !/Audio/.test((await page.locator('[data-testid="player-bar"] .fx[data-focused="true"]').textContent()) ?? ''); i++) {
-    await page.keyboard.press('ArrowRight')
-  }
+  await walkToAudio(page)
   await page.keyboard.press('Enter')
   await expect.poll(() => focusedKeyIn(page, 'player-menu')).toBe(true)
   await page.clock.install()
   await page.keyboard.press('Escape')
-  await expect(page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')).toContainText('Audio and subtitles')
+  await expect(barFocus(page)).toHaveAttribute('aria-label', 'Audio')
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(false)
   await page.clock.fastForward(50)
@@ -108,29 +110,33 @@ test('closing Audio restores focus immediately and cannot steal the next Up acti
 
 test('UAT P1-4: Search keeps the query, results and focused result on Back', async ({ page }) => {
   await signIn(page)
-  await page.keyboard.press('ArrowLeft')
-  await page.keyboard.press('ArrowDown')
+  await focusBarEntry(page, 'nav-search')
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/search/)
-  await expect(page.getByLabel('Search titles and channels')).toBeFocused()
+  await expect(searchBox(page)).toBeFocused()
   await page.keyboard.type('harbor')
-  await expect(page.getByTestId('group-play')).toBeVisible({ timeout: 8000 })
-  // Right from the field into the results, open the first result
-  await page.keyboard.press('ArrowRight')
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await expect(page.getByTestId('search-titles')).toBeVisible({ timeout: 8000 })
+  // Down from the box into the results, along to the poster, and open it
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByTestId('search-results').locator('.fx[data-focused="true"]')).toHaveCount(1)
+  for (let i = 0; i < 6 && !(await page.getByTestId('search-titles').locator('.fx[data-focused="true"]').count()); i++) await page.keyboard.press('ArrowDown')
   const label = await focusedLabel(page)
-  expect(label).toBeTruthy()
+  expect(label).toBe('Harbor Lights')
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/(title|play)\//)
+  await expect(page).toHaveURL(/\/title\//)
   await page.keyboard.press('Escape')
-  await expect(page).toHaveURL(/\/search/)
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
-  await expect(page.getByTestId('group-play')).toBeVisible()
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await expect(searchBox(page)).toHaveValue('harbor')
+  await expect(page.getByTestId('search-titles')).toBeVisible()
   await expect.poll(() => focusedLabel(page)).toBe(label)
-  // Returning from the rail preserves this profile's latest search.
+  // A query that led somewhere is offered again on the empty search page; the box itself starts empty.
   await page.goto('/')
-  await expect(page.getByTestId('home')).toBeVisible()
-  await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter')
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('harbor')
+  await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
+  await expect(searchBox(page)).toHaveValue('')
+  await focusBarEntry(page, 'nav-search')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('search-idle').getByRole('button', { name: 'harbor', exact: true })).toBeVisible()
 })
 
 test('UAT P1-7: failed artwork never shows a broken-image glyph', async ({ page }) => {
@@ -168,24 +174,35 @@ test('UAT P1-6: TMDB and JustWatch attribution logos render in About', async ({ 
 
 test.describe('TV width', () => {
   test.use({ viewport: { width: 1920, height: 1080 } })
-  test('UAT P1-1: rail items sit inside the 48/27 dp safe area; Left from the first card opens the rail', async ({ page }) => {
+  test('UAT P1-1: bar entries sit inside the 48/27 dp safe area; Up from the first row reaches the bar, Left from the first card does not', async ({ page }) => {
     await signIn(page)
     const dp = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize) / 16)
+    const bar = (await page.getByTestId('rail').boundingBox())!
     const boxes = await page.locator('[data-testid="rail"] .rail-item').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON() as DOMRect))
     expect(boxes.length).toBeGreaterThan(5)
     for (const b of boxes) {
       expect(b.x).toBeGreaterThanOrEqual(48 * dp - 0.5)
+      expect(b.x + b.width).toBeLessThanOrEqual(1920 - 48 * dp + 0.5)
       expect(b.y).toBeGreaterThanOrEqual(27 * dp - 0.5)
-      expect(b.y + b.height).toBeLessThanOrEqual(1080 - 27 * dp + 0.5)
+      expect(b.y + b.height).toBeLessThanOrEqual(bar.height)
     }
-    const railW = await page.getByTestId('rail').evaluate((e) => e.getBoundingClientRect().width)
-    expect(railW / dp).toBeGreaterThanOrEqual(100)
-    expect(railW / dp).toBeLessThanOrEqual(108)
-    // Down to the first card in the first row, then Left opens the rail
+    // The surface bleeds to the edges and stays a bar: about 68 dp of the screen's 720, not a panel.
+    expect([bar.x, bar.y, bar.width]).toEqual([0, 0, 1920])
+    expect(bar.height / dp).toBeGreaterThanOrEqual(64)
+    expect(bar.height / dp).toBeLessThanOrEqual(80)
+    // Down to the first card in the first row: Left stays on it, navigation is not to the left any more.
+    const inBar = page.getByTestId('rail').locator('[data-focused="true"]')
     await page.keyboard.press('ArrowDown')
-    await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'false')
+    const card = page.locator('[data-row="continue"] [data-testid="tile"]').first()
+    await expect(card).toHaveAttribute('data-focused', 'true')
     await page.keyboard.press('ArrowLeft')
-    await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
+    await expect(card).toHaveAttribute('data-focused', 'true')
+    await expect(inBar).toHaveCount(0)
+    // Up through the hero to the bar, on the section being shown.
+    await page.keyboard.press('ArrowUp')
+    await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
+    await page.keyboard.press('ArrowUp')
+    await expect(page.getByTestId('nav-home')).toHaveAttribute('data-focused', 'true')
   })
 })
 
@@ -196,7 +213,7 @@ test('Back during an uncommitted zap cancels pending playback instead of startin
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   })
   await expect(page).toHaveURL(/\/live/)
-  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
 })
 
 test('approved live playback retains the exact750ms double-Back behavior', async ({ page }) => {

@@ -4,6 +4,98 @@
  */
 
 export interface paths {
+    "/auth/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What a sign-in screen has to know before anyone is signed in */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            google_enabled: boolean;
+                            /** @description "Continue with Plex" is offered */
+                            plex_enabled: boolean;
+                            /** @description Username and password sign-in is offered */
+                            password_enabled: boolean;
+                            /** @description GOOGLE_AUTH_REQUIRED: the household profile picker (GET /profiles without a token, POST /auth/login) is closed everywhere, the home network included. People sign in with Google, Plex or a username and password; a TV pairs. */
+                            google_required: boolean;
+                            /** @description The profile picker is open to this request: it comes from the home network and google_required is false. Elsewhere a sign-in screen shows the other ways in instead of profile tiles. */
+                            profiles_enabled: boolean;
+                            content_policy_enabled: boolean;
+                            owner_pin_configured: boolean;
+                            owner_pin_setup_required: boolean;
+                            /**
+                             * @description As in /settings
+                             * @enum {string}
+                             */
+                            signup_mode?: "approval" | "invite_only";
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/google/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Begin Google sign-in (any Google account) */
+        get: {
+            parameters: {
+                query?: {
+                    return_to?: string;
+                    /** @description Invite token from /invite/<token>; held server-side for the sign-in */
+                    invite?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Redirect to Google */
+                303: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/google/complete": {
         parameters: {
             query?: never;
@@ -13,6 +105,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Active user: tokens, with status "active". Unknown user in approval mode: status "pending" and a token good only for GET /auth/me. Owner PIN regime: PendingOwnerLogin. */
         post: {
             parameters: {
                 query?: never;
@@ -22,14 +115,622 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Google identity handoff; owner PIN required before owner tokens when enabled */
+                /** @description Google identity handoff */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["AuthTokens"] | components["schemas"]["PendingOwnerLogin"];
+                        "application/json": (components["schemas"]["AuthTokens"] & {
+                            /** @enum {string} */
+                            status?: "active";
+                        }) | components["schemas"]["PendingApproval"] | components["schemas"]["PendingOwnerLogin"];
                     };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/plex/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin "Continue with Plex"
+         * @description The server opens a strong PIN at plex.tv and answers Plex's own sign-in page (https://app.plex.tv/auth#?clientID=…&code=…&forwardUrl=…). The browser goes there; Plex sends it back to return_to with ?plex=<state> added. The PIN is bound to this browser by an HttpOnly, SameSite=Lax cookie that lives ten minutes, and its id never leaves the server. Nothing is registered with Plex for this. 403 plex_disabled when the method is off, 502 plex_unavailable when plex.tv cannot be reached.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * @description /, /pair, /pair?code=XXXXXX or /settings. Anything else is /.
+                         * @default /
+                         */
+                        return_to?: string;
+                        /** @description Invite token from /invite/<token>; held server-side for the sign-in, never sent to Plex */
+                        invite?: string;
+                        /**
+                         * @description Needs a bearer token: link the Plex account to the caller's own user instead of signing in. Not on a shared device (403 shared_device).
+                         * @default false
+                         */
+                        link?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            auth_url: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/plex/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish "Continue with Plex" in the browser that started it
+         * @description Reads the PIN, asks plex.tv whose token it yields (account id, username, confirmed e-mail, avatar) and discards the token: it is never stored or logged. The user is the Plex account id, never the e-mail: an unknown account whose address matches another user's is a new user, not that one. Answers as /auth/google/complete does: tokens with status "active", or status "pending" with a token good only for GET /auth/me. 401 sign_in_expired for a state that is unknown, used, older than ten minutes, started by another browser, or never completed at Plex; 403 invite_required (invite-only mode, no usable invite), 403 user_suspended, 502 plex_unavailable. A flow started with link true needs the same user's bearer token here and answers status "linked": the Plex account is attached to that user and nobody is signed in. 409 identity_in_use when it already signs in as someone else, 409 already_linked when the user has another Plex account.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The plex query parameter Plex's redirect came back with */
+                        state: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": (components["schemas"]["AuthTokens"] & {
+                            /** @enum {string} */
+                            status?: "active";
+                        }) | components["schemas"]["PendingApproval"] | {
+                            /** @enum {string} */
+                            status: "linked";
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/google/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin linking a Google account to one's own user
+         * @description Answers Google's sign-in page. Google sends the browser back to /auth/google/callback, which attaches the identity and lands on /settings?linked=google, or on /settings?link_error=<code> (identity_in_use, already_linked, failed). Nobody is signed in by it. Not on a shared device.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            auth_url: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/methods/{method}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove one of one's own ways of signing in
+         * @description 409 last_method for the last one, 404 when it is not linked, 403 shared_device. The device asking stays signed in.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    method: components["schemas"]["SignInMethod"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's user, role, effective permissions and limits
+         * @description The one call a user waiting for approval may make (every other answers 403 approval_pending). Also answers a user without remote.access away from the home network, where every other call is 403 remote_access_denied. Once approved, the response carries full tokens, once, and the pending token stops working.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Me"];
+                    };
+                };
+                /** @description session_revoked | session_stale (refresh) | user_suspended | token_expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's signed-in devices */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Another user's sessions; needs users.manage */
+                    user_id?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description live sessions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthSession"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/sessions/{sid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Sign a device out (one's own; anyone's with users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description revoked; its next request answers 401 */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Relabel a device, or mark it a shared household device
+         * @description A label is its user's to change (anyone's with users.manage). shared_device needs users.manage, on one's own device too; marking records the caller as the device's owner, unmarking clears it.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        shared_device?: boolean;
+                        /** @description empty clears it */
+                        label?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description the session as it now is */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthSession"];
+                    };
+                };
+                /** @description forbidden (shared_device without users.manage) | owner_required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/auth/switchable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who's watching? The users a shared device can be handed to
+         * @description Active users whose role (or own override) has on_shared_devices, owners and family first, then by name. Only a shared-device session may ask. A shared device whose current user has been suspended is not stranded: while its session itself stands (not revoked), this route and POST /auth/switch keep answering for it, and POST /auth/refresh keeps renewing its tokens so the two stay reachable after the access token expires. Every other route, /auth/me included, answers 401 user_suspended, with a renewed token as with the old one. The suspended user is not listed, so no entry has current true.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            users: components["schemas"]["SwitchableUser"][];
+                        };
+                    };
+                };
+                /** @description token_expired | session_stale | session_revoked (signed out, or the device has been handed over since this token was issued). user_suspended only on a device that is not shared. */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not_shared_device */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hand a shared device to another user
+         * @description Keeps the device's session and re-binds it to the target, with fresh tokens; the previous user's tokens for this device stop working. A target with a PIN needs it. A target with more access than the current user must have one. Switching to oneself hands nothing over and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the current user's PIN is verified (pin_invalid when wrong, counted against the same five guesses), and a user without a PIN has nothing to check. When the current user has been suspended the device can still be handed over (see GET /auth/switchable): to anyone listed, by the same PIN rules, a target's access being compared with what the suspended user held. The suspended user is not a target (404), and their tokens for this device stop working with the hand-over like anyone's.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_id: string;
+                        /** @description null or absent: no PIN offered */
+                        pin?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description switched */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Switched"];
+                    };
+                };
+                /** @description pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. user_suspended only on a device that is not shared. */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not_shared_device */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not a user this device can switch to (a suspended user included) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description pin_setup_required (the target has more access and no PIN) | switch_conflict (retry) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description rate_limited: five wrong PINs for this target in 15 minutes. Retry-After is whole seconds (an integer), as on every 429 of this API. */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/adult-unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open the adult category on this session for four hours
+         * @description Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true. The same two conditions hold wherever an adult title is named by its id: GET /titles/{id}, POST /playback/resolve, POST /playback/multiview, GET /playback/options and /playback/rewind, and creating, showing or joining a watch room on one answer 403 with missing [watch.adult], or 403 adult_locked for a session that holds the permission but is not unlocked.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        pin: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description unlocked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: date-time */
+                            adult_unlocked_until: string;
+                        };
+                    };
+                };
+                /** @description forbidden (missing watch.adult) | pin_invalid */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description pin_setup_required */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Attempt limit; respect Retry-After */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/adult-lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close the adult category on this session again */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -399,7 +1100,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Admin-only content policy */
+                /** @description Content policy (users.manage) */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -455,7 +1156,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Profile login (password for admin, PIN for profiles) */
+        /**
+         * Profile login on the home network (password for admin, PIN for profiles)
+         * @description A household convenience, answered only for a request from the home network and never under GOOGLE_AUTH_REQUIRED. From anywhere else it is 403 home_network_only before anything is looked up: the same answer for every profile id, real or not.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -490,6 +1194,194 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change one's own password, or set a first one
+         * @description With a password already set, current_password is required (403 wrong_password, throttled like a sign-in) and every other session of the user is revoked. Without one, this links a password to the account: username is required unless the user has one (409 username_taken, 400 invalid_username). A username is 3 to 32 of a-z 0-9 . - _ and is stored lower case. A password has at least 10 characters, does not contain the username and is not one of the most common (400 weak_password). Not on a shared device (403 shared_device).
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        current_password?: string | null;
+                        new_password: string;
+                        username?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        /**
+         * Sign in with a username and a password
+         * @description A wrong username and a wrong password are one answer: 401 invalid_credentials, the same body, and the same work (an unknown name is verified against a stand-in hash). Guessing is throttled by username and by client address: five attempts for a name, twenty from an address, in fifteen minutes, then a lock of 60 seconds that doubles each time up to an hour, and a ceiling of 300 failures in five minutes for everyone. A refused attempt is 429 rate_limited with Retry-After, whoever the name belongs to. 403 password_disabled when the method is off. A suspended user is told so (401 user_suspended) only after the right password.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        username: string;
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+                /** @description invalid_credentials | user_suspended */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description rate_limited; Retry-After is whole seconds */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/invite/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What the page behind an invite or setup link shows
+         * @description The token travels in the body. Every link that cannot be used (unknown, used, expired, revoked) answers the same valid false.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            valid: boolean;
+                            display_name?: string | null;
+                            /** @description A setup link for someone who already has a username: it is kept */
+                            username?: string | null;
+                            /** @description A password setup link for one existing user rather than an invitation */
+                            setup: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/invite/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an invite, or use a setup link, by choosing a username and a password
+         * @description An invite makes a new active user with the invite's role and signs them in. A setup link sets the password of the user it names (who keeps a username they already have). Nothing is spent unless it goes through: 400 invalid_username, 400 weak_password and 409 username_taken leave the link good. 403 invite_invalid for any link that cannot be used.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        token: string;
+                        username: string;
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/refresh": {
         parameters: {
             query?: never;
@@ -499,6 +1391,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /**
+         * Exchange a refresh token for a new pair; refresh tokens rotate
+         * @description Every refresh answers a new refresh token and makes the presented one the previous one. The previous one is still honoured for 60 seconds (two tabs, or a retried request, refreshing at once) and answers the current pair without rotating again. A token older than that being presented means a copy is being replayed: the session is revoked (401 session_revoked) for whoever holds it, and the device signs in again. A client stores the new refresh token before it uses the new access token.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -557,6 +1453,56 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["DeviceCode"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/device/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What is asking to pair under a code, shown before it is approved
+         * @description A link with a code in it is how someone else's device gets signed in as the person who approves it, so the approval screen says what is asking: the address and user agent the request for the code came from. Signs nothing in. 404 for a code that is unknown, expired, used or already approved.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_code: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            user_code: string;
+                            ip?: string | null;
+                            user_agent?: string | null;
+                            expires_in: number;
+                        };
                     };
                 };
             };
@@ -637,12 +1583,24 @@ export interface paths {
                     "application/json": {
                         user_code?: string;
                         profile_id?: string;
+                        /**
+                         * @description Pair it as a shared household device (Who's watching?). true needs users.manage
+                         * @default false
+                         */
+                        shared_device?: boolean;
                     };
                 };
             };
             responses: {
                 /** @description ok */
                 204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description forbidden (shared_device without users.manage) */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -663,6 +1621,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * The household's profiles, for the picker on the home network
+         * @description Without a token: the list on the home network; 404 from anywhere else (which says nothing about what exists); 401 under GOOGLE_AUTH_REQUIRED. With a token: the list on the home network, otherwise the caller's own profile only.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -778,6 +1740,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        /** Set or clear a profile's PIN (the older route; see PUT /users/{id}/pin for the rule on changing one's own) */
         put: {
             parameters: {
                 query?: never;
@@ -791,6 +1754,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         pin?: string | null;
+                        current_pin?: string | null;
+                        current_password?: string | null;
                     };
                 };
             };
@@ -1402,14 +2367,20 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** One search across everything the caller may watch: titles (movies and shows; a series by its name, never a row per episode), live channels, and guide broadcasts that are on now or start within 48 hours. Each section is capped and counted. A query shorter than two characters returns every list empty. */
         get: {
             parameters: {
-                query: {
-                    q: string;
+                query?: {
+                    /** @description Diacritics, punctuation, case and a leading article are ignored, and "&" is "and". A year after the title ("the mill 2023") narrows titles to that year. A number also finds the channel with that number. */
+                    q?: string;
                     kinds?: string;
+                    /** @description Cap of the titles section. */
                     limit?: number;
                     language?: string;
                     source_id?: string;
+                    expand?: string;
+                    /** @description false = only what the hub holds (its own titles, channels and broadcasts): no remote metadata provider is asked, so the answer is quick, and metadata_available still says whether discovery exists. A client shows that answer first and adds the titles named in the full answer's discovered list when it arrives. With discovery, all remote lookups of one search share a budget of about 2.5 s; past it the answer goes out with what has arrived. A provider's answer for a query is kept for a few minutes. */
+                    discover?: boolean;
                 };
                 header?: never;
                 path?: never;
@@ -1423,15 +2394,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            results?: components["schemas"]["Tile"][];
-                            metadata_available?: boolean;
-                            discovery_note?: string;
-                            play_here?: components["schemas"]["Tile"][];
-                            open_in_app?: components["schemas"]["Tile"][];
-                            channels?: components["schemas"]["Channel"][];
-                            attribution?: string;
-                        };
+                        "application/json": components["schemas"]["SearchResults"];
                     };
                 };
             };
@@ -1642,6 +2605,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Source variants of a title and their audio. A VOD file whose source reports no audio tracks is probed once (up to ten seconds, cached for thirty days) so its tracks can be listed. */
         get: {
             parameters: {
                 query: {
@@ -1857,6 +2821,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/browse/{section}/shelves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Shelves of a section with their first titles, in one call
+         * @description New Releases first, then by size (a shelf with nothing new in 30 days counts half). Items put titles with a poster first, then newest. Same language, profile policy and adult scope as /browse/{section}.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    source_id?: string;
+                    language?: string;
+                    limit_rows?: number;
+                    limit_items?: number;
+                    include_adult?: boolean;
+                };
+                header?: never;
+                path: {
+                    section: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShelfList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/browse/{section}/genres": {
         parameters: {
             query?: never;
@@ -2053,6 +3064,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        /** Hide, sort or set the language of a group. Hiding a parent hides its children without changing their own setting, so a child hidden alone stays hidden when the parent is shown again. */
         patch: {
             parameters: {
                 query?: never;
@@ -2077,7 +3089,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["ChannelGroup"];
+                    };
                 };
             };
         };
@@ -2216,9 +3230,14 @@ export interface paths {
             parameters: {
                 query?: {
                     date?: string;
+                    /** @description The viewer's zone: it decides which calendar day date means. */
                     timezone?: string;
-                    status?: "all" | "current" | "upcoming" | "replay";
+                    /** @description Calendar days listed */
+                    days?: number;
+                    /** @description active = current, upcoming and game channels (everything but ended) */
+                    status?: "all" | "active" | "current" | "upcoming" | "replay";
                     language?: string;
+                    /** @description A name from the page's sports list; an unknown one matches nothing. */
                     sport?: string;
                     q?: string;
                     limit?: number;
@@ -2230,13 +3249,57 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio. */
+                /** @description Sports guide programmes and event-slot channels, grouped conservatively, by start. A programme that only repeats its channel's name is a placeholder and never an event. An event slot's embedded time is read in its source's event_timezone (source config, IANA name, default UTC). */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": components["schemas"]["SportsEventsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sports/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Always-on sports networks
+         * @description Channels a sports group or their own name marks as sport and that are not event slots, by channel number.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    language?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsChannelsPage"];
                     };
                 };
             };
@@ -2378,7 +3441,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Admin-only Streamhub-owned playback status */
+        /** Streamhub-owned playback status (system.manage) */
         get: {
             parameters: {
                 query?: never;
@@ -2423,7 +3486,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Admin-only stop owned sessions and pause new playback until resumed */
+        /** Stop owned sessions and pause new playback until resumed (system.manage) */
         post: {
             parameters: {
                 query?: never;
@@ -2470,7 +3533,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Admin-only allow new playback; old stream tokens remain revoked */
+        /** Allow new playback; old stream tokens remain revoked (system.manage) */
         post: {
             parameters: {
                 query?: never;
@@ -2662,6 +3725,15 @@ export interface paths {
                         "application/json": components["schemas"]["PlaybackDescriptor"];
                     };
                 };
+                /** @description user_stream_limit: the user's other devices already play as many streams as their max_streams allows; active lists them, limit is the allowance. Resolving on a device that is already playing never counts that device's own stream: the same title is the same stream (seek, audio change, retry), another title takes its place. Also audio_selection_required and the other playback conflicts. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -2679,6 +3751,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Besides saving the position, a report keeps the stream counted as playing for the user's stream limit (playing, paused) or releases it at once (stopped). */
         post: {
             parameters: {
                 query?: never;
@@ -2740,6 +3813,29 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again. The code alone tells them apart, as on API calls, with no need to ask /auth/me. session_stale: only the URL is out of date (the user's role, overrides or limits changed since it was issued) and the session stands; refresh the tokens and resolve again. session_revoked: the session it was issued to is signed out, or, on a shared device, was handed to another user; that user's tokens answer the same. unauthorized: the token is not a stream token of this server or is past its lifetime, which says nothing about the session; resolve again. */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description remote_access_denied: the user the token was issued to lacks remote.access and the request comes from outside home_networks. content_restricted: the content policy no longer admits it for them. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what. user_stream_limit: this stream went quiet for 30 seconds or was replaced on its device, and the user's limit is now used by other streams. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
             };
         };
         put?: never;
@@ -2774,6 +3870,29 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+                /** @description as for /stream/{token}; segments answer the same */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description as for /stream/{token}; segments answer the same. A segment (or nested playlist) URL also answers stream_epoch_stale: it belongs to an earlier stream_epoch of a watch room's shared stream, which a seek has since restarted. The member's playlist URL is still good: reload it, and ask GET /rooms/{code}/descriptor for the current stream_epoch and start_position_ms. This playlist URL itself never answers it. Any other segment that is not of the grant's stream answers forbidden. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description source_busy or user_stream_limit, as for /stream/{token} */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
                 };
             };
         };
@@ -3011,6 +4130,777 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Everyone (users.manage) */
+        get: {
+            parameters: {
+                query?: {
+                    status?: "pending" | "active" | "suspended";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserListItem"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Add a managed user, one without a Google identity (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        name: string;
+                        avatar?: string | null;
+                        /** @default family */
+                        role_id?: string;
+                        pin?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["User"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One user with effective access, devices and recent history (users.manage) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Remove a user and their viewer state (users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description last_owner */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Change a user (users.manage)
+         * @description Nobody changes their own role, grants, denials or limits (403 self_edit). Only an owner assigns the Owner role, grants users.manage / sources.manage / system.manage, or changes an owner (403 owner_required). The last active owner cannot be demoted (409 last_owner).
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        avatar?: string | null;
+                        role_id?: string;
+                        grants?: components["schemas"]["Permission"][];
+                        denials?: components["schemas"]["Permission"][];
+                        limits?: components["schemas"]["LimitsInput"];
+                        /** @description null follows the role */
+                        on_shared_devices?: boolean | null;
+                        /** @description This user is the owner of the Plex account behind the server's Plex token. At most one user: setting it on one clears it on the others (each change is audited) */
+                        plex_account_linked?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/users/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a waiting user with a role (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        role_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description active */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+                /** @description not_pending */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refuse and remove a waiting user (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not_pending */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Suspend an active user; their sessions answer 401 user_suspended, except that a shared device they are the current user of can still be handed over (GET /auth/switchable, POST /auth/switch) (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description suspended */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+                /** @description last_owner | not_active */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/reinstate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reinstate a suspended user (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description active */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+                /** @description not_suspended */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or clear a user's PIN (one's own; anyone's with users.manage)
+         * @description Changing or clearing one's own existing PIN needs proof that this is still its owner: current_pin (403 pin_invalid when wrong; five guesses in fifteen minutes, then 429), or current_password, or a sign-in made in the last ten minutes. Otherwise 403 current_pin_required. A first PIN needs nothing; someone else's is a user manager's to set. PUT /profiles/{id}/pin asks the same.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description 4 to 8 digits; null clears */
+                        pin?: string | null;
+                        current_pin?: string | null;
+                        current_password?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/methods/{method}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove one way a user signs in (users.manage)
+         * @description Their sessions are revoked. 409 last_method for the last one (suspend or remove the user instead). Only an owner changes an owner.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    method: components["schemas"]["SignInMethod"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a user's password and answer a setup link (users.manage)
+         * @description The password stops working and every session of that user is revoked at once (the caller's own device stays when resetting oneself). The answer is a one-time link, good for 72 hours, where that person chooses a new password; an earlier setup link for them stops working. Also how someone without a password gets one. Only an owner resets an owner; 409 not_active for a pending user. There is no e-mail recovery and no self-registration.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SetupLink"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Roles with their permissions and limits (users.manage) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description built-ins first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Role"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a custom role (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": WithRequired<components["schemas"]["RoleInput"], "name">;
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Role"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a custom role nobody holds (users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description role_builtin | role_in_use */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Edit a role; every member gets the change on their next request (users.manage) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RoleInput"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Role"];
+                    };
+                };
+                /** @description role_fixed (the Owner role) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Invites: one's own; all with users.manage (users.invite) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description newest first; never includes a token */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Invite"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create an invite link for a role (users.invite)
+         * @description The role may be no wider than the inviter's own access, and is never the Owner role (403 invite_role_too_wide).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        role_id: string;
+                        /** @default 72 */
+                        expires_in_hours?: number;
+                        /** @default 1 */
+                        max_uses?: number;
+                        /** @description Add a person: who the invite is for. Used once (max_uses must be 1). They accept it with Google, with Plex, or by choosing a username and password. */
+                        name?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InviteCreated"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an invite (its creator; anyone's with users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who changed what about whom, newest first (users.manage) */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Entries about or by this user */
+                    user_id?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuditEntry"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/themes": {
         parameters: {
             query?: never;
@@ -3162,6 +5052,1200 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/classification/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run one batch of rating lookups now (system.manage)
+         * @description A background job looks up TMDB certifications for catalog titles a batch at a time, so a user with a rating ceiling is not waiting on first views. This runs the next batch at once. Without a TMDB key it does nothing.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description what the batch did */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            classified: number;
+                            failed: number;
+                            /** @description Titles with a TMDB id still lacking fresh rating evidence */
+                            remaining: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/request_manager": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The API key is write-only (system.manage) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RequestManagerSettings"];
+                    };
+                };
+            };
+        };
+        /**
+         * Seerr-compatible request manager, Overseerr / Jellyseerr / Seerr (system.manage)
+         * @description Omit api_key to keep the stored key for the same server; a different server or a null url drops it.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        url?: string | null;
+                        api_key?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RequestManagerSettings"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/request_manager/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Checks the stored URL and API key (system.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Serves each request's stored progress. Stale ones (older than their phase's interval: 15 s while downloading or importing, 3 min otherwise) are refreshed first, at most 8 per call and for at most 4 s; the rest stay as stored until the server's own polling reaches them. */
+        get: {
+            parameters: {
+                query?: {
+                    scope?: "mine" | "all";
+                    state?: components["schemas"]["RequestState"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            requests: components["schemas"]["MediaRequest"][];
+                            /** @description The current profile may approve or decline requests and list scope=all. */
+                            can_approve?: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Ask for a title no source has */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        media_type: "movie" | "tv";
+                        tmdb_id: number;
+                        /** @description tv only; omitted = whole series */
+                        seasons?: number[] | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description an open request for this title already exists */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description already_available | request_manager_unconfigured | metadata_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One request, for its requester or whoever may approve requests
+         * @description Serves the stored progress, refreshed first when it is older than its phase's interval.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description request_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the request manager about this request now
+         * @description For its requester or whoever may approve requests. A sent request is asked about at once (at most every 5 s; sooner calls return the stored progress); an approved request that has not reached the request manager is sent again; any other request is returned as it is.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description the request as it is now */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description request_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        note?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description approved and */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description already decided */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requests/{id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        note?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description declined; the requester gets a notice */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MediaRequest"];
+                    };
+                };
+                /** @description already decided */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Notices for the current profile; unread first */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            notices: components["schemas"]["Notice"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notices/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Notice"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a watch room for a title or channel
+         * @description The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once. A room is on one thing. Made from a show (or a season) it is on one episode: the one POST /playback/resolve would start for the creator now (their next unwatched episode, of the variant named or of the one resolve would pick), chosen once, here. Room.id is that episode's id, Room.title describes the episode, and every member plays it whatever their own history with the show; a variant_id naming a variant of the show comes back as the episode's id. The episode does not change for the life of the room.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RoomCreate"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Room"];
+                    };
+                };
+                /** @description content_restricted, or not allowed to create rooms */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description unknown title; a show with no episode to play; a variant_id that is not a variant of the show */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_limit */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The join screen (title, host, members, state) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Room"];
+                    };
+                };
+                /** @description content_restricted: the current profile may not watch the room's title */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Close the room (host or administrator) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description closed; connected members receive a closed message with reason deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not the host */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{code}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take a seat in the room
+         * @description Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). Every call adds a member unless the body carries the member_token of a seat the caller already holds, which is then kept. The member starts at the room's position (descriptor.resume_position_ms). A room has at most 8 members and expires after 30 minutes with none.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RoomJoin"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RoomJoined"];
+                    };
+                };
+                /** @description remote_access_denied (as on every call of a user without remote.access away from the home network), content_restricted and the other /playback/resolve refusals */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found, or the room's title or variant is not available to this profile */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{code}/descriptor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A member's playback descriptor as it is now
+         * @description Authorized like the room WebSocket, by the member token in the query (no bearer token). The seat is unchanged. In a room that plays one shared stream the descriptor has the playlist URL the member already holds (a new one only once that URL's grant has expired or their session changed) with the current stream_epoch and start_position_ms; for a title each member plays for themselves it is a freshly resolved descriptor. resume_position_ms is the room's position now. Resolved for the member's access as it stands now, with the refusals of the join.
+         */
+        get: {
+            parameters: {
+                query: {
+                    member_token: string;
+                    client?: "android_tv" | "web";
+                    prefer_hls?: boolean;
+                    /** @description As in PlaybackRequest. Required for web clients. */
+                    recovery_generation?: string;
+                    allow_unverified_audio?: boolean;
+                };
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackDescriptor"];
+                    };
+                };
+                /** @description room_unauthorized: not a member token of this room, or expired. session_revoked | user_suspended: the session the seat was taken with no longer stands. */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description remote_access_denied, a missing rooms.join or watch.* permission, content_restricted and the other /playback/resolve refusals */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found, or not_a_member: the room dropped this seat (20 s of silence); join again */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description as for the join, except room_full */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recordings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The current profile's recordings (everyone's for a holder of users.manage), earliest first
+         * @description A user under a rating ceiling sees, plays and manages only recordings whose programme was rated within it when it was scheduled.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description omitted = every state except cancelled */
+                    state?: components["schemas"]["RecordingState"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description enabled is false, and the list empty, until the server has a recordings directory */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            enabled: boolean;
+                            /** @description The current profile may schedule, cancel and delete. */
+                            can_schedule?: boolean;
+                            recordings: components["schemas"]["Recording"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Record one programme
+         * @description Programme ids change whenever the guide is refreshed. Send channel_id and start as shown on the guide and the server finds the programme by those if the id no longer names it.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        programme_id: string;
+                        /** @description omitted = the lowest-numbered channel carrying the programme */
+                        channel_id?: string | null;
+                        /** Format: date-time */
+                        start?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description this programme was already scheduled */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Recording"];
+                    };
+                };
+                /** @description scheduled */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Recording"];
+                    };
+                };
+                /** @description recording_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable | programme_ended | already_scheduled (by another profile) | guide_changed */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recordings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel an upcoming or running recording; delete a finished one and its file */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recording-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The current profile's rules (everyone's for a holder of users.manage) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            enabled: boolean;
+                            can_schedule?: boolean;
+                            rules: components["schemas"]["RecordingRule"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Record every matching programme, now and after each guide refresh */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        kind: "series" | "team" | "keyword";
+                        match: string;
+                        channel_id?: string | null;
+                        /** @default false */
+                        new_only?: boolean;
+                        keep?: number | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description the profile already has this rule */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingRule"];
+                    };
+                };
+                /** @description created; matching programmes are scheduled at once */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingRule"];
+                    };
+                };
+                /** @description recording_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable | rule_limit */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recording-rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a rule and the upcoming recordings it scheduled; finished ones stay */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Edit, disable or enable a rule
+         * @description Fields left out are kept. Disabling a rule, or changing what it matches, drops the upcoming recordings it scheduled.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        match?: string;
+                        channel_id?: string | null;
+                        new_only?: boolean;
+                        keep?: number | null;
+                        enabled?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingRule"];
+                    };
+                };
+                /** @description recording_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/app/tv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The newest TV app build this server hands out
+         * @description Read from tv-release.json beside the APK in the web client's downloads directory (format in hub-server/README.md). apk_url is a path on this server.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            version_code: number;
+                            version_name: string;
+                            /** @description /downloads/<file> */
+                            apk_url: string;
+                            /** @description 64 lower-case hex digits */
+                            sha256: string;
+                        };
+                    };
+                };
+                /** @description No release is published here (no manifest */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -3274,6 +6358,242 @@ export interface components {
         Error: {
             code: string;
             message: string;
+            /** @description On source_busy: the streams this server is running on the source, longest-running first; may be empty when something outside this server holds the connections. On user_stream_limit: the user's own streams that use up their limit. */
+            active?: components["schemas"]["ActiveStream"][];
+            /** @description On source_busy: how many connections the source allows, when known. On user_stream_limit: the user's max_streams. */
+            limit?: number | null;
+            /** @description 403 forbidden only: the permissions the caller lacks */
+            missing?: components["schemas"]["Permission"][];
+        };
+        /** @description One stream holding a source connection, named to the profile a busy source turned away; or one of a user's own streams, on user_stream_limit. */
+        ActiveStream: {
+            profile_name?: string | null;
+            /** @description Channel or title being watched; null for adult titles and for content the refused profile may not open. A watch room's shared stream is named "Watch room: <title>" (profile_name is the host), a recording on a connection of its own "Recording: <title>". */
+            title?: string | null;
+            /** @description channel, movie, episode, …; null whenever title is. */
+            kind?: string | null;
+            /**
+             * Format: date-time
+             * @description When this stream's connection was opened.
+             */
+            since?: string;
+        };
+        /** @enum {string} */
+        Permission: "watch.library" | "watch.vod" | "watch.live" | "watch.adult" | "rooms.join" | "rooms.create" | "recordings.view" | "recordings.schedule" | "requests.create" | "requests.auto_approve" | "requests.approve" | "remote.access" | "users.invite" | "users.manage" | "sources.manage" | "system.manage";
+        Limits: {
+            /** @description Concurrent streams; null = no limit */
+            max_streams: number | null;
+            /** @enum {string|null} */
+            rating_ceiling_movie: "G" | "PG" | "PG-13" | "R" | "NC-17" | null;
+            /** @enum {string|null} */
+            rating_ceiling_tv: "TV-Y" | "TV-Y7" | "TV-G" | "TV-PG" | "TV-14" | "TV-MA" | null;
+            allow_unrated: boolean;
+        };
+        /** @description Only the fields present are set. Null lifts that limit; on a user an empty object clears every override. */
+        LimitsInput: {
+            max_streams?: number | null;
+            rating_ceiling_movie?: string | null;
+            rating_ceiling_tv?: string | null;
+            allow_unrated?: boolean;
+        };
+        RoleRef: {
+            id: string;
+            name: string;
+            builtin: boolean;
+        };
+        Role: {
+            id: string;
+            name: string;
+            builtin: boolean;
+            /** @description False for the Owner role */
+            editable: boolean;
+            permissions: components["schemas"]["Permission"][];
+            limits: components["schemas"]["Limits"];
+            /** @description Users with this role appear in the picker on shared household devices */
+            on_shared_devices: boolean;
+            user_count: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RoleInput: {
+            name?: string;
+            permissions?: components["schemas"]["Permission"][];
+            limits?: components["schemas"]["LimitsInput"];
+            on_shared_devices?: boolean;
+        };
+        User: {
+            id: string;
+            /**
+             * @description How this user came to be. What they can sign in with now is sign_in_methods.
+             * @enum {string}
+             */
+            kind: "google" | "plex" | "password" | "managed";
+            display_name: string;
+            email?: string | null;
+            picture?: string | null;
+            avatar?: string | null;
+            /** @enum {string} */
+            status: "pending" | "active" | "suspended";
+            /** @description Null while pending */
+            role_id?: string | null;
+            role_name?: string | null;
+            /** @description The profile holding this user's viewer state */
+            profile_id?: string | null;
+            has_pin?: boolean;
+            on_shared_devices?: boolean;
+            /** @description This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state. */
+            plex_account_linked?: boolean;
+            /** @description The name of username-and-password sign-in, lower case */
+            username?: string | null;
+            /** @description The Plex account this user signs in with. No Plex token is kept for it. */
+            plex_username?: string | null;
+            /** @description The ways this user can sign in from anywhere. Empty for a managed user, who is entered on the household's devices. */
+            sign_in_methods?: components["schemas"]["SignInMethod"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            approved_at?: string | null;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+        };
+        /** @enum {string} */
+        SignInMethod: "google" | "plex" | "password";
+        /** @description One stream a user is playing. Listed while it shows activity - bytes or a segment served, or a progress report, in the last 30 seconds - and for 30 seconds after it was resolved. */
+        NowPlaying: {
+            /** @description The id that was resolved */
+            id: string;
+            /** @description null for adult titles */
+            title?: string | null;
+            /** @description channel, movie, episode, recording, … */
+            kind?: string | null;
+            /** Format: date-time */
+            since?: string;
+            /** @enum {string|null} */
+            client?: "web" | "android_tv" | null;
+        } & {
+            [key: string]: unknown;
+        };
+        UserListItem: components["schemas"]["User"] & {
+            now_playing: components["schemas"]["NowPlaying"][];
+        };
+        AuthSession: {
+            sid: string;
+            user_id: string;
+            /** @enum {string} */
+            kind: "browser" | "tv" | "api";
+            label?: string | null;
+            user_agent?: string | null;
+            ip?: string | null;
+            shared_device: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            /** @description The session making this request */
+            current: boolean;
+        };
+        SwitchableUser: {
+            id: string;
+            display_name: string;
+            avatar: string | null;
+            picture: string | null;
+            role_name: string;
+            has_pin: boolean;
+            /** @description The user this device is signed in as */
+            current: boolean;
+        };
+        Switched: components["schemas"]["AuthTokens"] & {
+            /** @description The user now on the device. Every field of a picker entry and of /auth/me's user. */
+            user: components["schemas"]["User"] & {
+                /** @enum {boolean} */
+                current: true;
+            };
+        };
+        UserDetail: components["schemas"]["UserListItem"] & {
+            grants: components["schemas"]["Permission"][];
+            denials: components["schemas"]["Permission"][];
+            limit_overrides: {
+                [key: string]: unknown;
+            };
+            on_shared_devices_override?: boolean | null;
+            /** @description Effective set */
+            permissions: components["schemas"]["Permission"][];
+            limits: components["schemas"]["Limits"];
+            sessions: components["schemas"]["AuthSession"][];
+            history: {
+                ref_id: string;
+                kind?: string | null;
+                position_ms: number;
+                duration_ms?: number | null;
+                completed: boolean;
+                /** Format: date-time */
+                updated_at: string;
+            }[];
+        };
+        Me: {
+            /** @enum {string} */
+            status: "pending" | "active" | "suspended";
+            user: components["schemas"]["User"];
+            role: components["schemas"]["RoleRef"] | null;
+            permissions: components["schemas"]["Permission"][];
+            limits: components["schemas"]["Limits"];
+            shared_device: boolean;
+            adult_unlocked: boolean;
+            /** @description Set once: when a user who was waiting for approval has been approved */
+            tokens: components["schemas"]["AuthTokens"] | null;
+        };
+        PendingApproval: {
+            /** @enum {string} */
+            status: "pending";
+            /** @description Authorizes GET /auth/me and nothing else */
+            pending_token: string;
+            user: {
+                display_name?: string;
+                email?: string | null;
+            };
+        };
+        Invite: {
+            id: string;
+            role_id: string;
+            role_name?: string | null;
+            created_by_user_id?: string | null;
+            created_by_name?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            max_uses: number;
+            uses: number;
+            /** @enum {string} */
+            state: "open" | "used" | "expired" | "revoked";
+            /** @description Who the invite is for, when it was made for one person ("Add person"). The new user starts under this name. */
+            display_name?: string | null;
+            /** @description Set on a password setup link (POST /users/{id}/password-reset): the one user whose password it sets. Such a link admits nobody and is ignored by Google and Plex sign-in. */
+            user_id?: string | null;
+        };
+        SetupLink: {
+            /** @description /invite/<token>. The token is shown this once and stored only as a hash. */
+            url: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        InviteCreated: components["schemas"]["Invite"] & {
+            /** @description /invite/<token>. The token is shown this once and stored only as a hash. */
+            url: string;
+        };
+        AuditEntry: {
+            id: number;
+            /** Format: date-time */
+            at: string;
+            /** @description user.approve, user.role_change, user.suspend, role.update, invite.create, session.revoke, session.switch, session.update, ... */
+            action: string;
+            actor_user_id?: string | null;
+            actor_name?: string | null;
+            target_user_id?: string | null;
+            target_name?: string | null;
+            detail: {
+                [key: string]: unknown;
+            };
         };
         AuthTokens: {
             access_token: string;
@@ -3373,7 +6693,7 @@ export interface components {
             };
             /** @description for streaming_service: netflix, hulu, … */
             service_key?: string | null;
-            /** @description never includes secrets */
+            /** @description Never includes secrets. Where the source lives (server address, account name) is here only for a caller with sources.manage; for everyone else it is empty. */
             config_summary?: {
                 [key: string]: unknown;
             };
@@ -3390,7 +6710,9 @@ export interface components {
         };
         PlexPin: {
             pin_id: number;
+            /** @description The four-character code to type at link_url */
             code: string;
+            /** @description https://plex.tv/link */
             link_url: string;
         };
         /** @enum {string} */
@@ -3420,6 +6742,12 @@ export interface components {
             is_favorite: boolean;
             sources: components["schemas"]["SourceBadge"][];
             now_playing?: components["schemas"]["Programme"];
+            /** @description Open request for this title, else its most recent closed one; null when never requested. */
+            request_state?: components["schemas"]["RequestState"] | null;
+            /** @description What that same request is doing right now; set exactly when request_state is. The stored answer: a tile never makes the server ask the request manager. */
+            request_progress?: components["schemas"]["TileRequestProgress"] | null;
+            /** @description TMDB-identified, no in-app source, a request manager is configured and the profile may request. Independent of request_state: show the state instead while a request is open. */
+            requestable?: boolean;
         };
         Row: {
             id: string;
@@ -3430,6 +6758,20 @@ export interface components {
              */
             layout: "poster" | "landscape" | "hero" | "channel";
             tiles: components["schemas"]["Tile"][];
+            /** @description Client route for the row's "See all" (a shelf row: /browse/{section}?category=...). Null when the row has no fuller listing. */
+            browse_path?: string | null;
+        };
+        Shelf: {
+            /** @description Category name computed at sync, e.g. New Releases. */
+            name: string;
+            /** @description Distinct titles on the shelf for this profile, language and adult scope. */
+            count: number;
+            items: components["schemas"]["Tile"][];
+            /** @description Client route listing the whole shelf. */
+            browse_path: string;
+        };
+        ShelfList: {
+            shelves: components["schemas"]["Shelf"][];
         };
         TitleDetail: components["schemas"]["Tile"] & {
             overview?: string;
@@ -3444,6 +6786,8 @@ export interface components {
             episodes?: components["schemas"]["Tile"][];
             /** @description e.g. 'Availability data by JustWatch' */
             attribution?: string;
+            /** @description Requestable series only: season numbers a request may pick from (empty = whole series only). */
+            request_seasons?: number[];
         };
         DiscoveryPage: {
             tiles: components["schemas"]["Tile"][];
@@ -3460,6 +6804,7 @@ export interface components {
             source_id: string;
             ext_id?: string;
             number: number;
+            /** @description As shown. An event-slot channel (a provider name such as "(XX) (NETWORK 001) | Sport: Away at Home (date time)") is called by its network and number, "NETWORK 001"; ids, numbers and search still follow the stored name. */
             name: string;
             logo?: string | null;
             group: string;
@@ -3477,18 +6822,31 @@ export interface components {
             /** @default 0 */
             catchup_days: number;
             is_favorite?: boolean;
+            /** @description Null without guide data. A placeholder programme that only repeats the channel's name is not guide data and is never sent, here or in /epg. On an event-slot channel this is the game in its name while that game is live (see Programme.id). */
             now?: components["schemas"]["Programme"];
+            /** @description As now. On an event-slot channel: the game in its name until it starts. */
             next?: components["schemas"]["Programme"];
         };
+        /** @description A channel group of one source. Groups have two levels: a source names a child `Parent / Child`. GET /channels/groups lists each top-level group followed by its children; clients that show one level list the rows whose parent is null. */
         ChannelGroup: {
+            /** @description Stable for a source and a path. A parent has an id whether or not any channel is in it directly. */
             id: string;
             source_id: string;
+            /** @description The group's own name: for a child, the part after the parent. */
             name: string;
+            /** @description The parent's name; null for a top-level group. */
+            parent?: string | null;
+            /** @description `Parent / Child`, or the name of a top-level group. Channel.group carries this. */
+            path: string;
+            /** @description A parent counts its own channels and its children's. */
             channel_count: number;
+            /** @description True when the group is hidden or its parent is. */
             hidden: boolean;
+            /** @description A parent's also applies to its children that set none. */
             language_override?: string | null;
         };
         Programme: {
+            /** @description prog:<n> for a guide entry. prog:slot-<channel row>-<start, epoch seconds> for the game of an event-slot channel: it has no guide entry and no catch-up, and can be recorded like any other programme while the channel still announces it. */
             id: string;
             channel_id: string;
             /** Format: date-time */
@@ -3501,6 +6859,56 @@ export interface components {
             icon?: string | null;
             /** @default false */
             catchup_available: boolean;
+            /** @description Always sent. The server's sports classifier says this listing is sport (from its title and category); the classifier behind /sports/now and the recorder. */
+            is_sport?: boolean;
+            /** @description The two sides, in title order, when is_sport and the title spells out a matchup (A vs B, A v B, A versus B, A at B, A @ B; a league prefix and trailing notes are dropped). Empty otherwise: nothing is guessed. */
+            teams?: string[];
+            /** @description State of the household's recording of this programme, if there is one. Null when recording is off. */
+            recording_state?: components["schemas"]["RecordingState"] | null;
+        };
+        SearchResults: {
+            /** @description Titles, best first: exact title, title prefix, word prefix, contains, then every word in any order; at equal rank what plays here comes before what opens in another app, and that before a title known from metadata alone. */
+            results: components["schemas"]["Tile"][];
+            metadata_available?: boolean;
+            discovery_note?: string;
+            /** @description The results a source of the hub plays. */
+            play_here: components["schemas"]["Tile"][];
+            /** @description The results that only open in another app. */
+            open_in_app: components["schemas"]["Tile"][];
+            /** @description By number (the exact number first) or name: whole name, start of the name, start of a word, then anywhere in it. The name is compared without quality marks or a country tag. */
+            channels: components["schemas"]["Channel"][];
+            /** @description Guide broadcasts whose title matches, on now first, then by start. Placeholder programmes (a title that repeats the channel's name) are never listed. */
+            programmes: components["schemas"]["SearchProgramme"][];
+            /** @description Ids of the results that metadata discovery added: titles the hub's own search (discover=false) does not list. Always empty without discovery. */
+            discovered?: string[];
+            /** @description How many each section found, and whether it has more than were returned (ask again with expand). */
+            sections: {
+                titles: components["schemas"]["SearchSection"];
+                channels: components["schemas"]["SearchSection"];
+                programmes: components["schemas"]["SearchSection"];
+            };
+            /** @description The order to show the sections in. Broadcasts, channels, titles; channels first when the query is a channel's number or whole name. */
+            order: ("programmes" | "channels" | "titles")[];
+            attribution: string;
+        };
+        SearchSection: {
+            count: number;
+            more: boolean;
+        };
+        /** @description One broadcast: a programme as the guide lists it on the first channel carrying it (lowest number), and every channel that carries the same title at the same start as a feed. Can be recorded like any Programme. */
+        SearchProgramme: components["schemas"]["Programme"] & {
+            on_now: boolean;
+            channel_number: number;
+            /** @description As shown: see Channel.name. */
+            channel_name: string;
+            channel_logo?: string | null;
+            feeds: {
+                programme_id: string;
+                channel_id: string;
+                channel_number: number;
+                channel_name: string;
+                channel_logo?: string | null;
+            }[];
         };
         PlaybackRecoveryStatus: {
             paused: boolean;
@@ -3523,6 +6931,72 @@ export interface components {
             /** @constant */
             confirm: true;
         };
+        /** @description One audio stream of a VOD file, read from the file itself by a media probe. */
+        AudioTrack: {
+            /** @description Position among the file's audio streams; the value to send as audio_track. */
+            index: number;
+            /**
+             * @description ISO 639-2 code
+             * @default und
+             */
+            language: string;
+            /** @description ffmpeg codec name, e.g. ac3, eac3, aac, dts */
+            codec?: string | null;
+            channels?: number | null;
+            title?: string | null;
+            /** @default false */
+            default: boolean;
+        };
+        /** @description What is playing and how it reaches this client, for a player's stream information panel. The file's facts come from the media probe (the one that finds its audio tracks), the delivery from what the server planned for this stream. A field the server does not know is left out, not sent as null. Never a URL, a host name or a credential: the source is named as its owner named it. */
+        MediaInfo: {
+            /** @description The owner's name for the source; for a recording, the channel it was recorded from. */
+            source_name?: string | null;
+            /** @description ffprobe format name of the file, e.g. matroska, mov, mpegts */
+            container?: string | null;
+            /** @description Overall bit rate of the file. */
+            bitrate_kbps?: number | null;
+            /** @description The file's video stream. */
+            video?: {
+                /** @description ffmpeg codec name, e.g. h264, hevc, av1 */
+                codec?: string | null;
+                width?: number | null;
+                height?: number | null;
+                /** @description Frames per second. */
+                frame_rate?: number | null;
+                /**
+                 * @description From the stream's transfer characteristic.
+                 * @enum {string|null}
+                 */
+                dynamic_range?: "sdr" | "hdr10" | "hlg" | null;
+            } | null;
+            /** @description The audio track that plays: the one the server encoded (audio_track), else the file's default. */
+            audio?: {
+                /** @description Codec in the file; a remux or a transcode delivers it as AAC stereo. */
+                codec?: string | null;
+                channels?: number | null;
+                /** @description ISO 639-2 code. */
+                language?: string | null;
+            } | null;
+            /**
+             * @description direct: the file or feed as it is (played from the source or passed through this server). remux: repackaged as HLS with the video copied; a film's audio track is encoded to AAC. transcode: the video is encoded as well.
+             * @enum {string}
+             */
+            delivery: "direct" | "remux" | "transcode";
+            /**
+             * @description transcode only: what the server planned to encode the video with. A hardware encoder that fails to start falls back to software for that session without this changing.
+             * @enum {string|null}
+             */
+            encoder?: "hardware" | "software" | null;
+            /** @description Width of the picture as delivered. */
+            output_width?: number | null;
+            /** @description Height of the picture as delivered. */
+            output_height?: number | null;
+            /**
+             * @description The quality cap in force for this stream (PlaybackRequest.max_height); left out when none was asked for or the file is no taller than it.
+             * @enum {integer|null}
+             */
+            max_height?: 480 | 720 | 1080 | null;
+        };
         PlaybackOption: {
             variant_id: string;
             source_id: string;
@@ -3536,7 +7010,12 @@ export interface components {
             audio_verified: boolean;
             audio_evidence: string;
             language_hint?: string | null;
+            /** @description True when the default track */
             preferred_audio_available: boolean;
+            /** @description Tracks of a probed file; empty when the source reported its own audio or the file has not been probed. */
+            audio_tracks?: components["schemas"]["AudioTrack"][];
+            /** @description Index of the first track in a preferred language. */
+            preferred_audio_track?: number | null;
         };
         PlaybackOptions: {
             id: string;
@@ -3546,7 +7025,7 @@ export interface components {
             selection_required: boolean;
         };
         PlaybackRequest: {
-            /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false) */
+            /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false). Also rec:<recording id> for a recording that has a file (state done, or failed with what it kept): android_tv gets mode=proxy, the Matroska file itself with Range support; web gets the file probed and served as restart-at-offset HLS like any VOD file a browser cannot decode. Needs recordings.view and a recording the caller's /recordings list shows; anything else is 404. Progress is reported under the same id. */
             id: string;
             /** @description pick a specific source when a title has several */
             source_id?: string | null;
@@ -3573,6 +7052,15 @@ export interface components {
              * @default false
              */
             prefer_hls: boolean;
+            /** @description Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself. */
+            audio_track?: number | null;
+            /** @description Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced). */
+            start_position_ms?: number | null;
+            /**
+             * @description Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height.
+             * @enum {integer|null}
+             */
+            max_height?: 480 | 720 | 1080 | null;
             catchup_programme_id?: string | null;
             /**
              * Format: date-time
@@ -3654,6 +7142,16 @@ export interface components {
             /** @enum {string} */
             audio_evidence?: "unknown" | "audio_track_metadata" | "media_probe";
             default_audio_language?: string | null;
+            /** @description Tracks of the probed file (web VOD only). */
+            audio_tracks?: components["schemas"]["AudioTrack"][];
+            /** @description The one track the server encoded into this stream; null when the client receives the file's own tracks. */
+            audio_track?: number | null;
+            /** @description Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms. */
+            start_position_ms?: number | null;
+            /** @description Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor. */
+            stream_epoch?: number | null;
+            /** @description What is playing and how it is delivered; null for mode=handoff. Informational: nothing in playback depends on it. */
+            media_info?: components["schemas"]["MediaInfo"] | null;
             id: string;
             /** @enum {string} */
             mode: "direct" | "proxy" | "hls" | "handoff";
@@ -3671,7 +7169,10 @@ export interface components {
             archive_start?: string | null;
             /** Format: date-time */
             archive_end?: string | null;
-            /** @default 0 */
+            /**
+             * @description Where to start. In a room descriptor (join or GET /rooms/{code}/descriptor) this is the room's position when the descriptor was built, for every kind of title, never the member's own history.
+             * @default 0
+             */
             resume_position_ms: number;
             duration_ms?: number | null;
             title?: string;
@@ -3747,6 +7248,8 @@ export interface components {
         };
         Settings: {
             tmdb_api_key_set?: boolean;
+            /** @description A request manager URL and API key are stored. The key is never returned. */
+            request_manager_configured?: boolean;
             region?: string;
             sleep_timer_min?: number | null;
             epg_refresh_hours?: number;
@@ -3754,10 +7257,327 @@ export interface components {
             transcode_hw?: "none" | "vaapi" | "nvenc" | "qsv";
             /** @enum {string} */
             proxy_mode?: "auto" | "always" | "never";
+            /**
+             * @description Who may sign in with Google or Plex unasked: anyone (then waits for approval) or invitees only
+             * @enum {string}
+             */
+            signup_mode?: "approval" | "invite_only";
+            /** @description Offer "Continue with Plex" (system.manage to change). Default true. */
+            plex_sign_in?: boolean;
+            /** @description Offer username and password sign-in (system.manage to change). Default true. */
+            password_sign_in?: boolean;
+            /** @description Default false. When true and a Plex server is linked, a first Plex sign-in by an account that server is shared with (the linking account's friends at plex.tv, fetched with the stored token, cached for five minutes, nobody on any error) is an active user with the Friend role at once, in either signup_mode. Never the Owner role. */
+            plex_friends_auto_approve?: boolean;
+            /** @description A notification webhook is stored. The address is never returned. */
+            readonly notify_webhook_set?: boolean;
+            /** @description PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it */
+            notify_webhook?: string | null;
+            /** @description Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges) */
+            home_networks?: string | null;
+            /** @description The shelves Home shows after New Releases, in order (at most 12 are shown). An entry is a shelf (category) name, or movies:Name / shows:Name for one side only. Empty: Home chooses its shelves. Stored trimmed, without blanks or repeats. Null for callers without system.manage; PATCH null or [] clears it. */
+            home_shelves?: string[] | null;
+            /** @description The entries of home_shelves that name no shelf of an enabled source right now. They are kept (the shelf may arrive with a later sync) and skipped by Home. Null for callers without system.manage. */
+            readonly home_shelves_unknown?: string[] | null;
         };
         Disclaimer: {
             version: string;
             text: string;
+        };
+        /** @enum {string} */
+        RequestState: "pending_approval" | "approved" | "sent" | "available" | "declined" | "failed";
+        /**
+         * @description What is happening to a requested title, as last reported by the request manager. Never ahead of what an answer showed.
+         *     requested: waiting for approval here. approved: approved here, the request manager has not taken it yet (or holds it for
+         *     an approval of its own). searching: the request manager has it and nothing is in its download queue. downloading: its
+         *     download queue has an unfinished item for the title. importing: every queue item has finished and the title is not
+         *     available yet. partially_available: series only, some of the requested seasons can be watched. stalled: every unfinished
+         *     download reports a problem, or a running download's bytes (or a finished download's import) have not moved for 30
+         *     minutes. unknown: the request manager did not answer, or its answer could not be read; last_phase has the phase before.
+         * @enum {string}
+         */
+        RequestPhase: "requested" | "approved" | "searching" | "downloading" | "importing" | "partially_available" | "available" | "declined" | "failed" | "stalled" | "unknown";
+        RequestProgress: {
+            phase: components["schemas"]["RequestPhase"];
+            /** @description Only with phase unknown: the last phase that was known. */
+            last_phase?: components["schemas"]["RequestPhase"] | null;
+            /** @description Only while downloading: bytes done over bytes total across the title's queue items, rounded down. Null when a size is missing: show an indeterminate bar. */
+            percent?: number | null;
+            /**
+             * Format: date-time
+             * @description Only while downloading: when the last queue item is due. Null unless every unfinished item gives a time that is still ahead.
+             */
+            eta?: string | null;
+            /** @description Short plain text for beside the phase: "2 of 8 episodes", "Queued", "Paused", why it is stalled or failed, or the decline note. Never a file name, release name, host or URL. */
+            detail?: string | null;
+            /**
+             * Format: date-time
+             * @description When the request manager last answered for this request; for a request it is not asked about (requested, approved, closed), when it reached that state.
+             */
+            checked_at?: string | null;
+        };
+        /** @description The part of RequestProgress a poster needs. */
+        TileRequestProgress: {
+            phase: components["schemas"]["RequestPhase"];
+            percent?: number | null;
+        };
+        MediaRequest: {
+            id: string;
+            profile_id: string;
+            profile_name?: string;
+            /** @enum {string} */
+            media_type: "movie" | "tv";
+            tmdb_id: number;
+            /** @description hub id of the requested title, e.g. tmdb:movie:603 */
+            title_id: string;
+            title: string;
+            year?: number | null;
+            poster?: string | null;
+            /** @description tv only; null = whole series */
+            seasons?: number[] | null;
+            state: components["schemas"]["RequestState"];
+            progress: components["schemas"]["RequestProgress"];
+            /** @description Decline reason, or why an approved request has not reached the request manager yet. */
+            note?: string | null;
+            decided_by_profile_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        Notice: {
+            id: string;
+            /** @description request_available | request_declined */
+            kind: string;
+            title: string;
+            body?: string;
+            /** @description hub id the notice is about */
+            ref_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            read_at?: string | null;
+        };
+        /** @enum {string} */
+        RecordingState: "scheduled" | "recording" | "done" | "failed" | "missed" | "cancelled";
+        /** @description One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file (has_file) it plays with POST /playback/resolve {id: "rec:<id>"}. */
+        Recording: {
+            id: string;
+            profile_id: string;
+            profile_name?: string;
+            /** @description the rule that scheduled it; null when scheduled by hand */
+            rule_id?: string | null;
+            channel_id: string;
+            channel_name?: string;
+            title: string;
+            subtitle?: string | null;
+            season?: number | null;
+            episode?: number | null;
+            is_sport?: boolean;
+            /** @description As Programme.teams, from the recorded programme's title. */
+            teams?: string[];
+            /**
+             * Format: date-time
+             * @description listed start; capture begins pad_before_s earlier
+             */
+            starts_at: string;
+            /**
+             * Format: date-time
+             * @description listed end; capture runs pad_after_s longer
+             */
+            ends_at: string;
+            pad_before_s?: number;
+            pad_after_s?: number;
+            state: components["schemas"]["RecordingState"];
+            /** @description why it failed or was missed */
+            error?: string | null;
+            /** @description what the capture wrote. Not whether it can be played: see has_file */
+            size_bytes?: number | null;
+            /** @description There is a file that POST /playback/resolve {id: "rec:<id>"} would play now: the recording is done, or failed and kept what it had captured, and that file is still on the server. False while scheduled or recording, and for a file since removed. Always sent. */
+            has_file?: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RecordingRule: {
+            id: string;
+            profile_id: string;
+            profile_name?: string;
+            /**
+             * @description series = same title; team = a sports listing naming the team; keyword = title contains the text
+             * @enum {string}
+             */
+            kind: "series" | "team" | "keyword";
+            match: string;
+            /** @description null = any channel */
+            channel_id?: string | null;
+            channel_name?: string | null;
+            /** @description skip listings marked as repeats and episodes already recorded */
+            new_only: boolean;
+            /** @description finished recordings to keep, oldest deleted first; null = all */
+            keep?: number | null;
+            enabled: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        RequestManagerSettings: {
+            url?: string | null;
+            api_key_set: boolean;
+        };
+        RoomCreate: {
+            /** @description title or channel id (lib:, tmdb:, ch:). A channel makes a live room. A show or season makes a room on one of its episodes (see POST /rooms). */
+            id: string;
+            /** @description source variant every member plays; validated when a member joins, and for a show when the room is created */
+            variant_id?: string | null;
+            audio_track?: number | null;
+        };
+        RoomJoin: {
+            /**
+             * @default web
+             * @enum {string}
+             */
+            client: "android_tv" | "web";
+            /** @default false */
+            prefer_hls: boolean;
+            /** @description As in PlaybackRequest. Required for web clients. */
+            recovery_generation?: string | null;
+            /**
+             * @description Consent to the room's variant_id when its audio is unverified or not this profile's preference.
+             * @default false
+             */
+            allow_unverified_audio: boolean;
+            /** @description The token of a seat this session already holds in this room. The join then keeps that seat (same member_id, a fresh member_token, the descriptor as it is now) instead of adding a member. A token that is expired, another session's or another room's, or whose seat the room has dropped, is ignored: the join takes a new seat. */
+            member_token?: string | null;
+        };
+        RoomTitle: {
+            id: string;
+            kind: components["schemas"]["MediaKind"];
+            /** @description for an episode, the episode's own title */
+            title: string;
+            /** @description for an episode, its show where known and its number: "<show> · S01E02", or "S01E02" */
+            subtitle?: string | null;
+            year?: number | null;
+            poster?: string | null;
+            backdrop?: string | null;
+        };
+        RoomMember: {
+            id: string;
+            name: string;
+            host: boolean;
+            buffering: boolean;
+        };
+        /** @description The room clock. While playing, the position now is position_ms + (server time now - as_of_ms); paused, it is position_ms. */
+        RoomState: {
+            playing: boolean;
+            /** @description null in a live room: a channel has no position */
+            position_ms: number | null;
+            /** @description server epoch ms at which position_ms was true */
+            as_of_ms: number;
+        };
+        Room: {
+            /** @description six characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789; accepted in either case */
+            code: string;
+            /** @description web path of the join screen: /room/<code> */
+            join_path: string;
+            /** @description the title or channel the room watches: what every member plays. Never a show or a season: a room created from one names the episode it is on (see POST /rooms), so this can differ from the id the room was created with */
+            id: string;
+            live: boolean;
+            /** @description in a room created from a show with a variant named, the episode's id */
+            variant_id?: string | null;
+            audio_track?: number | null;
+            host_name: string;
+            /** @description the current profile created the room */
+            is_host: boolean;
+            /** @description only the host's play, pause and seek apply */
+            controls_locked: boolean;
+            /** @description member the room is paused for while they buffer */
+            waiting_for?: string | null;
+            max_members: number;
+            members: components["schemas"]["RoomMember"][];
+            state: components["schemas"]["RoomState"];
+            /** @description server epoch ms when this response was built */
+            server_ms: number;
+            title: components["schemas"]["RoomTitle"];
+        };
+        /**
+         * @description A seat in the room. Open the room WebSocket at `ws_path` with `?member_token=<member_token>`
+         *     (the access token never goes in a URL). A member who has not been heard from on the socket for
+         *     20 s is dropped and must join again; until then the same token reconnects and is resynchronised.
+         *
+         *     All messages are JSON objects with a `type`.
+         *
+         *     Client to server:
+         *     - `ping {t}`: clock sync and keep-alive; send one at least every 10 s. Answered with `pong {t, server_ms}`.
+         *     - `play`, `pause`, `seek {position_ms}`: become the room state for everyone. `position_ms` is an integer of at least 0.
+         *     - `buffering {on}`: this member's player is stalled (true) or has recovered (false).
+         *     - `lock {on}`: host only. While locked, only the host's play, pause and seek apply.
+         *
+         *     Server to client:
+         *     - `pong {t, server_ms}`: to the sender only. `t` is echoed; `server_ms` is server epoch ms.
+         *     - `state {playing, position_ms, as_of_ms, by, controls_locked}`: the room clock (see RoomState).
+         *       `by` is the member who caused it, or null when the room did. A member more than 1000 ms from
+         *       the room position seeks to it. Any `state` clears a `waiting` notice.
+         *       In a room that plays one shared stream, every `state` also carries `stream_epoch` and
+         *       `stream_start_ms` (see below); in other rooms the two fields are absent.
+         *     - `members {members: RoomMember[]}`: sent whenever someone joins, leaves or starts or stops buffering.
+         *     - `waiting {name}`: the room is paused for this member. It resumes when they recover or after 15 s.
+         *     - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
+         *       `host_only`, `live_no_seek`, `bad_message`.
+         *     - `closed {reason}`: the last message before the server closes the socket: `expired`, `deleted`,
+         *       `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized`,
+         *       `remote_access_denied` (4401), `not_found`, `not_a_member` (4404).
+         *       `remote_access_denied` is the socket's form of the API's 403 of that name: the member's
+         *       user lacks remote.access and the socket was opened from outside home_networks. The seat
+         *       is not taken away by it. POST /rooms/{code}/join and GET /rooms/{code}/descriptor answer
+         *       403 remote_access_denied in the same situation.
+         *
+         *     On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
+         *     Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
+         *     connection keeps the seat until the 20 s silence rule applies.
+         *
+         *     One shared stream. A title from a source that limits its connections (or is always proxied)
+         *     is played to the whole room from a single upstream: every member's `descriptor` is an HLS
+         *     URL of their own onto the same stream, whatever their client, with `start_position_ms`
+         *     (media time zero of the stream) and `stream_epoch` set. The stream uses one of the source's
+         *     connections however many members watch, and is released when the last member leaves or the
+         *     room closes. A seek restarts it at the new position before the seek's `state` is sent. That
+         *     `state` carries the new `stream_epoch` and `stream_start_ms`: a client whose epoch differs
+         *     reloads the same playlist URL (the descriptor's `url` does not change) and treats
+         *     `stream_start_ms` as its new time zero; segments of an earlier epoch answer 403 with code
+         *     `stream_epoch_stale` (the status the stream routes use for media they refuse; the code is
+         *     what tells this refusal from the others), which a member who missed the `state` answers by
+         *     asking GET /rooms/{code}/descriptor. `stream_epoch` only ever increases within a room: it
+         *     counts every start of the room's stream, also one made after the room stood empty and its
+         *     stream was released, so a greater epoch is always the later stream and no epoch is ever
+         *     reused; it need not increase by one. A seek to
+         *     a position the running stream already starts at (positions are floored to 5 s) keeps the
+         *     epoch, and the client seeks within what it is playing. The stream's audio is the room's
+         *     `audio_track`, else the first member's preferred or default track; `audio_track` in the
+         *     descriptor says which. Titles from other sources are resolved per member, and live channels
+         *     share the proxy's upstream as any two viewers of a channel do: for both, `stream_epoch` is
+         *     null and `state` carries neither field.
+         *
+         *     Reloading after a seek. `state` is the whole signal; there is no separate message.
+         *     - `state` carries `stream_epoch` (shared stream): compare it with the epoch the client is
+         *       playing (the descriptor's, then the last `state`'s). Different: reload the playlist URL it
+         *       already has and take `stream_start_ms` as media time zero, so the player position is
+         *       `position_ms - stream_start_ms`. Same: seek inside what is playing.
+         *     - `state` carries no `stream_epoch` (a library title each member plays for themselves): there
+         *       is nothing to reload. The member's own stream covers the whole title; seek the player to
+         *       `position_ms`. `state` alone suffices.
+         *     - A live room has no position: `position_ms` is null and only `playing` applies.
+         *     A client that lost its place (a player error, an expired stream URL, a reconnect after a
+         *     missed `state`) asks GET /rooms/{code}/descriptor for its descriptor as it is now, or joins
+         *     again with its `member_token`; neither changes its seat.
+         */
+        RoomJoined: {
+            /** @description valid 2 h, for this room and member only */
+            member_token: string;
+            member_id: string;
+            expires_in_seconds: number;
+            /** @description /api/v1/rooms/<code>/ws */
+            ws_path: string;
+            descriptor: components["schemas"]["PlaybackDescriptor"];
         };
         SportsListing: {
             id: string;
@@ -3792,27 +7612,77 @@ export interface components {
         };
         SportsEventFeed: {
             channel_id: string;
+            /** @description As shown: Channel.name */
             channel_name: string;
+            channel_number?: number | null;
+            /**
+             * @description Picture quality the provider's channel name advertises, in plain or superscript letters; null when it names none.
+             * @enum {string|null}
+             */
+            quality?: "4K" | "UHD" | "FHD" | "HD" | "SD" | null;
             source_id: string;
             source_name: string;
+            /** @description Programme.id of this event on this channel; pass it with channel_id and the event's start to POST /recordings. */
             programme_id: string;
             language?: string | null;
             language_verified: boolean;
         };
         SportsEvent: {
             id: string;
+            /**
+             * @description event = a guide programme classified as sport, or a dated event slot. channel = a game channel: an event slot whose name carries no date. It is listed with today's events and makes no claim about when it plays: status is unscheduled, start and stop are the bounds of the listed days.
+             * @default event
+             * @enum {string}
+             */
+            kind: "event" | "channel";
+            /** @description The event without provider decoration: for an event slot the text after its sport ("Away at Home"), for a guide programme its title. */
             title: string;
+            /** @description The classifier's sport for a guide programme; for an event slot the sport its name gives ("Field Hockey", "Men's Soccer"). */
             sport: string;
+            /** @description Network or league label of an event slot ("NETWORK" of "(NETWORK 001) | …"); null for a guide programme. */
+            league?: string | null;
+            /** @description With away: the two sides when the title is exactly "A at B" / "A @ B" (B is home) or "A vs B" / "A v B" (A is home). Null otherwise: nothing is guessed. */
+            home?: string | null;
+            away?: string | null;
             /** Format: date-time */
             start: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description For an event slot: start plus the source's event_duration_minutes (default 210).
+             */
             stop: string;
-            /** @enum {string} */
-            status: "current" | "upcoming" | "ended";
+            /**
+             * @description current = airing now by a real guide programme or a dated event slot inside its window. An event slot whose window has passed is not listed at all. unscheduled only with kind channel.
+             * @enum {string}
+             */
+            status: "current" | "upcoming" | "ended" | "unscheduled";
             replay: boolean;
+            /** @description The guide labels the programme live, or a dated event slot is inside its window. */
             live_evidence: boolean;
             grouping_evidence: string;
+            /** @description Channels carrying the event, lowest channel number first. Two event slots with the same title, sport and start are one event. */
             feeds: components["schemas"]["SportsEventFeed"][];
+        };
+        SportsChannel: {
+            channel_id: string;
+            /** @description The network's name without its country tag and quality marks */
+            channel_name: string;
+            channel_number: number;
+            logo?: string | null;
+            group: string;
+            /** @enum {string|null} */
+            quality?: "4K" | "UHD" | "FHD" | "HD" | "SD" | null;
+            language?: string | null;
+            source_id: string;
+            /** @description What the guide says is on; null without real guide data. */
+            now?: components["schemas"]["Programme"];
+        };
+        SportsChannelsPage: {
+            channels: components["schemas"]["SportsChannel"][];
+            total: number;
+            limit: number;
+            offset: number;
+            truncated: boolean;
         };
         SportsRecording: {
             /** @description Exact source-scoped library ID; open title/audio chooser */
@@ -3867,4 +7737,7 @@ export interface components {
     pathItems: never;
 }
 export type $defs = Record<string, never>;
+type WithRequired<T, K extends keyof T> = T & {
+    [P in K]-?: T[P];
+};
 export type operations = Record<string, never>;

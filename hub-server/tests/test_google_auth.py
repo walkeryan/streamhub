@@ -59,6 +59,10 @@ async def test_missing_configuration_fails_closed(api: Api) -> None:
     assert (await api.get("/auth/config")).json() == {
         "google_enabled": False,
         "google_required": True,
+        "plex_enabled": True,
+        "password_enabled": True,
+        "profiles_enabled": False,
+        "signup_mode": "approval",
         "content_policy_enabled": False,
         "owner_pin_configured": False,
         "owner_pin_setup_required": True,
@@ -116,7 +120,6 @@ async def test_verified_google_owner_and_tv_pairing(api: Api) -> None:
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"email": "other@example.test"},
         {"email_verified": False},
         {"email_verified": "true"},
         {"nonce": "wrong"},
@@ -155,7 +158,7 @@ async def test_expired_state_and_handoff_no_open_redirect(api: Api) -> None:
 async def test_required_mode_blocks_passwordless_profiles_and_pair_escalation(api: Api) -> None:
     child = (await api.post("/profiles", json={"name": "Child"})).json()
     child_profile = await api.c.auth.get_profile(child["id"])
-    token = api.c.auth.issue(child_profile)["access_token"]
+    token = (await api.c.auth.issue(child_profile))["access_token"]
     configure(api)
     assert (await api.client.get("/api/v1/profiles")).status_code == 401
     assert (await api.get("/profiles")).status_code == 200

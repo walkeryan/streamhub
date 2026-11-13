@@ -1,6 +1,6 @@
 """Plex adapter.
 
-- PIN link flow: POST https://clients.plex.tv/api/v2/pins?strong=true, poll /pins/{id}
+- PIN link flow: POST https://clients.plex.tv/api/v2/pins, poll /pins/{id}
 - server discovery via https://clients.plex.tv/api/v2/resources (prefer local connections)
 - library: /library/sections, /library/sections/{id}/all, /hubs/search, /library/metadata/{id}[/children]
 - direct play: server_url + part.key + ?X-Plex-Token=…
@@ -27,6 +27,7 @@ from app.domain.entities import (
     SourceType,
     StreamTarget,
     TestResult,
+    WatchState,
 )
 from app.domain.ports import AdapterContext, CatalogSink
 from app.infra.http import request_with_retry
@@ -35,6 +36,7 @@ from app.services.audio_selection import provider_audio_extra
 log = logging.getLogger(__name__)
 
 PLEX_TV = "https://clients.plex.tv"
+PLEX_LINK = "https://plex.tv/link"
 PAGE = 200
 _KIND = {"movie": MediaKind.MOVIE, "show": MediaKind.SHOW, "season": MediaKind.SEASON, "episode": MediaKind.EPISODE}
 _MIME = {
@@ -107,18 +109,12 @@ class PlexLinkFlow:
 
     async def start(self) -> dict[str, Any]:
         async with self._ctx.http_factory(headers=self._h()) as client:
-            resp = await client.post(f"{PLEX_TV}/api/v2/pins", params={"strong": "true"})
+            # A plain PIN, not a "strong" one: plex.tv/link takes only the four-character code,
+            # and that page is where a person types it (a strong code is long and is refused there).
+            resp = await client.post(f"{PLEX_TV}/api/v2/pins")
             resp.raise_for_status()
             data = resp.json()
-        code = str(data["code"])
-        link = "https://app.plex.tv/auth#?" + urlencode(
-            {
-                "clientID": self._ctx.client_id,
-                "code": code,
-                "context[device][product]": self._ctx.product,
-            }
-        )
-        return {"pin_id": int(data["id"]), "code": code, "link_url": link}
+        return {"pin_id": int(data["id"]), "code": str(data["code"]).upper(), "link_url": PLEX_LINK}
 
     async def poll(self, pin_id: int) -> list[SourceDraft] | None:
         async with self._ctx.http_factory(headers=self._h()) as client:
@@ -394,6 +390,31 @@ class PlexSource:
         if not url.startswith(self.server + "/"):
             return None
         return {"X-Plex-Token": self.token, "Accept": "image/*"}
+
+    async def watch_states(self, item: CatalogItem) -> dict[str, WatchState]:
+        """WatchStateProvider: where the account behind the token is in this item, or in each episode of it.
+
+        ``viewOffset`` is the resume point and ``lastViewedAt`` when it was set. An item with a
+        view count and no offset was watched to the end.
+        """
+        path = f"/library/metadata/{item.ext_id}"
+        if item.kind == MediaKind.SHOW:
+            path += "/allLeaves"
+        elif item.kind == MediaKind.SEASON:
+            path += "/children"
+        states: dict[str, WatchState] = {}
+        for m in (await self._get(path)).get("Metadata") or []:
+            key, seen = m.get("ratingKey"), m.get("lastViewedAt")
+            if key is None or not seen:
+                continue
+            offset = int(m.get("viewOffset") or 0)
+            states[str(key)] = WatchState(
+                position_ms=offset,
+                viewed_at=datetime.fromtimestamp(int(seen), UTC),
+                watched=offset == 0 and int(m.get("viewCount") or 0) > 0,
+                duration_ms=m.get("duration"),
+            )
+        return states
 
     async def report_progress(self, item: CatalogItem, position_ms: int, duration_ms: int | None, state: str) -> None:
         params = {

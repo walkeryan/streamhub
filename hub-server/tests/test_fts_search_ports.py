@@ -1,6 +1,7 @@
 """FTS port regressions using disposable data; no metadata/provider network."""
 
 import importlib.util
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -127,7 +128,7 @@ def test_fts_upgrade_from_pin_schema_preserves_existing_data(tmp_path):
     from sqlalchemy.orm import Session
 
     from app.infra.db import HUB_ROOT
-    from app.infra.models import OwnerCredential, Profile, Source
+    from app.infra.models import OwnerCredential, Source
 
     url = f"sqlite:///{tmp_path / 'migration.sqlite'}"
     cfg = Config(str(HUB_ROOT / "alembic.ini"))
@@ -137,28 +138,33 @@ def test_fts_upgrade_from_pin_schema_preserves_existing_data(tmp_path):
     command.upgrade(cfg, "0005")
     engine = create_engine(url)
     with Session(engine) as session:
-        session.add(Profile(id="fixture-owner", name="Fixture", is_admin=True, prefs={"language": "en"}))
         session.add(Source(id="fixture-source", type="plex", name="Fixture", config_enc="synthetic-retained-data"))
         session.add(OwnerCredential(id=1, credential_version=7, password_hash="synthetic-hash"))
         session.flush()
-        session.add(
-            Title(
-                source_id="fixture-source",
-                ext_id="42",
-                kind="movie",
-                title="Before migration",
-                norm_title="before migration",
+        # Raw SQL: the ORM models describe the head schema, which this database predates.
+        session.execute(
+            text(
+                "INSERT INTO profile(id,name,is_admin,theme_id,languages,kids,content_policy,token_version,prefs,"
+                "created_at) VALUES ('fixture-owner','Fixture',1,'midnight','[]',0,'{}',0,"
+                "'{\"language\": \"en\"}','2026-01-01 00:00:00')"
+            )
+        )
+        session.execute(
+            text(
+                "INSERT INTO title(source_id,ext_id,kind,title,norm_title,genres,extra,sync_gen) "
+                "VALUES ('fixture-source','42','movie','Before migration','before migration','[]','{}',0)"
             )
         )
         session.commit()
 
     def preserved():
         with Session(engine) as session:
-            assert session.get(Profile, "fixture-owner").prefs == {"language": "en"}
+            prefs = session.execute(text("SELECT prefs FROM profile WHERE id='fixture-owner'")).scalar_one()
+            assert json.loads(prefs) == {"language": "en"}
             assert session.get(Source, "fixture-source").config_enc == "synthetic-retained-data"
             assert session.get(OwnerCredential, 1).credential_version == 7
             assert session.get(OwnerCredential, 1).password_hash == "synthetic-hash"
-            assert session.query(Title).one().ext_id == "42"
+            assert session.execute(text("SELECT ext_id FROM title")).scalars().all() == ["42"]
 
     command.upgrade(cfg, "0006")
     preserved()

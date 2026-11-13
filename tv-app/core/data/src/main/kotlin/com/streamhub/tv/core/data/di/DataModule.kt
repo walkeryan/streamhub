@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import com.streamhub.tv.core.data.api.createStreamHubHttpClient
 import com.streamhub.tv.core.data.auth.SessionStore
+import com.streamhub.tv.core.data.repo.SessionEnd
 import com.streamhub.tv.core.data.repo.SessionEvents
 import dagger.Module
 import dagger.Provides
@@ -25,6 +26,8 @@ object DataModule {
     ): HttpClient = createStreamHubHttpClient(
         sessionStore = sessionStore,
         debug = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
-        onSessionExpired = events::emitExpired,
+        onSessionExpired = { code -> events.emitEnded(SessionEnd.ofCode(code) ?: SessionEnd.Expired) },
+        onUserSuspended = { events.emitEnded(SessionEnd.Suspended) },
+        onTokensRefreshed = events::emitRefreshed,
     )
 }

@@ -114,7 +114,7 @@ class OwnerReauthService:
             raise Gone("Owner verification already consumed")
         item.status = "consumed"
         await self.auth.consume_session(item.source, item.version, item.session)
-        return target, self.auth.issue(target)
+        return target, await self.auth.issue(target)
 
     async def cancel(self, p: Principal, challenge_id: str, secret: str) -> None:
         item = await self._bound(p, challenge_id, secret)

@@ -1,4 +1,11 @@
-"""Disabled-by-default server content policy. No inferred ages or client-only gates."""
+"""Server content policy: what a profile may see, enforced where rows are read. No inferred ages
+or client-only gates.
+
+Two regimes decide a profile's rule set. With ``CONTENT_POLICY_ENABLED`` (legacy, owner-PIN
+regime) it is the policy stored on the profile, for every profile. Without it, the default, it
+is derived from the user's effective limits (rating ceilings, unknown ratings), and the engine
+only runs for a user those limits restrict. ``applies_to`` is the one question a caller asks.
+"""
 
 from __future__ import annotations
 
@@ -20,16 +27,45 @@ from app.infra.models import (
     OwnerCredential,
     Profile,
     Programme,
+    Recording,
     RevokedSession,
+    Role,
     Source,
     Title,
+    User,
 )
 from app.services.classification import MOVIE_CODES, TV_CODES
 from app.services.errors import Conflict, Forbidden, NotFound, ServiceError
+from app.services.permissions import MOVIE_ORDER, TV_ORDER, Limits, effective_limits
+
+TOP_KINDS = ("movie", "vod", "show", "series")
+SHOW_KINDS = ("show", "series")
+# Evidence older than this no longer proves a rating; the classification job refreshes it sooner.
+EVIDENCE_FRESH = timedelta(days=7)
 
 active_principal: ContextVar[Any] = ContextVar("content_principal", default=None)
 
 active_policy: ContextVar[tuple[ContentPolicy, Profile] | None] = ContextVar("content_policy", default=None)
+
+# Where ``ContentPolicy.profile`` leaves the user's effective limits on the row it returns.
+_LIMITS = "_policy_limits"
+
+
+def restricts(limits: Limits) -> bool:
+    """Do these limits keep any title from their user? A stream count alone does not."""
+    return bool(limits.rating_ceiling_movie or limits.rating_ceiling_tv or not limits.allow_unrated)
+
+
+def rating_key(principal: Any) -> tuple[str | None, str | None, bool] | None:
+    """Part of any cache key for a listing computed under this principal's rating limits."""
+    limits = getattr(principal, "limits", None)
+    if limits is None:
+        return None
+    return limits.rating_ceiling_movie, limits.rating_ceiling_tv, limits.allow_unrated
+
+
+def _up_to(order: tuple[str, ...], ceiling: str | None) -> list[str]:
+    return list(order[: order.index(ceiling) + 1]) if ceiling in order else list(order)
 
 
 class ContentPolicy:
@@ -39,28 +75,78 @@ class ContentPolicy:
 
     @property
     def enabled(self) -> bool:
+        """The legacy owner-PIN regime. Not "is anything filtered": ask ``applies_to`` for that."""
         return bool(self.settings.content_policy_enabled)
 
-    async def profile(self, profile_id: str) -> Profile:
+    def applies_to(self, principal: Any) -> bool:
+        """Does the engine run for this caller's requests?
+
+        Under the legacy flag, for everyone (each stored policy then decides what it filters).
+        Otherwise only for a user whose own limits restrict them, as loaded for this request.
+        """
+        if self.enabled:
+            return True
+        limits = getattr(principal, "limits", None)
+        return limits is not None and restricts(limits)
+
+    async def profile(self, profile_id: str, limits: Limits | None = None) -> Profile:
+        """The profile with its user's effective limits attached, ready for ``values``.
+
+        ``limits`` skips the lookup for a caller that already validated them this request.
+        A profile no user owns yet has nothing to derive a ceiling from.
+        """
         async with self.db.session() as session:
             row = await session.get(Profile, profile_id)
-        if row is None:
-            raise NotFound("profile not found")
+            if row is None:
+                raise NotFound("profile not found")
+            if limits is None and row.user_id and not self.enabled:
+                user = await session.get(User, row.user_id)
+                role = await session.get(Role, user.role_id) if user is not None and user.role_id else None
+                if user is not None and role is not None:
+                    limits = effective_limits(role.limits or {}, user.limits or {})
+        setattr(row, _LIMITS, limits)
         return row
 
+    async def scope(self, profile_id: str) -> tuple[ContentPolicy, Profile] | None:
+        """What to set ``active_policy`` to for work done on a profile's behalf outside a request."""
+        profile = await self.profile(profile_id)
+        return (self, profile) if self.restricts(profile) else None
+
     def values(self, profile: Profile) -> dict[str, Any]:
-        stored = profile.content_policy or {}
+        """The rule set for a profile: whether it is restricted and which rating codes it admits."""
+        if self.enabled:
+            stored = profile.content_policy or {}
+            return {
+                "restricted": bool(stored.get("restricted", profile.kids and not profile.is_admin)),
+                "allowed_movie_codes": list(stored.get("allowed_movie_codes", [])),
+                "allowed_tv_codes": list(stored.get("allowed_tv_codes", [])),
+                "allow_unknown": False,
+            }
+        limits: Limits | None = getattr(profile, _LIMITS, None)
+        if limits is None or not restricts(limits):
+            return {
+                "restricted": False,
+                "allowed_movie_codes": list(MOVIE_ORDER),
+                "allowed_tv_codes": list(TV_ORDER),
+                "allow_unknown": True,
+            }
         return {
-            "restricted": bool(stored.get("restricted", profile.kids and not profile.is_admin)),
-            "allowed_movie_codes": list(stored.get("allowed_movie_codes", [])),
-            "allowed_tv_codes": list(stored.get("allowed_tv_codes", [])),
-            "allow_unknown": False,
+            "restricted": True,
+            "allowed_movie_codes": _up_to(MOVIE_ORDER, limits.rating_ceiling_movie),
+            "allowed_tv_codes": _up_to(TV_ORDER, limits.rating_ceiling_tv),
+            "allow_unknown": limits.allow_unrated,
         }
 
     def is_restricted(self, profile: Profile) -> bool:
+        """Legacy regime only: a profile the owner PIN stands guard over. Never true without the flag."""
         return self.enabled and self.values(profile)["restricted"]
 
-    def evidence_clause(self, evidence: Any, profile: Profile) -> Any:
+    def restricts(self, profile: Profile) -> bool:
+        """Does the engine filter anything for this profile (loaded by ``profile``), in either regime?"""
+        return bool(self.values(profile)["restricted"])
+
+    def _records(self, evidence: Any, profile: Profile) -> tuple[Any, Any, Any]:
+        """One evidence document's records, the "known US rating" test and the "admitted code" test."""
         values = self.values(profile)
         records = func.json_each(evidence, "$.records").table_valued("value")
         code, system = func.json_extract(records.c.value, "$.code"), func.json_extract(records.c.value, "$.system")
@@ -72,6 +158,11 @@ class ContentPolicy:
             func.json_extract(records.c.value, "$.country") == "US",
             func.json_extract(records.c.value, "$.status") == "known",
         )
+        return records, known, allowed
+
+    def evidence_clause(self, evidence: Any, profile: Profile) -> Any:
+        """Proven within the ceiling: one known US rating, and it is an admitted one."""
+        records, known, allowed = self._records(evidence, profile)
         return and_(
             func.json_extract(evidence, "$.status") == "known",
             func.json_extract(evidence, "$.assessment_region") == "US",
@@ -79,53 +170,117 @@ class ContentPolicy:
             ~exists(select(1).select_from(records).where(known, ~allowed)),
         )
 
+    def above_clause(self, evidence: Any, profile: Profile) -> Any:
+        """Rated above the ceiling: any known US rating that is not admitted, however old or contested."""
+        records, known, allowed = self._records(evidence, profile)
+        return exists(select(1).select_from(records).where(known, ~allowed))
+
     def programme_clause(self, evidence: Any, profile: Profile) -> Any:
+        if self.values(profile)["allow_unknown"]:
+            return not_(self.above_clause(evidence, profile))
         return and_(
             self.evidence_clause(evidence, profile),
             func.json_extract(evidence, "$.scope") == "programme",
             func.json_extract(evidence, "$.provider") == "xmltv",
         )
 
-    def title_clause(self, profile: Profile, title: Any = Title) -> Any:
-        mt = case((title.kind.in_(("movie", "vod")), "movie"), else_="tv")
-        key = literal("tmdb:") + mt + ":" + cast(title.tmdb_id, String)
-        # Episode/season IDs are different namespaces. Without explicit episode
-        # classification, restricted playback stays unknown rather than inheriting.
-        return and_(
-            title.kind.in_(("movie", "vod", "show", "series")),
-            title.tmdb_id > 0,
-            key.in_(
-                select(AgeClassification.subject_key).where(
-                    AgeClassification.provider == "tmdb",
-                    func.json_extract(AgeClassification.evidence, "$.subject_key") == AgeClassification.subject_key,
-                    or_(
-                        and_(
-                            AgeClassification.subject_key.like("tmdb:movie:%"),
-                            func.json_extract(AgeClassification.evidence, "$.scope") == "movie",
-                        ),
-                        and_(
-                            AgeClassification.subject_key.like("tmdb:tv:%"),
-                            func.json_extract(AgeClassification.evidence, "$.scope") == "series",
-                        ),
-                    ),
-                    AgeClassification.observed_at >= datetime.now(UTC) - timedelta(days=7),
-                    self.evidence_clause(AgeClassification.evidence, profile),
-                )
+    @staticmethod
+    def _subject(cols: Any) -> Any:
+        """The classification key of a movie or show row (``cols``: the entity or a table alias's columns)."""
+        mt = case((cols.kind.in_(("movie", "vod")), "movie"), else_="tv")
+        return literal("tmdb:") + mt + ":" + cast(cols.tmdb_id, String)
+
+    @staticmethod
+    def _typed() -> list[Any]:
+        """Classification rows that are what their key says: TMDB's, for that movie or that series."""
+        return [
+            AgeClassification.provider == "tmdb",
+            func.json_extract(AgeClassification.evidence, "$.subject_key") == AgeClassification.subject_key,
+            or_(
+                and_(
+                    AgeClassification.subject_key.like("tmdb:movie:%"),
+                    func.json_extract(AgeClassification.evidence, "$.scope") == "movie",
+                ),
+                and_(
+                    AgeClassification.subject_key.like("tmdb:tv:%"),
+                    func.json_extract(AgeClassification.evidence, "$.scope") == "series",
+                ),
             ),
+        ]
+
+    def _proven(self, profile: Profile) -> list[Any]:
+        return [
+            *self._typed(),
+            AgeClassification.observed_at >= datetime.now(UTC) - EVIDENCE_FRESH,
+            self.evidence_clause(AgeClassification.evidence, profile),
+        ]
+
+    def _admitted(self, cols: Any, profile: Profile) -> Any:
+        """A movie or show row with fresh proof that it is within the ceiling."""
+        return and_(
+            cols.tmdb_id > 0,
+            self._subject(cols).in_(select(AgeClassification.subject_key).where(*self._proven(profile))),
         )
+
+    def _refused(self, cols: Any, profile: Profile) -> Any:
+        """A movie or show row marked adult, or known to be rated above the ceiling."""
+        rated_above = exists(
+            select(1).where(
+                AgeClassification.subject_key == self._subject(cols),
+                *self._typed(),
+                self.above_clause(AgeClassification.evidence, profile),
+            )
+        )
+        # A row without a TMDB id has no key, so nothing matches: unknown, never NULL.
+        return or_(cols.adult.is_(True), rated_above)
+
+    def title_clause(self, profile: Profile, title: Any = Title) -> Any:
+        if self.enabled:
+            # Episode/season IDs are different namespaces. Without explicit episode
+            # classification, restricted playback stays unknown rather than inheriting.
+            return and_(title.kind.in_(TOP_KINDS), self._admitted(title, profile))
+        # Limits regime. A season or episode is judged by its show, one or two rows up; plain
+        # table aliases, so the scope this clause is part of is not applied to them in turn.
+        parent, grand = Title.__table__.alias("policy_parent"), Title.__table__.alias("policy_show")
+
+        def above(child: Any, row: Any) -> Any:
+            return and_(row.c.source_id == child.source_id, row.c.ext_id == child.parent_ext_id)
+
+        def shows(test: Any) -> Any:
+            direct = exists(
+                select(1).select_from(parent).where(above(title, parent), parent.c.kind.in_(SHOW_KINDS), test(parent.c))
+            )
+            via_season = exists(
+                select(1)
+                .select_from(parent.join(grand, above(parent.c, grand)))
+                .where(above(title, parent), parent.c.kind == "season", grand.c.kind.in_(SHOW_KINDS), test(grand.c))
+            )
+            return or_(direct, via_season)
+
+        top = title.kind.in_(TOP_KINDS)
+        if self.values(profile)["allow_unknown"]:
+            # Everything but what is known to be over the ceiling. An unmatched episode is unknown.
+            own = not_(self._refused(title, profile))
+            inherited = not_(shows(lambda cols: self._refused(cols, profile)))
+        else:
+            own = self._admitted(title, profile)
+            inherited = shows(lambda cols: and_(cols.adult.is_not(True), self._admitted(cols, profile)))
+        # Marked adult is over every ceiling, whatever a rating says.
+        return and_(title.adult.is_not(True), or_(and_(top, own), and_(not_(top), inherited)))
 
     def channel_clause(self, profile: Profile, channel: Any = Channel, at: datetime | None = None) -> Any:
         p = Programme.__table__.alias("policy_airing")
         at = at or datetime.now(UTC)
         current = and_(p.c.feed == channel.source_id, p.c.epg_channel == channel.epg_id, p.c.start <= at, p.c.stop > at)
         allowed = self.programme_clause(p.c.age_evidence, profile)
-        return and_(
-            exists(select(1).select_from(p).where(current, allowed)),
-            ~exists(select(1).select_from(p).where(current, not_(func.coalesce(allowed, False)))),
-        )
+        nothing_refused = ~exists(select(1).select_from(p).where(current, not_(func.coalesce(allowed, False))))
+        if self.values(profile)["allow_unknown"]:
+            # No guide, or a guide that does not say: unknown, and unknown is admitted here.
+            return nothing_refused
+        return and_(exists(select(1).select_from(p).where(current, allowed)), nothing_refused)
 
     def scope_statement(self, statement: Any, profile: Profile) -> Any:
-        if not self.is_restricted(profile):
+        if not self.restricts(profile):
             return statement
         return statement.options(
             with_loader_criteria(Title, self.title_clause(profile), include_aliases=True),
@@ -135,12 +290,17 @@ class ContentPolicy:
             ),
         )
 
-    async def allowed_refs(self, profile_id: str, refs: list[str], at: datetime | None = None) -> set[str]:
+    async def allowed_refs(
+        self, profile_id: str, refs: list[str], at: datetime | None = None, *, proven: bool = False
+    ) -> set[str]:
+        """Which of ``refs`` the profile may see. ``proven`` admits a ``tmdb:`` id only on fresh
+        evidence, even for a profile that is allowed unknown ratings: for titles that are only
+        metadata so far, "not looked up yet" is not the same as "has no rating"."""
         profile = await self.profile(profile_id)
-        if not self.is_restricted(profile):
+        if not self.restricts(profile):
             return set(refs)
         allowed: set[str] = set()
-        canonical, programmes = [], []
+        canonical, programmes, recordings = [], [], []
         libraries: dict[str, list[str]] = {}
         channels: dict[str, list[str]] = {}
         for ref in set(refs):
@@ -151,34 +311,14 @@ class ContentPolicy:
                 (libraries if parts[0] == "lib" else channels).setdefault(parts[1], []).append(parts[2])
             elif len(parts) == 2 and parts[0] == "prog" and parts[1].isdigit():
                 programmes.append(int(parts[1]))
+            elif len(parts) == 2 and parts[0] == "rec" and not self.enabled:
+                # Under the legacy flag a restricted profile plays no recording at all, as before.
+                recordings.append(parts[1])
         reset = active_policy.set(None)
         try:
             async with self.db.session() as session:
                 if canonical:
-                    allowed.update(
-                        (
-                            await session.execute(
-                                select(AgeClassification.subject_key).where(
-                                    AgeClassification.subject_key.in_(canonical),
-                                    AgeClassification.provider == "tmdb",
-                                    func.json_extract(AgeClassification.evidence, "$.subject_key")
-                                    == AgeClassification.subject_key,
-                                    or_(
-                                        and_(
-                                            AgeClassification.subject_key.like("tmdb:movie:%"),
-                                            func.json_extract(AgeClassification.evidence, "$.scope") == "movie",
-                                        ),
-                                        and_(
-                                            AgeClassification.subject_key.like("tmdb:tv:%"),
-                                            func.json_extract(AgeClassification.evidence, "$.scope") == "series",
-                                        ),
-                                    ),
-                                    AgeClassification.observed_at >= datetime.now(UTC) - timedelta(days=7),
-                                    self.evidence_clause(AgeClassification.evidence, profile),
-                                )
-                            )
-                        ).scalars()
-                    )
+                    allowed.update(await self._canonical(session, profile, canonical, proven))
                 for source, ext_ids in libraries.items():
                     hits = (
                         await session.execute(
@@ -208,9 +348,42 @@ class ContentPolicy:
                         )
                     ).scalars()
                     allowed.update(f"prog:{pk}" for pk in programme_hits)
+                if recordings:
+                    # A recording is its programme: judged by the evidence it kept of it.
+                    recorded = (
+                        await session.execute(
+                            select(Recording.id).where(
+                                Recording.id.in_(recordings), self.programme_clause(Recording.age_evidence, profile)
+                            )
+                        )
+                    ).scalars()
+                    allowed.update(f"rec:{rid}" for rid in recorded)
         finally:
             active_policy.reset(reset)
         return allowed
+
+    async def _canonical(self, session: Any, profile: Profile, refs: list[str], proven: bool = False) -> set[str]:
+        """Which ``tmdb:`` ids the profile's rule set admits."""
+        keys = select(AgeClassification.subject_key).where(AgeClassification.subject_key.in_(refs))
+        if self.enabled or proven or not self.values(profile)["allow_unknown"]:
+            found = set((await session.execute(keys.where(*self._proven(profile)))).scalars())
+            if self.enabled:
+                return found
+        else:
+            above = keys.where(*self._typed(), self.above_clause(AgeClassification.evidence, profile))
+            found = set(refs) - set((await session.execute(above)).scalars())
+        if not found:
+            return found
+        # A title the catalog marks adult is over every ceiling under its canonical id too.
+        rows = await session.execute(
+            select(Title.kind, Title.tmdb_id).where(
+                Title.adult.is_(True),
+                Title.kind.in_(TOP_KINDS),
+                Title.tmdb_id.in_({int(ref.rsplit(":", 1)[1]) for ref in found}),
+            )
+        )
+        adult = {f"tmdb:{'movie' if kind in ('movie', 'vod') else 'tv'}:{tmdb}" for kind, tmdb in rows.all()}
+        return found - adult
 
     async def require(self, profile_id: str, ref: str, at: datetime | None = None) -> None:
         if ref not in await self.allowed_refs(profile_id, [ref], at=at):
@@ -218,7 +391,7 @@ class ContentPolicy:
 
     async def filter_payload(self, profile_id: str, payload: Any) -> Any:
         profile = await self.profile(profile_id)
-        if not self.is_restricted(profile):
+        if not self.restricts(profile):
             return payload
         refs: set[str] = set()
 
@@ -257,6 +430,12 @@ class ContentPolicy:
                 result["open_in_app"] = [
                     x for x in result["results"] if x["sources"] and not any(s["playable_in_app"] for s in x["sources"])
                 ]
+                # A search says how many each section found: what was left out is not counted.
+                sections = result.get("sections")
+                for name, field in (("titles", "results"), ("channels", "channels"), ("programmes", "programmes")):
+                    if isinstance(sections, dict) and name in sections and isinstance(value.get(field), list):
+                        removed = len(value[field]) - len(result[field])
+                        sections[name]["count"] = max(len(result[field]), sections[name]["count"] - removed)
             return result
 
         return clean(payload)
@@ -335,7 +514,7 @@ class ContentPolicy:
 
     async def require_channel_interval(self, profile_id: str, ref: str, start: datetime, stop: datetime) -> None:
         profile = await self.profile(profile_id)
-        if not self.is_restricted(profile):
+        if not self.restricts(profile):
             return
         parts = ref.split(":", 2)
         if len(parts) != 3 or parts[0] != "ch" or stop <= start or stop - start > timedelta(days=1):
@@ -370,6 +549,12 @@ class ContentPolicy:
         finally:
             active_policy.reset(reset)
         cursor = start
+        if self.values(profile)["allow_unknown"]:
+            # Gaps and unrated programmes are unknown, which this profile is allowed; only a
+            # programme known to be over the ceiling closes the interval.
+            if len(rows) > 1000 or any(not allowed for _, _, allowed in rows):
+                raise Forbidden("Programme interval is restricted", code="content_restricted")
+            return
         if not rows or len(rows) > 1000:
             raise Forbidden("Programme coverage unavailable", code="content_restricted")
         for begins, ends, allowed in rows:
@@ -379,8 +564,17 @@ class ContentPolicy:
         if cursor < stop:
             raise Forbidden("Programme coverage incomplete", code="content_restricted")
 
+    async def _governs(self, profile_id: str) -> bool:
+        """Is a grant held by this profile subject to the engine right now?"""
+        if self.enabled:
+            return True
+        try:
+            return self.restricts(await self.profile(profile_id))
+        except NotFound:
+            return False  # nobody to restrict; the session check refuses a grant for a removed profile
+
     async def require_grant(self, grant: Any, auth: Any) -> None:
-        if not self.enabled:
+        if not await self._governs(grant.profile_id):
             return
         if not grant.content_ref or not grant.session_id or grant.profile_version is None:
             raise Forbidden("Start playback again with the current profile", code="content_restricted")
@@ -414,9 +608,13 @@ class ContentPolicy:
 
     async def require_segment(self, grant: Any, auth: Any, path: Path, manifest: Path) -> None:
         await self.require_grant(grant, auth)
-        if not self.enabled or not grant.live or not grant.content_ref or not grant.content_ref.startswith("ch:"):
+        if not grant.live or not grant.content_ref or not grant.content_ref.startswith("ch:"):
             return
-        if not self.is_restricted(await self.profile(grant.profile_id)):
+        try:
+            profile = await self.profile(grant.profile_id)
+        except NotFound:
+            return
+        if not self.restricts(profile):
             return
         # A signed channel grant is not permission for every programme carried
         # by the channel. Bind each segment to its actual wall-clock interval.

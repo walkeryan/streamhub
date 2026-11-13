@@ -109,7 +109,7 @@ async def test_admin_password_generated_once(settings: object, caplog: object, t
     from app.infra.cache import MemoryCache
     from app.infra.settings import AppSettings
 
-    s = AppSettings(config_dir=tmp_path / "gen", secret_key="k" * 20, enable_scheduler=False)
+    s = AppSettings(config_dir=tmp_path / "gen", secret_key="k" * 40, enable_scheduler=False)
     c = build_container(s, cache=MemoryCache())
     with caplog.at_level(logging.WARNING):  # type: ignore[attr-defined]
         await startup(c, start_background=False)

@@ -115,6 +115,11 @@ class CatalogItem:
     stream_url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
+    # Presentation facts an adapter may know. ``language`` is a filter hint (ISO 639-3 or
+    # "und"), not verified audio; ``None`` leaves it to the source default / category inference.
+    language: str | None = None
+    quality: str | None = None
+    adult: bool = False
 
 
 @dataclass(slots=True)
@@ -149,6 +154,16 @@ class StreamTarget:
     title: str | None = None
     subtitle: str | None = None
     poster: str | None = None
+
+
+@dataclass(slots=True)
+class WatchState:
+    """One item's resume point as the library server's own account has it."""
+
+    position_ms: int
+    viewed_at: datetime  # when the account last watched it
+    watched: bool = False  # watched to the end: there is nothing to resume
+    duration_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -196,6 +211,7 @@ class MetaTitle:
     popularity: float = 0.0
 
     age_evidence: dict[str, Any] = field(default_factory=dict)
+    season_numbers: list[int] = field(default_factory=list)  # tv: regular seasons, specials excluded
 
 
 @dataclass(slots=True)

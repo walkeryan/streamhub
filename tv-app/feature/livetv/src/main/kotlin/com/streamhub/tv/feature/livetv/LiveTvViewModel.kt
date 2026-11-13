@@ -1,5 +1,12 @@
 package com.streamhub.tv.feature.livetv
 
+import com.streamhub.tv.core.data.model.Permissions
+import com.streamhub.tv.core.data.repo.MeRepository
+import com.streamhub.tv.core.data.repo.RoomDirectory
+import com.streamhub.tv.core.data.repo.RoomSubject
+import com.streamhub.tv.core.data.repo.WatchTogetherLauncher
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.StreamHubApi
@@ -10,6 +17,9 @@ import com.streamhub.tv.core.data.model.Favorite
 import com.streamhub.tv.core.data.model.LanguageCount
 import com.streamhub.tv.core.data.model.MediaKind
 import com.streamhub.tv.core.data.repo.ChannelListCache
+import com.streamhub.tv.core.data.repo.ProgrammeRecorder
+import com.streamhub.tv.core.data.repo.RecordingsRepository
+import com.streamhub.tv.core.data.model.Programme
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -57,12 +67,32 @@ class LiveTvViewModel @Inject constructor(
     private val cache: ChannelListCache,
     private val session: SessionStore,
     private val prefs: ProfileFilterStore,
+    recordings: RecordingsRepository,
+    rooms: RoomDirectory,
+    private val me: MeRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(LiveTvState())
     val state: StateFlow<LiveTvState> = _state.asStateFlow()
 
     private var loadJob: Job? = null
     private var groupsJob: Job? = null
+
+    /** The Record actions of the now/next dialog; a scheduled programme gets its mark at once. */
+    val recorder = ProgrammeRecorder(recordings, viewModelScope) { programme, state ->
+        fun Programme.marked() = if (id == programme.id) copy(recordingState = state) else this
+        _state.update { s -> s.copy(channels = s.channels.map { if (it.id == programme.channelId) it.copy(now = it.now?.marked(), next = it.next?.marked()) else it }) }
+    }
+
+    /** "Watch together" on a channel: a live room, which has no position, only play and pause for everyone. */
+    val together = WatchTogetherLauncher(rooms, viewModelScope)
+    fun watchTogether(ch: Channel) = together.open(ch.id, ch.name, RoomSubject.Channel)
+
+    /**
+     * The signed-in user may start a watch room (rooms.create): a channel's actions offer "Watch
+     * together". Its own flow: the screen state below is replaced wholesale when the profile changes.
+     */
+    val canWatchTogether: StateFlow<Boolean> = me.state.map { it.can(Permissions.ROOMS_CREATE) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, me.can(Permissions.ROOMS_CREATE))
 
     private var profileId: String? = null
     init {
@@ -149,6 +179,22 @@ class LiveTvViewModel @Inject constructor(
     fun selectGroup(name: String?) { if (!_state.value.ready) return; _state.update { it.copy(selectedGroup = name) }; saveFilters(); load() }
     fun toggleFavoritesOnly() { if (!_state.value.ready) return; _state.update { it.copy(favoritesOnly = !it.favoritesOnly) }; saveFilters(); refreshGroups(); load() }
 
+    /**
+     * The channel a typed number names: the loaded page first, then the whole list under the current
+     * filters on the server (the page holds 60 of what can be thousands). null when there is none.
+     */
+    suspend fun channelByNumber(n: Int): Channel? {
+        val s = _state.value
+        s.channels.firstOrNull { it.number == n }?.let { return it }
+        return try {
+            api.channels(
+                q = n.toString(), group = s.selectedGroup, languages = s.selectedLanguages?.toList() ?: emptyList(),
+                favorites = s.favoritesOnly.takeIf { it }, country = s.country, limit = NUMBER_LOOKUP_LIMIT,
+            ).channels.firstOrNull { it.number == n }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+
     /** Focus only updates metadata; browsing must never consume a provider stream. */
     fun onChannelFocused(ch: Channel) {
         _state.update { it.copy(previewChannelId = ch.id) }
@@ -174,4 +220,9 @@ class LiveTvViewModel @Inject constructor(
     }
 
     fun stopPreview() { _state.update { it.copy(previewChannelId = null) } }
+
+    private companion object {
+        /** A number search also matches names containing the digits; the exact number is among the first hits. */
+        const val NUMBER_LOOKUP_LIMIT = 100
+    }
 }

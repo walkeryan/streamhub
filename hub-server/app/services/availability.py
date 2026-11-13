@@ -13,13 +13,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import ColumnElement, and_, delete, or_, select
+from sqlalchemy import ColumnElement, and_, delete, or_, select, true
 
 from app.domain.entities import MetaTitle, SourceType
 from app.domain.ports import MetadataProvider
 from app.infra.db import Database
 from app.infra.models import Availability, ServiceRegistry, Source, Title, utcnow
 from app.services import ids
+from app.services.adult import general_audience
 from app.services.tiles import badge_for_source, sort_badges
 
 ATTRIBUTION = "Availability data by JustWatch"
@@ -38,7 +39,9 @@ class AvailabilityService:
         imdb_id: str | None,
         title: str | None,
         year: int | None,
+        general: bool = False,
     ) -> list[Title]:
+        """``general`` is for listings: it leaves out adult rows (see ``app.services.adult``)."""
         kinds = list(ids.MOVIE_KINDS if media_type == "movie" else ids.SHOW_KINDS)
         conds = []
         if tmdb_id:
@@ -65,7 +68,12 @@ class AvailabilityService:
                     await s.execute(
                         select(Title)
                         .join(Source, Source.id == Title.source_id)
-                        .where(Title.kind.in_(kinds), or_(*conds), Source.enabled.is_(True))
+                        .where(
+                            Title.kind.in_(kinds),
+                            or_(*conds),
+                            Source.enabled.is_(True),
+                            general_audience() if general else true(),
+                        )
                     )
                 ).scalars()
             )
@@ -84,7 +92,7 @@ class AvailabilityService:
         ]
 
     async def library_matches_many(
-        self, metas: list[MetaTitle], *, candidates: list[Title] | None = None
+        self, metas: list[MetaTitle], *, candidates: list[Title] | None = None, general: bool = False
     ) -> dict[str, list[Title]]:
         """Three indexed lookups for a discovery page, never a LIKE scan per title.
 
@@ -109,7 +117,7 @@ class AvailabilityService:
                     await session.execute(
                         select(Title)
                         .join(Source, Source.id == Title.source_id)
-                        .where(condition, Source.enabled.is_(True))
+                        .where(condition, Source.enabled.is_(True), general_audience() if general else true())
                     )
                 ).scalars()
                 rows.update((r.id, r) for r in found)
@@ -217,10 +225,13 @@ class AvailabilityService:
         sources: dict[str, Source],
         is_in_app: Any,
         include_handoff: bool = True,
+        general: bool = False,
     ) -> tuple[list[dict[str, Any]], list[Title]]:
-        matches = await self.library_matches(media_type, tmdb_id=tmdb_id, imdb_id=imdb_id, title=title, year=year)
+        matches = await self.library_matches(
+            media_type, tmdb_id=tmdb_id, imdb_id=imdb_id, title=title, year=year, general=general
+        )
         badges = [
-            badge_for_source(sources[m.source_id], in_app=is_in_app(sources[m.source_id].type))
+            badge_for_source(sources[m.source_id], in_app=is_in_app(sources[m.source_id].type), quality=m.quality)
             for m in matches
             if m.source_id in sources
         ]

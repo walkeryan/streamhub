@@ -36,6 +36,7 @@ async def seed_catalog(api: Api, title_count: int = 0, channel_count: int = 0) -
                         title=f"Film {i:06}",
                         norm_title=f"film {i:06}",
                         group_name=["UK| Films", "FR| Films", None][i % 3],
+                        language=["eng", "fra", "und"][i % 3],
                     )
                     for i in range(title_count)
                 ],
@@ -66,6 +67,7 @@ async def seed_catalog(api: Api, title_count: int = 0, channel_count: int = 0) -
                 title="Film hidden",
                 norm_title="film hidden",
                 group_name="UK| Films",
+                language="eng",
             )
         )
         await s.commit()
@@ -225,9 +227,10 @@ async def test_on_now_uses_only_profile_history_and_current_eligible_channels(ap
     pairs, personalized = await api.c.channels.on_now("cold")
     assert not personalized and [ch.ext_id for ch, _ in pairs] == ["0", "3", "6"]
     home = await api.c.home.home(api.profile_id)
-    assert next(row for row in home["rows"] if row["id"] == "on_now")["title"] == "On now · Recent channels first"
+    on_now = next(row for row in home["rows"] if row["id"] == "on_now")
+    assert on_now["title"] == "On Now" and on_now["tiles"][0]["id"] == "ch:catalog:6"
     cold = await api.c.home.home("cold")
-    assert next(row for row in cold["rows"] if row["id"] == "on_now")["title"] == "On now · Explore live TV"
+    assert next(row for row in cold["rows"] if row["id"] == "on_now")["title"] == "On Now"
     await api.patch("/channels/groups/eng", json={"hidden": True})
     assert await api.c.channels.on_now(api.profile_id) == ([], False)
 

@@ -15,8 +15,6 @@ interface HomePrefs {
 }
 
 interface UiState {
-  railPinned: boolean
-  setRailPinned: (v: boolean) => void
   toasts: Toast[]
   toast: (text: string, tone?: Toast['tone']) => void
   dismissToast: (id: number) => void
@@ -66,8 +64,6 @@ function migratePreferences() {
 migratePreferences()
 
 export const useUi = create<UiState>((set, get) => ({
-  railPinned: false,
-  setRailPinned: (railPinned) => set({ railPinned }),
   toasts: [],
   toast: (text, tone = 'info') => {
     const id = ++toastSeq
@@ -110,7 +106,6 @@ useSession.subscribe((session, previous) => {
     recentSearches: safeJson<string[]>(lsGet(scopeKey(SEARCH_KEY)), []),
     searchQuery: ssGet(scopeKey(QUERY_KEY)) ?? '',
     homePrefs: safeJson<HomePrefs>(lsGet(scopeKey(HOME_KEY)), { order: [], hidden: [] }),
-    railPinned: false, toasts: [], channelList: { listId: null, channels: [] },
-    lastChannelId: null, sleepMinutes: null,
+    toasts: [], channelList: { listId: null, channels: [] }, lastChannelId: null, sleepMinutes: null,
   })
 })

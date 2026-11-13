@@ -26,6 +26,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -65,7 +67,7 @@ class StreamHubApi @Inject constructor(
     private suspend fun HttpResponse.toError(): ApiException {
         val text = runCatching { bodyAsText() }.getOrNull()
         val err = text?.let { runCatching { StreamHubJson.decodeFromString(ApiError.serializer(), it) }.getOrNull() }
-        return ApiException(status.value, err, err?.message ?: "HTTP ${status.value}", headers["Retry-After"]?.toIntOrNull())
+        return ApiException(status.value, err, err?.message?.takeIf { it.isNotBlank() } ?: "HTTP ${status.value}", headers["Retry-After"]?.toIntOrNull())
     }
 
     private suspend inline fun <reified T> get(path: String, noinline block: HttpRequestBuilder.() -> Unit = {}): T =
@@ -76,6 +78,27 @@ class StreamHubApi @Inject constructor(
     /** Used by onboarding to validate a server URL before saving it. */
     suspend fun health(serverBase: String): Boolean =
         runCatching { client.get("$serverBase/api/v1/health").status.isSuccess() }.getOrDefault(false)
+
+    /** Who this TV is signed in as and what they may do. Servers without users and roles answer 404. */
+    suspend fun me(): Me = get("/auth/me")
+
+    /** The people who can be picked on this shared TV. 404 = no such feature; 403 `not_shared_device` = a personal device. */
+    suspend fun switchableUsers(): SwitchableUsers = get("/auth/switchable")
+
+    /**
+     * Become another person on this TV. The usual 401 handling is kept out of this one call: here a
+     * 401 says the PIN is missing or wrong, and refreshing the session and sending the same PIN again
+     * would count as a second wrong attempt. `pin` is sent as an explicit null when there is none.
+     */
+    suspend fun switchUser(from: Session, userId: String, pin: String?): AuthTokens {
+        val base = from.apiBase ?: throw ApiException(0, null, "Server URL not set")
+        val token = from.accessToken ?: throw ApiException(401, null, "Not signed in")
+        return client.post("$base/auth/switch") {
+            attributes.put(AuthCircuitBreaker, Unit)
+            header(HttpHeaders.Authorization, "Bearer $token")
+            setBody(buildJsonObject { put("user_id", userId); put("pin", pin) })
+        }.ok()
+    }
 
     suspend fun login(req: LoginRequest): AuthTokens = client.post(url("/auth/login")) { setBody(req) }.ok()
     suspend fun startDevicePairing(): DeviceCode = client.post(url("/auth/device")).ok()
@@ -156,13 +179,17 @@ class StreamHubApi @Inject constructor(
         sort: String? = null,
         page: Int = 1,
         language: String? = null,
+        category: String? = null,
+        q: String? = null,
     ): BrowsePage = get("/browse/${id(section)}") {
-        sourceId?.let { parameter("source_id", it) }
-        genre?.let { parameter("genre", it) }
-        sort?.let { parameter("sort", it) }
-        parameter("page", page)
-        language?.let { parameter("language", it) }
+        browseParameters(sourceId, genre, sort, page, language, category, q).forEach { (key, value) -> parameter(key, value) }
     }
+
+    /** Provider categories in server order, with scoped title counts: the shelves of Movies and Shows. */
+    suspend fun browseCategories(section: String, sourceId: String? = null, language: String? = null, q: String? = null): List<CatalogFacet> =
+        get("/browse/${id(section)}/categories") {
+            browseFacetParameters(sourceId, language, q = q).forEach { (key, value) -> parameter(key, value) }
+        }
 
     suspend fun discover(
         section: String,
@@ -175,10 +202,9 @@ class StreamHubApi @Inject constructor(
         }
     }
 
-    suspend fun browseGenres(section: String, sourceId: String? = null, language: String? = null): List<CatalogFacet> =
+    suspend fun browseGenres(section: String, sourceId: String? = null, language: String? = null, category: String? = null, q: String? = null): List<CatalogFacet> =
         get("/browse/${id(section)}/genres") {
-            sourceId?.let { parameter("source_id", it) }
-            language?.let { parameter("language", it) }
+            browseFacetParameters(sourceId, language, category, q).forEach { (key, value) -> parameter(key, value) }
         }
     suspend fun browseLanguages(section: String, sourceId: String? = null): List<LanguageCount> =
         get("/browse/${id(section)}/languages") { sourceId?.let { parameter("source_id", it) } }
@@ -300,6 +326,59 @@ class StreamHubApi @Inject constructor(
         return true
     }
 
+    // ---- Watch rooms ---------------------------------------------------------------------------
+
+    /** A room for a title or channel; it starts empty and paused at 0 (a live room starts playing). */
+    suspend fun createRoom(titleId: String, variantId: String? = null): Room =
+        client.post(url("/rooms")) { setBody(RoomCreate(titleId, variantId)) }.ok()
+    /** The join screen: title, host, members, state. 404 `room_not_found`. */
+    suspend fun room(code: String): Room = get("/rooms/${id(code)}")
+    /** Takes a seat; resolves playback exactly as /playback/resolve would and returns its refusals unchanged. */
+    suspend fun joinRoom(code: String, allowUnverifiedAudio: Boolean = false, memberToken: String? = null): RoomJoined =
+        client.post(url("/rooms/${id(code)}/join")) { setBody(RoomJoinRequest(allowUnverifiedAudio = allowUnverifiedAudio, memberToken = memberToken)) }.ok()
+    /**
+     * A member's descriptor as it is now; the seat is unchanged. Authorized like the room's socket, by
+     * the member token in the query: no bearer token is sent (see PUBLIC_PATHS) and a 401 here
+     * (`room_unauthorized`) is about that token, so it is kept away from the session refresh.
+     */
+    suspend fun roomDescriptor(code: String, memberToken: String, allowUnverifiedAudio: Boolean = false): PlaybackDescriptor =
+        client.get(url("/rooms/${id(code)}/descriptor")) {
+            attributes.put(AuthCircuitBreaker, Unit)
+            parameter("member_token", memberToken)
+            parameter("client", "android_tv")
+            if (allowUnverifiedAudio) parameter("allow_unverified_audio", true)
+        }.ok()
+    /** Host or administrator: closes the room for everyone. */
+    suspend fun deleteRoom(code: String) = client.delete(url("/rooms/${id(code)}")).unit()
+
+    // ---- Recordings ----------------------------------------------------------------------------
+
+    /** The current profile's recordings (everyone's for an admin), earliest first; cancelled ones are left out. */
+    suspend fun recordings(): RecordingsResponse = get("/recordings")
+    /** 201 scheduled, or 200 when this programme was already scheduled: both answer with the recording. */
+    suspend fun record(req: RecordRequest): Recording = client.post(url("/recordings")) { setBody(req) }.ok()
+    /** Cancels an upcoming or running recording; deletes a finished one and its file. */
+    suspend fun deleteRecording(recordingId: String) = client.delete(url("/recordings/${id(recordingId)}")).unit()
+    suspend fun recordingRules(): RecordingRulesResponse = get("/recording-rules")
+    suspend fun createRecordingRule(req: RecordingRuleCreate): RecordingRule = client.post(url("/recording-rules")) { setBody(req) }.ok()
+    suspend fun patchRecordingRule(ruleId: String, patch: RecordingRulePatch): RecordingRule =
+        client.patch(url("/recording-rules/${id(ruleId)}")) { setBody(patch) }.ok()
+    suspend fun deleteRecordingRule(ruleId: String) = client.delete(url("/recording-rules/${id(ruleId)}")).unit()
+
+    // ---- Requests / notices ---------------------------------------------------------------------
+
+    /** Newest first. [all] lists everyone's and needs permission to approve. */
+    suspend fun requests(all: Boolean = false): RequestsResponse = get("/requests") { parameter("scope", if (all) "all" else "mine") }
+    /** 201 created, or 200 when an open request for this title already exists: both answer with the request. */
+    suspend fun createRequest(req: RequestCreate): MediaRequest = client.post(url("/requests")) { setBody(req) }.ok()
+    suspend fun approveRequest(requestId: String, note: String? = null): MediaRequest =
+        client.post(url("/requests/${id(requestId)}/approve")) { setBody(RequestDecision(note)) }.ok()
+    suspend fun declineRequest(requestId: String, note: String? = null): MediaRequest =
+        client.post(url("/requests/${id(requestId)}/decline")) { setBody(RequestDecision(note)) }.ok()
+    /** Notices for the current profile, unread first. */
+    suspend fun notices(): NoticesResponse = get("/notices")
+    suspend fun markNoticeRead(noticeId: String) = client.post(url("/notices/${id(noticeId)}/read")).unit()
+
     // ---- Favorites / watchlist / history -------------------------------------------------------
 
     suspend fun favorites(): List<Tile> = get("/favorites")
@@ -322,6 +401,8 @@ class StreamHubApi @Inject constructor(
     /** Version + TMDB/JustWatch attribution strings (schema open in the contract). */
     suspend fun about(): JsonObject = get("/about")
     suspend fun settings(): Settings = get("/settings")
+    /** Newest TV build on offer. Servers without the update service answer 404 (see UpdateRepository). */
+    suspend fun tvAppRelease(): TvAppRelease = get("/app/tv")
     suspend fun patchSettings(s: Settings) = client.patch(url("/settings")) { setBody(s) }.unit()
     suspend fun setTmdbKey(key: String) =
         client.put(url("/settings/tmdb_key")) { setBody(JsonObject(mapOf("api_key" to kotlinx.serialization.json.JsonPrimitive(key)))) }.unit()

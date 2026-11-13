@@ -16,6 +16,8 @@ async function fixture(page: Page, mode: 'admin' | 'restricted' | 'member' | 'di
     }
     window.fetch = async (input, init) => {
       const req = new Request(input, init), url = new URL(req.url)
+      // The regime under test predates users and roles: no /auth/me, so the app reads the profile's admin flag.
+      if (url.pathname === '/api/v1/auth/me') return Response.json({ code: 'not_found', message: 'Not found' }, { status: 404 })
       if (url.pathname === '/api/v1/auth/config') return Response.json({ google_enabled:false, google_required:false, content_policy_enabled:mode !== 'disabled',owner_pin_configured:true })
       if (url.pathname === '/api/v1/disclaimer/accept') { accepted = (await req.clone().json()).version; return original(req) }
       if (url.pathname === '/api/v1/profiles' && req.method === 'GET') { const res = await original(req); return Response.json((await res.json() as Array<Record<string,unknown>>).map(decorate)) }
@@ -154,12 +156,12 @@ test('a restricted admin cannot expose policy or profile-management escape contr
 })
 
 
-test('owner profiles cannot be restricted through the editor', async ({page}) => {
+test('an owner profile is not held back by its admin flag: the editor says what the server will answer', async ({page}) => {
   await fixture(page);await page.goto('/settings?tab=parental')
-  await page.getByTestId('content-policies').getByRole('button',{name:'Ryan',exact:true}).click()
-  await expect(page.getByText('Owner profiles cannot be restricted.')).toBeVisible()
-  await expect(page.getByTestId('policy-editor')).toHaveCount(0)
-  expect(await calls(page)).toEqual([])
+  await page.getByTestId('content-policies').getByRole('button').first().click()
+  await expect(page.getByTestId('policy-owner-note')).toContainText('cannot be restricted: the server refuses it')
+  await expect(page.getByTestId('policy-editor')).toBeVisible()
+  expect((await calls(page)).map((c)=>c.path)).toEqual(['/api/v1/profiles/p1/content-policy'])
 })
 
 

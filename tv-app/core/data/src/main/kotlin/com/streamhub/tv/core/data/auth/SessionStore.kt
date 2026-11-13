@@ -104,6 +104,22 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
         }
     }
 
+    /**
+     * "Who's watching?": the tokens POST /auth/switch returned replace the session they were asked
+     * from, and only that one. The generation is bumped, so everything bound to the previous person
+     * (progress reports, stream leases, in-flight loads) stops matching.
+     */
+    suspend fun saveUserSwitchTokens(expected: Session, tokens: AuthTokens) {
+        context.sessionStore.edit { values ->
+            val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) },values[K.generation])
+            if(!sameSwitchSession(expected,current)) throw kotlinx.coroutines.CancellationException("Session changed")
+            values[K.generation]=java.util.UUID.randomUUID().toString()
+            values[K.access]=tokens.accessToken
+            values[K.refresh]=tokens.refreshToken
+            values[K.profile]=json.encodeToString(Profile.serializer(),tokens.profile)
+        }
+    }
+
     /** Refresh alone preserves identity; stale responses must not replace a new login. */
     suspend fun saveRefreshedTokens(expected: Session, tokens: AuthTokens): Boolean {
         var saved=false

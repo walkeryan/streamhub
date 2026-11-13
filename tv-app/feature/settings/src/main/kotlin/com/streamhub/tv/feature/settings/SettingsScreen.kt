@@ -2,6 +2,7 @@ package com.streamhub.tv.feature.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.ShTextField
 import com.streamhub.tv.core.ui.focus.FocusSurface
+import com.streamhub.tv.core.ui.focus.InitialFocusOnce
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
 import com.streamhub.tv.core.ui.focus.leftOpensRail
@@ -56,11 +58,12 @@ import com.streamhub.tv.core.ui.theme.Tokens
 
 /** Two-pane settings: section list (left) · content (right). Right enters content, Left returns. */
 @Composable
-fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(appVersion: String, onWhoIsWatching: () -> Unit = {}, onOpenRequests: () -> Unit = {}, vm: SettingsViewModel = hiltViewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val t = LocalThemeTokens.current
     val rail = LocalRailController.current
     val first = remember { FocusRequester() }
+    val screenFocus = remember { FocusRequester() }
     var switchOpener by remember { mutableStateOf<FocusRequester?>(null) }
     var restoreSwitchFocus by remember { mutableStateOf(false) }
     var hadOwnerPinPrompt by remember { mutableStateOf(false) }
@@ -76,13 +79,16 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
             restoreSwitchFocus=false
         }
     }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    // The section list gets focus the first time only. A plain LaunchedEffect(Unit) ran again every
+    // time the screen was shown, pulling focus out of whatever pane the viewer had been in.
+    InitialFocusOnce(initial = first, restore = screenFocus)
     DisposableEffect(Unit) { onDispose { vm.previewTheme(null); vm.cancelPin() } }
 
-    Row(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY)) {
+    Row(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY).focusRequester(screenFocus).focusRestorer().focusGroup()) {
         Column(Modifier.width(260.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX).focusRestorer(first), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Settings", style = MaterialTheme.typography.headlineSmall, color = t.text, modifier = Modifier.padding(bottom = 12.dp))
-            SettingsSection.entries.forEachIndexed { i, sec ->
+            // Requests is listed only for someone who may ask for titles or decide on requests.
+            SettingsSection.entries.filter { it != SettingsSection.Requests || s.showRequests }.forEachIndexed { i, sec ->
                 FocusSurface(
                     onClick = { vm.select(sec) },
                     modifier = Modifier.fillMaxWidth().height(44.dp).leftOpensRail(rail)
@@ -98,11 +104,12 @@ fun SettingsScreen(appVersion: String, vm: SettingsViewModel = hiltViewModel()) 
         Box(Modifier.weight(1f).fillMaxHeight().padding(start = 32.dp, end = Tokens.Canvas.SafeMarginX)) {
             s.message?.let { Text(it, color = t.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.align(Alignment.TopEnd)) }
             when (s.section) {
-                SettingsSection.Profiles -> ProfilesPane(s, vm) { switchOpener=it }
+                SettingsSection.Profiles -> ProfilesPane(s, vm, onWhoIsWatching) { switchOpener=it }
                 SettingsSection.Theme -> ThemePane(vm)
                 SettingsSection.Languages -> LanguagesPane(s, vm)
                 SettingsSection.Rows -> RowsPane(s, vm)
                 SettingsSection.Parental -> ParentalPane(s, vm)
+                SettingsSection.Requests -> RequestsPane(onOpenRequests)
                 SettingsSection.Playback -> PlaybackPane(s, vm)
                 SettingsSection.About -> AboutPane(s, appVersion, vm)
             }
@@ -141,7 +148,15 @@ private fun Pane(title: String, content: androidx.compose.foundation.lazy.LazyLi
 }
 
 @Composable
-private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel, onOpen: (FocusRequester) -> Unit) = Pane("Profiles") {
+private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel, onWhoIsWatching: () -> Unit, onOpen: (FocusRequester) -> Unit) = Pane("Profiles") {
+    // A shared TV on a server with users: people are switched in "Who's watching?", which asks for
+    // each person's own PIN. The per-profile list below is what older servers and personal devices get.
+    if (s.sharedDevice) {
+        item { ShButton("Who's watching? Switch person", onWhoIsWatching, style = ButtonStyle.Primary) }
+        item { Text("Signed in as ${s.current?.name ?: "nobody"}. Everyone keeps their own history, watchlist and preferences.", color = LocalThemeTokensText()) }
+        item { Text("Add people and set their PINs from the web app.", color = LocalThemeTokensText(), style = MaterialTheme.typography.bodySmall) }
+        return@Pane
+    }
     items(s.profiles, key = { it.id }) { p ->
         val current = p.id == s.current?.id
         val opener=remember(p.id){FocusRequester()}
@@ -155,6 +170,12 @@ private fun ProfilesPane(s: SettingsState, vm: SettingsViewModel, onOpen: (Focus
     }
     item { Text(if(s.current?.contentRestricted==true) "Leaving this restricted profile requires the existing owner PIN. A target profile PIN or Google sign-in alone cannot approve it." else if(s.switching) "Checking profile authorization…" else "Profile changes keep each user's saved history and preferences separate.", color=LocalThemeTokensText()) }
     item { Text("Create and edit profiles from the web app (admin).", color = LocalThemeTokensText(), style = MaterialTheme.typography.bodySmall) }
+}
+
+@Composable
+private fun RequestsPane(onOpen: () -> Unit) = Pane("Requests") {
+    item { Text("Titles that no source has can be asked for from their page. This is where the answers are: what you asked for and, if you may approve, what everyone asked for.", color = LocalThemeTokensText()) }
+    item { ShButton("Open requests", onOpen, style = ButtonStyle.Primary) }
 }
 
 @Composable private fun LocalThemeTokensText() = LocalThemeTokens.current.textMuted
@@ -264,8 +285,20 @@ private fun PlaybackPane(s: SettingsState, vm: SettingsViewModel) = Pane("Playba
 @Composable
 private fun AboutPane(s: SettingsState, appVersion: String, vm: SettingsViewModel) {
     val t = LocalThemeTokens.current
+    // Asked each time About opens; servers without the update service just show nothing here.
+    LaunchedEffect(Unit) { vm.checkForUpdate() }
     Pane("About") {
     item { Text("StreamHub for Android TV $appVersion", color = t.text, style = MaterialTheme.typography.bodyLarge) }
+    s.update?.let { update ->
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Update available: ${update.versionName}", color = t.text, style = MaterialTheme.typography.titleSmall)
+                // Stays enabled while busy (presses are ignored) so focus is not dropped mid-download.
+                ShButton(if (s.updateBusy) "Installing…" else "Install", vm::installUpdate, style = ButtonStyle.Primary)
+                s.updateStatus?.let { Text(it, color = t.textMuted, style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+    }
     item {
         Column(Modifier.background(t.surface, RoundedCornerShape(Tokens.Radius.Md)).padding(16.dp)) {
             // TMDB + JustWatch attribution (LEGAL.md). Logos are not bundled (engineering rule); text attribution shown.

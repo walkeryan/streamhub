@@ -7,6 +7,8 @@ import com.streamhub.tv.core.data.model.LiveGuideFilters
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.data.model.Programme
 import com.streamhub.tv.core.data.repo.ChannelListCache
+import com.streamhub.tv.core.data.repo.ProgrammeRecorder
+import com.streamhub.tv.core.data.repo.RecordingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -51,11 +53,20 @@ fun floor30(i: Instant): Instant {
 class GuideViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val cache: ChannelListCache,
+    recordings: RecordingsRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(GuideState())
     val state: StateFlow<GuideState> = _state.asStateFlow()
 
     private var loadJob: Job? = null
+
+    /** The Record actions of the programme dialog; a scheduled programme gets its badge at once. */
+    val recorder = ProgrammeRecorder(recordings, viewModelScope) { programme, state -> markRecording(programme, state) }
+
+    private fun markRecording(programme: Programme, state: String?) = _state.update { s ->
+        fun GuideProgramme.marked() = if (p.id == programme.id && p.channelId == programme.channelId) copy(p = p.copy(recordingState = state)) else this
+        s.copy(programmes = s.programmes.mapValues { (_, list) -> list.map { it.marked() } }, selected = s.selected?.marked())
+    }
 
     private var initialized = false
 
@@ -123,7 +134,27 @@ class GuideViewModel @Inject constructor(
         }
     }
 
-    companion object { const val PAGE_SIZE = 40 }
+    /**
+     * The channel a typed number names: this page first, then the guide's whole filtered list on the
+     * server. null when there is none.
+     */
+    suspend fun channelByNumber(n: Int): Channel? {
+        val s = _state.value
+        s.channels.firstOrNull { it.number == n }?.let { return it }
+        return try {
+            api.channels(
+                q = n.toString(), group = s.filters.group, languages = s.filters.languages,
+                favorites = s.filters.favorites, country = s.filters.country, limit = NUMBER_LOOKUP_LIMIT,
+            ).channels.firstOrNull { it.number == n }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+    }
+
+    companion object {
+        const val PAGE_SIZE = 40
+        /** A number search also matches names containing the digits; the exact number is among the first hits. */
+        const val NUMBER_LOOKUP_LIMIT = 100
+    }
 
     fun select(ch: Channel, gp: GuideProgramme?) = _state.update { it.copy(selected = gp, selectedChannel = ch) }
 }

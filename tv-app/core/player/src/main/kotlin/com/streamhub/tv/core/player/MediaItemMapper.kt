@@ -50,7 +50,12 @@ object MediaItemMapper {
                     .build(),
             )
         mimeFor(d)?.let(builder::setMimeType)
-        if (d.live) {
+        if (pinsPosition(d)) {
+            // A room's shared stream is a playlist that grows faster than it plays. The player would
+            // take it for a live stream it has fallen behind on and speed up to catch the end of it;
+            // the room clock, not the playlist's edge, says where a member belongs.
+            builder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
+        } else if (d.live) {
             builder.setLiveConfiguration(
                 MediaItem.LiveConfiguration.Builder()
                     .setTargetOffsetMs(LIVE_TARGET_OFFSET_MS)
@@ -61,6 +66,16 @@ object MediaItemMapper {
         }
         return builder.build()
     }
+
+    /**
+     * A watch room's one shared stream (`stream_epoch` set): it is always started at an exact
+     * position, the first frame included, and played at 1×. Its media time zero is [timeZeroMs] into
+     * the title.
+     */
+    fun pinsPosition(d: PlaybackDescriptor): Boolean = d.streamEpoch != null && !d.live
+
+    /** Where in the title the stream's media time zero is: `start_position_ms` for a room's shared stream, 0 otherwise. */
+    fun timeZeroMs(d: PlaybackDescriptor): Long = if (pinsPosition(d)) (d.startPositionMs ?: 0).coerceAtLeast(0) else 0
 
     const val LIVE_TARGET_OFFSET_MS = 8_000L
 }

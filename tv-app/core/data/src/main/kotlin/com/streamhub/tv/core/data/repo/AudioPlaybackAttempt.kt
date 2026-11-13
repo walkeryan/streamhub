@@ -6,7 +6,8 @@ import kotlinx.coroutines.ensureActive
 
 sealed interface AudioPlaybackAttempt {
     data class Choice(val request: PlaybackRequest, val options: PlaybackOptions) : AudioPlaybackAttempt
-    data class Ready(val descriptor: PlaybackDescriptor) : AudioPlaybackAttempt
+    /** [request] is what was actually resolved (automatic or chosen variant included), for a later re-resolve. */
+    data class Ready(val descriptor: PlaybackDescriptor, val request: PlaybackRequest) : AudioPlaybackAttempt
 }
 
 /** One request owns its consent. Cancellation wins even if an HTTP adapter returns late. */
@@ -33,5 +34,5 @@ suspend fun audioPlaybackAttempt(
     currentCoroutineContext().ensureActive()
     val descriptor = resolve(selected)
     currentCoroutineContext().ensureActive()
-    return AudioPlaybackAttempt.Ready(descriptor)
+    return AudioPlaybackAttempt.Ready(descriptor, selected)
 }

@@ -1,10 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { z } from 'zod'
-import { api, ok, unwrap } from './client'
+import { api, ok, tokenless, unwrap } from './client'
+import { useCan } from './me'
 import { useSession } from '../store/session'
+import { mergeProgrammes } from '../lib/guideWindow'
+import { isOpenRequest, refetchMsFor, tileRequest, tilesRefetchMs } from '../lib/requests'
+import { MIN_QUERY } from '../lib/searchQuery'
+import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined } from './types'
 import type {
-  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
-  Settings, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind,
+  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult, SearchSectionName,
+  Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
 } from './types'
 
 const useProfileId = () => useSession((s) => s.profile?.id ?? null)
@@ -30,29 +35,85 @@ export const useProfiles = () =>
 export const useDisclaimer = () =>
   useQuery({ queryKey: qk.disclaimer, queryFn: () => unwrap<Disclaimer>(api.GET('/disclaimer')), staleTime: Infinity })
 
-export const useHome = () => useQuery({ queryKey: [...qk.home, useProfileId()], queryFn: () => unwrap<HomeData>(api.GET('/home')), staleTime: 30_000 })
+export const useHome = () => useQuery({
+  queryKey: [...qk.home, useProfileId()],
+  queryFn: () => unwrap<HomeData>(api.GET('/home')),
+  staleTime: 30_000,
+  // Only while one of its posters shows a request on its way, so that chip and bar keep up.
+  refetchInterval: (query) => tilesRefetchMs([...(query.state.data?.hero ?? []), ...(query.state.data?.rows ?? []).flatMap((row) => row.tiles)]),
+})
 
-export const useSearch = (q: string, filters: { language?: string; source_id?: string } = {}) =>
-  useQuery({
-    queryKey: ['search', useProfileId(), q.trim().toLowerCase().replace(/\s+/g, ' '), filters, useSession((s) => s.profile?.languages.join(','))],
-    enabled: q.trim().length > 1,
+/** A server from before the unified search sends titles and channels only: read it as the same shape. */
+function completeSearch(r: Partial<SearchResult>): SearchResult {
+  const results = r.results ?? [...(r.play_here ?? []), ...(r.open_in_app ?? [])]
+  const channels = r.channels ?? [], programmes = r.programmes ?? []
+  const all = (rows: unknown[]) => ({ count: rows.length, more: false })
+  return {
+    ...r, results, channels, programmes, play_here: r.play_here ?? [], open_in_app: r.open_in_app ?? [],
+    sections: r.sections ?? { titles: all(results), channels: all(channels), programmes: all(programmes) },
+    order: r.order ?? ['programmes', 'channels', 'titles'], attribution: r.attribution ?? 'Availability data by JustWatch',
+  }
+}
+
+/** One search across titles, channels and guide broadcasts. `expand` names the sections asked for in full
+ *  ("Show more"). Asked twice for every query (see `searchView`): `discover: false` is what the hub itself
+ *  holds and answers at once; with discovery the server also asks the metadata provider, which takes as
+ *  long as that provider does, and only the titles are needed from it. */
+export const useSearch = (q: string, expand: readonly SearchSectionName[], discover: boolean) => {
+  const profile = useProfileId()
+  const key = q.trim().toLowerCase().replace(/\s+/g, ' ')
+  const full = [...expand].sort().join(',')
+  return useQuery<SearchResult>({
+    queryKey: ['search', profile, key, full, discover, useSession((s) => s.profile?.languages.join(','))],
+    enabled: key.length >= MIN_QUERY,
     staleTime: 30_000,
-    queryFn: ({ signal }) => unwrap<SearchResult>(api.GET('/search', { signal, params: { query: { q: q.trim(), ...filters } } })),
+    queryFn: async ({ signal }) => completeSearch(await unwrap<Partial<SearchResult>>(api.GET('/search', {
+      signal, params: { query: { q: q.trim(), ...(full ? { expand: full } : {}), ...(discover ? { kinds: 'movie,show' } : { discover: false }) } },
+    }))),
   })
+}
+
+/**
+ * What a search shows from its two answers. The hub's own comes first and is the page: its titles keep
+ * their places. The titles discovery adds (the ones the server names in `discovered`, or, from a server
+ * that names none, the ones the first answer did not have) go after them, so nothing on screen moves.
+ */
+export function searchView(local: SearchResult, full: SearchResult | undefined): SearchResult {
+  if (!full) return local
+  const have = new Set(local.results.map((t) => t.id))
+  const named = full.discovered ? new Set(full.discovered) : null
+  const added = full.results.filter((t) => !have.has(t.id) && (!named || named.has(t.id)))
+  const titles = { count: Math.max(full.sections.titles.count, local.results.length + added.length), more: local.sections.titles.more || full.sections.titles.more }
+  return { ...local, results: [...local.results, ...added], sections: { ...local.sections, titles }, metadata_available: full.metadata_available, attribution: full.attribution }
+}
 
 export const useTitle = (id: string | undefined) =>
   useQuery({
     queryKey: ['title', useProfileId(), id],
     enabled: !!id,
+    // While a request for it is on its way the page follows it, at the pace of its phase; otherwise it is read once.
+    refetchInterval: (query) => {
+      const request = query.state.data ? tileRequest(query.state.data) : null
+      return request ? refetchMsFor([request.phase]) : false
+    },
     queryFn: () => unwrap<TitleDetail>(api.GET('/titles/{id}', { params: { path: { id: id! } } })),
   })
 
 export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
-export const useBrowse = (section: string, f: BrowseFilters, page = 1) =>
+export const useBrowse = (section: string, f: BrowseFilters, page = 1, enabled = true) =>
   useQuery({
     queryKey: ['browse', useProfileId(), section, f, page],
+    enabled,
     placeholderData: useProfilePlaceholder<BrowsePage>(),
     queryFn: () => unwrap<BrowsePage>(api.GET('/browse/{section}', { params: { path: { section }, query: { ...f, page } } })),
+  })
+
+/** Every shelf of a section with its first titles: what Movies and Shows open on. */
+export const useBrowseShelves = (section: string, f: { language?: string; limit_rows?: number; limit_items?: number; include_adult?: boolean }, enabled = true) =>
+  useQuery({
+    queryKey: ['browse-shelves', useProfileId(), section, f],
+    enabled,
+    queryFn: () => unwrap<ShelfList>(api.GET('/browse/{section}/shelves', { params: { path: { section }, query: f } })),
   })
 
 export const useBrowseCategories = (section: string, f: BrowseFilters) =>
@@ -71,6 +132,23 @@ export const useChannels = (f: ChannelFilters, enabled = true) => {
   })
 }
 
+type ChannelPage = ChannelsResult & { total?: number; offset?: number; limit?: number }
+/** The guide's channels, a page at a time: the next page starts where the loaded ones end. */
+export const useChannelPages = (f: ChannelFilters, limit: number) => {
+  const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
+  return useInfiniteQuery({
+    queryKey: ['channels', useProfileId(), { ...f, limit }, preferred, 'pages'],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => unwrap<ChannelPage>(api.GET('/channels', { params: { query: { ...f, limit, offset: pageParam } } })),
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + (p.channels?.length ?? 0), 0)
+      // A server that sends no total is asked again for as long as its pages come back full.
+      const more = last.total != null ? loaded < last.total : (last.channels?.length ?? 0) >= limit
+      return more && last.channels?.length ? loaded : undefined
+    },
+  })
+}
+
 export const useChannelGroups = (filters: ChannelFilters = {}, enabled = true) => {
   const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
   return useQuery({ enabled, queryKey: ['channel-groups', useProfileId(), filters, preferred], queryFn: () => unwrap<ChannelGroup[]>(api.GET('/channels/groups', { params: { query: filters } })) })
@@ -79,13 +157,37 @@ export const useChannelGroups = (filters: ChannelFilters = {}, enabled = true) =
 export const useLanguages = () =>
   useQuery({ queryKey: ['channel-languages', useProfileId()], queryFn: () => unwrap<LanguageCount[]>(api.GET('/channels/languages')) })
 
-export const useEpg = (ids: string[], from: string, to: string) =>
-  useQuery({
-    queryKey: ['epg', useProfileId(), ids.join(','), from, to],
-    enabled: ids.length > 0,
-    staleTime: 60_000,
-    queryFn: () => unwrap<EpgData>(api.GET('/epg', { params: { query: { channel_ids: ids.join(','), from, to } } })),
+export interface EpgRequest { ids: string[]; from: number; to: number; enabled: boolean }
+export interface EpgChunks { byChannel: Record<string, Programme[]>; loading: boolean[]; error: unknown }
+// Not a closure: the same function on every render is what lets the merged schedule keep its identity until an answer changes.
+const mergeEpg = (results: UseQueryResult<EpgData>[]): EpgChunks => {
+  const lists = new Map<string, Programme[][]>()
+  for (const r of results) for (const [id, list] of Object.entries(r.data ?? {})) lists.set(id, [...(lists.get(id) ?? []), list])
+  return {
+    byChannel: Object.fromEntries([...lists].map(([id, parts]) => [id, mergeProgrammes(parts)])),
+    loading: results.map((r) => r.isLoading),
+    error: results.find((r) => r.error)?.error ?? null,
+  }
+}
+/**
+ * The guide's programmes, asked for by page of channels and by span of hours. Every request is cached
+ * on its own, so loading more channels or later hours never asks again for what is on screen.
+ */
+export const useEpgChunks = (requests: EpgRequest[]): EpgChunks => {
+  const profile = useProfileId()
+  return useQueries({
+    queries: requests.map((r) => {
+      const from = new Date(r.from).toISOString(), to = new Date(r.to).toISOString()
+      return {
+        queryKey: ['epg', profile, r.ids.join(','), from, to],
+        enabled: r.enabled && r.ids.length > 0,
+        staleTime: 60_000,
+        queryFn: () => unwrap<EpgData>(api.GET('/epg', { params: { query: { channel_ids: r.ids.join(','), from, to } } })),
+      }
+    }),
+    combine: mergeEpg,
   })
+}
 
 export const useFavorites = () =>
   useQuery({ queryKey: [...qk.favorites, useProfileId()], queryFn: () => unwrap<Tile[]>(api.GET('/favorites')) })
@@ -100,6 +202,9 @@ export const useWatchlist = () =>
       return (await r.json()) as Tile[]
     },
   })
+
+export const useHistory = () =>
+  useQuery({ queryKey: ['history', useProfileId()], queryFn: () => unwrap<Tile[]>(api.GET('/history')) })
 
 function authHeader(): Record<string, string> {
   const raw = localStorage.getItem('sh.session.v1')
@@ -149,7 +254,7 @@ export function useToggleFavorite() {
       else await ok(api.DELETE('/favorites', { params: { query: { kind: v.kind, id: v.id } } }))
     },
     onSuccess: () => {
-      for (const k of [qk.favorites, qk.home, ['channels'], ['title'], ['search'], ['browse']]) void qc.invalidateQueries({ queryKey: k })
+      for (const k of [qk.favorites, qk.home, ['channels'], ['title'], ['search'], ['browse'], ['browse-shelves'], ['history']]) void qc.invalidateQueries({ queryKey: k })
     },
   })
 }
@@ -204,3 +309,157 @@ export const usePlaybackOptions = (id?: string) => useQuery({
   enabled: !!id,
   queryFn: ({ signal }) => playbackOptions(id!, undefined, signal),
 })
+
+/* ---------- requests & notices ---------- */
+const REQUEST_VIEWS = [['requests'], ['title'], ['search'], ['discover'], qk.home] as const
+
+// Approval, downloading and arrival happen elsewhere (another profile, the request manager), so these
+// lists poll: as often as the busiest request in them needs, and (react-query's default, said here
+// because it is relied on) not at all while the tab is hidden.
+export const useRequests = (scope: 'mine' | 'all', enabled = true) =>
+  useQuery({
+    queryKey: ['requests', useProfileId(), scope],
+    enabled,
+    staleTime: 0,
+    refetchInterval: (query) => refetchMsFor((query.state.data?.requests ?? []).map((r) => r.progress.phase)),
+    refetchIntervalInBackground: false,
+    queryFn: () => unwrap<RequestList>(api.GET('/requests', { params: { query: { scope } } })),
+  })
+
+/**
+ * The open request for a title, with everything the server knows about it (the title itself carries only
+ * the phase and the percentage). Found among the requests this profile may list; undefined when it is
+ * somebody else's and this profile may not see those.
+ */
+export function useOpenRequestFor(titleId: string | undefined, enabled: boolean): MediaRequest | undefined {
+  const all = useCan('requests.approve')
+  const { data } = useRequests(all ? 'all' : 'mine', enabled && !!titleId)
+  return enabled ? data?.requests.find((r) => r.title_id === titleId && isOpenRequest(r.state)) : undefined
+}
+
+export const useNotices = () =>
+  useQuery({
+    queryKey: ['notices', useProfileId()],
+    staleTime: 0,
+    refetchInterval: 60_000,
+    queryFn: async () => (await unwrap<{ notices: Notice[] }>(api.GET('/notices'))).notices,
+  })
+
+export function useCreateRequest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { media_type: 'movie' | 'tv'; tmdb_id: number; seasons?: number[] | null }) =>
+      unwrap<MediaRequest>(api.POST('/requests', { body })),
+    onSuccess: () => { for (const queryKey of REQUEST_VIEWS) void qc.invalidateQueries({ queryKey }) },
+  })
+}
+
+/** "Check again": the server asks the request manager about this request now, or sends an unsent one again. */
+export function useRefreshRequest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => unwrap<MediaRequest>(api.POST('/requests/{id}/refresh', { params: { path: { id } } })),
+    onSuccess: () => { for (const queryKey of REQUEST_VIEWS) void qc.invalidateQueries({ queryKey }) },
+  })
+}
+
+export function useDecideRequest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { id: string; approve: boolean; note?: string }) =>
+      unwrap<MediaRequest>(api.POST(v.approve ? '/requests/{id}/approve' : '/requests/{id}/decline', { params: { path: { id: v.id } }, body: { note: v.note?.trim() || null } })),
+    onSuccess: () => { for (const queryKey of REQUEST_VIEWS) void qc.invalidateQueries({ queryKey }) },
+  })
+}
+
+export function useReadNotice() {
+  const qc = useQueryClient()
+  const profileId = useProfileId()
+  return useMutation({
+    mutationFn: (id: string) => unwrap<Notice>(api.POST('/notices/{id}/read', { params: { path: { id } } })),
+    // The banner leaves at once; the server copy follows.
+    onMutate: (id) => qc.setQueryData<Notice[]>(['notices', profileId], (list) => list?.map((n) => (n.id === id ? { ...n, read_at: new Date().toISOString() } : n))),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['notices'] }),
+  })
+}
+
+export const useRequestManager = (enabled: boolean) =>
+  useQuery({ queryKey: ['request-manager', useProfileId()], enabled, queryFn: () => unwrap<RequestManagerSettings>(api.GET('/settings/request_manager')) })
+
+/* ---------- watch rooms ---------- */
+export const createRoom = (body: { id: string; variant_id?: string | null; audio_track?: number | null }) => unwrap<Room>(api.POST('/rooms', { body }))
+export const joinRoom = (code: string, body: RoomJoin) => unwrap<RoomJoined>(api.POST('/rooms/{code}/join', { params: { path: { code } }, body }))
+/** A member's descriptor as it is now. The member token is the credential; the seat does not change. */
+export const roomDescriptor = (code: string, query: RoomDescriptorQuery) => unwrap<PlaybackDescriptor>(tokenless.GET('/rooms/{code}/descriptor', { params: { path: { code }, query } }))
+export const closeRoom = (code: string) => ok(api.DELETE('/rooms/{code}', { params: { path: { code } } }))
+/** The join screen: who is in the room changes while it is open, so it polls. A refusal is an answer, not a fault to retry. */
+export const useRoomInfo = (code: string | undefined, poll = true) =>
+  useQuery({
+    queryKey: ['room', useProfileId(), code],
+    enabled: !!code,
+    retry: false,
+    staleTime: 0,
+    refetchInterval: poll ? 5000 : false,
+    queryFn: () => unwrap<Room>(api.GET('/rooms/{code}', { params: { path: { code: code! } } })),
+  })
+
+/* ---------- recordings ---------- */
+const RECORDING_VIEWS = [['recordings'], ['recording-rules'], ['epg'], ['channels'], ['search']] as const
+const refreshRecordings = (qc: ReturnType<typeof useQueryClient>) => { for (const queryKey of RECORDING_VIEWS) void qc.invalidateQueries({ queryKey }) }
+
+// The recorder starts, finishes and fails recordings on its own clock, so the Recordings screen polls;
+// places that only ask whether recording is on (navigation, the guide) take what is cached.
+export const useRecordings = (enabled = true, poll = true) =>
+  useQuery({
+    queryKey: ['recordings', useProfileId()],
+    enabled,
+    staleTime: poll ? 0 : 60_000,
+    refetchInterval: poll ? 60_000 : false,
+    queryFn: () => unwrap<RecordingList>(api.GET('/recordings')),
+  })
+
+export const useRecordingRules = (enabled = true) =>
+  useQuery({ queryKey: ['recording-rules', useProfileId()], enabled, staleTime: 0, queryFn: () => unwrap<RecordingRuleList>(api.GET('/recording-rules')) })
+
+export function useScheduleRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    // All three: programme ids change with every guide refresh, channel and start find it again.
+    mutationFn: (body: { programme_id: string; channel_id: string; start: string }) => unwrap<Recording>(api.POST('/recordings', { body })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function useDeleteRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => ok(api.DELETE('/recordings/{id}', { params: { path: { id } } })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function useCreateRecordingRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { kind: RecordingRule['kind']; match: string; channel_id?: string | null; new_only?: boolean; keep?: number | null }) =>
+      unwrap<RecordingRule>(api.POST('/recording-rules', { body })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function usePatchRecordingRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { id: string; patch: { match?: string; channel_id?: string | null; new_only?: boolean; keep?: number | null; enabled?: boolean } }) =>
+      unwrap<RecordingRule>(api.PATCH('/recording-rules/{id}', { params: { path: { id: v.id } }, body: v.patch })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function useDeleteRecordingRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => ok(api.DELETE('/recording-rules/{id}', { params: { path: { id } } })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}

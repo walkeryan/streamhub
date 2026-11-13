@@ -1,9 +1,13 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { openMore, signIn } from './helpers'
 
 test('Android download is remote-operable and preserves its filename', async ({ page }) => {
   await signIn(page)
   await page.route('**/downloads/streamhub-tv-debug-1b991e9.apk', route => route.fulfill({ status: 200, contentType: 'application/octet-stream', body: 'download-fixture' }))
+  // The app download is not a content shortcut: it sits with the other app details.
+  await expect(page.getByTestId('android-download')).toHaveCount(0)
+  await openMore(page, 'Settings')
+  await page.getByTestId('tab-about').click()
   const button = page.getByTestId('android-download')
   await button.hover()
   await expect(button).toHaveAttribute('data-focused', 'true')
@@ -11,5 +15,5 @@ test('Android download is remote-operable and preserves its filename', async ({ 
   await page.keyboard.press('Enter')
   const download = await pending
   expect(download.suggestedFilename()).toBe('streamhub-tv-debug-1b991e9.apk')
-  await expect(page.getByTestId('home')).toBeVisible()
+  await expect(page.getByTestId('about')).toBeVisible()
 })

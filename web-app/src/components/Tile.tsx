@@ -6,7 +6,9 @@ import { ProgressBar, SourceChips } from './ui'
 import { Initials, SafeImg } from './SafeImg'
 import { cn, fmtTime, hueOf, progressOf, useNow } from '../lib/util'
 import { useGo } from '../nav/back'
-import type { Tile as TileT, Channel } from '../api/types'
+import { tileRequest } from '../lib/requests'
+import { RequestTileStatus } from './RequestStatus'
+import type { Tile as TileT, Channel, SourceBadge } from '../api/types'
 
 export type TileLayout = 'poster' | 'landscape' | 'channel'
 
@@ -18,6 +20,19 @@ export function useOpenTile() {
   const go = useGo()
   return (t: Pick<TileT, 'id' | 'kind'>) => go(openPath(t))
 }
+
+/**
+ * Where a title can be watched, when that is worth a badge. A copy in the household's own library
+ * is: "In your library". So is a choice between sources, and a title that only opens in another
+ * app. One ordinary source is what every tile of a one-source catalog has, and says nothing.
+ */
+export function TileBadge({ sources, max = 1 }: { sources: SourceBadge[]; max?: number }) {
+  if (sources.some((s) => s.kind === 'library' || s.source_type === 'plex' || s.source_type === 'jellyfin')) return <span className="badge badge-play" data-testid="tile-badge">In your library</span>
+  return namesSource(sources) ? <SourceChips sources={sources} max={max} /> : null
+}
+/** Is there anything to say about where this plays: the household's library, a choice of sources, or another app? */
+export const namesSource = (sources: SourceBadge[]): boolean =>
+  sources.some((s) => s.kind === 'library' || s.source_type === 'plex' || s.source_type === 'jellyfin' || !s.playable_in_app) || new Set(sources.map((s) => s.source_id)).size > 1
 
 function Fallback({ title }: { title: string }) {
   const h = hueOf(title)
@@ -31,11 +46,17 @@ function Fallback({ title }: { title: string }) {
 
 export const MediaTile = memo(function MediaTile(p: {
   tile: TileT; scope: string; layout?: TileLayout; onFocusTile?: (t: TileT) => void; onOpen?: (t: TileT) => void; titleAlways?: boolean
+  /**
+   * Search mixes what can be watched here with what is only known about. There a tile says one thing:
+   * a green tick when it plays here, nothing when it does not (a request in progress still shows itself).
+   */
+  mark?: 'availability'
 }) {
   const open = useOpenTile()
   const layout = p.layout ?? 'poster'
   const art = layout === 'landscape' ? (p.tile.backdrop ?? p.tile.poster) : (p.tile.poster ?? p.tile.backdrop)
   const noArt = !art
+  const request = tileRequest(p.tile)
   return (
     <Focusable
       focusKey={`${p.scope}::${p.tile.id}`}
@@ -51,7 +72,10 @@ export const MediaTile = memo(function MediaTile(p: {
         <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className="tile" style={{ position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
           <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} fallback={<Fallback title={p.tile.title} />} />
           <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
-          <div className="tile-badges">{p.tile.sources.length ? <SourceChips sources={p.tile.sources} max={1} /> : <span className="badge">Not available here</span>}</div>
+          {/* A request on its way says where it is, in place of where the title plays. */}
+          {request ? <RequestTileStatus progress={request} of={p.tile.title} /> : p.mark === 'availability' ? (
+            p.tile.sources.some((s) => s.playable_in_app) && <span className="tile-check" role="img" aria-label="Available to watch" data-testid="tile-available"><Icon name="check" size={14} /></span>
+          ) : <div className="tile-badges">{p.tile.sources.length ? <TileBadge sources={p.tile.sources} /> : <span className="badge">Not available here</span>}</div>}
           {p.tile.is_favorite && <span style={{ position: 'absolute', top: 6, left: 6, color: 'var(--t-accent)' }}><Icon name="heart" size={16} filled /></span>}
           {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && (
             <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}><ProgressBar pct={p.tile.progress_pct} /></div>
@@ -62,7 +86,8 @@ export const MediaTile = memo(function MediaTile(p: {
   )
 })
 
-/** Live tile: 220x96 logo on a coloured block, number, and now-playing progress. Accepts a Tile (kind=channel) or a Channel. */
+/** Live tile, 220x96 on a coloured block: the logo in its own box on the left, the channel and what is on
+ *  beside it, now-playing progress along the bottom. Logo and words never share space, whatever the logo's shape. */
 export function ChannelTile(p: { tile: TileT; scope: string; onFocusTile?: (t: TileT) => void }) {
   const open = useOpenTile()
   const now = useNow()
@@ -79,12 +104,11 @@ export function ChannelTile(p: { tile: TileT; scope: string; onFocusTile?: (t: T
       onEnter={() => open(t)}
       onFocus={() => p.onFocusTile?.(t)}
     >
-      <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg, hsl(${h} 45% 30%), hsl(${(h + 45) % 360} 50% 18%))` }}>
-        <SafeImg src={t.logo} alt="" loading="lazy" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', padding: 14, filter: 'blur(0)' }}
-          fallback={<Initials name={t.title} style={{ fontSize: 'var(--text-title)', paddingBottom: '1.25rem' }} />} />
-        <div style={{ position: 'absolute', left: 10, top: 8, fontWeight: 700, fontSize: 'var(--text-label)' }}>{t.subtitle ?? ''}</div>
-        <div style={{ position: 'absolute', left: 10, right: 10, bottom: 12, fontSize: 'var(--text-label)', fontWeight: 600 }} className="truncate">
-          {t.title}{t.now_playing ? ` · ${t.now_playing.title}` : ''}
+      <div className="channel-card" style={{ background: `linear-gradient(135deg, hsl(${h} 45% 30%), hsl(${(h + 45) % 360} 50% 18%))` }}>
+        <div className="channel-logo"><SafeImg src={t.logo} alt="" loading="lazy" fallback={<Initials name={t.title} style={{ background: 'transparent' }} />} /></div>
+        <div className="channel-copy">
+          <span className="channel-name truncate">{t.subtitle ? `${t.subtitle} · ` : ''}{t.title}</span>
+          <span className="channel-now clamp2">{t.now_playing?.title ?? 'No programme data'}</span>
         </div>
         {pct !== null && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}><ProgressBar pct={pct} /></div>}
       </div>
@@ -111,28 +135,45 @@ function FeatureTile({ tile, scope, onFocusTile, now }: { tile: TileT; scope: st
     badge={airing ? 'On now' : channel ? 'Channel' : undefined}
     progress={airing ? progressOf(programme.start, programme.stop, now) : tile.progress_pct}
     onEnter={() => open(tile)} onFocus={() => onFocusTile?.(tile)} testId="tile">
-    {!channel && <SourceChips sources={tile.sources} max={1} />}
+    {!channel && <TileBadge sources={tile.sources} />}
   </FeatureCard>
+}
+
+/** Last tile of a row: opens the row's full listing. Shaped like its neighbours so the row keeps one rhythm. */
+function SeeAllTile({ scope, title, to, count, layout }: { scope: string; title: string; to: string; count?: number; layout: TileLayout }) {
+  const go = useGo()
+  return (
+    <Focusable focusKey={`${scope}::see-all`} className={cn('tile tile-more', `tile-${layout}`)} role="link" label={`See all ${title}`}
+      data-testid="see-all" scroll onEnter={() => go(to)}>
+      <Icon name="chevR" size={28} />
+      <span>See all</span>
+      {count !== undefined && <span className="label">{count.toLocaleString()} titles</span>}
+    </Focusable>
+  )
 }
 
 export function TileRow(p: {
   id: string; title: string; tiles: TileT[]; layout?: 'poster' | 'landscape' | 'hero' | 'channel'
   onFocusTile?: (t: TileT) => void; empty?: string; presentation?: 'wide'
+  /** route of the full listing; adds a "See all" tile after the last one */
+  seeAll?: string | null; count?: number
 }) {
   const layout = p.layout ?? 'poster'
   const now = useNow(30_000) // one clock per row, not per media card
   if (!p.tiles.length) return null
   return (
-    <section aria-label={p.title} data-testid="row" data-row={p.id} style={{ marginBottom: '0.5rem' }}>
+    <section aria-label={p.title} data-testid="row" data-row={p.id} className="tile-row">
       <h2 className="row-title">{p.title}</h2>
       <FocusGroup focusKey={`row:${p.id}`} className={cn('row-scroll', p.presentation === 'wide' && 'feature-row')} remember>
         {p.tiles.map((t) =>
           p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
             <ChannelTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
           ) : (
-            <MediaTile key={t.id} tile={t} scope={p.id} layout={layout === 'landscape' ? 'landscape' : 'poster'} onFocusTile={p.onFocusTile} />
+            // artwork cut for a wide tile rarely carries the title, so it is always captioned
+            <MediaTile key={t.id} tile={t} scope={p.id} layout={layout === 'landscape' ? 'landscape' : 'poster'} titleAlways={layout === 'landscape'} onFocusTile={p.onFocusTile} />
           ),
         )}
+        {p.seeAll && <SeeAllTile scope={p.id} title={p.title} to={p.seeAll} count={p.count} layout={layout === 'landscape' || layout === 'channel' ? layout : 'poster'} />}
       </FocusGroup>
     </section>
   )

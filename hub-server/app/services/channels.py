@@ -9,18 +9,32 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, func, or_, select, tuple_
+from sqlalchemy import and_, case, func, or_, select, tuple_
+from sqlalchemy.orm import aliased
 
 from app.adapters.language.country import channel_country, group_country
+from app.domain.groups import GROUP_SEPARATOR, group_path, split_group_path
 from app.infra.db import Database
 from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Progress, Setting, Source
 from app.services import ids
 from app.services.errors import NotFound, ServiceError
-from app.services.sources import SourceService, apply_overrides
+from app.services.event_slots import (
+    DEFAULT_SLOT_CONFIG,
+    SLOT_NAME_LIKE,
+    EventSlot,
+    SlotConfig,
+    display_name,
+    is_placeholder,
+    parse_event_slot,
+    slot_programme_id,
+)
+from app.services.sources import SourceService, apply_overrides, group_id
+from app.services.sports import sport_facts
+from app.services.tiles import ImageFn
 
 LIST_PREFIX = "chlist:"
 MAX_GRID_HOURS = 24
@@ -31,6 +45,7 @@ def programme_dict(p: Programme, ch: Channel | None = None, now: datetime | None
     catchup = False
     if ch is not None and ch.catchup_days > 0:
         catchup = p.stop <= now and p.start >= now - timedelta(days=ch.catchup_days)
+    is_sport, teams = sport_facts(p.title, p.category)
     return {
         "id": ids.prog_id(p.id),
         "channel_id": ids.channel_id(ch.source_id, ch.ext_id) if ch else p.epg_channel,
@@ -41,7 +56,62 @@ def programme_dict(p: Programme, ch: Channel | None = None, now: datetime | None
         "category": p.category,
         "icon": p.icon,
         "catchup_available": catchup,
+        "is_sport": is_sport,
+        "teams": list(teams),
     }
+
+
+def slot_named(name: Any) -> Any:
+    """SQL condition narrowing a channel-name column to names that can be event slots (see SLOT_NAME_LIKE)."""
+    squashed = func.replace(func.replace(name, "  ", " "), "  ", " ")
+    return or_(*(squashed.like(pattern) for pattern in SLOT_NAME_LIKE))
+
+
+def slot_programme(ch: Channel, slot: EventSlot, config: SlotConfig) -> dict[str, Any] | None:
+    """The game a dated slot's name announces, shaped like a guide entry."""
+    window = slot.window(config)
+    if window is None:
+        return None
+    return {
+        "id": slot_programme_id(ch.id, window[0]),
+        "channel_id": ids.channel_id(ch.source_id, ch.ext_id),
+        "start": window[0],
+        "stop": window[1],
+        "title": slot.title,
+        "description": None,
+        "category": slot.sport,
+        "icon": None,
+        "catchup_available": False,
+        "is_sport": True,
+        "teams": slot.teams,
+    }
+
+
+def present_now_next(
+    ch: Channel,
+    current: Programme | None,
+    following: Programme | None,
+    config: SlotConfig = DEFAULT_SLOT_CONFIG,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """What is on a channel and what follows, as a client should show it.
+
+    An event slot is its own schedule: the game is "now" while it is live and "next" before
+    it starts, and nothing once it is over (the provider leaves old names in place for
+    weeks). Anywhere else a programme that only repeats the channel's name is the
+    manager's filler for a missing guide, and is left out.
+    """
+    now = now or datetime.now(UTC)
+    slot = parse_event_slot(ch.name)
+    if slot is not None:
+        state = slot.state(now, config)
+        event = slot_programme(ch, slot, config) if state in ("live", "upcoming") else None
+        return (event, None) if state == "live" else (None, event)
+    shown = [
+        None if p is None or is_placeholder(p.title, ch.name) else programme_dict(p, ch, now)
+        for p in (current, following)
+    ]
+    return shown[0], shown[1]
 
 
 async def now_next(
@@ -97,7 +167,35 @@ async def now_next(
     return out
 
 
+def named_group_ids(rows: Sequence[Any], group: str) -> list[str]:
+    """Ids of the stored groups (rows of id, source_id, name, hidden) that a ``group`` filter names.
+
+    A group is named by its id or its full name. A top-level group brings its children, except
+    those hidden on their own: the group asked for is shown even when hidden, as it always was.
+    A child may also be named by its bare name while only one path ends in it.
+    """
+    wanted = group_path(group)
+    parent_of = {row.id: split_group_path(row.name)[0] for row in rows}
+    named = [row for row in rows if row.id == group] or [row for row in rows if row.name == wanted]
+    parents = {(row.source_id, row.name) for row in named if parent_of[row.id] is None}
+    # A parent need not have a row of its own (see ``ChannelService.groups``): its name and its id still name it.
+    parents |= {
+        (row.source_id, parent)
+        for row in rows
+        if (parent := parent_of[row.id]) is not None and (parent == wanted or group_id(row.source_id, parent) == group)
+    }
+    children = [row for row in rows if not row.hidden and (row.source_id, parent_of[row.id]) in parents]
+    if not named and not children:
+        leaves = [row for row in rows if parent_of[row.id] is not None and split_group_path(row.name)[1] == wanted]
+        if len({row.name for row in leaves}) == 1:
+            named = leaves
+    return list(dict.fromkeys(row.id for row in (*named, *children)))
+
+
 class ChannelService:
+    # Set by the composition root (CatalogService.image_fn); logos stay provider URLs without it.
+    image_fn: Callable[[dict[str, Source]], ImageFn] | None = None
+
     def __init__(self, db: Database, sources: SourceService) -> None:
         self._db = db
         self._sources = sources
@@ -229,6 +327,9 @@ class ChannelService:
         )
         if not group and not include_hidden:
             query = query.where(ChannelGroup.hidden.is_(False))
+            under_hidden = await self._under_hidden_parent()
+            if under_hidden:
+                query = query.where(Channel.group_id.not_in(under_hidden))
         if country and country.lower() != "all":
             codes = [code.strip().upper() for code in country.split(",") if code.strip()]
             known = [code for code in codes if code not in ("UND", "UNKNOWN")]
@@ -247,9 +348,12 @@ class ChannelService:
         if source_id:
             query = query.where(Channel.source_id == source_id)
         if group:
-            query = query.where(
-                or_(ChannelGroup.id == group, ChannelGroup.name == group, Channel.group_override == group)
-            )
+            async with self._db.session() as session:
+                stored = select(ChannelGroup.id, ChannelGroup.source_id, ChannelGroup.name, ChannelGroup.hidden)
+                if source_id:
+                    stored = stored.where(ChannelGroup.source_id == source_id)
+                named = named_group_ids((await session.execute(stored)).all(), group)
+            query = query.where(or_(ChannelGroup.id.in_(named), Channel.group_override == group))
         if langs:
             query = query.where(Channel.language.in_(langs))
         if q and q.strip():
@@ -286,6 +390,33 @@ class ChannelService:
             )
         return query, langs
 
+    async def _under_hidden_parent(self) -> list[str]:
+        """Ids of the groups that are not hidden themselves but whose parent is.
+
+        Hiding a parent hides its children without touching their own flag, so showing the
+        parent again leaves a child that was hidden alone as it was. Usually there are none.
+        """
+        parent = aliased(ChannelGroup)
+        prefix = parent.name + GROUP_SEPARATOR
+        async with self._db.session() as s:
+            return list(
+                (
+                    await s.execute(
+                        select(ChannelGroup.id)
+                        .join(
+                            parent,
+                            and_(
+                                parent.source_id == ChannelGroup.source_id,
+                                parent.hidden.is_(True),
+                                func.instr(parent.name, GROUP_SEPARATOR) == 0,
+                                func.substr(ChannelGroup.name, 1, func.length(prefix)) == prefix,
+                            ),
+                        )
+                        .where(ChannelGroup.hidden.is_(False))
+                    )
+                ).scalars()
+            )
+
     async def context_for_channel(self, profile_id: str, channel_id: int) -> dict[str, Any] | None:
         """Resolve zap order without serializing thousands of channels or querying programme rows."""
         query, langs = await self._channel_query(profile_id)
@@ -321,11 +452,13 @@ class ChannelService:
                     )
                 ).scalars()
             )
-        nn = await now_next(self._db, chans)
+        shown = await self.now_next_view(chans)
+        sources = await self._sources.rows_by_id() if self.image_fn and chans else {}
+        image = self.image_fn(sources) if self.image_fn else None
         out = []
         for c in chans:
             cid = ids.channel_id(c.source_id, c.ext_id)
-            cur, nxt = nn.get((c.source_id, c.epg_id or ""), (None, None))
+            cur, nxt = shown[c.id]
             country, country_source = channel_country(c.country, c.group_name)
             out.append(
                 {
@@ -333,8 +466,8 @@ class ChannelService:
                     "source_id": c.source_id,
                     "ext_id": c.ext_id,
                     "number": c.number,
-                    "name": c.name,
-                    "logo": c.logo,
+                    "name": display_name(c.name),
+                    "logo": image(sources.get(c.source_id), c.logo, cid) if image else c.logo,
                     "group": c.group_override or c.group_name,
                     "language": c.language or "und",
                     "language_source": c.language_source,
@@ -343,11 +476,35 @@ class ChannelService:
                     "epg_id": c.epg_id,
                     "catchup_days": c.catchup_days,
                     "is_favorite": cid in favs,
-                    "now": programme_dict(cur, c) if cur else None,
-                    "next": programme_dict(nxt, c) if nxt else None,
+                    "now": cur,
+                    "next": nxt,
                 }
             )
         return out
+
+    async def slot_configs(self, chans: Sequence[Channel]) -> dict[str, SlotConfig]:
+        """Each source's slot clock, read only when one of ``chans`` is a slot: most pages have none."""
+        if not any(parse_event_slot(c.name) for c in chans):
+            return {}
+        return await self._sources.slot_configs()
+
+    async def now_next_view(
+        self, chans: Sequence[Channel], now: datetime | None = None
+    ) -> dict[int, tuple[dict[str, Any] | None, dict[str, Any] | None]]:
+        """Now and next of each channel (by row id), as shown: see ``present_now_next``."""
+        if not chans:
+            return {}
+        nn = await now_next(self._db, chans)
+        configs = await self.slot_configs(chans)
+        return {
+            c.id: present_now_next(
+                c,
+                *nn.get((c.source_id, c.epg_id or ""), (None, None)),
+                configs.get(c.source_id, DEFAULT_SLOT_CONFIG),
+                now,
+            )
+            for c in chans
+        }
 
     async def channel_by_hub_id(self, hub_id: str) -> Channel:
         try:
@@ -435,23 +592,49 @@ class ChannelService:
                     )
                 ).scalars()
             )
-        return [
-            {
-                "id": g.id,
-                "source_id": g.source_id,
-                "name": g.name,
-                "channel_count": int(counts.get(g.id, 0)),
-                "hidden": g.hidden,
-                "language_override": g.language_override,
-                "sort": g.sort,
-            }
-            for g in rows
-            if counts.get(g.id, 0) or profile_id is None
-        ]
+        # The stored name is the hierarchy. A parent has a row once a sync has seen one of its
+        # children; a catalog synced before that is given the row here, under the id it will have.
+        stored = {(g.source_id, g.name): g for g in rows}
+        children: dict[tuple[str, str], list[ChannelGroup]] = {}
+        top: list[ChannelGroup] = []
+        for g in rows:
+            parent = split_group_path(g.name)[0]
+            if parent is None:
+                top.append(g)
+                continue
+            if (g.source_id, parent) not in stored and (g.source_id, parent) not in children:
+                top.append(
+                    ChannelGroup(
+                        id=group_id(g.source_id, parent), source_id=g.source_id, name=parent, hidden=False, sort=g.sort
+                    )
+                )
+            children.setdefault((g.source_id, parent), []).append(g)
+        out: list[dict[str, Any]] = []
+        for g in top:
+            below = sorted(children.get((g.source_id, g.name), []), key=lambda c: (c.sort, c.name))
+            total = int(counts.get(g.id, 0)) + sum(int(counts.get(c.id, 0)) for c in below)
+            listed: list[tuple[ChannelGroup, ChannelGroup | None, int]] = [(g, None, total)]
+            listed += [(c, g, int(counts.get(c.id, 0))) for c in below]
+            for row, above, count in listed:
+                if count or profile_id is None:
+                    out.append(
+                        {
+                            "id": row.id,
+                            "source_id": row.source_id,
+                            "name": split_group_path(row.name)[1] if above else row.name,
+                            "parent": above.name if above else None,
+                            "path": row.name,
+                            "channel_count": count,
+                            "hidden": bool(row.hidden or (above and above.hidden)),
+                            "language_override": row.language_override,
+                            "sort": row.sort,
+                        }
+                    )
+        return out
 
     async def update_group(self, group_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         async with self._db.session() as s:
-            g = await s.get(ChannelGroup, group_id)
+            g = await s.get(ChannelGroup, group_id) or await self._adopt_parent(s, group_id)
             if g is None:
                 raise NotFound("group not found")
             if "hidden" in patch and patch["hidden"] is not None:
@@ -470,13 +653,20 @@ class ChannelService:
                     g.language_override = None
                     clear_lang = True
             source_id = g.source_id
+            # A parent's language reaches the children that set none, so clearing it clears theirs.
+            lifted = [group_id]
+            if clear_lang and split_group_path(g.name)[0] is None:
+                siblings = (await s.execute(select(ChannelGroup).where(ChannelGroup.source_id == source_id))).scalars()
+                lifted += [
+                    c.id for c in siblings if c.language_override is None and split_group_path(c.name)[0] == g.name
+                ]
             await s.commit()
         if clear_lang:
             # restore inferred languages for channels in the group without their own override
             async with self._db.session() as s:
                 chans = (
                     await s.execute(
-                        select(Channel).where(Channel.group_id == group_id, Channel.language_override.is_(None))
+                        select(Channel).where(Channel.group_id.in_(lifted), Channel.language_override.is_(None))
                     )
                 ).scalars()
                 for c in chans:
@@ -486,6 +676,24 @@ class ChannelService:
         await apply_overrides(self._db, source_id)
         return next(x for x in await self.groups() if x["id"] == group_id)
 
+    @staticmethod
+    async def _adopt_parent(session: Any, parent_id: str) -> ChannelGroup | None:
+        """Store the parent that ``groups`` listed without a row, so a setting on it has somewhere to live.
+
+        ``parent_id`` is the id its name gives it in one source; it takes its place before its
+        first child and that child's sync generation, so the next sync's sweep keeps it.
+        """
+        rows = list((await session.execute(select(ChannelGroup).order_by(ChannelGroup.sort))).scalars())
+        for child in rows:
+            parent = split_group_path(child.name)[0]
+            if parent is not None and group_id(child.source_id, parent) == parent_id:
+                adopted = ChannelGroup(
+                    id=parent_id, source_id=child.source_id, name=parent, sort=child.sort, sync_gen=child.sync_gen
+                )
+                session.add(adopted)
+                return adopted
+        return None
+
     async def languages(self) -> list[dict[str, Any]]:
         async with self._db.session() as s:
             rows = (
@@ -493,7 +701,11 @@ class ChannelService:
                     select(Channel.language, func.count(Channel.id))
                     .join(ChannelGroup, ChannelGroup.id == Channel.group_id)
                     .join(Source, Source.id == Channel.source_id)
-                    .where(ChannelGroup.hidden.is_(False), Source.enabled.is_(True))
+                    .where(
+                        ChannelGroup.hidden.is_(False),
+                        Channel.group_id.not_in(await self._under_hidden_parent()),
+                        Source.enabled.is_(True),
+                    )
                     .group_by(Channel.language)
                     .order_by(func.count(Channel.id).desc())
                 )
@@ -560,10 +772,18 @@ class ChannelService:
                 )
             chans = [ch for ch in chans if ch.id in allowed]
         by_epg: dict[tuple[str, str], list[Channel]] = {}
-        for c in chans:
-            if c.epg_id:
-                by_epg.setdefault((c.source_id, c.epg_id), []).append(c)
         out: dict[str, list[dict[str, Any]]] = {ids.channel_id(c.source_id, c.ext_id): [] for c in chans}
+        configs = await self.slot_configs(chans)
+        for c in chans:
+            slot = parse_event_slot(c.name)
+            if slot is not None:
+                # The name is this channel's whole schedule; its guide rows only repeat it.
+                config = configs.get(c.source_id, DEFAULT_SLOT_CONFIG)
+                event = slot_programme(c, slot, config) if slot.state(now, config) != "ended" else None
+                if event is not None and event["stop"] > start and event["start"] < stop:
+                    out[ids.channel_id(c.source_id, c.ext_id)].append(event)
+            elif c.epg_id:
+                by_epg.setdefault((c.source_id, c.epg_id), []).append(c)
         if not by_epg:
             return out
         async with self._db.session() as s:
@@ -580,7 +800,35 @@ class ChannelService:
                 ).scalars()
                 for p in rows:
                     for c in by_epg.get((p.feed, p.epg_channel), []):
-                        out[ids.channel_id(c.source_id, c.ext_id)].append(programme_dict(p, c, now))
+                        if not is_placeholder(p.title, c.name):
+                            out[ids.channel_id(c.source_id, c.ext_id)].append(programme_dict(p, c, now))
+        return out
+
+    async def slot_entries(self, chans: Sequence[Channel], now: datetime | None = None) -> dict[int, Programme]:
+        """The game each live or coming slot among ``chans`` announces (by row id), as an unsaved guide row.
+
+        For the recorder, which snapshots a guide entry: there is no stored row to read.
+        """
+        now = now or datetime.now(UTC)
+        out: dict[int, Programme] = {}
+        configs = await self.slot_configs(chans)
+        for ch in chans:
+            slot = parse_event_slot(ch.name)
+            if slot is None:
+                continue
+            window = slot.window(configs.get(ch.source_id, DEFAULT_SLOT_CONFIG))
+            if window is None or window[1] <= now:
+                continue
+            out[ch.id] = Programme(
+                feed=ch.source_id,
+                epg_channel=ch.epg_id or "",
+                start=window[0],
+                stop=window[1],
+                title=slot.title,
+                # A slot is a game whatever its sport is called: the classifier must not miss one it has no word for.
+                category=slot.sport if slot.sport and sport_facts(slot.title, slot.sport)[0] else "Sports",
+                age_evidence={},
+            )
         return out
 
     async def programme(self, prog_hub_id: str) -> Programme:
@@ -595,8 +843,14 @@ class ChannelService:
             raise NotFound("programme not found")
         return p
 
-    async def on_now(self, profile_id: str, limit: int = 20) -> tuple[list[tuple[Channel, Programme | None]], bool]:
-        """Currently scheduled channels, prioritizing this profile's recent viewing."""
+    async def on_now(
+        self, profile_id: str, limit: int = 20
+    ) -> tuple[list[tuple[Channel, dict[str, Any] | None]], bool]:
+        """Currently scheduled channels, prioritizing this profile's recent viewing.
+
+        Each comes with what it is showing, as ``present_now_next`` reads it. A channel whose
+        only "programme" repeats its own name has no schedule and does not count.
+        """
         now = datetime.now(UTC)
         query, _ = await self._channel_query(profile_id)
         history = (
@@ -618,6 +872,7 @@ class ChannelService:
                     Programme.epg_channel == Channel.epg_id,
                     Programme.start <= now,
                     Programme.stop > now,
+                    func.lower(func.trim(Programme.title)) != func.lower(func.trim(Channel.name)),
                 )
                 .exists()
             )
@@ -648,8 +903,8 @@ class ChannelService:
                             )
                         ).scalars()
                     )
-            return [(ch, None) for ch in chans], False
+            shown = await self.now_next_view(chans, now)
+            return [(ch, shown[ch.id][0]) for ch in chans], False
         chans = [row[0] for row in rows]
-        nn = await now_next(self._db, chans)
-        pairs = [(c, nn.get((c.source_id, c.epg_id or ""), (None, None))[0]) for c in chans]
-        return pairs, any(row[1] is not None for row in rows)
+        shown = await self.now_next_view(chans, now)
+        return [(c, shown[c.id][0]) for c in chans], any(row[1] is not None for row in rows)

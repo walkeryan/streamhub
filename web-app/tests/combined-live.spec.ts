@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { chooseLiveGroup, closeLiveOptions, liveChoice, openLiveOptions, searchLive, signIn } from './helpers'
 
 test('one Live TV destination shares filters and selection without a hidden preview player', async ({ page }) => {
   await page.addInitScript(() => {
@@ -16,13 +16,14 @@ test('one Live TV destination shares filters and selection without a hidden prev
   await signIn(page)
   await page.getByRole('link', { name: 'Live TV', exact: true }).click()
   await expect(page.getByRole('link', { name: 'Guide', exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: 'English', exact: true }).click()
-  await page.getByRole('button', { name: 'Source: All sources', exact: true }).click()
+  const options = await openLiveOptions(page)
+  await options.getByRole('button', { name: 'English', exact: true }).click()
+  await options.getByRole('button', { name: 'Source: All sources', exact: true }).click()
   await page.getByRole('dialog', { name: 'Source', exact: true }).getByRole('button', { name: 'IPTV Provider', exact: true }).click()
-  await page.getByRole('button', { name: 'Category: All categories', exact: true }).click()
-  await page.getByRole('dialog', { name: 'Category', exact: true }).getByRole('button', { name: /^Sports \(/ }).click()
-  await page.getByRole('button', { name: 'Favorites only', exact: true }).click()
-  await page.getByLabel('Search channels or number').fill('Metro')
+  await closeLiveOptions(page)
+  const groups = page.getByRole('group', { name: 'Channel groups', exact: true })
+  await chooseLiveGroup(page, 'Sports')
+  await searchLive(page, 'Metro')
   await expect(page.getByTestId('channel-row')).toHaveCount(1)
   await page.getByTestId('channel-row').hover()
   await expect(page.getByTestId('live-info')).toContainText('Metro Sports 1')
@@ -33,10 +34,14 @@ test('one Live TV destination shares filters and selection without a hidden prev
   await expect(page.getByTestId('live-preview')).toHaveCount(0)
   await expect(page.locator('video')).toHaveCount(0)
   await expect(page.getByLabel('Search channels or number')).toHaveValue('Metro')
-  await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('button', { name: 'Category: Sports', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Source: IPTV Provider', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Favorites only', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  // The header is the same one in both views: it still names the language and the source chosen in Options.
+  await expect(liveChoice(page, 'English')).toBeVisible()
+  await expect(liveChoice(page, 'IPTV Provider')).toBeVisible()
+  await expect(groups.getByRole('button', { name: 'Sports', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const again = await openLiveOptions(page)
+  await expect(again.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(again.getByRole('button', { name: 'Source: IPTV Provider', exact: true })).toBeVisible()
+  await closeLiveOptions(page)
   await expect(page.getByTestId('guide').getByRole('button', { name: '2 Metro Sports 1', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Channels', exact: true }).click()
   await expect(page.getByTestId('guide')).toHaveCount(0)

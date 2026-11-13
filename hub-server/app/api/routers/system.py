@@ -1,7 +1,8 @@
-"""/themes, /settings, /settings/tmdb_key, /health, /about."""
+"""/themes, /settings, /settings/tmdb_key, /settings/classification/run, /app/tv, /health, /about."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Query, Response
@@ -9,9 +10,11 @@ from sqlalchemy import text
 
 from app.adapters.tmdb.client import JUSTWATCH_ATTRIBUTION, TMDB_ATTRIBUTION
 from app.api import schemas as S
-from app.api.deps import Admin, C, P
+from app.api.deps import Admin, C, P, limited
 from app.infra.settings import APP_VERSION
-from app.services.errors import ServiceError
+from app.services.auth import Principal
+from app.services.errors import NotFound, ServiceError
+from app.services.tv_release import read_release
 
 router = APIRouter()
 
@@ -22,19 +25,26 @@ async def themes(c: C) -> list[dict[str, Any]]:
 
 
 @router.post("/themes", response_model=S.Theme, status_code=201, tags=["system"])
-async def create_theme(body: S.Theme, c: C, p: P) -> dict[str, Any]:
+async def create_theme(body: S.Theme, c: C, p: Admin) -> dict[str, Any]:
     return await c.themes.create(p.profile_id, body.model_dump())
+
+
+async def _settings(c: C, p: Principal, settings: dict[str, Any]) -> dict[str, Any]:
+    if not p.can("system.manage"):
+        # How the household's network is laid out, and which shelves exist, is the administrator's to know.
+        return {**settings, "home_networks": None, "home_shelves": None, "home_shelves_unknown": None}
+    return {**settings, "home_shelves_unknown": await c.catalog.unknown_shelves(settings["home_shelves"])}
 
 
 @router.get("/settings", response_model=S.Settings, tags=["system"])
 async def get_settings(c: C, p: P) -> dict[str, Any]:
-    return c.app_settings.public()
+    return await _settings(c, p, c.app_settings.public())
 
 
 @router.patch("/settings", response_model=S.Settings, tags=["system"])
 async def patch_settings(body: S.SettingsPatch, c: C, p: Admin) -> dict[str, Any]:
     try:
-        return await c.app_settings.update(body.model_dump(exclude_unset=True))
+        return await _settings(c, p, await c.app_settings.update(body.model_dump(exclude_unset=True)))
     except ValueError as exc:
         raise ServiceError(str(exc)) from exc
 
@@ -43,6 +53,22 @@ async def patch_settings(body: S.SettingsPatch, c: C, p: Admin) -> dict[str, Any
 async def put_tmdb_key(body: S.TmdbKey, c: C, p: Admin) -> Response:
     await c.app_settings.set_tmdb_key(body.api_key)
     return Response(status_code=204)
+
+
+@router.post("/settings/classification/run", response_model=S.ClassificationRun, tags=["system"])
+async def run_classification(c: C, p: Admin) -> dict[str, int]:
+    """Run one batch of the rating lookups now instead of waiting for the schedule."""
+    return await c.classifier.run_batch()
+
+
+@router.get("/app/tv", response_model=S.TvAppRelease, tags=["system"])
+async def tv_app_release(c: C, response: Response) -> dict[str, Any]:
+    """The newest TV build this server hands out. Public: a TV asks before anyone has signed in."""
+    release = await asyncio.to_thread(read_release, c.settings.web_dist / "downloads")
+    if release is None:
+        raise NotFound("no TV app release is published here")
+    response.headers["Cache-Control"] = "no-cache"
+    return release
 
 
 @router.get("/health", response_model=S.Health, tags=["system"])
@@ -56,7 +82,7 @@ async def health(c: C) -> dict[str, Any]:
     return {"status": "ok" if ok else "degraded", "version": APP_VERSION, "db": ok}
 
 
-@router.get("/qr", tags=["system"], response_class=Response)
+@router.get("/qr", tags=["system"], response_class=Response, dependencies=[limited("qr")])
 async def qr(data: str = Query(..., min_length=1, max_length=1024)) -> Response:
     """SVG QR code for pairing / Plex link screens (TV shows it next to the 6-char code)."""
     import io

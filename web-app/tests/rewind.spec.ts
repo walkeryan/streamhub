@@ -26,7 +26,7 @@ test('provider archive is honest, D-pad adjustable and returns to Live', async (
   await expect(page.getByTestId('player-ui')).toHaveAttribute('data-show', 'true')
   await expect(page.getByTestId('rewind-controls')).toContainText('availability unverified')
   await expect(page.getByRole('button', { name: 'Go Live', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '−10 s', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back 10 seconds', exact: true })).toBeVisible()
   const position = page.getByRole('button', { name: 'Try 1 minutes ago. Left and Right adjust, Select plays.', exact: true })
   await position.click()
   await expect(position).toHaveAttribute('data-focused', 'true')

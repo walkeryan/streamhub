@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -59,8 +60,14 @@ import androidx.media3.common.C
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.ui.components.AudioSourceDialog
+import com.streamhub.tv.core.ui.components.ErrorDialog
+import com.streamhub.tv.core.ui.components.ButtonStyle
+import com.streamhub.tv.core.data.room.RoomCode
+import com.streamhub.tv.core.data.room.RoomConnection
+import com.streamhub.tv.core.data.room.RoomUiState
 import com.streamhub.tv.core.player.PlayerUiState
 import com.streamhub.tv.core.player.VideoSurface
 import com.streamhub.tv.core.ui.components.ProgressLine
@@ -69,6 +76,8 @@ import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.programmeProgress
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.PivotScroll
+import com.streamhub.tv.core.ui.input.ChannelNumberEntry
+import com.streamhub.tv.core.ui.input.ChannelNumberOverlay
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 import kotlinx.coroutines.Job
@@ -88,7 +97,8 @@ private fun fmt(ms: Long): String {
 /** Hold time after which OK counts as a long press (Android's default long-press timeout). */
 private const val LONG_PRESS_MS = 500L
 
-private fun isOk(key: Key) = key == Key.DirectionCenter || key == Key.Enter || key == Key.NumPadEnter
+/** Appended to audio and subtitle tracks that are in the file but have no decoder on this device. */
+private const val UNSUPPORTED_TRACK = " (not supported on this TV)"
 
 /** Tracks one OK press across its KeyDown / auto-repeat / KeyUp events (not state: no recomposition). */
 private class OkPress {
@@ -96,19 +106,16 @@ private class OkPress {
     var longHandled = false
 }
 
-private fun digitOf(key: Key): Int? = when (key.nativeKeyCode) {
-    in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9 -> key.nativeKeyCode - android.view.KeyEvent.KEYCODE_0
-    in android.view.KeyEvent.KEYCODE_NUMPAD_0..android.view.KeyEvent.KEYCODE_NUMPAD_9 -> key.nativeKeyCode - android.view.KeyEvent.KEYCODE_NUMPAD_0
-    else -> null
-}
-
 /**
- * Remote mapping
+ * Remote mapping (decided by [PlayerKeyMap], which is unit-tested)
  *  Live:  Up/Down, CH+/CH- = zap · 0-9 = channel number (commits after 2 s or OK) · OK = mini channel list
- *         Back = exit; Back twice within 500 ms = last channel
- *  VOD:   OK / Play-Pause = toggle · Left/Right / FF/RW = seek ∓10 s/30 s · Up/Down = show OSD
- *  VOD Down / Live Right opens visible audio/playback controls. Hold OK also opens the menu. Google TV remotes
- *         have no Menu key, so the short-press OK action fires on key *up* and a hold opens the menu.
+ *         Left = archive · Right = menu · Back = exit; Back twice within 750 ms = last channel
+ *  Film:  OK or Down = control row (scrubber, Play/Pause, −10, +10, Start over, Audio & subtitles), which
+ *         hides after 5 s without a key press · Left/Right = seek 10 s, faster while held
+ *  Hold OK (or Menu) opens the audio/subtitle/picture menu. Google TV remotes have no Menu key, so the
+ *         short-press OK action fires on key *up* and a hold opens the menu.
+ *  Room:  play, pause and seek are the room's (everyone moves together); a live room does not zap and
+ *         OK plays/pauses; Back asks "Leave the room?" before leaving
  */
 @Composable
 fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
@@ -118,12 +125,34 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
     val scope = rememberCoroutineScope()
     var lastBackAt by remember { mutableLongStateOf(0L) }
     var pendingExit by remember { mutableStateOf<Job?>(null) }
+    var backHint by remember { mutableStateOf(false) }
+    var backHintShown by remember { mutableStateOf(false) }
     val ok = remember { OkPress() }
+    val room = s.room
+    val inRoom = s.roomCode != null
 
     LaunchedEffect(Unit) { vm.exit.collect { onExit() } }
     LaunchedEffect(ps.audioBlocked) {if(ps.audioBlocked) vm.openMenu()}
     LaunchedEffect(s.overlay) {
         if (s.overlay == Overlay.None || s.overlay == Overlay.Osd) runCatching { rootFocus.requestFocus() }
+    }
+
+    fun perform(command: PlayerCommand) {
+        when (command) {
+            PlayerCommand.None, PlayerCommand.Back -> Unit
+            is PlayerCommand.Zap -> vm.zap(command.delta)
+            is PlayerCommand.Digit -> vm.digit(command.value)
+            PlayerCommand.OpenChannelList -> vm.openMiniList()
+            PlayerCommand.OpenMenu -> vm.openMenu()
+            PlayerCommand.OpenArchive -> vm.openRewind()
+            PlayerCommand.ShowControls, PlayerCommand.ShowInfo -> vm.showOsd()
+            // Through the view model: in a watch room these go to the room, not to this player.
+            PlayerCommand.TogglePlayPause -> { vm.togglePlayPause(); vm.showOsd() }
+            PlayerCommand.Play -> { vm.resumePlayback(); vm.showOsd() }
+            PlayerCommand.Pause -> { vm.pausePlayback(); vm.showOsd() }
+            is PlayerCommand.Seek -> { vm.scrubBy(command.deltaMs); vm.showOsd() }
+            PlayerCommand.LastChannel -> vm.lastChannel()
+        }
     }
 
     Box(
@@ -132,19 +161,29 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             .background(Color.Black)
             .focusRequester(rootFocus)
             .onPreviewKeyEvent { e ->
-                val overlayOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu || s.overlay == Overlay.Rewind || s.overlay == Overlay.Buffer
-                if (e.key == Key.Back) {
+                val code = e.key.nativeKeyCode
+                val menuOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu || s.overlay == Overlay.Rewind || s.overlay == Overlay.Buffer
+                val controls = s.overlay == Overlay.Controls
+                val live = s.live && !s.bufferTimeshift
+                // Every press counts as activity for the control row's 5 s idle timer.
+                if (e.type == KeyEventType.KeyDown) vm.touchControls()
+                fun resolve(longPress: Boolean = false) = PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress, inRoom)
+                if (resolve() == PlayerCommand.Back) {
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                     when {
-                        overlayOpen -> vm.hideOverlay()
+                        menuOpen || controls -> vm.hideOverlay()
+                        // Leaving a room is leaving other people: ask first.
+                        inRoom -> vm.askLeaveRoom()
                         s.numberEntry.isNotEmpty() -> vm.commitNumber()
                         s.live && vm.hasLastChannel -> {
                             val now = System.currentTimeMillis()
                             if (now - lastBackAt < PlayerViewModel.BACK_DOUBLE_MS) {
-                                pendingExit?.cancel(); lastBackAt = 0; vm.lastChannel()
+                                pendingExit?.cancel(); lastBackAt = 0; backHint = false; vm.lastChannel()
                             } else {
                                 lastBackAt = now
-                                pendingExit = scope.launch { delay(PlayerViewModel.BACK_DOUBLE_MS); onExit() }
+                                // Taught once per visit: a second Back inside the window swaps channels instead of leaving.
+                                if (!backHintShown) { backHintShown = true; backHint = true }
+                                pendingExit = scope.launch { delay(PlayerViewModel.BACK_DOUBLE_MS); backHint = false; onExit() }
                             }
                         }
                         else -> onExit()
@@ -153,14 +192,15 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                 }
                 // OK / D-pad centre: short press acts on key up; holding it opens the menu. Every edge of a
                 // press that started here is consumed, including the KeyUp after the menu has opened, so the
-                // release can't click the menu item that just took focus.
-                if (isOk(e.key) && (ok.down || (!overlayOpen && e.type == KeyEventType.KeyDown))) {
+                // release can't click the menu item that just took focus. While a menu or the control row
+                // holds focus a new press is theirs.
+                if (PlayerKeyMap.isSelect(code) && (ok.down || (!menuOpen && !controls && e.type == KeyEventType.KeyDown))) {
                     val n = e.nativeKeyEvent
                     when (e.type) {
                         KeyEventType.KeyDown -> when {
                             !ok.down -> { ok.down = true; ok.longHandled = false }
                             !ok.longHandled && (n.isLongPress || n.eventTime - n.downTime >= LONG_PRESS_MS) -> {
-                                ok.longHandled = true; vm.openMenu()
+                                ok.longHandled = true; perform(resolve(longPress = true))
                             }
                         }
                         KeyEventType.KeyUp -> {
@@ -169,33 +209,19 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                             ok.down = false; ok.longHandled = false
                             when {
                                 handled -> Unit
-                                wasLong -> vm.openMenu() // remotes that send no auto-repeat while held
+                                // remotes that send no auto-repeat while held
+                                wasLong -> perform(resolve(longPress = true))
                                 vm.commitNumber() -> Unit
-                                s.live && !s.bufferTimeshift -> vm.openMiniList()
-                                else -> { vm.player.togglePlayPause(); vm.showOsd() }
+                                else -> perform(resolve())
                             }
                         }
                     }
                     return@onPreviewKeyEvent true
                 }
-                if (overlayOpen) return@onPreviewKeyEvent false // let the overlay's focusables handle D-pad
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                digitOf(e.key)?.let { vm.digit(it); return@onPreviewKeyEvent true }
-                when (e.key) {
-                    Key.DirectionUp, Key.ChannelUp -> { if (s.live && !s.bufferTimeshift) vm.zap(+1) else vm.showOsd(); true }
-                    Key.DirectionDown, Key.ChannelDown -> { if (s.live && !s.bufferTimeshift) vm.zap(-1) else vm.openMenu(); true }
-                    Key.DirectionLeft -> { if(s.live && !s.bufferTimeshift) vm.openRewind() else { vm.player.seekBy(-10_000); vm.showOsd() }; true }
-                    Key.DirectionRight -> { if(s.live && !s.bufferTimeshift) vm.openMenu() else { vm.player.seekBy(10_000); vm.showOsd() }; true }
-                    Key.MediaRewind -> { vm.player.seekBy(-30_000); vm.showOsd(); true }
-                    Key.MediaFastForward -> { vm.player.seekBy(30_000); vm.showOsd(); true }
-                    Key.MediaPlayPause -> { vm.player.togglePlayPause(); vm.showOsd(); true }
-                    Key.MediaPlay -> { vm.player.resume(); vm.showOsd(); true }
-                    Key.MediaPause -> { vm.player.pause(); vm.showOsd(); true }
-                    Key.Menu, Key.Settings -> { vm.openMenu(); true }
-                    Key.Info, Key.Guide -> { vm.showOsd(); true }
-                    Key.LastChannel -> { vm.lastChannel(); true }
-                    else -> false
-                }
+                // None = the overlay's or control row's focusables handle the key.
+                val command = resolve()
+                if (command == PlayerCommand.None) false else { perform(command); true }
             }
             .focusable(),
     ) {
@@ -204,14 +230,55 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
         if(s.overlay == Overlay.Buffer && s.audioChoice == null) BufferPlaybackDialog(vm,s,ps)
         s.audioChoice?.let { choice -> AudioSourceDialog(choice.options, vm::cancelAudioChoice, onChoose=vm::confirmAudioChoice) }
 
-        if (ps.buffering || ps.error != null || s.message != null || s.bufferBusy) {
-            StatusBadge(ps.error ?: s.message ?: if(s.bufferBusy) "Preparing buffer…" else "Buffering…", Modifier.align(Alignment.Center))
+        // A stopped stream asks for a decision instead of leaving a badge over a black screen. Live
+        // reconnect attempts (reconnectAttempt > 0) are still in progress and stay a badge.
+        val failure = s.failure ?: ps.error?.takeIf { ps.reconnectAttempt == 0 && !s.retrying && !ps.audioBlocked }
+            ?.let { UserError("Playback stopped", it, canRetry = true) }
+        val status = when {
+            s.retrying -> if (s.roomCatchUp) "Catching up with the room…" else "Trying again…"
+            failure != null -> null
+            ps.error != null -> ps.error
+            s.message != null -> s.message
+            room?.connection == RoomConnection.Reconnecting -> "Reconnecting to the room…"
+            s.bufferBusy -> "Preparing buffer…"
+            ps.buffering -> "Buffering…"
+            else -> null
+        }
+        if (status != null) StatusBadge(status, Modifier.align(Alignment.Center))
+        if (backHint) StatusBadge("Back again for last channel", Modifier.align(Alignment.TopCenter).padding(top = Tokens.Canvas.SafeMarginY))
+        // Watch room: who is here (with the controls, or whenever the room is waiting), and why it paused.
+        if (inRoom && room != null && s.roomEnded == null) {
+            if (s.overlay != Overlay.None || room.waitingFor != null || room.connection != RoomConnection.Connected) {
+                RoomStrip(s.roomCode.orEmpty(), room, Modifier.align(Alignment.TopStart).padding(start = Tokens.Canvas.SafeMarginX, top = Tokens.Canvas.SafeMarginY))
+            }
+            room.waitingFor?.let { StatusBadge("Waiting for $it…", Modifier.align(Alignment.TopCenter).padding(top = Tokens.Canvas.SafeMarginY + 44.dp)) }
+        }
+        if (s.leaveAsk) LeaveRoomDialog(isHost = room?.isHost == true, onLeave = vm::leaveRoom, onEnd = vm::endRoom, onStay = vm::stayInRoom)
+        // The room is over: say why, then back to the title it was opened from.
+        s.roomEnded?.let { ErrorDialog(it, onRetry = onExit, onDismiss = onExit, dismissLabel = "Back") }
+        if (failure != null && s.audioChoice == null && s.roomEnded == null) {
+            val keepsPlaying = s.failure != null && s.failureKeepsPlaying
+            ErrorDialog(
+                failure,
+                onRetry = vm::retry,
+                // Back leaves the player unless the previous channel is still on screen behind the dialog.
+                onDismiss = { if (keepsPlaying) vm.dismissFailure() else onExit() },
+                dismissLabel = if (keepsPlaying) "Keep watching" else "Back",
+            )
         }
 
         AnimatedVisibility(s.overlay == Overlay.Osd || s.numberEntry.isNotEmpty(), enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
             Osd(s, ps)
         }
-        if (s.numberEntry.isNotEmpty()) NumberEntry(s.numberEntry, s.channels, Modifier.align(Alignment.TopEnd))
+        AnimatedVisibility(s.overlay == Overlay.Controls && s.numberEntry.isEmpty(), enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
+            FilmControls(vm, s, ps)
+        }
+        if (s.numberEntry.isNotEmpty()) {
+            ChannelNumberOverlay(
+                s.numberEntry, ChannelNumberEntry.match(s.numberEntry, s.channels) { it.number }?.name,
+                Modifier.align(Alignment.TopEnd).padding(top = Tokens.Canvas.SafeMarginY, end = Tokens.Canvas.SafeMarginX),
+            )
+        }
 
         AnimatedVisibility(
             s.overlay == Overlay.MiniList,
@@ -266,19 +333,26 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
         } else {
             Text(d?.title.orEmpty(), style = MaterialTheme.typography.headlineSmall, color = Color.White)
             d?.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(alpha = 0.8f)) }
-            if (ps.durationMs > 0) {
-                ProgressLine(ps.positionMs.toFloat() / ps.durationMs, Modifier.padding(top = 12.dp))
+            // The title's position and length: a room's shared stream starts part-way in.
+            val position = s.titlePositionMs(ps.positionMs)
+            val duration = s.titleDurationMs(ps.durationMs)
+            if (duration > 0) {
+                ProgressLine((position.toFloat() / duration).coerceIn(0f, 1f), Modifier.padding(top = 12.dp))
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                    Text(fmt(ps.positionMs), color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    Text(fmt(position), color = Color.White, style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.weight(1f))
                     Text(if (ps.isPlaying) "▶" else "❚❚", color = Color.White, style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.weight(1f))
-                    Text("-" + fmt(ps.durationMs - ps.positionMs), color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    Text("-" + fmt((duration - position).coerceAtLeast(0)), color = Color.White, style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
         Text(
-            if(s.bufferTimeshift) "Buffered history · ◀▶ seek · ▼ menu / Go Live" else if (s.live) "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel" else if(s.descriptor?.archiveStart != null) "Provider archive · ${if(ps.seekable) "◀▶ seek" else "Not seekable yet"} · ▼ Go Live/menu" else "OK play/pause · ${if(ps.seekable) "◀▶ seek" else "Not seekable"} · ▼ audio/playback controls",
+            when {
+                s.roomCode != null && s.live -> "OK play/pause for everyone · ▶ menu · Back to leave the room"
+                s.live && !s.bufferTimeshift -> "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel"
+                else -> "OK or ▼ for playback controls"
+            },
             style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(top = 10.dp),
         )
         ps.audioNotice?.let {Text(it,color=t.textMuted,style=MaterialTheme.typography.labelMedium)}
@@ -289,13 +363,92 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
     }
 }
 
+/**
+ * Film control row: the scrubber has focus first, the buttons sit one Down below it. Everything a
+ * film needs is reachable with the D-pad and Select; nothing here depends on a media or Menu key.
+ */
 @Composable
-private fun NumberEntry(entry: String, channels: List<Channel>, modifier: Modifier) {
+private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiState) {
     val t = LocalThemeTokens.current
-    val match = entry.toIntOrNull()?.let { n -> channels.firstOrNull { it.number == n } }
-    Column(modifier.padding(top = Tokens.Canvas.SafeMarginY, end = Tokens.Canvas.SafeMarginX).background(t.overlay, RoundedCornerShape(Tokens.Radius.Md)).padding(20.dp), horizontalAlignment = Alignment.End) {
-        Text(entry, style = MaterialTheme.typography.displayMedium, color = Color.White)
-        Text(match?.name ?: "—", style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f))
+    val d = s.descriptor
+    val scrubFocus = remember { FocusRequester() }
+    val room = s.room
+    // In a room the button says what the room is doing: this player follows a moment later.
+    val playing = room?.clock?.playing ?: ps.isPlaying
+    val seekable = s.canSeek(ps.seekable)
+    LaunchedEffect(Unit) { withFrameNanos { }; runCatching { scrubFocus.requestFocus() } }
+    Column(
+        Modifier.fillMaxWidth()
+            .background(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.92f)))
+            .padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY)
+            .padding(top = 64.dp)
+            .focusGroup(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(d?.title.orEmpty(), style = MaterialTheme.typography.headlineSmall, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        d?.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        Scrubber(
+            positionMs = s.scrubTargetMs ?: s.titlePositionMs(ps.positionMs),
+            durationMs = s.titleDurationMs(ps.durationMs),
+            playing = playing,
+            seekable = seekable,
+            onSeek = vm::scrubBy,
+            onToggle = vm::togglePlayPause,
+            modifier = Modifier.focusRequester(scrubFocus),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ShButton(if (playing) "Pause" else "Play", vm::togglePlayPause)
+            ShButton("−10 s", { vm.scrubBy(-PlayerKeyMap.SEEK_STEP_MS) }, enabled = seekable)
+            ShButton("+10 s", { vm.scrubBy(PlayerKeyMap.SEEK_STEP_MS) }, enabled = seekable)
+            ShButton("Start over", vm::startOver, enabled = seekable)
+            ShButton("Audio & subtitles", vm::openMenu)
+        }
+        Text(
+            when {
+                room != null && room.controlsLocked && !room.isHost -> "Only the host can control playback"
+                room != null -> "Play, pause and seek move everyone in the room · Back to leave"
+                s.bufferTimeshift -> "Buffered history · Go Live is under Audio & subtitles"
+                d?.archiveStart != null -> "Provider archive · Go Live is under Audio & subtitles"
+                !seekable -> "This stream can't be seeked"
+                else -> "◀ ▶ seek, hold to go faster · Select play/pause"
+            },
+            style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f),
+        )
+        ps.audioNotice?.let { Text(it, color = t.textMuted, style = MaterialTheme.typography.labelMedium) }
+        s.sleepEndsAt?.let {
+            val min = ((it - System.currentTimeMillis()) / 60_000).coerceAtLeast(0)
+            Text("Sleep in $min min", style = MaterialTheme.typography.labelMedium, color = t.accent)
+        }
+    }
+}
+
+/** Focusable progress bar: Left/Right seek (faster while held), Select toggles play/pause. */
+@Composable
+private fun Scrubber(
+    positionMs: Long, durationMs: Long, playing: Boolean, seekable: Boolean,
+    onSeek: (Long) -> Unit, onToggle: () -> Unit, modifier: Modifier = Modifier,
+) {
+    FocusSurface(
+        onClick = onToggle,
+        modifier = modifier.fillMaxWidth().height(44.dp).onPreviewKeyEvent { e ->
+            val direction = when (e.key) { Key.DirectionLeft -> -1; Key.DirectionRight -> 1; else -> 0 }
+            if (direction == 0) false else {
+                if (e.type == KeyEventType.KeyDown && seekable) onSeek(direction * PlayerKeyMap.seekStepMs(e.nativeKeyEvent.repeatCount))
+                // Consumed even at either end of the film: there is nothing beside the scrubber to move to.
+                true
+            }
+        },
+        containerColor = Color.Transparent,
+        focusedContainerColor = Color.White.copy(alpha = 0.14f),
+        scaleOnFocus = false,
+        glow = false,
+    ) { focused ->
+        Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(if (playing) "▶" else "❚❚", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            Text(fmt(positionMs), color = Color.White, style = MaterialTheme.typography.labelLarge)
+            ProgressLine(if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f, Modifier.weight(1f), height = if (focused) 8.dp else 4.dp)
+            if (durationMs > 0) Text("-" + fmt((durationMs - positionMs).coerceAtLeast(0)), color = Color.White, style = MaterialTheme.typography.labelLarge)
+        }
     }
 }
 
@@ -338,7 +491,7 @@ private fun MiniList(channels: List<Channel>, currentId: String?, onPick: (Chann
     }
 }
 
-/** Menu: audio track · subtitles · aspect ratio · sleep timer. */
+/** Menu: audio track · subtitles · aspect ratio · sleep timer. Every track is listed; undecodable ones are disabled. */
 @Composable
 private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiState) {
     val t = LocalThemeTokens.current
@@ -352,11 +505,33 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         if(confirmation!=null && confirmation !in ps.audioTracks) {confirmation=null;trackMessage="Audio tracks changed. Choose again.";withFrameNanos{};runCatching{first.requestFocus()}}
     }
     LaunchedEffect(Unit) { delay(50); runCatching { first.requestFocus() } }
+    val room = s.room
+    val inRoom = s.roomCode != null
+    // No archive or Go Live in a room: it stays on the room clock.
+    val isChannel = s.descriptor?.id?.startsWith("ch:") == true && !inRoom
+    /** A section above Audio holds the menu's first focus. */
+    val topSection = isChannel || inRoom
+    // Initial focus must land on something focusable: tracks this TV cannot decode are listed but disabled.
+    val firstAudio = ps.audioTracks.indexOfFirst { it.supported }
     Column(
         Modifier.fillMaxHeight().width(420.dp).background(t.overlay).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = Tokens.Canvas.SafeMarginY),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if(s.descriptor?.id?.startsWith("ch:") == true) {
+        if (inRoom) {
+            Text("Watch room ${RoomCode.display(s.roomCode.orEmpty())}", style = MaterialTheme.typography.titleSmall, color = t.text)
+            Text(
+                (room?.members?.size ?: 0).let { n -> if (n == 1) "1 person watching" else "$n people watching" } +
+                    if (room?.controlsLocked == true) " · only the host controls playback" else "",
+                color = t.textMuted, style = MaterialTheme.typography.bodySmall,
+            )
+            if (room?.isHost == true) {
+                ShButton(if (room.controlsLocked) "Let everyone control playback" else "Only I control playback", vm::toggleRoomLock, Modifier.focusRequester(first))
+                ShButton("Leave the room", vm::askLeaveRoom)
+            } else {
+                ShButton("Leave the room", vm::askLeaveRoom, Modifier.focusRequester(first))
+            }
+        }
+        if(isChannel) {
             ShButton(if(s.bufferWindow!=null) "Buffered rewind" else "Provider archive · unverified", vm::openRewind, Modifier.focusRequester(first))
             ShButton("Go Live", vm::goLive)
             s.rewindError?.let { Text(it, color=t.danger) }
@@ -369,15 +544,22 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         if (ps.audioTracks.isEmpty()) Text("Audio track metadata unavailable", color = t.textMuted, style = MaterialTheme.typography.bodySmall)
         ps.audioTracks.forEachIndexed { i, tr ->
             val opener=remember(tr.revision,tr.groupIndex,tr.trackIndex){FocusRequester()}
-            ShChip(tr.label + if(tr.language.isNullOrBlank() || tr.language.equals("und",true)) " · language unverified" else "", tr.selected, {
+            val note = when {
+                !tr.supported -> UNSUPPORTED_TRACK
+                tr.language.isNullOrBlank() || tr.language.equals("und",true) -> " · language unverified"
+                else -> ""
+            }
+            ShChip(tr.label + note, tr.selected, {
                 trackMessage=null
                 if(vm.player.audioTrackNeedsConfirmation(tr)) {vm.player.pause();confirmOpener=opener;confirmation=tr}
                 else if(!vm.player.selectTrack(tr,C.TRACK_TYPE_AUDIO)) trackMessage="Audio tracks changed. Choose again."
-            },Modifier.focusRequester(opener).then(if(i==0 && s.descriptor?.id?.startsWith("ch:")!=true)Modifier.focusRequester(first) else Modifier))
+            },Modifier.focusRequester(opener).then(if(i==firstAudio && !topSection)Modifier.focusRequester(first) else Modifier), enabled = tr.supported)
         }
         Text("Subtitles", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
-        ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (ps.audioTracks.isEmpty() && s.descriptor?.id?.startsWith("ch:") != true) Modifier.focusRequester(first) else Modifier)
-        ps.textTracks.forEach { tr -> ShChip(tr.label, !ps.subtitlesOff && tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) }) }
+        ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (firstAudio < 0 && !topSection) Modifier.focusRequester(first) else Modifier)
+        ps.textTracks.forEach { tr ->
+            ShChip(tr.label + if (tr.supported) "" else UNSUPPORTED_TRACK, !ps.subtitlesOff && tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) }, enabled = tr.supported)
+        }
         Text("Picture", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
         ShButton("Aspect: ${s.aspect.label}", vm::cycleAspect)
         Text("Sleep timer", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
@@ -401,5 +583,51 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             }
         }
         LaunchedEffect(track){withFrameNanos{};runCatching{cancelFocus.requestFocus()}}
+    }
+}
+
+/** Who is in the room: slim, top-left, shown with the controls and whenever the room is waiting. */
+@Composable
+private fun RoomStrip(code: String, room: RoomUiState, modifier: Modifier = Modifier) {
+    Row(
+        modifier.background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(Tokens.Radius.Pill)).padding(horizontal = 14.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Room ${RoomCode.display(code)}", color = Color.White, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        room.members.take(MAX_STRIP_MEMBERS).forEach { m ->
+            // Host and buffering are said with a mark, not with colour alone.
+            Text(
+                (if (m.host) "★ " else "") + m.name.ifBlank { "Guest" } + (if (m.buffering) " …" else ""),
+                color = Color.White.copy(alpha = if (m.buffering) 0.6f else 0.9f), style = MaterialTheme.typography.labelMedium, maxLines = 1,
+            )
+        }
+        if (room.members.size > MAX_STRIP_MEMBERS) Text("+${room.members.size - MAX_STRIP_MEMBERS}", color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.labelMedium)
+        if (room.controlsLocked) Text("Host controls", color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+    }
+}
+
+private const val MAX_STRIP_MEMBERS = 6
+
+/** Back in a room. Focus starts on staying: leaving is the choice that has to be made on purpose. */
+@Composable
+private fun LeaveRoomDialog(isHost: Boolean, onLeave: () -> Unit, onEnd: () -> Unit, onStay: () -> Unit) {
+    val t = LocalThemeTokens.current
+    val stay = remember { FocusRequester() }
+    Dialog(onDismissRequest = onStay) {
+        Column(Modifier.width(520.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Leave the room?", style = MaterialTheme.typography.titleLarge, color = t.text)
+            Text(
+                if (isHost) "The others can keep watching without you, or you can end the room for everyone."
+                else "The others keep watching. You can come back with the room's code while it is open.",
+                style = MaterialTheme.typography.bodyLarge, color = t.textMuted,
+            )
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ShButton("Stay", onStay, Modifier.focusRequester(stay), style = ButtonStyle.Primary)
+                ShButton("Leave", onLeave)
+                if (isHost) ShButton("End for everyone", onEnd, style = ButtonStyle.Danger)
+            }
+        }
+        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { stay.requestFocus() } }
     }
 }

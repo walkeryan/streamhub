@@ -86,6 +86,11 @@ def _token_to_lang(tok: str) -> str | None:
     return None
 
 
+def lang_from_token(token: str) -> str | None:
+    """Language for one delimited tag ("EN", "UK", "FRA"); ``None`` for quality and other non-language tags."""
+    return _token_to_lang(token)
+
+
 def lang_from_group(group: str | None) -> str | None:
     if not group:
         return None
@@ -113,6 +118,12 @@ def lang_from_flag(*texts: str | None) -> str | None:
             if lang:
                 return lang
     return None
+
+
+def lang_from_category(category: str | None) -> str | None:
+    # Categories are a provider hint, not verified audio metadata. Never guess English
+    # from a Latin-script title or treat missing metadata as English.
+    return lang_from_group(category) or lang_from_flag(category)
 
 
 def lang_from_name(name: str | None) -> str | None:

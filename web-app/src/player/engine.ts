@@ -15,11 +15,14 @@ export interface PlayerHandle {
   subtitleTracks: () => TrackInfo[]
   /** -1 turns subtitles off */
   setSubtitle: (id: number) => void
+  /** The engine's measured download rate in kbit/s, when it keeps one (the stream information panel shows it). */
+  downloadKbps?: () => number | null
 }
 
 export interface AttachOptions {
   signal?: AbortSignal
-  onFatal: (reason: string) => void
+  /** `refusal` is the server's JSON answer when it turned the stream away (401, 403, 409), if the engine can read it. */
+  onFatal: (reason: string, refusal?: unknown) => void
   onTracks?: (resetAudio?: boolean) => void
 }
 
@@ -69,6 +72,15 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     let audioReady = false
     hls.on(Hls.Events.ERROR, (_e, data) => {
       if (!data.fatal) return
+      // The server turned the stream away and says why: no free connection (409), not for this user here (403),
+      // or the session it was issued to is gone (401). Loading again cannot succeed.
+      const status = data.response?.code
+      if (status === 409 || status === 403 || status === 401) {
+        let refusal: unknown
+        try { refusal = JSON.parse((data.networkDetails as XMLHttpRequest | undefined)?.responseText ?? '') } catch { refusal = undefined }
+        opt.onFatal(`http ${status}`, refusal)
+        return
+      }
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries++ < 2) hls.startLoad()
       else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && netRetries++ < 3) hls.recoverMediaError()
       else opt.onFatal(`${data.type}: ${data.details}`)
@@ -88,6 +100,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
       setAudio: (id) => { hls.audioTrack = id },
       subtitleTracks: () => hls.subtitleTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Subtitles ${i + 1}`, active: hls.subtitleTrack === i })),
       setSubtitle: (id) => { hls.subtitleTrack = id; hls.subtitleDisplay = id >= 0 },
+      downloadKbps: () => (Number.isFinite(hls.bandwidthEstimate) && hls.bandwidthEstimate > 0 ? hls.bandwidthEstimate / 1000 : null),
     }
   }
 
@@ -101,9 +114,12 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
       { enableStashBuffer: true, liveBufferLatencyChasing: false, isLive: live, lazyLoad: false },
     )
     p.on(mpegts.Events.ERROR, (type: string, detail: string) => opt.onFatal(`${type}: ${detail}`))
+    // The library reports its loader speed in KB/s.
+    let speed: number | null = null
+    p.on(mpegts.Events.STATISTICS_INFO, (info: { speed?: number }) => { speed = typeof info.speed === 'number' && info.speed > 0 ? info.speed * 8 : null })
     p.attachMediaElement(video)
     p.load()
-    return { kind: 'mpegts', destroy: () => { try { p.unload(); p.detachMediaElement(); p.destroy() } catch { /* already gone */ } }, ...noTracks, ...nativeTextTracks(video) }
+    return { kind: 'mpegts', destroy: () => { try { p.unload(); p.detachMediaElement(); p.destroy() } catch { /* already gone */ } }, ...noTracks, ...nativeTextTracks(video), downloadKbps: () => speed }
   }
 
   if (kind === 'dash') {
@@ -129,6 +145,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
       setAudio: (id) => { const t = player.getAudioTracks()[id]; if (t) player.selectAudioTrack(t) },
       subtitleTracks: () => player.getTextTracks().map((t, i) => ({ id: i, label: t.label || t.language || `Subtitles ${i + 1}`, active: t.active })),
       setSubtitle: (id) => { player.selectTextTrack(player.getTextTracks()[id] ?? null) },
+      downloadKbps: () => { const rate = player.getStats().estimatedBandwidth; return Number.isFinite(rate) && rate > 0 ? rate / 1000 : null },
     }
   }
 

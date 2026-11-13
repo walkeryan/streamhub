@@ -77,7 +77,7 @@ async def sports_recordings(
         kind = classify_sport("", " ".join(g for g in row.genres or [] if isinstance(g, str)))
         if kind is None or (sport and sport != kind):
             continue
-        audio = audio_info(extra, label=row.title, group=row.group_name)
+        audio = audio_info(extra, label=row.title, group=row.group_name, language=row.language)
         known = set(audio["audio_languages"])
         # Unknown is discoverable, not silently labelled English/playable in English.
         if preferred == ["und"] and known:

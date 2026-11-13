@@ -14,6 +14,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 
+from app.adapters.language.inferrer import lang_from_category
 from app.container import build_container
 from app.infra.cache import MemoryCache
 from app.infra.models import Channel, ChannelGroup, DisclaimerAcceptance, Profile, Programme, Progress, Source, Title
@@ -122,6 +123,7 @@ async def seed(c: Any, base: str) -> None:
                     tmdb_id=tmdb,
                     year=int(MOVIES[tmdb]["release_date"][:4]),
                     group_name=group,
+                    language=lang_from_category(group) or "und",
                     genres=["Adventure"],
                     extra={"ext": "mp4", "stream_id": ext, **extra},
                 )

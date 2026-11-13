@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.adapters.language.inferrer import lang_from_category
 from app.domain.entities import MetaTitle
 from app.infra.models import Title
 from app.services.ids import clean_display_title, normalise_title
@@ -44,6 +45,7 @@ async def setup(api):
                     tmdb_id=tmdb,
                     year=year,
                     group_name=group,
+                    language=lang_from_category(group) or "und",
                 )
             )
         await session.commit()

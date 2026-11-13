@@ -15,7 +15,6 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
@@ -24,6 +23,7 @@ import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.sameSwitchSession
 import kotlinx.coroutines.CoroutineStart
 import com.streamhub.tv.core.data.repo.OwnedProgressJobs
+import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackState
@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.min
 
 data class TrackOption(
@@ -49,6 +50,8 @@ data class TrackOption(
     val trackIndex: Int,
     val selected: Boolean,
     val revision: Long = 0,
+    /** False when this TV has no decoder for the track: listed so the viewer sees it exists, but not selectable. */
+    val supported: Boolean = true,
 )
 
 data class PlayerUiState(
@@ -64,6 +67,12 @@ data class PlayerUiState(
     val subtitlesOff: Boolean = true,
     val audioBlocked: Boolean = false,
     val audioNotice: String? = null,
+    /**
+     * Set with [error] when the failure was the server refusing the media URL itself (see
+     * StreamRefusals): the session or account behind the stream, the home network, the rating
+     * ceiling or the user's stream limit. Never reconnected; the screen decides what to do about it.
+     */
+    val refusal: ApiException? = null,
 )
 
 /**
@@ -95,6 +104,7 @@ class StreamHubPlayer(
     private var trackRevision=0L
     private var wantsPlayback=false
     private var waitingForAudio=false
+    private var requestedPreferredAudio:Pair<androidx.media3.common.TrackGroup,Int>?=null
     private var updatingMedia=false
     private val audioApproval=RuntimeAudioApproval<androidx.media3.common.TrackGroup>()
 
@@ -115,13 +125,13 @@ class StreamHubPlayer(
         .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
 
     private val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractors)
-        .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(6))
+        .setLoadErrorHandlingPolicy(RefusalAwareLoadErrorPolicy(6))
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .setRenderersFactory(
-            // EXTENSION_RENDERER_MODE_PREFER lets the FFmpeg audio extension (if bundled, see README)
-            // take over AC-3/E-AC-3/DTS on devices lacking HW decoders. No-op without the extension.
-            DefaultRenderersFactory(context).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER),
+            // EXTENSION_RENDERER_MODE_PREFER lets an FFmpeg audio extension (if bundled, see README)
+            // take over AC-3/E-AC-3/DTS on devices lacking HW decoders. No-op without one.
+            SoftwareAudioRenderersFactory(context).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER),
         )
         .setMediaSourceFactory(mediaSourceFactory)
         .setLoadControl(
@@ -143,7 +153,7 @@ class StreamHubPlayer(
             _state.value = _state.value.copy(buffering = playbackState == Player.STATE_BUFFERING)
             if (playbackState == Player.STATE_READY) {
                 reconnectJob?.cancel()
-                _state.value = _state.value.copy(error = null, reconnectAttempt = 0)
+                _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0)
                 enforceAudioLanguage()
             }
             if (playbackState == Player.STATE_ENDED) {
@@ -154,6 +164,14 @@ class StreamHubPlayer(
 
         override fun onPlayerError(error: PlaybackException) {
             val d = current
+            // The server refused the stream for a reason the same address cannot get past: say so instead
+            // of reconnecting. (A two-pane player keeps its own wording and has no screen for this.)
+            val refusal = if (allowLiveReconnect) streamRefusal(error) else null
+            if (refusal != null) {
+                reconnectJob?.cancel()
+                _state.value = _state.value.copy(error = friendly(error), refusal = refusal, reconnectAttempt = 0)
+                return
+            }
             if(d?.bufferAvailable == true) {
                 _state.value = _state.value.copy(error="Buffered playback interrupted. Choose Go Live or retry.")
             } else if (d?.live == true && allowLiveReconnect) {
@@ -201,7 +219,12 @@ class StreamHubPlayer(
         }
     }
 
-    /** Start playing a descriptor (replaces whatever was playing). */
+    /**
+     * Start playing a descriptor (replaces whatever was playing). [startPositionMs] is a position of
+     * the stream: for a room's shared stream that is the title position minus the stream's time zero
+     * (RoomSync.playerPosition), and it is honoured exactly, 0 included. [PlayerUiState.positionMs]
+     * and [seekTo] are on the same stream timeline; progress is reported in title time.
+     */
     fun play(d: PlaybackDescriptor, owner:Session?=null, startPositionMs: Long = d.resumePositionMs) {
         reportJobs.retainFor(owner)
         if (current != null && current?.id != d.id) report(PlaybackState.STOPPED)
@@ -209,18 +232,20 @@ class StreamHubPlayer(
         exoPlayer.playWhenReady=false
         current = d
         progressOwner=owner
-        mediaEpoch++;trackRevision++;audioApproval.clear()
+        mediaEpoch++;trackRevision++;audioApproval.clear();requestedPreferredAudio=null
         wantsPlayback=true;waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
         exoPlayer.playWhenReady=false
         exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
             .setPreferredAudioLanguages(*d.preferredAudioLanguages.toTypedArray()).build()
         reconnectJob?.cancel()
-        _state.value = _state.value.copy(error = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList())
+        _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList())
         httpFactory.setDefaultRequestProperties(d.headers.filterKeys { !it.equals("User-Agent", true) })
         httpFactory.setUserAgent(d.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: DEFAULT_UA)
         val item = MediaItemMapper.toMediaItem(d)
-        if (d.live || startPositionMs <= 0) exoPlayer.setMediaItem(item) else exoPlayer.setMediaItem(item, startPositionMs)
+        // A growing playlist started without a position would open at its newest end.
+        if (MediaItemMapper.pinsPosition(d)) exoPlayer.setMediaItem(item, startPositionMs.coerceAtLeast(0))
+        else if (d.live || startPositionMs <= 0) exoPlayer.setMediaItem(item) else exoPlayer.setMediaItem(item, startPositionMs)
         exoPlayer.prepare()
         updatingMedia=false
         exoPlayer.playWhenReady = !waitingForAudio
@@ -233,7 +258,8 @@ class StreamHubPlayer(
     private fun enforceAudioLanguage(): Boolean {
         if(updatingMedia) return false
         val d=current ?: return false
-        val audio=options(exoPlayer.currentTracks,C.TRACK_TYPE_AUDIO)
+        // Tracks the TV cannot decode are listed for the menu but can never play, so they do not count as observed audio.
+        val audio=options(exoPlayer.currentTracks,C.TRACK_TYPE_AUDIO).filter {it.supported}
         val selectedTracks=exoPlayer.currentTracks.groups.filter {it.type==C.TRACK_TYPE_AUDIO}.flatMap {group ->
             (0 until group.length).filter {group.isTrackSelected(it)}.map {group.mediaTrackGroup to it}
         }
@@ -241,17 +267,30 @@ class StreamHubPlayer(
         val decision=runtimeAudioDecision(d.audioLanguageRequired,d.preferredAudioLanguages,audio.size,audio.filter{it.selected}.map{it.language},explicit)
         if(decision==RuntimeAudioDecision.Blocked || (decision==RuntimeAudioDecision.Unobservable && exoPlayer.playbackState!=Player.STATE_READY)) {
             exoPlayer.playWhenReady=false;waitingForAudio=true
+            // A known foreign default must not win over an available tagged preferred track.
+            val preferred=preferredAudioIndex(d.preferredAudioLanguages,audio.map {it.language})?.let {audio[it]}
+            if(preferred!=null) {
+                val group=exoPlayer.currentTracks.groups.getOrNull(preferred.groupIndex)
+                if(group!=null && group.isTrackSupported(preferred.trackIndex) && requestedPreferredAudio!=(group.mediaTrackGroup to preferred.trackIndex)) {
+                    requestedPreferredAudio=group.mediaTrackGroup to preferred.trackIndex
+                    exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon()
+                        .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup,preferred.trackIndex)).build()
+                    return false
+                }
+            }
             if(exoPlayer.playbackState==Player.STATE_READY) _state.value=_state.value.copy(audioBlocked=true,audioNotice="Preferred audio is unavailable or unverified. Choose Audio in playback controls.")
             return false
         }
         val wasBlocked=_state.value.audioBlocked
-        _state.value=_state.value.copy(audioBlocked=false,audioNotice=if(decision==RuntimeAudioDecision.Unobservable) "Runtime audio tags unavailable; using your source selection. Language is not newly verified." else null,error=if(wasBlocked)null else _state.value.error)
+        _state.value=_state.value.copy(audioBlocked=false,audioNotice=if(decision==RuntimeAudioDecision.Unobservable) "Audio language unverified. You can change audio in playback controls." else null,error=if(wasBlocked)null else _state.value.error)
         if(waitingForAudio) {waitingForAudio=false;exoPlayer.playWhenReady=wantsPlayback}
         return true
     }
 
     fun audioTrackNeedsConfirmation(option:TrackOption):Boolean = current?.let {
-        needsRuntimeAudioCheck(it.audioLanguageRequired,it.preferredAudioLanguages) && !preferredAudioSelected(it.preferredAudioLanguages,listOf(option.language))
+        needsRuntimeAudioCheck(it.audioLanguageRequired,it.preferredAudioLanguages) &&
+            !singleUntaggedAudio(_state.value.audioTracks.size,listOf(option.language)) &&
+            !preferredAudioSelected(it.preferredAudioLanguages,listOf(option.language))
     } ?: true
 
     private fun scheduleReconnect(reason: String) {
@@ -264,7 +303,7 @@ class StreamHubPlayer(
             delay(backoff)
             if (current === d) {
                 updatingMedia=true
-                mediaEpoch++;trackRevision++;audioApproval.clear();waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
+                mediaEpoch++;trackRevision++;audioApproval.clear();requestedPreferredAudio=null;waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
                 exoPlayer.playWhenReady=false
                 exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
                 exoPlayer.setMediaItem(MediaItemMapper.toMediaItem(d))
@@ -294,8 +333,11 @@ class StreamHubPlayer(
         val owner=progressOwner ?: return
         val d = current ?: return
         if (!reportProgress || d.live) return
-        val pos = exoPlayer.currentPosition
-        val dur = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: d.durationMs
+        // A room's shared stream starts part-way into the title and its own length is only what has been
+        // produced so far: the report is in title time, against the title's length.
+        val pinned = MediaItemMapper.pinsPosition(d)
+        val pos = exoPlayer.currentPosition.coerceAtLeast(0) + MediaItemMapper.timeZeroMs(d)
+        val dur = if (pinned) d.durationMs else exoPlayer.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: d.durationMs
         val job=scope.launch(start=CoroutineStart.LAZY) {
             runCatching {api.reportProgress(ProgressReport(id=d.id,expectedProfileId=owner.profile?.id,positionMs=pos,durationMs=dur,state=state),owner)}
         }
@@ -310,9 +352,10 @@ class StreamHubPlayer(
         tracks.groups.forEachIndexed { gi, g ->
             if (g.type != type) return@forEachIndexed
             for (ti in 0 until g.length) {
-                if (!g.isTrackSupported(ti)) continue
+                // Unsupported tracks are kept (marked) rather than hidden: a film whose only English track is
+                // one this TV cannot decode should say so in the menu instead of appearing to have no English.
                 val f = g.getTrackFormat(ti)
-                out += TrackOption(label(f, out.size), f.language, gi, ti, g.isTrackSelected(ti),trackRevision)
+                out += TrackOption(label(f, out.size), f.language, gi, ti, g.isTrackSelected(ti),trackRevision,g.isTrackSupported(ti))
             }
         }
         return out
@@ -365,6 +408,15 @@ class StreamHubPlayer(
         }
     }
 
+    /** Absolute seek for the scrubber and "Start over"; the position shown updates at once. */
+    fun seekTo(positionMs: Long) {
+        if (exoPlayer.isCurrentMediaItemSeekable && exoPlayer.duration > 0) {
+            val target = positionMs.coerceIn(0, exoPlayer.duration)
+            exoPlayer.seekTo(target)
+            _state.value = _state.value.copy(positionMs = target)
+        }
+    }
+
     fun stop() {
         cancelReports()
         report(PlaybackState.STOPPED)
@@ -376,11 +428,21 @@ class StreamHubPlayer(
         reconnectJob?.cancel()
     }
 
+    /**
+     * Frees the player. Call [stop] first when leaving a screen: its STOPPED report carries the final
+     * position, and it is given a moment here to reach the server instead of being cancelled with
+     * the scope. Reports for a session that has since changed are still dropped (see the collector in init).
+     */
     fun release() {
-        cancelReports();progressOwner=null
+        progressOwner=null
+        tickerJob?.cancel();progressJob?.cancel();reconnectJob?.cancel()
         exoPlayer.removeListener(listener)
         exoPlayer.release()
-        scope.cancel()
+        val closing=scope
+        closing.launch {
+            withTimeoutOrNull(FINAL_REPORT_GRACE_MS) {reportJobs.joinAll()}
+            closing.cancel()
+        }
     }
 
     private fun friendly(e: PlaybackException): String = when (e.errorCode) {
@@ -394,6 +456,7 @@ class StreamHubPlayer(
 
     companion object {
         const val PROGRESS_INTERVAL_MS = 10_000L
+        const val FINAL_REPORT_GRACE_MS = 3_000L
         const val BASE_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L
         const val DEFAULT_UA = "StreamHub-AndroidTV/1.0 (Media3)"

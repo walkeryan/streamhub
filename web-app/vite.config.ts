@@ -6,7 +6,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
-    proxy: { '/api': { target: 'http://localhost:8787', changeOrigin: true } },
+    // ws: the watch-room socket lives under /api too
+    proxy: { '/api': { target: 'http://localhost:8787', changeOrigin: true, ws: true } },
   },
   preview: { port: 4173 },
   build: {

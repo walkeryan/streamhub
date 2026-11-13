@@ -36,10 +36,29 @@ const P: Record<string, string> = {
   tmdb: 'M4 8h16M12 8v10',
   info: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v6M12 7.5h.01',
   upload: 'M12 16V4M7 9l5-5 5 5M4 20h16',
+  download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
   eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 100 6 3 3 0 000-6z',
   tv2: 'M3 7h18v10H3z',
+  trophy: 'M7 4h10v5a5 5 0 01-10 0zM7 6H4v1a3 3 0 003 3M17 6h3v1a3 3 0 01-3 3M12 14v4M8 20h8',
+  filter: 'M4 6h16M7 12h10M10 18h4',
+  people: 'M9 11a3 3 0 100-6 3 3 0 000 6zM3 20a6 6 0 0112 0M16 5.2a3 3 0 010 5.6M17.5 14.4A6 6 0 0121 20',
+  lock: 'M6 11h12v9H6zM9 11V8a3 3 0 016 0v3',
+  copy: 'M9 9h11v11H9zM5 15V4h11',
+  record: 'M12 6a6 6 0 100 12 6 6 0 000-12z',
+  exit: 'M10 4H5v16h5M15 8l4 4-4 4M19 12H9',
+  users: 'M9 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zM2.5 20a6.5 6.5 0 0113 0M16 5.2a3.5 3.5 0 010 6.6M18 14.3a6.5 6.5 0 013.5 5.7',
+  delete: 'M21 5H9l-6 7 6 7h12zM12 9.5l5 5M17 9.5l-5 5',
+  tracks: 'M4 10v4M8 6v12M12 9v6M16 4v16M20 10v4',
+  mute: 'M4 9v6h4l5 4V5L8 9zM16.5 9.5l5 5M21.5 9.5l-5 5',
+  back10: 'M12 6a7.5 7.5 0 11-7.5 7.5M12 6l3-3M12 6l3 3',
+  fwd10: 'M12 6a7.5 7.5 0 107.5 7.5M12 6L9 3M12 6L9 9',
 }
-const FILLED = new Set(['play', 'pause'])
+// A finer second stroke for what the main one cannot draw legibly: the "10" inside the skip arrows.
+const DETAIL: Record<string, string> = {
+  back10: 'M9.6 11.2v4.8M12.6 12.4a1.2 1.2 0 012.4 0v2.4a1.2 1.2 0 01-2.4 0z',
+  fwd10: 'M9.6 11.2v4.8M12.6 12.4a1.2 1.2 0 012.4 0v2.4a1.2 1.2 0 01-2.4 0z',
+}
+const FILLED = new Set(['play', 'pause', 'record'])
 
 export function Icon({ name, size = 22, className, filled }: { name: keyof typeof P | string; size?: number; className?: string; filled?: boolean }) {
   const f = filled ?? FILLED.has(name)
@@ -47,6 +66,7 @@ export function Icon({ name, size = 22, className, filled }: { name: keyof typeo
     <svg width={size} height={size} viewBox="0 0 24 24" fill={f ? 'currentColor' : 'none'} stroke="currentColor"
       strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
       <path d={P[name] ?? P.info} />
+      {DETAIL[name] && <path d={DETAIL[name]} strokeWidth={1.4} />}
     </svg>
   )
 }

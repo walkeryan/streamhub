@@ -5,6 +5,18 @@ import { Chip } from './ui'
 import { CatalogPicker } from './CatalogPicker'
 import type { LanguageCount } from '../api/types'
 
+/**
+ * A language control earns its place only when the catalog has more than one language. With one,
+ * the row is not offered, and the filter must not hide that language from a profile that prefers
+ * another (an untagged catalog is all "und").
+ */
+export function languageScope(languages: LanguageCount[] | undefined, value: string, preferred: string): { offered: boolean; language: string } {
+  const language = value === 'mine' ? preferred || 'all' : value
+  if (!languages || languages.length > 1) return { offered: !!languages, language }
+  const only = languages[0]?.code
+  return { offered: false, language: only && language !== 'all' && !language.split(',').includes(only) ? 'all' : language }
+}
+
 export function LanguageFilter({ scope, value, onChange, languages }: {
   scope: string; value: string; onChange: (value: string) => void; languages?: LanguageCount[]
 }) {

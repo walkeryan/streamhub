@@ -1,35 +1,88 @@
 import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
-import type { PlaybackDescriptor, Source, Tile } from '../api/types'
+import type { Channel, PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
-  DISCLAIMER, channelTile, channels, episodesOf, fav, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, sources, tileOf, titles,
-  watch, withNowNext,
+  DISCLAIMER, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
+  searchBroadcasts, sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
+import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
+import { roomHandlers } from './rooms'
+import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
+import { adultUnlocked, holds, mockProfile, ownProfile, peopleHandlers, setProfilePin } from './people'
+import { sportsChannels, sportsEvents, sportsNetworks } from './sports'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
 const srcs: Source[] = [...sources]
 let settings = { tmdb_api_key_set: false, region: 'US', sleep_timer_min: null as number | null, epg_refresh_hours: 12, transcode_hw: 'none', proxy_mode: 'auto' }
+// The shelves Home shows after New Releases, in order; empty = Home chooses. Kept for the tab, like the other fixtures a spec changes.
+const HOME_SHELVES = 'mock.home_shelves'
+const homeShelves = (): string[] => { try { return JSON.parse(sessionStorage.getItem(HOME_SHELVES) ?? '[]') as string[] } catch { return [] } }
+/** Does an entry (Name, movies:Name, shows:Name) name a shelf the fixtures have? */
+const knownShelf = (entry: string): boolean => {
+  const sided = /^(movies|shows):(.+)$/.exec(entry)
+  return (sided ? [sided[1] as 'movies' | 'shows'] : (['movies', 'shows'] as const)).some((section) => shelvesOf(section).some((s) => s.name === (sided ? sided[2] : entry)))
+}
+/** GET /settings: the two home_shelves fields are null for a caller without system.manage. */
+const settingsFor = (request: Request) => {
+  const manages = holds(request, 'system.manage')
+  return { ...settings, request_manager_configured: requestManagerConfigured(), home_shelves: manages ? homeShelves() : null, home_shelves_unknown: manages ? homeShelves().filter((e) => !knownShelf(e)) : null }
+}
 let pinPolls = 0
 const hiddenGroups = new Set<string>()
+interface GroupRow { id: string; name: string; parent: string | null; path: string }
+/** The groups of the fixture channels as the server lists them: each top-level group, then its children. */
+function groupRows(): GroupRow[] {
+  const below = new Map<string, string[]>()
+  for (const path of new Set(channels.map((c) => c.group))) {
+    const { parent } = groupLevels(path)
+    if (!below.has(parent ?? path)) below.set(parent ?? path, [])
+    if (parent) below.get(parent)!.push(path)
+  }
+  return [...below].flatMap(([top, paths], i) => [
+    { id: `g${i}`, name: top, parent: null, path: top },
+    ...paths.map((path, j) => ({ id: `g${i}c${j}`, name: groupLevels(path).name, parent: top, path })),
+  ])
+}
+const groupHidden = (path: string) => hiddenGroups.has(path) || hiddenGroups.has(groupLevels(path).parent ?? path)
+/** The stored groups a `group` filter names: an id or a path, a parent with its children, or a child's bare name if only one has it. */
+function groupPaths(group: string): Set<string> {
+  const rows = groupRows()
+  const named = rows.find((r) => r.id === group) ?? rows.find((r) => r.path === group)
+  const bare = named ? [] : rows.filter((r) => r.parent && r.name === group)
+  const row = named ?? (bare.length === 1 ? bare[0] : undefined)
+  if (!row) return new Set()
+  return new Set([row.path, ...(row.parent ? [] : rows.filter((r) => r.parent === row.name && !hiddenGroups.has(r.path)).map((r) => r.path))])
+}
 
 const withProfile = (id: string) => {
-  const p = profiles.find((x) => x.id === id) ?? profiles[0]!
+  const p = profiles.find((x) => x.id === id) ?? mockProfile(id) ?? profiles[0]!
   return { ...p, disclaimer_accepted_version: accepted.has(p.id) ? DISCLAIMER.version : null }
 }
 const tokens = (id: string) => ({ access_token: `mock-access-${id}`, refresh_token: `mock-refresh-${id}`, profile: withProfile(id) })
 const currentProfileId = (req: Request) => req.headers.get('authorization')?.replace('Bearer mock-access-', '') ?? 'p1'
 const tileById = (id: string): Tile | undefined => {
-  const t = titles.find((x) => x.id === id)
-  if (t) return tileOf(seedFor(id)!)
+  const seed = seedFor(id)
+  if (seed) return tileOf(seed)
   const c = channels.find((x) => x.id === id)
-  return c ? channelTile(withNowNext(c)) : undefined
+  if (c) return channelTile(withNowNext(c))
+  const sport = sportsChannels.find((x) => x.id === id)
+  return sport && channelTile(sport)
 }
 
 const countryMatches = (value: string | null | undefined, country: string | null) =>
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
 export const handlers = [
+  // first: these also stand in for the checks the server makes on every request
+  ...peopleHandlers,
+  ...requestHandlers,
+  // watch rooms (REST and the room socket)
+  ...roomHandlers,
+  // recordings, rules and playing a finished recording (before the general resolve handler below)
+  ...recordingHandlers,
+  http.get(`${B}/sports/events`, async ({ request }) => { await delay(60); return HttpResponse.json(sportsEvents(new URL(request.url).searchParams, withRecordingState)) }),
+  http.get(`${B}/sports/channels`, ({ request }) => HttpResponse.json(sportsNetworks(new URL(request.url).searchParams, withRecordingState))),
   http.get(`${B}/sports/recordings`, ({ request }) => {
     const params = new URL(request.url).searchParams
     return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])
@@ -44,7 +97,12 @@ export const handlers = [
       return HttpResponse.json({ id, preferred_languages: ['eng'], options: [option], automatic_variant_id: variant, selection_required: false })
     }
     const tile = tileById(id)
-    const options = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }))
+    // Films carry a probed two-track file; series keep source-reported audio and list no tracks.
+    const audio_tracks: components['schemas']['AudioTrack'][] = tile?.kind === 'movie' ? [
+      { index: 0, language: 'eng', codec: 'ac3', channels: 6, title: null, default: true },
+      { index: 1, language: 'fra', codec: 'aac', channels: 2, title: null, default: false },
+    ] : []
+    const options: components['schemas']['PlaybackOption'][] = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: audio_tracks.length ? ['eng', 'fra'] : ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: audio_tracks.length ? 'media_probe' : 'audio_track_metadata', preferred_audio_available: true, audio_tracks, preferred_audio_track: audio_tracks.length ? 0 : null }))
     return HttpResponse.json({ id, preferred_languages: ['eng'], options, automatic_variant_id: options[0]?.variant_id ?? null, selection_required: false })
   }),
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),
@@ -56,7 +114,7 @@ export const handlers = [
     return HttpResponse.json(document)
   }),
   http.get(`${B}/browse/:section/genres`, () => HttpResponse.json([{ name: 'drama', count: 8 }, { name: 'comedy', count: 5 }])),
-  http.get(`${B}/profiles`, () => HttpResponse.json(profiles.map((p) => withProfile(p.id)))),
+  http.get(`${B}/profiles`, ({ request }) => HttpResponse.json([...profiles, ...ownProfile(request)].map((p) => withProfile(p.id)))),
   http.post(`${B}/auth/login`, async ({ request }) => {
     const b = (await request.json()) as { profile_id: string; pin?: string | null; password?: string | null }
     const p = profiles.find((x) => x.id === b.profile_id)
@@ -66,6 +124,13 @@ export const handlers = [
     return HttpResponse.json(tokens(p.id))
   }),
   http.post(`${B}/auth/refresh`, () => HttpResponse.json(tokens('p1'))),
+  // What asked for a TV code, for the approval screen. "mock.pair.old" stands for a server that cannot say.
+  http.post(`${B}/auth/device/lookup`, async ({ request }) => {
+    if (sessionStorage.getItem('mock.pair.old')) return HttpResponse.json({ code: 'not_found', message: 'no such endpoint' }, { status: 404 })
+    const b = (await request.json()) as { user_code?: string }
+    if (!/^[A-Z0-9]{6}$/.test(b.user_code ?? '') || b.user_code === 'BADBAD') return HttpResponse.json({ code: 'not_found', message: 'unknown code' }, { status: 404 })
+    return HttpResponse.json({ user_code: b.user_code, ip: '203.0.113.24', user_agent: 'StreamHub TV/1.0 (Android 12)', expires_in: 540 })
+  }),
   http.post(`${B}/auth/device/approve`, async ({ request }) => {
     const b = (await request.json()) as { user_code?: string }
     if (!/^[A-Z0-9]{6}$/.test(b.user_code ?? '') || b.user_code === 'BADBAD') return HttpResponse.json({ code: 'invalid_code', message: 'That code is not valid or has expired.' }, { status: 404 })
@@ -90,6 +155,7 @@ export const handlers = [
     const b = (await request.json()) as { pin?: string | null }
     const p = profiles.find((x) => x.id === params.id)
     if (p) p.has_pin = !!b.pin
+    setProfilePin(String(params.id), b.pin ?? null)
     return new HttpResponse(null, { status: 204 })
   }),
   http.get(`${B}/disclaimer`, () => HttpResponse.json(DISCLAIMER)),
@@ -112,9 +178,9 @@ export const handlers = [
     if (i >= 0) srcs.splice(i, 1)
     return new HttpResponse(null, { status: 204 })
   }),
-  http.post(`${B}/sources/:id/sync`, () => new HttpResponse(null, { status: 202 })),
+  http.post(`${B}/sources/:id/sync`, () => { sourceSynced(); return new HttpResponse(null, { status: 202 }) }),
   http.post(`${B}/sources/:id/test`, () => HttpResponse.json({ ok: true, message: 'Connection works.' })),
-  http.post(`${B}/sources/plex/pin`, () => { pinPolls = 0; return HttpResponse.json({ pin_id: 4242, code: 'K7QP', link_url: 'https://app.plex.tv/auth#?code=K7QP' }) }),
+  http.post(`${B}/sources/plex/pin`, () => { pinPolls = 0; return HttpResponse.json({ pin_id: 4242, code: 'K7QP', link_url: 'https://plex.tv/link' }) }),
   http.get(`${B}/sources/plex/pin/:id`, () => {
     if (++pinPolls < 3) return new HttpResponse(null, { status: 428 })
     const s: Source = { id: 's_plex2', type: 'plex', name: 'Linked Plex', enabled: true, priority: 9, region: 'US', status: 'syncing', last_sync: null, counts: {}, service_key: null, config_summary: {} }
@@ -127,16 +193,40 @@ export const handlers = [
     { key: 'disney', name: 'Disney+', web_url: 'https://www.disneyplus.com/' },
   ])),
 
-  http.get(`${B}/home`, async () => { await delay(120); return HttpResponse.json(homeRows()) }),
+  http.get(`${B}/home`, async () => { await delay(120); return HttpResponse.json(homeRows(homeShelves())) }),
   http.get(`${B}/search`, async ({ request }) => {
-    const q = (new URL(request.url).searchParams.get('q') ?? '').toLowerCase()
-    await delay(100)
-    const hits = titles.filter((t) => t.title.toLowerCase().includes(q))
-    const chans = channels.filter((c) => c.name.toLowerCase().includes(q)).map(withNowNext)
+    const params = new URL(request.url).searchParams
+    const q = (params.get('q') ?? '').trim().toLowerCase()
+    const expand = new Set((params.get('expand') ?? '').split(','))
+    // Like the server: discover=false is what the hub holds and answers at once; with discovery the
+    // metadata provider is asked too, which takes a moment and adds the titles no source has.
+    const discover = params.get('discover') !== 'false'
+    const kinds = params.get('kinds')?.split(',')
+    await delay(discover ? 350 : 100)
+    const none = { results: [], play_here: [], open_in_app: [], channels: [], programmes: [], discovered: [], metadata_available: true, attribution: 'Availability data by JustWatch' }
+    const section = (count: number, shown: number) => ({ count, more: count > shown })
+    // Like the server: nothing is looked up for a letter.
+    if (q.length < 2) return HttpResponse.json({ ...none, sections: { titles: section(0, 0), channels: section(0, 0), programmes: section(0, 0) }, order: ['programmes', 'channels', 'titles'] })
+    const cap = (name: string, capped: number) => (expand.has(name) ? 100 : capped)
+    // Titles: the library first, then what only the metadata provider knows, each by where the query falls in the name.
+    const rank = (name: string) => { const at = name.toLowerCase().indexOf(q); return name.toLowerCase() === q ? 0 : at === 0 ? 1 : at > 0 && name[at - 1] === ' ' ? 2 : 3 }
+    const hits = [...titles, ...(discover ? unavailable : [])].filter((t) => t.title.toLowerCase().includes(q))
+      .sort((a, b) => rank(a.title) - rank(b.title) || Number(!a.sources.length) - Number(!b.sources.length))
+    const exact = (c: Channel) => c.name.toLowerCase() === q || String(c.number) === q
+    const live = !kinds || kinds.includes('channel')
+    const chans = !live ? [] : channels.filter((c) => c.name.toLowerCase().includes(q) || String(c.number) === q)
+      .sort((a, b) => Number(exact(b)) - Number(exact(a)) || a.number - b.number)
+    const broadcasts = !kinds || kinds.includes('programme') ? searchBroadcasts(q) : []
+    const shown = { titles: hits.slice(0, cap('titles', 40)).map(annotate), channels: chans.slice(0, cap('channels', 12)), programmes: broadcasts.slice(0, cap('programmes', 24)) }
     return HttpResponse.json({
-      play_here: hits.filter((t) => t.sources.some((s) => s.playable_in_app)),
-      open_in_app: hits.filter((t) => !t.sources.some((s) => s.playable_in_app)),
-      channels: chans, attribution: 'Availability data by JustWatch',
+      results: shown.titles,
+      play_here: shown.titles.filter((t) => t.sources.some((s) => s.playable_in_app)),
+      open_in_app: shown.titles.filter((t) => t.sources.length > 0 && !t.sources.some((s) => s.playable_in_app)),
+      channels: shown.channels.map(withNowNext), programmes: shown.programmes.map(withRecordingState),
+      discovered: shown.titles.filter((t) => unavailable.some((u) => u.id === t.id)).map((t) => t.id), metadata_available: true,
+      sections: { titles: section(hits.length, shown.titles.length), channels: section(chans.length, shown.channels.length), programmes: section(broadcasts.length, shown.programmes.length) },
+      order: chans[0] && exact(chans[0]) ? ['channels', 'programmes', 'titles'] : ['programmes', 'channels', 'titles'],
+      attribution: 'Availability data by JustWatch',
     })
   }),
   http.get(`${B}/titles/:id`, async ({ params }) => {
@@ -151,12 +241,14 @@ export const handlers = [
     const t = tileById(id)
     if (t?.kind === 'channel') return HttpResponse.json({ ...t, attribution: 'Provider guide metadata' })
     if (!seed || !t) return HttpResponse.json({ code: 'not_found', message: 'Title not found' }, { status: 404 })
-    const show = seed.kind === 'show'
+    const a = annotate(t)
+    // Seasons and episodes come from a library copy; a title no source has only offers seasons to request.
+    const show = seed.kind === 'show' && a.sources.length > 0
     return HttpResponse.json({
-      ...t, overview: seed.overview, genres: seed.genres, runtime_min: seed.runtime,
+      ...a, overview: seed.overview, genres: seed.genres, runtime_min: seed.runtime,
       cast: ['Mara Ellison', 'Theo Okafor', 'Junko Hale', 'Luis Ferreira'].map((name, i) => ({ name, character: ['Lead', 'Rival', 'Mentor', 'Stranger'][i] ?? '', photo: null })),
       seasons: show ? seasonsOf(seed.n) : [], episodes: show ? episodesOf(seed.n, 1) : [],
-      sources: [...seed.sources, ...(seed.sources.some((s) => !s.playable_in_app) ? [] : [])],
+      request_seasons: seed.kind === 'show' && a.requestable ? [1, 2, 3] : [],
       attribution: 'Availability data by JustWatch',
     })
   }),
@@ -183,6 +275,15 @@ export const handlers = [
       has_more:page*size<list.length, coverage_note:'Synthetic metadata fixture catalog. Availability is checked separately; this is not exhaustive coverage.',
     } satisfies components['schemas']['DiscoveryPage'])
   }),
+  http.get(`${B}/browse/:section/shelves`, async ({ params, request }) => {
+    const u = new URL(request.url)
+    const section = params.section === 'movies' || params.section === 'vod' ? 'movies' : 'shows'
+    const rows = Number(u.searchParams.get('limit_rows') ?? 12), items = Number(u.searchParams.get('limit_items') ?? 20)
+    await delay(80)
+    // Adult titles are listed only when asked for, and only on a session that unlocked them.
+    const all = u.searchParams.get('include_adult') === 'true' && adultUnlocked(request) ? [...shelvesOf(section), ...adultShelf(section)] : shelvesOf(section)
+    return HttpResponse.json({ shelves: all.slice(0, rows).map((s) => ({ ...s, items: s.items.slice(0, items) })) } satisfies components['schemas']['ShelfList'])
+  }),
   http.get(`${B}/browse/:section/categories`, () => HttpResponse.json([])),
   http.get(`${B}/browse/:section/languages`, () => HttpResponse.json([{ code: 'eng', name: 'English', count: titles.length }])),
   http.get(`${B}/browse/:section`, async ({ params, request }) => {
@@ -192,7 +293,9 @@ export const handlers = [
     const sort = u.searchParams.get('sort')
     const query = u.searchParams.get('q')?.toLowerCase()
     const kind = params.section === 'movies' || params.section === 'vod' ? 'movie' : 'show'
-    let list = titles.filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
+    const category = u.searchParams.get('category')
+    // One shelf lists everything on it; the unfiltered grid stays the small, known title set.
+    let list = (category ? shelfTiles(kind, category) : titles).filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
     if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title))
     if (sort === 'year') list = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
     if (sort === 'rating') list = [...list].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
@@ -210,27 +313,34 @@ export const handlers = [
     const q = u.searchParams.get('q')?.toLowerCase()
     const pid = currentProfileId(request)
     const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === pid)?.languages ?? []
-    const groupNames = [...new Set(channels.map((c) => c.group))]
-    const selectedGroup = group?.startsWith('g') && /^g\d+$/.test(group) ? groupNames[Number(group.slice(1))] : group
+    const selected = group ? groupPaths(group) : null
     const list = channels
-      .filter((c) => countryMatches(c.country, country) && !hiddenGroups.has(c.group) && (!selectedGroup || c.group === selectedGroup) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
+      .filter((c) => countryMatches(c.country, country) && !groupHidden(c.group) && (!selected || selected.has(c.group)) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
 
     const offset = Number(u.searchParams.get('offset') ?? 0), limit = Number(u.searchParams.get('limit') ?? list.length)
-    return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list.slice(offset, offset + limit).map(withNowNext), total: list.length, limit, offset })
+    return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list.slice(offset, offset + limit).map(withNowNext).map(withRecordingStates), total: list.length, limit, offset })
   }),
   http.get(`${B}/channels/groups`, ({ request }) => {
     const u = new URL(request.url), lang = u.searchParams.get('language'), country = u.searchParams.get('country')
     const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === currentProfileId(request))?.languages ?? []
     const q = u.searchParams.get('q')?.toLowerCase()
-    const all = [...new Set(channels.map((c) => c.group))]
-    return HttpResponse.json(all.map((g, i) => ({ id: `g${i}`, source_id: 's_xt', name: g,
-      channel_count: channels.filter((c) => countryMatches(c.country, country) && c.group === g && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)).length,
-      hidden: hiddenGroups.has(g), language_override: null })).filter((g) => g.channel_count > 0))
+    // One pass over the channels: a large fixture catalog has hundreds of groups.
+    const counts = new Map<string, number>()
+    for (const c of channels) {
+      if (countryMatches(c.country, country) && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)) {
+        counts.set(c.group, (counts.get(c.group) ?? 0) + 1)
+        // A parent counts its children's channels with its own.
+        const { parent } = groupLevels(c.group)
+        if (parent) counts.set(parent, (counts.get(parent) ?? 0) + 1)
+      }
+    }
+    return HttpResponse.json(groupRows().map((g) => ({ id: g.id, source_id: 's_xt', name: g.name, parent: g.parent, path: g.path, channel_count: counts.get(g.path) ?? 0,
+      hidden: groupHidden(g.path), language_override: null })).filter((g) => g.channel_count > 0))
   }),
   http.patch(`${B}/channels/groups/:id`, async ({ params, request }) => {
     const b = (await request.json()) as { hidden?: boolean }
-    const name = [...new Set(channels.map((c) => c.group))][Number(String(params.id).slice(1))]
-    if (name && b.hidden !== undefined) { if (b.hidden) hiddenGroups.add(name); else hiddenGroups.delete(name) }
+    const path = groupRows().find((g) => g.id === params.id)?.path
+    if (path && b.hidden !== undefined) { if (b.hidden) hiddenGroups.add(path); else hiddenGroups.delete(path) }
     return HttpResponse.json({})
   }),
   http.get(`${B}/channels/languages`, () => {
@@ -244,12 +354,12 @@ export const handlers = [
     const ids = (u.searchParams.get('channel_ids') ?? '').split(',').filter(Boolean)
     const from = Date.parse(u.searchParams.get('from') ?? '') || Date.now() - 3600_000
     const to = Date.parse(u.searchParams.get('to') ?? '') || Date.now() + 6 * 3600_000
-    return HttpResponse.json(Object.fromEntries(ids.map((id) => [id, programmesFor(channels.find((c) => c.id === id) ?? channels[0]!, from, to)])))
+    return HttpResponse.json(Object.fromEntries(ids.map((id) => [id, programmesFor(channels.find((c) => c.id === id) ?? channels[0]!, from, to).map(withRecordingState)])))
   }),
 
   http.get(`${B}/playback/generation`, () => HttpResponse.json({ generation: 'fixture-generation' })),
   http.post(`${B}/playback/resolve`, async ({ request }) => {
-    const b = (await request.json()) as { id: string; source_id?: string | null }
+    const b = (await request.json()) as { id: string; source_id?: string | null; start_position_ms?: number | null; max_height?: number | null }
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
@@ -261,10 +371,33 @@ export const handlers = [
       }
       return HttpResponse.json(d)
     }
+    // A film only the provider has is converted for a browser: a restart-at-offset stream whose media time zero
+    // is where it was asked to start (on the server's 5 s grid) and which knows only its own clip beyond that.
+    // A quality cap below the file's height does the same to a film the browser would have played as it is.
+    const converted = !!t && !chan && t.sources.filter((s) => s.playable_in_app).every((s) => s.source_type === 'xtream')
+    const file = converted
+      ? { source_name: 'IPTV', container: 'matroska', bitrate_kbps: 18_250, video: { codec: 'hevc', width: 3840, height: 1600, frame_rate: 23.976, dynamic_range: 'hdr10' as const }, audio: { codec: 'eac3', channels: 6, language: 'eng' } }
+      : { source_name: t?.sources.find((s) => s.playable_in_app)?.name ?? null, container: 'mov', bitrate_kbps: 9_400, video: { codec: 'h264', width: 1920, height: 1080 }, audio: { codec: 'aac', channels: 2 } }
+    const cap = !chan && (b.max_height === 480 || b.max_height === 720 || b.max_height === 1080) && b.max_height < file.video.height ? b.max_height : null
+    if (converted || cap) {
+      const start = Math.floor((b.start_position_ms ?? 0) / 5000) * 5000
+      // The server's sizes: at most 1920 wide, then down to the cap, the shape kept and both sides even.
+      const wide = Math.min(1920, file.video.width)
+      const tall = Math.round((file.video.height * wide) / file.video.width / 2) * 2
+      const [width, height] = cap && tall > cap ? [Math.round((wide * cap) / tall / 2) * 2, cap] : [wide, tall]
+      const d: PlaybackDescriptor = {
+        ...base, mode: 'proxy', url: `/mock/room.webm?start=${start}${cap ? `&cap=${cap}` : ''}`, mime: 'video/webm', live: false,
+        resume_position_ms: start, duration_ms: converted ? 112 * 60_000 : 30_000, start_position_ms: start,
+        // As the server describes a film it transcodes for a browser; fields it does not know are absent.
+        media_info: { ...file, delivery: 'transcode', encoder: 'hardware', output_width: width, output_height: height, ...(cap ? { max_height: cap } : {}) },
+      }
+      return HttpResponse.json(d)
+    }
     const d: PlaybackDescriptor = {
       ...base, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: chan,
       resume_position_ms: progress[b.id]?.pos ? Math.min(progress[b.id]!.pos, 20_000) : 0, duration_ms: chan ? null : 30_000,
       channel_context: chan ? { list_id: 'mock', index: channels.findIndex((c) => c.id === b.id), count: channels.length } : null,
+      media_info: chan ? { source_name: 'IPTV', delivery: 'remux' } : { ...file, delivery: 'direct', output_width: 1920, output_height: 1080 },
     }
     return HttpResponse.json(d)
   }),
@@ -279,9 +412,20 @@ export const handlers = [
   http.get(`${B}/watchlist`, () => HttpResponse.json(titles.filter((t) => watch.has(t.id)))),
   http.put(`${B}/watchlist`, async ({ request }) => { watch.add(((await request.json()) as { id: string }).id); return new HttpResponse(null, { status: 204 }) }),
   http.delete(`${B}/watchlist`, ({ request }) => { watch.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
-  http.get(`${B}/history`, () => HttpResponse.json([])),
+  http.get(`${B}/history`, () => HttpResponse.json(Object.keys(progress).map(tileById).filter((t): t is Tile => !!t))),
   http.get(`${B}/themes`, () => HttpResponse.json([])),
-  http.get(`${B}/settings`, () => HttpResponse.json(settings)),
-  http.patch(`${B}/settings`, async ({ request }) => { settings = { ...settings, ...((await request.json()) as object) }; return HttpResponse.json(settings) }),
+  http.get(`${B}/settings`, ({ request }) => HttpResponse.json(settingsFor(request))),
+  http.patch(`${B}/settings`, async ({ request }) => {
+    const { home_shelves, ...rest } = (await request.json()) as { home_shelves?: string[] | null } & Record<string, unknown>
+    if (home_shelves !== undefined) {
+      if (!holds(request, 'system.manage')) return HttpResponse.json({ code: 'forbidden', message: 'Missing permission: system.manage', missing: ['system.manage'] }, { status: 403 })
+      // Stored trimmed, without blanks or repeats.
+      const kept = [...new Set((home_shelves ?? []).map((e) => e.trim()).filter(Boolean))]
+      if (kept.length > 24 || kept.some((e) => e.length > 200)) return HttpResponse.json({ code: 'validation_error', message: 'home_shelves takes at most 24 entries of at most 200 characters.' }, { status: 422 })
+      sessionStorage.setItem(HOME_SHELVES, JSON.stringify(kept))
+    }
+    settings = { ...settings, ...rest }
+    return HttpResponse.json(settingsFor(request))
+  }),
   http.put(`${B}/settings/tmdb_key`, () => { settings.tmdb_api_key_set = true; return new HttpResponse(null, { status: 204 }) }),
 ]
