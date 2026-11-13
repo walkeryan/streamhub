@@ -55,6 +55,8 @@ class Profile(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
     avatar: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Mirror of "this profile's user is active and holds system.manage", kept by the users
+    # service for the legacy owner-PIN regime and older clients. Never the authority for a request.
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     theme_id: Mapped[str] = mapped_column(String(64), default="midnight")
     languages: Mapped[list[Any]] = mapped_column(JSON, default=list)
@@ -65,6 +67,94 @@ class Profile(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     prefs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # The person this viewer state belongs to, one to one. Null only for a row written
+    # before the users model existed; the auth service attaches a user on first use.
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), unique=True, nullable=True)
+
+
+class Role(Base):
+    """A named permission set with limits. Built-ins are seeded by the migration."""
+
+    __tablename__ = "role"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    permissions: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    limits: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    on_shared_devices: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class User(Base):
+    """One person. Owns exactly one profile (the viewer state) and holds one role."""
+
+    __tablename__ = "user"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), default="managed")  # google | managed
+    google_subject: Mapped[str | None] = mapped_column(String(256), unique=True, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(64))
+    picture: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending|active|suspended
+    role_id: Mapped[str | None] = mapped_column(ForeignKey("role.id"), nullable=True, index=True)
+    grants: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    denials: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    limits: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # overrides on the role's limits
+    # None follows the role's on_shared_devices.
+    on_shared_devices: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Carried in tokens as ``uv``; any change to role, overrides, limits or status bumps it.
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    plex_account_linked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    approved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    approved_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class AuthSession(Base):
+    """A signed-in device. Tokens are only as good as the row their ``sid`` names."""
+
+    __tablename__ = "auth_session"
+    sid: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user.id", ondelete="CASCADE"), index=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(16), default="api")  # browser | tv | api
+    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    shared_device: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    device_owner_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Set by a correct PIN at /auth/adult-unlock; adult rows need it and watch.adult.
+    adult_unlocked_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class Invite(Base):
+    __tablename__ = "invite"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # SHA-256 of the token. The token itself is shown once, at creation, and never stored.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    role_id: Mapped[str] = mapped_column(ForeignKey("role.id", ondelete="CASCADE"))
+    created_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    max_uses: Mapped[int] = mapped_column(Integer, default=1)
+    uses: Mapped[int] = mapped_column(Integer, default=0)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class AuditLog(Base):
+    """Who changed what about whom. ``detail`` never holds a secret, a token or a PIN."""
+
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    action: Mapped[str] = mapped_column(String(48))
+    target_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class DisclaimerAcceptance(Base):
