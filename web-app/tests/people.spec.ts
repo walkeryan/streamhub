@@ -546,3 +546,144 @@ test.describe('the Users screen', () => {
     })
   })
 })
+
+test.describe("who's watching", () => {
+  const picker = (page: Page) => page.getByTestId('who-is-watching')
+  const card = (page: Page, name: string) => picker(page).getByTestId('who-card').filter({ hasText: name })
+  const pin = (page: Page) => page.getByTestId('pin-dialog')
+  const key = (page: Page, digit: string) => pin(page).getByRole('button', { name: digit, exact: true })
+
+  test('a shared device opens on the picker; a PIN switches to that user', async ({ page }) => {
+    await enter(page, '/', { who: 'guest', shared: true })
+    await expect(picker(page).getByRole('heading', { name: "Who's watching?" })).toBeVisible()
+    await expect(picker(page)).toHaveAttribute('data-mandatory', 'true')
+    // People whose role is offered on shared devices; a friend's is not. Lock badges mark the PINs.
+    await expect(picker(page).getByTestId('who-card').locator('.who-name')).toHaveText(['Ryan', 'Guest', 'Kids', 'Priya'])
+    await expect(card(page, 'Guest')).toHaveAttribute('data-focused', 'true')
+    await expect(card(page, 'Guest')).toContainText('Watching now')
+    for (const [name, locked] of [['Ryan', 0], ['Guest', 0], ['Kids', 1], ['Priya', 1]] as const) await expect(card(page, name).getByTestId('who-lock')).toHaveCount(locked)
+    // At the start of the app there is no way round it.
+    await expect(page.getByTestId('who-close')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Backspace')
+    await expect(picker(page)).toBeVisible()
+    await expect(page.getByTestId('home')).toHaveCount(0)
+
+    // Wider access without a PIN is refused, and says what to do.
+    await page.keyboard.press('ArrowLeft')
+    await expect(card(page, 'Ryan')).toHaveAttribute('data-focused', 'true')
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('who-problem')).toContainText('Ryan has no PIN yet')
+
+    // Kids has a PIN: wrong, then right, on the keypad.
+    await card(page, 'Kids').click()
+    await expect(pin(page).getByRole('heading', { name: 'PIN for Kids' })).toBeVisible()
+    await expect(key(page, '1')).toHaveAttribute('data-focused', 'true')
+    await expect(page.getByTestId('pin-ok')).toHaveAttribute('aria-disabled', 'true')
+    for (const digit of '9999') await key(page, digit).click()
+    await expect(pin(page).getByTestId('pin-dots').locator('i')).toHaveCount(4)
+    await expect(pin(page).getByTestId('pin-dots')).toHaveAttribute('aria-label', '4 digits entered')
+    await expect(pin(page)).not.toContainText('9999')
+    await page.getByTestId('pin-ok').click()
+    await expect(pin(page).getByTestId('pin-error')).toHaveText('That PIN is not right. Try again.')
+    await expect(pin(page).getByTestId('pin-dots').locator('i')).toHaveCount(0)
+    for (const digit of '12345') await key(page, digit).click()
+    await pin(page).getByRole('button', { name: 'Erase last digit', exact: true }).click()
+    await page.getByTestId('pin-ok').click()
+    await expect(page.getByTestId('home')).toBeVisible()
+    await expect(picker(page)).toHaveCount(0)
+    await expect(page.getByTestId('nav-profile')).toHaveAttribute('aria-label', 'Profile Kids')
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.session.v1')!).access)).toBe('mock-access-p3')
+
+    // The profile entry asks again; this time Back closes it.
+    await page.getByTestId('nav-profile').click()
+    await expect(picker(page)).toHaveAttribute('data-mandatory', 'false')
+    await expect(card(page, 'Kids')).toHaveAttribute('data-focused', 'true')
+    await expect(card(page, 'Kids')).toContainText('Watching now')
+    await page.keyboard.press('Escape')
+    await expect(picker(page)).toHaveCount(0)
+    await expect(page.getByTestId('nav-profile')).toHaveAttribute('data-focused', 'true')
+
+    // A new start of the app asks again.
+    await page.reload()
+    await expect(picker(page)).toHaveAttribute('data-mandatory', 'true')
+    // Staying as Kids still takes the PIN, typed this time: digits only, Enter to switch.
+    await expect(card(page, 'Kids')).toHaveAttribute('data-focused', 'true')
+    await page.keyboard.press('Enter')
+    await expect(pin(page)).toBeVisible()
+    await page.keyboard.type('12x34')
+    await expect(pin(page).getByTestId('pin-dots').locator('i')).toHaveCount(4)
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('home')).toBeVisible()
+  })
+
+  test('five wrong PINs lock the keypad and count the wait down', async ({ page }) => {
+    await enter(page, '/', { who: 'guest', shared: true })
+    await card(page, 'Priya').click()
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await page.keyboard.type('0000')
+      await page.keyboard.press('Enter')
+      await expect(pin(page).getByTestId('pin-error')).toHaveText('That PIN is not right. Try again.')
+      await expect(pin(page).getByTestId('pin-dots').locator('i')).toHaveCount(0)
+    }
+    await page.keyboard.type('0000')
+    await page.keyboard.press('Enter')
+    const locked = pin(page).getByTestId('pin-locked')
+    await expect(locked).toHaveText(/^Too many wrong PINs\. Try again in 1[45]:\d\d\.$/)
+    const before = await locked.textContent()
+    await expect(locked).not.toHaveText(before!, { timeout: 4000 })
+    await expect(key(page, '1')).toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.type('4321')
+    await expect(pin(page).getByTestId('pin-dots').locator('i')).toHaveCount(0)
+    // The right PIN is refused too while the lock holds, and opening the dialog again shows the wait.
+    await pin(page).getByRole('button', { name: 'Cancel', exact: true }).click()
+    await card(page, 'Priya').click()
+    await page.keyboard.type('4321')
+    await page.keyboard.press('Enter')
+    await expect(pin(page).getByTestId('pin-locked')).toContainText('Try again in 1')
+    // Someone else can still be chosen.
+    await pin(page).getByRole('button', { name: 'Cancel', exact: true }).click()
+    await card(page, 'Guest').click()
+    await expect(page.getByTestId('home')).toBeVisible()
+  })
+
+  test('a personal device has no picker', async ({ page }) => {
+    await enter(page, '/', { who: 'guest' })
+    await expect(page.getByTestId('home')).toBeVisible()
+    await expect(picker(page)).toHaveCount(0)
+    await page.getByTestId('nav-profile').click()
+    await expect(page).toHaveURL(/\/settings\?tab=profiles$/)
+  })
+
+  test('a shared device on a server without the switch calls has no picker either', async ({ page }) => {
+    const asked: number[] = []
+    page.on('response', (r) => { if (r.url().endsWith('/api/v1/auth/switchable')) asked.push(r.status()) })
+    await enter(page, '/', { who: 'guest', shared: true, mode: 'no-switch' })
+    await expect(page.getByTestId('home')).toBeVisible()
+    expect(new Set(asked)).toEqual(new Set([404]))
+    await expect(picker(page)).toHaveCount(0)
+    await page.getByTestId('nav-profile').click()
+    await expect(page).toHaveURL(/\/settings\?tab=profiles$/)
+  })
+
+  test.describe('on a phone', () => {
+    test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    test('the picker and the keypad fit, and More reaches the picker', async ({ page }) => {
+      await enter(page, '/', { who: 'guest', shared: true })
+      await expect(picker(page)).toBeVisible()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await card(page, 'Kids').tap()
+      for (const digit of '1234') await key(page, digit).tap()
+      const pad = (await pin(page).boundingBox())!
+      expect(pad.x).toBeGreaterThanOrEqual(0)
+      expect(pad.x + pad.width).toBeLessThanOrEqual(390)
+      await page.getByTestId('pin-ok').tap()
+      await expect(page.getByTestId('home')).toBeVisible()
+      await page.getByTestId('nav-more').tap()
+      await page.getByTestId('more-menu').getByTestId('nav-profile').tap()
+      await expect(picker(page)).toHaveAttribute('data-mandatory', 'false')
+      await page.getByTestId('who-close').tap()
+      await expect(picker(page)).toHaveCount(0)
+    })
+  })
+})

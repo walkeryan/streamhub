@@ -5,13 +5,16 @@ import { api, unwrap } from './api/client'
 import type { Profile } from './api/types'
 import { useDisclaimer } from './api/hooks'
 import { useMe } from './api/me'
+import { useSwitchable } from './api/people'
 import { useCatalogFreshness } from './api/catalogFreshness'
 import { Rail } from './components/Rail'
+import { WhoIsWatching } from './components/WhoIsWatching'
 import { Button, ErrorState, Skeleton, Toasts } from './components/ui'
 import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
 import { bootTheme, useTheme } from './lib/theme'
 import { useSession } from './store/session'
+import { useWho } from './store/who'
 import { DisclaimerGate } from './screens/Gate'
 import { LoginGate } from './screens/GoogleLogin'
 import { InviteLanding } from './screens/Invite'
@@ -52,6 +55,12 @@ export function App() {
   const setProfile = useSession((s) => s.setProfile)
   const signOut = useSession((s) => s.clear)
   const me = useMe()
+  // A shared household device asks who is watching before it shows anything. No list (an older server,
+  // or the server calls this a personal device) means no picker.
+  const shared = !!profile && !!me.data?.shared_device
+  const switchable = useSwitchable(shared)
+  const who = useWho()
+  const asks = shared && !who.picked && switchable.data !== null
   useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')
@@ -86,6 +95,8 @@ export function App() {
       </ErrorState>
     </div>
   )
+  else if (asks && switchable.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
+  else if (asks) body = <WhoIsWatching mandatory users={switchable.data ?? undefined} error={switchable.error} onRetry={() => void switchable.refetch()} />
   else if (disclaimer.data && profile.disclaimer_accepted_version !== disclaimer.data.version) {
     body = <DisclaimerGate onAccepted={() => setProfile({ ...profile, disclaimer_accepted_version: disclaimer.data!.version })} />
   } else if (disclaimer.isLoading) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
@@ -113,6 +124,7 @@ export function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
+        {who.open && switchable.data && <WhoIsWatching users={switchable.data} />}
       </Suspense>
     )
   }

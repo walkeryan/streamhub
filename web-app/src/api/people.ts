@@ -38,7 +38,7 @@ export const useSessions = () => useQuery({ queryKey: ['sessions', useScope()], 
  */
 export const useSwitchable = (enabled: boolean) =>
   useQuery({
-    queryKey: ['switchable', useScope()], enabled, staleTime: 0, retry: false,
+    queryKey: ['switchable', useScope()], enabled, staleTime: 30_000, retry: false,
     queryFn: async ({ signal }): Promise<Switchable[] | null> => {
       try { return (await call<{ users: Switchable[] }>('GET', '/auth/switchable', undefined, signal)).users } catch (e) {
         if (absent(e) || (e as { code?: string }).code === 'not_shared_device') return null
