@@ -415,3 +415,83 @@ test('TV browser at 1920x1080: Movies shows three shelves on the first screen an
   expect(head.x - (poster.x + poster.width)).toBeLessThan(60)
   await tv.context.close()
 })
+
+// Two things real data showed up: channel logos of any shape sat under the channel's text, and a
+// catalog with one source repeated that source on every tile.
+test.describe('review of the first pass', () => {
+  /** The mock's home feed, with On Now logos of awkward shapes and one row of tiles with chosen sources. */
+  const realistic = (page: Page) => page.addInitScript(() => {
+    const original = window.fetch.bind(window)
+    const svg = (w: number, h: number) => `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="#fff"/></svg>`)}`
+    const iptv = (id: string, name: string) => ({ source_id: id, source_type: 'xtream', name, playable_in_app: true, kind: 'vod' })
+    const title = (n: number, name: string, sources: unknown[]) => ({ id: `tmdb:movie:${n}`, kind: 'movie', title: name, year: 2024, poster: null, backdrop: null, sources })
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      if (new URL(request.url).pathname !== '/api/v1/home') return original(request)
+      const home = await (await original(request)).json() as { rows: Array<{ id: string; title: string; layout: string; tiles: Array<Record<string, unknown>> }> }
+      const shapes = [svg(640, 80), svg(90, 400), svg(300, 300), null]
+      for (const row of home.rows) if (row.id === 'onnow') row.tiles.forEach((tile, i) => {
+        tile.logo = shapes[i % shapes.length]
+        if (i === 0) { tile.title = 'International Documentary Channel HD Plus One'; (tile.now_playing as { title: string }).title = 'An Unusually Long Programme Title About Rivers, Maps And The People Who Draw Them' }
+      })
+      home.rows.splice(2, 0, { id: 'sources', title: 'Badge cases', layout: 'poster', tiles: [
+        title(901, 'One Source', [iptv('s_xt', 'IPTV')]),
+        title(902, 'Two Sources', [iptv('s_xt', 'IPTV'), iptv('s_x2', 'Second IPTV')]),
+        title(903, 'Owned', [{ source_id: 's_plex', source_type: 'plex', name: 'Plex', playable_in_app: true, kind: 'library' }]),
+        title(904, 'Owned Too', [iptv('s_xt', 'IPTV'), { source_id: 's_jf', source_type: 'jellyfin', name: 'Jellyfin', playable_in_app: true, kind: 'library' }]),
+        title(905, 'Elsewhere', [{ source_id: 's_nf', source_type: 'streaming_service', name: 'Netflix', playable_in_app: false, kind: 'flatrate' }]),
+        title(906, 'Nowhere', []),
+      ] })
+      return Response.json(home)
+    }
+  })
+  const apart = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+    a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5
+  const inside = (inner: { x: number; y: number; width: number; height: number }, outer: typeof inner) =>
+    inner.x >= outer.x - 0.5 && inner.y >= outer.y - 0.5 && inner.x + inner.width <= outer.x + outer.width + 0.5 && inner.y + inner.height <= outer.y + outer.height + 0.5
+
+  for (const [name, options] of [['a phone', PHONE], ['a TV browser', { viewport: { width: 1920, height: 1080 } }]] as const) {
+    test(`On Now on ${name}: the channel logo and the channel's text never overlap`, async ({ browser }) => {
+      const { context, page } = await other(browser, options)
+      await realistic(page)
+      await enter(page)
+      const cards = page.locator('[data-row="onnow"] .tile-channel')
+      await expect(cards.first()).toBeVisible()
+      await expect(cards.first().locator('.channel-logo img')).toBeVisible()
+      const count = Math.min(await cards.count(), 4)
+      expect(count).toBe(4)
+      for (let i = 0; i < count; i++) {
+        const card = cards.nth(i)
+        await card.scrollIntoViewIfNeeded()
+        const [tile, logo, copy] = await Promise.all([card.boundingBox(), card.locator('.channel-logo').boundingBox(), card.locator('.channel-copy').boundingBox()])
+        expect(apart(logo!, copy!), `card ${i}: logo and text`).toBe(true)
+        expect(inside(logo!, tile!), `card ${i}: logo in card`).toBe(true)
+        expect(inside(copy!, tile!), `card ${i}: text in card`).toBe(true)
+        // The picture itself stays in its box whatever its shape; the words are cut, not spilled.
+        const drawn = card.locator('.channel-logo img')
+        if (await drawn.count()) expect(inside((await drawn.boundingBox())!, logo!), `card ${i}: image in box`).toBe(true)
+        for (const line of await card.locator('.channel-copy > *').all()) expect(inside((await line.boundingBox())!, copy!), `card ${i}: line in text box`).toBe(true)
+      }
+      await expect(cards.first().locator('.channel-name')).toHaveText('2 · International Documentary Channel HD Plus One')
+      await expect(cards.nth(3).getByTestId('img-fallback')).toBeVisible()
+      expect(await fits(page)).toBe(true)
+      await context.close()
+    })
+  }
+
+  test('a tile names a source only when that says something', async ({ page }) => {
+    await realistic(page)
+    await enter(page)
+    const tile = (title: string) => page.locator('[data-row="sources"]').getByRole('link', { name: title, exact: true })
+    await expect(tile('One Source')).toBeVisible()
+    // One ordinary source: nothing to say. A choice of sources, or a copy elsewhere only: say so.
+    await expect(tile('One Source').locator('.badge')).toHaveCount(0)
+    await expect(tile('Two Sources').locator('.badge')).toHaveText('Available · IPTV')
+    await expect(tile('Elsewhere').locator('.badge')).toHaveText('Open · Netflix')
+    await expect(tile('Nowhere').locator('.badge')).toHaveText('Not available here')
+    // The household's own library is named as such, alone or among others.
+    await expect(tile('Owned').locator('.badge')).toHaveText('In your library')
+    await expect(tile('Owned Too').locator('.badge')).toHaveText('In your library')
+    await expect(page.locator('.tile-badges').getByText(/Available · Plex/)).toHaveCount(0)
+  })
+})
