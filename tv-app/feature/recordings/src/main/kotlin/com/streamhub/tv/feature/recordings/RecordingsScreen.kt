@@ -30,12 +30,16 @@ import androidx.tv.material3.Text
 import com.streamhub.tv.core.data.model.Recording
 import com.streamhub.tv.core.data.model.RecordingRule
 import com.streamhub.tv.core.data.model.RecordingStates
+import com.streamhub.tv.core.data.repo.isPlayable
 import com.streamhub.tv.core.data.repo.isUpcoming
+import com.streamhub.tv.core.data.repo.playbackId
+import com.streamhub.tv.core.data.repo.teamsLabel
 import com.streamhub.tv.core.data.repo.recordingStateLabel
 import com.streamhub.tv.core.data.repo.recordingStateMark
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.CenterMessage
 import com.streamhub.tv.core.ui.components.FocusRow
+import com.streamhub.tv.core.ui.components.HeroIcons
 import com.streamhub.tv.core.ui.components.LoadingView
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.SectionTitle
@@ -68,8 +72,9 @@ internal fun ruleSummary(rule: RecordingRule): String = when (rule.kind) {
 
 /**
  * Recordings: three rows, Upcoming · Recorded · Rules. Select on a card opens what can be done with
- * it (cancel, delete, disable) and, for a recording that failed, why. Recorded items are not played
- * yet (see [RECORDED_PLAYBACK_ENABLED]).
+ * it (play, cancel, delete, disable) and, for a recording that failed, why. A recording with a file
+ * plays as `rec:<id>` through the same path as any pressed Play; a refusal (a recording above the
+ * viewer's rating ceiling, say) comes back in the server's words in the usual play-failure dialog.
  */
 @Composable
 fun RecordingsScreen(vm: RecordingsViewModel = hiltViewModel()) {
@@ -119,7 +124,7 @@ private fun RecordingRows(s: RecordingsState, vm: RecordingsViewModel) {
                 else FocusRow(s.upcoming, key = { it.id }, title = "Upcoming") { i, r, m -> RecordingCard(r, { vm.open(r) }, m.then(firstOf(0, i))) }
             }
             item("recorded") {
-                if (s.recorded.isEmpty()) EmptyRow("Recorded", "Nothing has been recorded yet.")
+                if (s.recorded.isEmpty()) EmptyRow("Recorded", "Nothing has been recorded yet. Finished recordings play from here.")
                 else FocusRow(s.recorded, key = { it.id }, title = "Recorded") { i, r, m -> RecordingCard(r, { vm.open(r) }, m.then(firstOf(1, i))) }
             }
             item("rules") {
@@ -150,7 +155,7 @@ private fun RecordingCard(r: Recording, onClick: () -> Unit, modifier: Modifier 
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(r.title.ifBlank { "Untitled" }, style = MaterialTheme.typography.titleSmall, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                listOfNotNull(r.channelName?.takeIf(String::isNotBlank), episodeLabel(r), r.subtitle?.takeIf(String::isNotBlank)).joinToString(" · "),
+                recordingByline(r),
                 style = MaterialTheme.typography.labelMedium, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Text(recordingWhen(r.startsAt, r.endsAt), style = MaterialTheme.typography.labelMedium, color = t.textMuted, maxLines = 1)
@@ -163,6 +168,10 @@ private fun RecordingCard(r: Recording, onClick: () -> Unit, modifier: Modifier 
         }
     }
 }
+
+/** Under a recording's title: the sides of a game when the server names them, then channel, episode and subtitle. */
+internal fun recordingByline(r: Recording): String =
+    listOfNotNull(teamsLabel(r.teams), r.channelName?.takeIf(String::isNotBlank), episodeLabel(r), r.subtitle?.takeIf(String::isNotBlank)).joinToString(" · ")
 
 private fun episodeLabel(r: Recording): String? = when {
     r.season != null && r.episode != null -> "S${r.season} E${r.episode}"
@@ -201,8 +210,9 @@ private fun RecordingDialog(r: Recording, s: RecordingsState, onRemove: () -> Un
     val launcher = LocalPlayLauncher.current
     val focus = remember { FocusRequester() }
     val upcoming = r.isUpcoming()
-    val playable = RECORDED_PLAYBACK_ENABLED && r.state == RecordingStates.DONE
+    val playable = r.isPlayable()
     DetailDialog(r.title.ifBlank { "Recording" }, onDismiss, focus) {
+        teamsLabel(r.teams)?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Text(listOfNotNull(r.channelName?.takeIf(String::isNotBlank), recordingWhen(r.startsAt, r.endsAt)).joinToString("  ·  "), style = MaterialTheme.typography.bodyMedium, color = t.textMuted)
         Text(listOfNotNull(recordingStateMark(r.state), recordingStateLabel(r.state)).joinToString(" "), style = MaterialTheme.typography.bodyLarge, color = t.text)
         if (!r.error.isNullOrBlank()) Text("Reason: ${r.error}", style = MaterialTheme.typography.bodyMedium, color = t.danger)
@@ -211,11 +221,12 @@ private fun RecordingDialog(r: Recording, s: RecordingsState, onRemove: () -> Un
                 if (r.ruleId != null) "Scheduled by a rule. Cancelling skips just this one; the rule keeps recording the others." else "Cancelling removes it from the schedule.",
                 style = MaterialTheme.typography.bodyMedium, color = t.textMuted,
             )
-            r.state == RecordingStates.DONE && !playable -> Text("Recordings can't be played on this TV yet. That is on its way.", style = MaterialTheme.typography.bodyMedium, color = t.textMuted)
+            // Failed part-way but kept what it had: it plays, as far as it goes.
+            playable && r.state == RecordingStates.FAILED -> Text("The part that was recorded before it failed can be played.", style = MaterialTheme.typography.bodyMedium, color = t.textMuted)
         }
         s.actionError?.let { Text("${it.title}. ${it.body}", style = MaterialTheme.typography.bodyMedium, color = t.danger) }
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (playable) ShButton("Play", { onDismiss(); launcher.play("rec:${r.id}") }, Modifier.focusRequester(focus), style = ButtonStyle.Primary)
+            if (playable) ShButton("Play", { onDismiss(); launcher.play(r.playbackId()) }, Modifier.focusRequester(focus), icon = HeroIcons.Play, style = ButtonStyle.Primary)
             if (s.canSchedule) {
                 ShButton(
                     when { s.busy -> "Working…"; upcoming -> "Cancel recording"; else -> "Delete" },

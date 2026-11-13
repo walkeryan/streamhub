@@ -32,6 +32,26 @@ object ApiErrors {
         else -> UserError("Something went wrong", e.message?.takeIf { it.isNotBlank() } ?: "Try again in a moment.", canRetry = true)
     }
 
+    /**
+     * A refused `rec:<id>` playback. A recording is refused in the server's own words (one above the
+     * viewer's rating ceiling, one deleted meanwhile), and those are shown: no status code says as
+     * much. Refusals that are not about the recording keep their own wording.
+     */
+    fun describeRecordingPlayback(e: Throwable): UserError {
+        val api = e as? ApiException ?: return describe(e)
+        val general = describeApi(api)
+        val said = api.error?.message?.trim().orEmpty()
+        if (api.error?.code in NOT_ABOUT_THE_RECORDING || api.status !in 400..499 || said.isEmpty()) return general
+        val sentence = said.replaceFirstChar(Char::uppercase).let { if (it.last() in ".!?") it else "$it." }
+        return UserError("Can't play this recording", sentence, canRetry = general.canRetry)
+    }
+
+    /** Refusals of playback that say nothing about the title asked for: the account, the session, the network, the streams in use. */
+    private val NOT_ABOUT_THE_RECORDING = setOf(
+        "user_stream_limit", "source_busy", "source_limit_reached", "remote_access_denied", "user_suspended", "session_revoked",
+        "session_stale", "token_expired", "approval_pending", "forbidden", "disclaimer_required",
+    )
+
     private fun describeApi(e: ApiException): UserError {
         val error = e.error
         val detail = error?.message?.takeIf { it.isNotBlank() }

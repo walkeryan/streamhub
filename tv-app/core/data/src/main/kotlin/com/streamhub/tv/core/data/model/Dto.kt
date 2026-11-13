@@ -302,8 +302,13 @@ data class Programme(
     @SerialName("catchup_available") val catchupAvailable: Boolean = false,
     /** State of the household's recording of this programme, if there is one; null also when recording is off. */
     @SerialName("recording_state") val recordingState: String? = null,
-    /** Not in the contract today: honoured if a server sends it, otherwise sport is told from title and category. */
-    @SerialName("is_sport") val isSport: Boolean? = null,
+    /** The server's sports classifier says this listing is sport; the same classifier the recorder's team rules use. */
+    @SerialName("is_sport") val isSport: Boolean = false,
+    /**
+     * The two sides, in title order, when [isSport] and the title spells out a matchup. Empty
+     * otherwise: the server guesses nothing, and neither does this app.
+     */
+    val teams: List<String> = emptyList(),
 )
 
 @Serializable

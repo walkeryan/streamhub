@@ -93,31 +93,34 @@ abstract class RecordingsModule {
 fun recordRequest(p: Programme): RecordRequest =
     RecordRequest(programmeId = p.id, channelId = p.channelId.takeIf(String::isNotBlank), start = p.start.takeIf(String::isNotBlank))
 
-/**
- * Whether a guide entry is a sports listing. The contract's Programme carries no flag for it, so this
- * follows the server's own classifier (sport and league names as whole words in the category or
- * title); a server that does send `is_sport` is believed over the words.
- */
-fun isSportProgramme(p: Programme): Boolean = p.isSport ?: SPORT_WORDS.containsMatchIn("${p.category.orEmpty()} ${p.title}")
-
-private val SPORT_WORDS = Regex(
-    "\\b(?:sports?|sportscenter|sportscentre|athletics|olympics|nfl|ncaa|football|basketball|nba|wnba|baseball|mlb|hockey|nhl|" +
-        "cricket|ipl|soccer|epl|uefa|premier league|champions league|la ?liga|bundesliga|tennis|golf|pga|lpga|" +
-        "formula 1|formula one|nascar|indycar|motogp|motorsport|rugby|boxing|ufc|mixed martial arts|wrestling)\\b",
-    RegexOption.IGNORE_CASE,
-)
-
-/**
- * A first guess at the team to follow, from a listing's title: the first side of "A vs B" / "A at B"
- * / "A @ B" / "A - B", without a leading "League:" label. The viewer edits it before the rule is made.
- */
-fun teamGuess(title: String): String {
-    val withoutLeague = title.substringAfter(": ", title).trim().ifEmpty { title.trim() }
-    val firstSide = TEAM_SEPARATOR.split(withoutLeague, limit = 2).first().trim()
-    return firstSide.ifEmpty { withoutLeague }.take(TEAM_MAX_LENGTH)
+/** How "Record every game for…" is offered on a guide entry. */
+sealed interface TeamRecording {
+    /** Not a sports listing: there is no team to follow. */
+    data object NotOffered : TeamRecording
+    /** One action per side the server found in the title, in title order. */
+    data class Teams(val names: List<String>) : TeamRecording
+    /** Sport, but the title spells out no matchup: the viewer types the team to follow. */
+    data object AskName : TeamRecording
 }
 
-private val TEAM_SEPARATOR = Regex("\\s+(?:vs?\\.?|versus|at|@|-|–|—)\\s+", RegexOption.IGNORE_CASE)
+/**
+ * Follows the server's `is_sport` and `teams` and nothing else: the classifier that marks a listing
+ * as sport and names its sides is the one the recorder matches team rules with, so a team offered
+ * here is a team the rule will find.
+ */
+fun teamRecording(p: Programme): TeamRecording {
+    if (!p.isSport) return TeamRecording.NotOffered
+    val names = cleanTeams(p.teams)
+    return if (names.isEmpty()) TeamRecording.AskName else TeamRecording.Teams(names)
+}
+
+/** Team names as sent, without blanks or repeats. */
+fun cleanTeams(teams: List<String>): List<String> = teams.map(String::trim).filter(String::isNotEmpty).distinct()
+
+/** "A vs B" for a recording's or a listing's sides; null when the server named none. */
+fun teamsLabel(teams: List<String>): String? = cleanTeams(teams).takeIf { it.isNotEmpty() }?.joinToString(" vs ")
+
+/** Longest team name the text entry takes. */
 const val TEAM_MAX_LENGTH = 60
 
 /** The few words shown on a guide cell and a recording card; null when there is nothing to say. */
@@ -143,6 +146,15 @@ fun recordingStateMark(state: String?): String? = when (state) {
 
 /** Still to come or under way: can be cancelled. */
 fun Recording.isUpcoming(): Boolean = state == RecordingStates.SCHEDULED || state == RecordingStates.RECORDING
+
+/**
+ * Has a file to play as `rec:<id>`: a finished recording, and one that failed part-way but kept
+ * what it had (the server reports its size).
+ */
+fun Recording.isPlayable(): Boolean = state == RecordingStates.DONE || (state == RecordingStates.FAILED && (sizeBytes ?: 0) > 0)
+
+/** The id POST /playback/resolve plays a recording under; progress is reported under the same id. */
+fun Recording.playbackId(): String = "rec:$id"
 
 /** How a Record action ended, worded for the dialog it was pressed in. */
 sealed interface RecordOutcome {

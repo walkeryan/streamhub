@@ -157,4 +157,26 @@ class ApiErrorsTest {
         assertEquals("Access updated", e.title)
         assertTrue(e.canRetry)
     }
+
+    @Test fun aRefusedRecordingIsExplainedInTheServersWords() {
+        // Above the viewer's rating ceiling, or gone: whatever the server says about it is what is shown.
+        val ceiling = ApiErrors.describeRecordingPlayback(api(403, "content_restricted", message = "this recording is rated above what this account may watch"))
+        assertEquals("Can't play this recording", ceiling.title)
+        assertEquals("This recording is rated above what this account may watch.", ceiling.body)
+        assertFalse(ceiling.canRetry)
+        val gone = ApiErrors.describeRecordingPlayback(api(404, "not_found", message = "recording not found"))
+        assertEquals("Recording not found.", gone.body)
+        assertEquals("Already a sentence!", ApiErrors.describeRecordingPlayback(api(409, "conflict", message = "Already a sentence!")).body)
+    }
+
+    @Test fun refusalsThatAreNotAboutTheRecordingKeepTheirOwnWording() {
+        val limit = ApiErrors.describeRecordingPlayback(api(409, "user_stream_limit", active = listOf(ActiveStream(null, "The Long Film"))))
+        assertEquals("You're already watching The Long Film on another device. Stop it there, then try again.", limit.body)
+        assertEquals("Account suspended", ApiErrors.describeRecordingPlayback(api(401, "user_suspended")).title)
+        assertEquals("Not allowed", ApiErrors.describeRecordingPlayback(api(403, "forbidden")).title)
+        // Nothing said, a server fault, or no answer at all: the general wording.
+        assertEquals(ApiErrors.describe(api(404, "not_found", message = " ")), ApiErrors.describeRecordingPlayback(api(404, "not_found", message = " ")))
+        assertEquals("Server problem", ApiErrors.describeRecordingPlayback(api(503, "upstream_error")).title)
+        assertEquals("Can't reach the server", ApiErrors.describeRecordingPlayback(IOException("down")).title)
+    }
 }

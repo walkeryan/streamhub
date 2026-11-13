@@ -19,12 +19,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/**
- * Finished recordings are listed but not played yet: the server's `rec:` playback is still being
- * built. Select on one opens a detail dialog with Delete only; with this on it also offers Play.
- */
-const val RECORDED_PLAYBACK_ENABLED = false
-
 /** What the detail dialog is open on. */
 sealed interface RecordingsSelection {
     data class Item(val recording: Recording) : RecordingsSelection
