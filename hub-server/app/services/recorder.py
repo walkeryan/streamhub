@@ -540,12 +540,51 @@ class RecorderService:
         }
 
     # ------------------------------------------------------------------ one programme
-    async def _channel_for(self, programme: Programme, channel_id: str | None) -> Channel:
+    async def _resolve(
+        self, programme_id: str, channel_id: str | None, start: datetime | None
+    ) -> tuple[Programme, Channel]:
+        """The guide entry a client means, and the channel to record it from.
+
+        ``programme_id`` alone is trusted as is. A guide refresh replaces the feed's rows and
+        SQLite hands their ids out again, so an id from a guide fetched before the refresh can
+        name another programme: with ``channel_id`` and ``start``, as the client saw them, the
+        entry is found by what identifies it, and a mismatch that cannot be resolved is refused.
+        """
+        if not programme_id.startswith("prog:"):
+            raise NotFound("unknown programme")
+        try:
+            programme: Programme | None = await self._channels.programme(programme_id)
+        except NotFound:
+            programme = None
+        changed = Conflict("The guide has changed. Refresh it and try again.", code="guide_changed")
         if channel_id is not None:
             ch = await self._channels.channel_by_hub_id(channel_id)
-            if (ch.source_id, ch.epg_id) != (programme.feed, programme.epg_channel):
-                raise ServiceError("That programme is not on that channel.", code="invalid_request")
-            return ch
+            on_channel = programme is not None and (programme.feed, programme.epg_channel) == (ch.source_id, ch.epg_id)
+            if start is None:
+                if programme is None:
+                    raise NotFound("programme not found")
+                if not on_channel:
+                    raise changed
+            elif programme is None or not on_channel or programme.start != start:
+                async with self._db.session() as s:
+                    programme = (
+                        await s.execute(
+                            select(Programme)
+                            .where(
+                                Programme.feed == ch.source_id,
+                                Programme.epg_channel == ch.epg_id,
+                                Programme.start == start,
+                            )
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+            if programme is None:
+                raise NotFound("programme not found")
+            return programme, ch
+        if programme is None:
+            raise NotFound("programme not found")
+        if start is not None and programme.start != start:
+            raise changed
         # Several channels can share one guide entry (HD/SD variants): the lowest number wins.
         async with self._db.session() as s:
             found = (
@@ -558,23 +597,22 @@ class RecorderService:
             ).scalar_one_or_none()
         if found is None:
             raise NotFound("programme not found")
-        return found
+        return programme, found
 
-    async def schedule_programme(self, p: Principal, programme_id: str, channel_id: str | None = None) -> Recording:
-        return (await self.schedule_or_get(p, programme_id, channel_id))[0]
+    async def schedule_programme(
+        self, p: Principal, programme_id: str, channel_id: str | None = None, start: datetime | None = None
+    ) -> Recording:
+        return (await self.schedule_or_get(p, programme_id, channel_id, start))[0]
 
     async def schedule_or_get(
-        self, p: Principal, programme_id: str, channel_id: str | None = None
+        self, p: Principal, programme_id: str, channel_id: str | None = None, start: datetime | None = None
     ) -> tuple[Recording, bool]:
         """The recording for this programme and whether this call scheduled it (False: it already was)."""
         self._require_schedule(p)
-        if not programme_id.startswith("prog:"):
-            raise NotFound("unknown programme")
+        programme, ch = await self._resolve(programme_id, channel_id, start)
         # Checked before anything about the programme is echoed back, including an existing recording.
         if self.content_policy is not None and self.content_policy.enabled:
-            await self.content_policy.require(p.profile_id, programme_id)
-        programme = await self._channels.programme(programme_id)
-        ch = await self._channel_for(programme, channel_id)
+            await self.content_policy.require(p.profile_id, ids.prog_id(programme.id))
         if programme.stop <= self.clock():
             raise Conflict("That programme has already ended.", code="programme_ended")
         values = self._snapshot(
@@ -920,7 +958,9 @@ class RecorderService:
                     self._retry_at[row.id] = now + RETRY_EVERY
                 return
             self._retry_at.pop(row.id, None)
-            await self._transition(fresh, ("scheduled",), "recording", error=None)
+            if await self._transition(fresh, ("scheduled",), "recording", error=None) is None:
+                # The row went away while the capture was starting (its profile was deleted).
+                self._remove_file((await self.capture.stop(fresh)).path)
 
     async def _finish(self, row: Recording, error: str | None = None, *, early: bool = False) -> None:
         async with self._lock:
@@ -1005,9 +1045,9 @@ class RecorderService:
                 note = f"{row.error or 'Missed.'} Archive: {result.error or 'no file'}"[:ERROR_MAX]
                 await self._transition(row, ("missed",), "missed", error=note)
             else:
-                await self._transition(
-                    row, ("missed",), "done", error=None, path=result.path, size_bytes=result.size_bytes
-                )
+                values = {"error": None, "path": result.path, "size_bytes": result.size_bytes}
+                if await self._transition(row, ("missed",), "done", **values) is None:
+                    self._remove_file(result.path)  # deleted or scheduled again while the fetch ran
 
     async def _spawn_recovery(self, now: datetime) -> None:
         """Ask the backend for missed programmes that have ended. Beside the tick: a fetch can take minutes."""
@@ -1049,6 +1089,8 @@ class RecorderService:
                         )
                     ).scalars()
                 )
+            active = {row.id for row in rows}
+            self._retry_at = {key: at for key, at in self._retry_at.items() if key in active}
             low = bool(rows) and self._low_space()
             for row in rows:
                 try:

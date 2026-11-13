@@ -10,6 +10,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
 RequestStateL = Literal["pending_approval", "approved", "sent", "available", "declined", "failed"]
+RecordingStateL = Literal["scheduled", "recording", "done", "failed", "missed", "cancelled"]
 
 
 class _M(BaseModel):
@@ -173,6 +174,7 @@ class Programme(_M):
     category: str | None = None
     icon: str | None = None
     catchup_available: bool = False
+    recording_state: RecordingStateL | None = None
 
 
 class Tile(_M):
@@ -649,3 +651,74 @@ class RequestManagerSettings(_M):
 class RequestManagerWrite(_M):
     url: str | None = Field(default=None, max_length=512)
     api_key: str | None = Field(default=None, max_length=512, description="omit to keep the stored key")
+
+
+class Recording(_M):
+    id: str
+    profile_id: str
+    profile_name: str = ""
+    rule_id: str | None = None
+    channel_id: str
+    channel_name: str = ""
+    title: str
+    subtitle: str | None = None
+    season: int | None = None
+    episode: int | None = None
+    is_sport: bool = False
+    starts_at: datetime
+    ends_at: datetime
+    pad_before_s: int = 0
+    pad_after_s: int = 0
+    state: RecordingStateL
+    error: str | None = None
+    size_bytes: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecordingList(_M):
+    enabled: bool
+    can_schedule: bool = False
+    recordings: list[Recording]
+
+
+class RecordingCreate(_M):
+    programme_id: str = Field(max_length=64)
+    channel_id: str | None = Field(default=None, max_length=256)
+    start: AwareDatetime | None = None
+
+
+class RecordingRule(_M):
+    id: str
+    profile_id: str
+    profile_name: str = ""
+    kind: Literal["series", "team", "keyword"]
+    match: str
+    channel_id: str | None = None
+    channel_name: str | None = None
+    new_only: bool = False
+    keep: int | None = None
+    enabled: bool = True
+    created_at: datetime
+
+
+class RecordingRuleList(_M):
+    enabled: bool
+    can_schedule: bool = False
+    rules: list[RecordingRule]
+
+
+class RecordingRuleCreate(_M):
+    kind: Literal["series", "team", "keyword"]
+    match: str = Field(max_length=256)
+    channel_id: str | None = Field(default=None, max_length=256)
+    new_only: bool = False
+    keep: int | None = None
+
+
+class RecordingRulePatch(_M):
+    match: str | None = Field(default=None, max_length=256)
+    channel_id: str | None = Field(default=None, max_length=256)
+    new_only: bool | None = None
+    keep: int | None = None
+    enabled: bool | None = None

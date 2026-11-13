@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import delete, select
 
-from app.infra.models import Channel, Programme, Recording, RecordingRule
+from app.infra.models import Channel, ChannelGroup, Programme, Recording, RecordingRule
 from app.services import ids
 from app.services.auth import Principal
 from app.services.errors import Forbidden, NotFound, ServiceError
@@ -289,9 +289,12 @@ async def test_schedule_rejects_ended_unknown_and_mismatched_programmes(env: Env
     with pytest.raises(NotFound):
         await env.svc.schedule_programme(env.admin, "tmdb:movie:603")
     upcoming = await env.programme(bbc, "Later", NOW + timedelta(hours=2))
-    with pytest.raises(ServiceError) as exc:
-        await env.svc.schedule_programme(env.admin, upcoming, hub(tf1))
-    assert exc.value.code == "invalid_request"
+    for stale in ((hub(tf1), None), (None, NOW + timedelta(hours=3))):
+        with pytest.raises(ServiceError) as exc:
+            await env.svc.schedule_programme(env.admin, upcoming, *stale)
+        assert (exc.value.status, exc.value.code) == (409, "guide_changed")
+    with pytest.raises(NotFound):
+        await env.svc.schedule_programme(env.admin, upcoming, hub(tf1), NOW + timedelta(hours=2))
     assert await env.recordings() == []
 
 
@@ -318,6 +321,11 @@ async def test_recording_survives_a_guide_refresh(env: Env) -> None:
     assert [p["recording_state"] for p in payload[hub(bbc)]] == ["scheduled", None]
     # And scheduling the refreshed programme finds the same recording.
     assert (await env.svc.schedule_programme(env.admin, new)).id == r.id
+    # Row ids are handed out again, so the old id now names another programme. With the
+    # channel and start the client saw, it still resolves to the programme that was meant.
+    assert (await env.api.c.channels.programme(old)).title == "Filler"
+    assert (await env.svc.schedule_programme(env.admin, old, hub(bbc), start)).id == r.id
+    assert len(await env.recordings()) == 1
 
 
 # ---------------------------------------------------------------------- rules
@@ -577,6 +585,23 @@ async def test_archive_recovery_is_attempted_once_and_missed_stays_missed_withou
     assert failed.state == "missed" and "archive returned no data" in (failed.error or "")
 
 
+async def test_archive_file_is_dropped_when_the_recording_was_deleted_meanwhile(env: Env) -> None:
+    await scheduled(env)
+    env.capture.busy = True
+    await env.tick(minutes=58)
+    await env.tick(minutes=10)
+    fetched = env.root / "archive.mkv"
+
+    async def slow(recording: Recording) -> CaptureResult:
+        await env.svc.cancel(env.admin, recording.id)  # the user deletes the missed entry mid-fetch
+        fetched.write_bytes(b"x")
+        return CaptureResult(path=str(fetched), size_bytes=1)
+
+    env.capture.recover_from_archive = slow
+    await env.tick(hours=1)
+    assert await env.recordings() == [] and not fetched.exists()
+
+
 async def test_never_started_recording_is_missed_once_its_window_has_passed(env: Env) -> None:
     r = await scheduled(env)
     await env.tick(hours=3)  # the server was down for the whole programme
@@ -747,6 +772,47 @@ async def test_off_until_a_recordings_directory_is_configured(env: Env, tmp_path
         assert (await off.annotate(env.admin, payload))[0].get("recording_state") is None
     assert env.capture.attempts == [] and not (tmp_path / "not-created").exists()
     assert env.svc.enabled and (await env.get(r.id)).state == "scheduled"
+
+
+async def test_rules_and_scheduling_respect_the_profiles_content_policy(api: Api, tmp_path: Path) -> None:
+    from app.services.classification import classification_record, summarize
+    from tests.test_content_policy import activate, seed
+
+    policy = await seed(api)
+    await activate(api)
+    now = datetime.now(UTC).replace(microsecond=0)
+    rated = summarize("xmltv", "programme", [classification_record("US", "US-TVPG", "TV-G")])
+    listings = [
+        ("On now", now - timedelta(minutes=10), rated),
+        ("Harbour Lights", now + timedelta(hours=2), rated),
+        ("Harbour Lights", now + timedelta(hours=5), {}),  # unrated: blocked for a restricted profile
+    ]
+    async with api.c.db.session() as s:
+        s.add(ChannelGroup(id="group", source_id="fixture", name="Group"))
+        rows = [
+            Programme(
+                feed="fixture", epg_channel="epg", title=t, start=at, stop=at + timedelta(hours=1), age_evidence=ev
+            )
+            for t, at, ev in listings
+        ]
+        s.add_all(rows)
+        await s.commit()
+    root = tmp_path / "recordings"
+    root.mkdir()
+    svc = RecorderService(api.c.db, api.c.channels, recordings_dir=str(root), capture=FakeCapture())
+    svc.content_policy = policy
+    child = Principal(profile_id="child", is_admin=False, kids=False)
+    admin = Principal(profile_id=api.profile_id, is_admin=True, kids=False)
+
+    await svc.add_rule(child, "series", "Harbour Lights", None, False, None)
+    assert [r.starts_at for r in await svc.list(child, state=None)] == [now + timedelta(hours=2)]
+    with pytest.raises(Forbidden) as exc:
+        await svc.schedule_programme(child, ids.prog_id(rows[2].id))
+    assert exc.value.code == "content_restricted"
+    # An unrestricted profile's rule sees the whole guide; the rated airing is already the household's.
+    await svc.add_rule(admin, "series", "Harbour Lights", None, False, None)
+    mine = [r for r in await svc.list(admin, state=None) if r.profile_id == admin.profile_id]
+    assert [r.starts_at for r in mine] == [now + timedelta(hours=5)]
 
 
 # ---------------------------------------------------------------------- wiring

@@ -3530,6 +3530,329 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/recordings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The current profile's recordings (everyone's for an admin), earliest first */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description omitted = every state except cancelled */
+                    state?: components["schemas"]["RecordingState"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description enabled is false, and the list empty, until the server has a recordings directory */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            enabled: boolean;
+                            /** @description The current profile may schedule, cancel and delete. */
+                            can_schedule?: boolean;
+                            recordings: components["schemas"]["Recording"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Record one programme
+         * @description Programme ids change whenever the guide is refreshed. Send channel_id and start as shown on the guide and the server finds the programme by those if the id no longer names it.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        programme_id: string;
+                        /** @description omitted = the lowest-numbered channel carrying the programme */
+                        channel_id?: string | null;
+                        /** Format: date-time */
+                        start?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description this programme was already scheduled */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Recording"];
+                    };
+                };
+                /** @description scheduled */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Recording"];
+                    };
+                };
+                /** @description recording_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable | programme_ended | already_scheduled (by another profile) | guide_changed */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recordings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel an upcoming or running recording; delete a finished one and its file */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recording-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The current profile's rules (everyone's for an admin) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            enabled: boolean;
+                            can_schedule?: boolean;
+                            rules: components["schemas"]["RecordingRule"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Record every matching programme, now and after each guide refresh */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        kind: "series" | "team" | "keyword";
+                        match: string;
+                        channel_id?: string | null;
+                        /** @default false */
+                        new_only?: boolean;
+                        keep?: number | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description the profile already has this rule */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingRule"];
+                    };
+                };
+                /** @description created; matching programmes are scheduled at once */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingRule"];
+                    };
+                };
+                /** @description recording_forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable | rule_limit */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recording-rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a rule and the upcoming recordings it scheduled; finished ones stay */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description recording_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Edit, disable or enable a rule
+         * @description Fields left out are kept. Disabling a rule, or changing what it matches, drops the upcoming recordings it scheduled.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        match?: string;
+                        channel_id?: string | null;
+                        new_only?: boolean;
+                        keep?: number | null;
+                        enabled?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingRule"];
+                    };
+                };
+                /** @description recording_unavailable */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -3875,6 +4198,8 @@ export interface components {
             icon?: string | null;
             /** @default false */
             catchup_available: boolean;
+            /** @description State of the household's recording of this programme, if there is one. Null when recording is off. */
+            recording_state?: components["schemas"]["RecordingState"] | null;
         };
         PlaybackRecoveryStatus: {
             paused: boolean;
@@ -4172,6 +4497,64 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             read_at?: string | null;
+        };
+        /** @enum {string} */
+        RecordingState: "scheduled" | "recording" | "done" | "failed" | "missed" | "cancelled";
+        /** @description One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. */
+        Recording: {
+            id: string;
+            profile_id: string;
+            profile_name?: string;
+            /** @description the rule that scheduled it; null when scheduled by hand */
+            rule_id?: string | null;
+            channel_id: string;
+            channel_name?: string;
+            title: string;
+            subtitle?: string | null;
+            season?: number | null;
+            episode?: number | null;
+            is_sport?: boolean;
+            /**
+             * Format: date-time
+             * @description listed start; capture begins pad_before_s earlier
+             */
+            starts_at: string;
+            /**
+             * Format: date-time
+             * @description listed end; capture runs pad_after_s longer
+             */
+            ends_at: string;
+            pad_before_s?: number;
+            pad_after_s?: number;
+            state: components["schemas"]["RecordingState"];
+            /** @description why it failed or was missed */
+            error?: string | null;
+            size_bytes?: number | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RecordingRule: {
+            id: string;
+            profile_id: string;
+            profile_name?: string;
+            /**
+             * @description series = same title; team = a sports listing naming the team; keyword = title contains the text
+             * @enum {string}
+             */
+            kind: "series" | "team" | "keyword";
+            match: string;
+            /** @description null = any channel */
+            channel_id?: string | null;
+            channel_name?: string | null;
+            /** @description skip listings marked as repeats and episodes already recorded */
+            new_only: boolean;
+            /** @description finished recordings to keep, oldest deleted first; null = all */
+            keep?: number | null;
+            enabled: boolean;
+            /** Format: date-time */
+            created_at: string;
         };
         RequestManagerSettings: {
             url?: string | null;
