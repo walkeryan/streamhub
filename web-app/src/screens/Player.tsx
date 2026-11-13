@@ -209,7 +209,9 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     if (!v) return
     const buffered = (): Range[] => Array.from({ length: v.buffered.length }, (_, i) => [v.buffered.start(i), v.buffered.end(i)])
     const t = () => setTime({ cur: v.currentTime, dur: Number.isFinite(v.duration) ? v.duration : 0, seekable: v.seekable.length > 0, buffered: buffered(), produced: seekableRanges(v) })
-    const p = () => { setPaused(v.paused); if (v.paused) setUi(true) }
+    // Paused shows the controls by itself (showChrome). It must not also leave them marked "in use": the element is
+    // paused in passing by every zap and every new stream, and nothing would hide them again once it plays.
+    const p = () => setPaused(v.paused)
     const moved = ['timeupdate', 'loadedmetadata', 'durationchange', 'progress', 'seeking', 'seeked'] as const
     for (const name of moved) v.addEventListener(name, t)
     v.addEventListener('pause', p); v.addEventListener('play', p)
