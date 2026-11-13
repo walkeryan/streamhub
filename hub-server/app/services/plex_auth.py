@@ -89,6 +89,7 @@ class PlexAuthService:
         self._available = available
         self.clock = clock
         self.transactions: dict[str, _Transaction] = {}
+        self.max_pending = MAX_TRANSACTIONS
         self._friends: tuple[float, frozenset[str]] | None = None
 
     @property
@@ -101,8 +102,9 @@ class PlexAuthService:
     def _prune(self) -> None:
         now = self.clock()
         self.transactions = {k: v for k, v in self.transactions.items() if v.expires > now}
-        if len(self.transactions) >= MAX_TRANSACTIONS:
-            raise Unauthorized("Sign-in temporarily busy; try again later")
+        while len(self.transactions) >= max(1, self.max_pending):
+            # Full: the oldest unfinished sign-in makes room, so the table cannot be held shut.
+            del self.transactions[next(iter(self.transactions))]
 
     # ------------------------------------------------------------------ start
     async def start(self, return_to: str | None, invite: str = "", *, link_user_id: str = "") -> tuple[str, str]:

@@ -43,6 +43,7 @@ class GoogleAuthService:
         # state -> (expires, browser, nonce, verifier, user id): a signed-in user linking Google.
         self.link_transactions: dict[str, tuple[float, str, str, str, str]] = {}
         self.handoffs: dict[str, tuple[float, str, str, float | None, str]] = {}
+        self.max_pending = 1000
 
     @property
     def enabled(self) -> bool:
@@ -78,9 +79,19 @@ class GoogleAuthService:
         self.owner_transactions = {k: v for k, v in self.owner_transactions.items() if v[0] > now}
         self.link_transactions = {k: v for k, v in self.link_transactions.items() if v[0] > now}
         self.handoffs = {k: v for k, v in self.handoffs.items() if v[0] > now}
-        held = (self.transactions, self.handoffs, self.owner_transactions, self.link_transactions)
-        if sum(len(store) for store in held) >= 1000:
-            raise Unauthorized("Sign-in temporarily busy; try again later")
+        held: tuple[dict[str, Any], ...] = (
+            self.transactions,
+            self.link_transactions,
+            self.owner_transactions,
+            self.handoffs,
+        )
+        while sum(len(store) for store in held) >= self.max_pending:
+            # Full. The oldest sign-in nobody has finished makes room: turning new ones away
+            # instead would let whoever fills the table keep everyone else from signing in.
+            store = next((store for store in held if store), None)
+            if store is None:
+                break
+            del store[next(iter(store))]
 
     def start(self, return_to: str, invite: str = "") -> tuple[str, str]:
         if not self.enabled:
