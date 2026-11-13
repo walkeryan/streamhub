@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.adapters.language.inferrer import normalise_code
+from app.services.media_info import frame_rate
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +30,8 @@ PROBE_BYTES = 5_000_000
 MAX_OUTPUT = 512 * 1024
 # No ``format=filename``: that field is the upstream URL and may embed credentials.
 ENTRIES = (
-    "format=format_name,duration"
-    ":stream=codec_type,codec_name,profile,pix_fmt,width,height,channels,channel_layout"
+    "format=format_name,duration,bit_rate"
+    ":stream=codec_type,codec_name,profile,pix_fmt,width,height,channels,channel_layout,avg_frame_rate,color_transfer"
     ":stream_tags=language,title"
     ":stream_disposition=default,attached_pic"
 )
@@ -79,6 +80,13 @@ def parse_probe(raw: Any, now: datetime | None = None) -> dict[str, Any] | None:
                     "height": _int(stream.get("height")),
                     "pix_fmt": str(stream.get("pix_fmt") or "").lower() or None,
                 }
+                # For the viewer's stream information only (``media_info``); kept when the file says them.
+                fps = frame_rate(stream.get("avg_frame_rate"))
+                if fps is not None:
+                    video["fps"] = fps
+                transfer = str(stream.get("color_transfer") or "").lower()
+                if transfer:
+                    video["transfer"] = transfer[:24]
         elif stream.get("codec_type") == "audio" and codec:
             title = str(tags.get("title") or "").strip()[:80]
             audio.append(
@@ -100,13 +108,17 @@ def parse_probe(raw: Any, now: datetime | None = None) -> dict[str, Any] | None:
         duration_ms: int | None = int(float(str(fmt.get("duration"))) * 1000)
     except ValueError:
         duration_ms = None
-    return {
+    found: dict[str, Any] = {
         "video": video,
         "audio": audio,
         "container": str(fmt.get("format_name") or "").lower() or None,
         "duration_ms": duration_ms if duration_ms and duration_ms > 0 else None,
         "probed_at": (now or datetime.now(UTC)).isoformat(),
     }
+    bit_rate = _int(fmt.get("bit_rate"))
+    if bit_rate and bit_rate > 0:
+        found["bit_rate"] = bit_rate
+    return found
 
 
 def cached_probe(extra: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any] | None:

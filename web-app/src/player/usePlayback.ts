@@ -15,6 +15,8 @@ export interface PlaybackReq {
   audioTrack?: number | null
   /** Start a restart-at-offset stream here instead of at the profile's resume position. */
   startPositionMs?: number | null
+  /** The viewer's quality cap (480, 720 or 1080); the server applies it to films taller than that. */
+  maxHeight?: number | null
 }
 
 async function playbackGeneration(): Promise<string> {
@@ -29,7 +31,7 @@ export async function resolve(req: PlaybackReq, generation?: string): Promise<Pl
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)) },
+      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null },
     }),
   )
 }
@@ -48,6 +50,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   muted?: boolean; report?: boolean; buffer?: boolean
   /** A watch room supplies its member's descriptor (the room decides variant and position) instead of /playback/resolve. */
   descriptor?: (generation: string | undefined) => Promise<PlaybackDescriptor>
+  /** The quality cap playback starts with (the browser's remembered choice); setMaxHeight changes it. */
+  maxHeight?: number | null
 } = {}) {
   const descriptorSource = useRef(opts.descriptor)
   descriptorSource.current = opts.descriptor
@@ -61,6 +65,14 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const selectedAudio = useRef<number | null>(null)
   const wantedAudio = useRef<number | null>(null)
   const wantsPlayback = useRef(true)
+  // The viewer paused. A seek or a track change that needs a new stream then starts it paused, as a seek
+  // inside the old one would have left it. A room decides for its members whether they play.
+  const pausedByViewer = useRef(false)
+  // A channel is delivered as it is; a room's stream is the room's.
+  const maxHeight = useRef<number | null>(opts.maxHeight ?? null)
+  // The viewer's own mute. Unmuting is asked of checkAudio, never done here: a stream whose audio is
+  // not allowed for this profile stays silent whatever the mute button says.
+  const silenced = useRef(false)
   const [bufferWindow, setBufferWindow] = useState<BufferWindow | null>(null)
   const [bufferIssue, setBufferIssue] = useState<string | null>(null)
   const buffer = useRef<BufferSession | null>(null)
@@ -204,11 +216,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       intent.current = { key }
       terminal.current = false
       restart.current = {}
+      pausedByViewer.current = false
     }
     consent.current = null
     selectedAudio.current = null
     wantedAudio.current = null
-    wantsPlayback.current = true
+    wantsPlayback.current = !pausedByViewer.current || !!descriptorSource.current
     setAudioBlocked(false)
     let cancelled = false
     const ownsSession = () => { const session = useSession.getState(); return session.profile?.id === profileId && session.generation === sessionGeneration }
@@ -239,7 +252,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         }
         const d = descriptorSource.current
           ? await descriptorSource.current(intent.current.generation)
-          : await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs }, intent.current.generation)
+          : await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs, maxHeight: req.id.startsWith('ch:') ? null : maxHeight.current }, intent.current.generation)
         if (cancelled || !ownsSession()) return
         setDesc(d)
         descRef.current = d
@@ -285,8 +298,10 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
               return false
             }
             setAudioBlocked(false)
-            video.muted = !!opts.muted
+            video.muted = !!opts.muted || silenced.current
             if (wantsPlayback.current && video.paused) void video.play().catch(() => { if (!cancelled) setState('paused') })
+            // A stream that is meant to stay paused has arrived: it is not still starting.
+            else if (!wantsPlayback.current) setState((s) => (s === 'loading' ? 'paused' : s))
             return true
           }
           const next = await attachSource(video, descriptor, {
@@ -392,8 +407,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (!v) return
     const onMeta = () => {
       const d = descRef.current
-      // A restart-at-offset stream already begins at the resume position.
-      if (d && !d.live && d.start_position_ms == null && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
+      if (!d || d.live || d.start_position_ms != null) return // a restart-at-offset stream already begins where it should
+      // Back from a capped quality to a file the browser plays as it is: carry on where the viewer was, once.
+      const carried = restart.current.startMs
+      if (carried != null) restart.current = { ...restart.current, startMs: undefined }
+      const at = carried ?? d.resume_position_ms
+      if (at > 0 && v.currentTime < 1) v.currentTime = at / 1000
     }
     // The source can drop mid-film and ffmpeg then closes the stream as if it had ended. Carry on from there.
     const onEnded = () => {
@@ -481,19 +500,30 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
 
   return {
     desc, state, error, busy, tracks, audioBlocked,
-    pause: () => { wantsPlayback.current = false; videoRef.current?.pause() },
-    resume: () => { wantsPlayback.current = true; checkAudio.current() },
-    consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; checkAudio.current() },
+    pause: () => { wantsPlayback.current = false; pausedByViewer.current = true; videoRef.current?.pause() },
+    resume: () => { wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
+    consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
     bufferWindow, bufferIssue, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
     setAudio: (i: number) => {
       if (!handle.current?.audioTracks().some(t => t.id === i)) return
       const video = videoRef.current
       if (video) { video.muted = true; video.pause() }
-      consent.current = null; selectedAudio.current = i; wantsPlayback.current = true
+      consent.current = null; selectedAudio.current = i; wantsPlayback.current = true; pausedByViewer.current = false
       handle.current.setAudio(i); setTracksVersion((v) => v + 1); checkAudio.current()
     },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
-    retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
+    /** What the engine measures of its download, in kbit/s; null when it measures nothing. */
+    downloadKbps: () => handle.current?.downloadKbps?.() ?? null,
+    /** The viewer's mute button. */
+    setSilenced: (on: boolean) => {
+      silenced.current = on
+      const video = videoRef.current
+      if (!video) return
+      if (on) video.muted = true
+      // Every start of playback goes through checkAudio, which applies this; only a stream already playing needs telling.
+      else if (!video.paused) checkAudio.current()
+    },
+    retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; pausedByViewer.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
     /** Restart-at-offset streams: start a new stream at this position in the title. */
     seekTo: (ms: number) => {
       if (descRef.current?.start_position_ms == null || terminal.current) return
@@ -505,6 +535,16 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     reload: () => {
       if (terminal.current) return
       clearWaiting(); clearRetry(); retry.current = 0
+      setAttempt((a) => a + 1)
+    },
+    /** Another quality: a new stream of the same film from where the viewer is (the cap is part of the server's session). */
+    setMaxHeight: (height: number | null) => {
+      if (maxHeight.current === height) return
+      maxHeight.current = height
+      const d = descRef.current
+      if (!d || d.live || d.mode === 'handoff' || descriptorSource.current || terminal.current) return
+      clearWaiting(); clearRetry(); retry.current = 0
+      restart.current = { ...restart.current, startMs: titlePositionMs() }
       setAttempt((a) => a + 1)
     },
     /** Have the server encode another audio track of the file, continuing from the current position. */

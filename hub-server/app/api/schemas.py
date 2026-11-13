@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictBool,
+    model_serializer,
+)
 
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
@@ -338,6 +346,7 @@ class PlaybackRequest(_M):
     rewind_at: AwareDatetime | None = None
     audio_track: int | None = Field(default=None, ge=0, le=255)
     start_position_ms: int | None = Field(default=None, ge=0)
+    max_height: Literal[480, 720, 1080] | None = None
 
 
 class MultiviewRequest(_M):
@@ -417,7 +426,43 @@ class AudioTrack(_M):
     default: bool = False
 
 
+class _Known(_M):
+    """A model that is sent without the fields nobody knows: absent, not null."""
+
+    @model_serializer(mode="wrap")
+    def _leave_out_unknown(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return {key: value for key, value in handler(self).items() if value is not None}
+
+
+class MediaInfoVideo(_Known):
+    codec: str | None = None
+    width: int | None = None
+    height: int | None = None
+    frame_rate: float | None = None
+    dynamic_range: Literal["sdr", "hdr10", "hlg"] | None = None
+
+
+class MediaInfoAudio(_Known):
+    codec: str | None = None
+    channels: int | None = None
+    language: str | None = None
+
+
+class MediaInfo(_Known):
+    source_name: str | None = None
+    container: str | None = None
+    bitrate_kbps: int | None = None
+    video: MediaInfoVideo | None = None
+    audio: MediaInfoAudio | None = None
+    delivery: Literal["direct", "remux", "transcode"]
+    encoder: Literal["hardware", "software"] | None = None
+    output_width: int | None = None
+    output_height: int | None = None
+    max_height: Literal[480, 720, 1080] | None = None
+
+
 class PlaybackDescriptor(_M):
+    media_info: MediaInfo | None = None
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
     audio_track: int | None = None
     start_position_ms: int | None = None

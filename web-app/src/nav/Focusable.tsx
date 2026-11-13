@@ -24,6 +24,8 @@ export interface FocusableProps {
   title?: string
   forceFocus?: boolean
   data?: Record<string, string | boolean | undefined>
+  /** Further aria-* attributes (a slider's value, a menu button's state), without the prefix. */
+  aria?: Record<string, string | number | boolean | undefined>
 }
 
 export interface FocusableHandle { focus: () => void; el: HTMLElement | null }
@@ -70,6 +72,7 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       title={p.title}
       data-focused={focused}
       {...Object.fromEntries(Object.entries(p.data ?? {}).map(([k, v]) => [`data-${k}`, v]))}
+      {...Object.fromEntries(Object.entries(p.aria ?? {}).map(([k, v]) => [`aria-${k}`, v]))}
       className={cn('fx', p.className)}
       style={p.style}
       onClick={async () => {
