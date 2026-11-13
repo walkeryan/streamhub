@@ -44,6 +44,8 @@ class SyncService:
         self._tasks: set[asyncio.Task[Any]] = set()
         # Runs after every successful catalog sync (new titles may satisfy open requests).
         self.after_catalog_sync: Callable[[], Awaitable[Any]] | None = None
+        # Runs after every successful guide refresh (recording rules match the new guide).
+        self.after_epg_refresh: Callable[[], Awaitable[Any]] | None = None
 
     def _lock(self, key: str) -> asyncio.Lock:
         return self._locks.setdefault(key, asyncio.Lock())
@@ -238,7 +240,17 @@ class SyncService:
                         src.counts = counts
                     await s.commit()
             await self._finish_run(run_id, True, None, {"programmes": total})
+            await self._after_epg_refresh()
             return total
+
+    async def _after_epg_refresh(self) -> None:
+        if self.after_epg_refresh is None:
+            return
+        try:
+            await self.after_epg_refresh()
+        except Exception as exc:
+            # The guide itself is in place; the next refresh runs the follow-up again.
+            log.warning("post-refresh hook failed", extra={"err": redact_text(f"{type(exc).__name__}: {exc}")[:200]})
 
     async def cleanup_epg(self) -> int:
         cutoff = datetime.now(UTC) - EPG_RETENTION
@@ -301,9 +313,15 @@ class SyncService:
 
 
 class SyncScheduler:
-    def __init__(self, sync: SyncService, reconcile_requests: Callable[[], Awaitable[Any]] | None = None) -> None:
+    def __init__(
+        self,
+        sync: SyncService,
+        reconcile_requests: Callable[[], Awaitable[Any]] | None = None,
+        recorder_tick: Callable[[], Awaitable[Any]] | None = None,
+    ) -> None:
         self._sync = sync
         self._reconcile_requests = reconcile_requests
+        self._recorder_tick = recorder_tick
         self._sched: Any = None
 
     def start(self) -> None:
@@ -337,6 +355,17 @@ class SyncScheduler:
                 max_instances=1,
                 coalesce=True,
                 next_run_time=datetime.now(UTC) + timedelta(minutes=1),
+            )
+        if self._recorder_tick is not None:
+            # Starts and stops captures, so it runs far more often than the other jobs.
+            sched.add_job(
+                self._recorder_tick,
+                "interval",
+                seconds=30,
+                id="recorder",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(seconds=30),
             )
         sched.start()
         self._sched = sched

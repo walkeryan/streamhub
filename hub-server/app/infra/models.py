@@ -407,3 +407,49 @@ class Notice(Base):
     ref_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     read_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class RecordingRule(Base):
+    """A standing instruction to record matching programmes; applied after each guide refresh."""
+
+    __tablename__ = "recording_rule"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(8))  # series | team | keyword
+    match: Mapped[str] = mapped_column(String(256))  # series title, team name or keyword
+    channel_id: Mapped[str | None] = mapped_column(String(256), nullable=True)  # ch:… hub id; None = any channel
+    new_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    keep: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = keep all
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class Recording(Base):
+    """One programme to capture. A snapshot of the guide entry, so it outlives guide refreshes."""
+
+    __tablename__ = "recording"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
+    rule_id: Mapped[str | None] = mapped_column(
+        ForeignKey("recording_rule.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    channel_id: Mapped[str] = mapped_column(String(256))  # ch:… hub id
+    channel_name: Mapped[str] = mapped_column(String(256), default="")
+    # Source feed + channel + start. Programme row ids change on every guide refresh; this does not.
+    programme_key: Mapped[str] = mapped_column(String(320), unique=True)
+    title: Mapped[str] = mapped_column(String(512))
+    subtitle: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    episode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_sport: Mapped[bool] = mapped_column(Boolean, default=False)
+    starts_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    ends_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    pad_before_s: Mapped[int] = mapped_column(Integer, default=0)
+    pad_after_s: Mapped[int] = mapped_column(Integer, default=0)
+    # scheduled | recording | done | failed | missed | cancelled
+    state: Mapped[str] = mapped_column(String(16), default="scheduled", index=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)  # SQLite integers are 64-bit
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)

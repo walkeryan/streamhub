@@ -30,6 +30,8 @@ SPORT_RULES = [
     ("Sports", r"\b(?:sports?|sportscenter|sportscentre|athletics|olympics)\b"),
 ]
 PATTERNS = [(name, re.compile(pattern, re.IGNORECASE)) for name, pattern in SPORT_RULES]
+# The only repeat marker the guide carries: the listing says so in its title or category.
+REPLAY = re.compile(r"\b(?:replay|rerun|encore|repeat)\b", re.IGNORECASE)
 
 
 def classify_sport(title: str, category: str | None) -> str | None:
@@ -256,7 +258,7 @@ async def sports_events(
             continue
         scheduled.add(row[0])
         label = f"{row[7]} {row[8] or ''}"
-        replay = bool(re.search(r"\b(?:replay|rerun|encore|repeat)\b", label, re.I))
+        replay = bool(REPLAY.search(label))
         live = not replay and bool(re.search(r"(?:^live\s*[:\-]|\(live\)|\blive coverage\b)", label, re.I))
         if status == "replay" and not replay:
             continue
