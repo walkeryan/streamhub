@@ -1409,6 +1409,16 @@ class PlaybackResolver:
                 mode = PlaybackMode.HLS
             elif mode == PlaybackMode.DIRECT:
                 mode = PlaybackMode.PROXY
+        from app.services.content_policy import active_principal
+
+        principal = active_principal.get()
+        if mode == PlaybackMode.DIRECT and not (principal is not None and principal.can("sources.manage")):
+            # An upstream URL carries the source's credentials: a Plex token, an Xtream username
+            # and password, a provider's signed query. It goes only to someone who manages the
+            # sources and so holds them already. Everyone else plays through this server, whatever
+            # the proxy settings say about the route.
+            raw_live = target.live and (target.mime or "").lower() == "video/mp2t"
+            mode = PlaybackMode.HLS if raw_live else PlaybackMode.PROXY
         # A file the browser cannot decode is served as HLS whatever the routing above chose.
         plan = vod if vod is not None and vod.video is not None else None
         if plan is not None:
@@ -1419,9 +1429,6 @@ class PlaybackResolver:
         url = target.url
         mime = target.mime
         headers = dict(target.headers)
-        from app.services.content_policy import active_principal
-
-        principal = active_principal.get()
         # Adult rows stay out of everything nobody asked for by id, a busy answer included.
         shown = None if private else title[:80]
         device = client if client == "android_tv" else "web"
