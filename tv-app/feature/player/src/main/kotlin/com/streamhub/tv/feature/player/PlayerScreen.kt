@@ -64,6 +64,10 @@ import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.ui.components.AudioSourceDialog
 import com.streamhub.tv.core.ui.components.ErrorDialog
+import com.streamhub.tv.core.ui.components.ButtonStyle
+import com.streamhub.tv.core.data.room.RoomCode
+import com.streamhub.tv.core.data.room.RoomConnection
+import com.streamhub.tv.core.data.room.RoomUiState
 import com.streamhub.tv.core.player.PlayerUiState
 import com.streamhub.tv.core.player.VideoSurface
 import com.streamhub.tv.core.ui.components.ProgressLine
@@ -110,6 +114,8 @@ private class OkPress {
  *         hides after 5 s without a key press · Left/Right = seek 10 s, faster while held
  *  Hold OK (or Menu) opens the audio/subtitle/picture menu. Google TV remotes have no Menu key, so the
  *         short-press OK action fires on key *up* and a hold opens the menu.
+ *  Room:  play, pause and seek are the room's (everyone moves together); a live room does not zap and
+ *         OK plays/pauses; Back asks "Leave the room?" before leaving
  */
 @Composable
 fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
@@ -122,6 +128,8 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
     var backHint by remember { mutableStateOf(false) }
     var backHintShown by remember { mutableStateOf(false) }
     val ok = remember { OkPress() }
+    val room = s.room
+    val inRoom = s.roomCode != null
 
     LaunchedEffect(Unit) { vm.exit.collect { onExit() } }
     LaunchedEffect(ps.audioBlocked) {if(ps.audioBlocked) vm.openMenu()}
@@ -138,9 +146,10 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             PlayerCommand.OpenMenu -> vm.openMenu()
             PlayerCommand.OpenArchive -> vm.openRewind()
             PlayerCommand.ShowControls, PlayerCommand.ShowInfo -> vm.showOsd()
-            PlayerCommand.TogglePlayPause -> { vm.player.togglePlayPause(); vm.showOsd() }
-            PlayerCommand.Play -> { vm.player.resume(); vm.showOsd() }
-            PlayerCommand.Pause -> { vm.player.pause(); vm.showOsd() }
+            // Through the view model: in a watch room these go to the room, not to this player.
+            PlayerCommand.TogglePlayPause -> { vm.togglePlayPause(); vm.showOsd() }
+            PlayerCommand.Play -> { vm.resumePlayback(); vm.showOsd() }
+            PlayerCommand.Pause -> { vm.pausePlayback(); vm.showOsd() }
             is PlayerCommand.Seek -> { vm.scrubBy(command.deltaMs); vm.showOsd() }
             PlayerCommand.LastChannel -> vm.lastChannel()
         }
@@ -158,10 +167,13 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                 val live = s.live && !s.bufferTimeshift
                 // Every press counts as activity for the control row's 5 s idle timer.
                 if (e.type == KeyEventType.KeyDown) vm.touchControls()
-                if (PlayerKeyMap.resolve(code, live, menuOpen, controls) == PlayerCommand.Back) {
+                fun resolve(longPress: Boolean = false) = PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress, inRoom)
+                if (resolve() == PlayerCommand.Back) {
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                     when {
                         menuOpen || controls -> vm.hideOverlay()
+                        // Leaving a room is leaving other people: ask first.
+                        inRoom -> vm.askLeaveRoom()
                         s.numberEntry.isNotEmpty() -> vm.commitNumber()
                         s.live && vm.hasLastChannel -> {
                             val now = System.currentTimeMillis()
@@ -188,7 +200,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                         KeyEventType.KeyDown -> when {
                             !ok.down -> { ok.down = true; ok.longHandled = false }
                             !ok.longHandled && (n.isLongPress || n.eventTime - n.downTime >= LONG_PRESS_MS) -> {
-                                ok.longHandled = true; perform(PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress = true))
+                                ok.longHandled = true; perform(resolve(longPress = true))
                             }
                         }
                         KeyEventType.KeyUp -> {
@@ -198,9 +210,9 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                             when {
                                 handled -> Unit
                                 // remotes that send no auto-repeat while held
-                                wasLong -> perform(PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress = true))
+                                wasLong -> perform(resolve(longPress = true))
                                 vm.commitNumber() -> Unit
-                                else -> perform(PlayerKeyMap.resolve(code, live, menuOpen, controls))
+                                else -> perform(resolve())
                             }
                         }
                     }
@@ -208,7 +220,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                 }
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 // None = the overlay's or control row's focusables handle the key.
-                val command = PlayerKeyMap.resolve(code, live, menuOpen, controls)
+                val command = resolve()
                 if (command == PlayerCommand.None) false else { perform(command); true }
             }
             .focusable(),
@@ -227,13 +239,24 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             failure != null -> null
             ps.error != null -> ps.error
             s.message != null -> s.message
+            room?.connection == RoomConnection.Reconnecting -> "Reconnecting to the room…"
             s.bufferBusy -> "Preparing buffer…"
             ps.buffering -> "Buffering…"
             else -> null
         }
         if (status != null) StatusBadge(status, Modifier.align(Alignment.Center))
         if (backHint) StatusBadge("Back again for last channel", Modifier.align(Alignment.TopCenter).padding(top = Tokens.Canvas.SafeMarginY))
-        if (failure != null && s.audioChoice == null) {
+        // Watch room: who is here (with the controls, or whenever the room is waiting), and why it paused.
+        if (inRoom && room != null && s.roomEnded == null) {
+            if (s.overlay != Overlay.None || room.waitingFor != null || room.connection != RoomConnection.Connected) {
+                RoomStrip(s.roomCode.orEmpty(), room, Modifier.align(Alignment.TopStart).padding(start = Tokens.Canvas.SafeMarginX, top = Tokens.Canvas.SafeMarginY))
+            }
+            room.waitingFor?.let { StatusBadge("Waiting for $it…", Modifier.align(Alignment.TopCenter).padding(top = Tokens.Canvas.SafeMarginY + 44.dp)) }
+        }
+        if (s.leaveAsk) LeaveRoomDialog(isHost = room?.isHost == true, onLeave = vm::leaveRoom, onEnd = vm::endRoom, onStay = vm::stayInRoom)
+        // The room is over: say why, then back to the title it was opened from.
+        s.roomEnded?.let { ErrorDialog(it, onRetry = onExit, onDismiss = onExit, dismissLabel = "Back") }
+        if (failure != null && s.audioChoice == null && s.roomEnded == null) {
             val keepsPlaying = s.failure != null && s.failureKeepsPlaying
             ErrorDialog(
                 failure,
@@ -322,7 +345,11 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
             }
         }
         Text(
-            if (s.live && !s.bufferTimeshift) "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel" else "OK or ▼ for playback controls",
+            when {
+                s.roomCode != null && s.live -> "OK play/pause for everyone · ▶ menu · Back to leave the room"
+                s.live && !s.bufferTimeshift -> "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel"
+                else -> "OK or ▼ for playback controls"
+            },
             style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.padding(top = 10.dp),
         )
         ps.audioNotice?.let {Text(it,color=t.textMuted,style=MaterialTheme.typography.labelMedium)}
@@ -342,6 +369,9 @@ private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUi
     val t = LocalThemeTokens.current
     val d = s.descriptor
     val scrubFocus = remember { FocusRequester() }
+    val room = s.room
+    // In a room the button says what the room is doing: this player follows a moment later.
+    val playing = room?.clock?.playing ?: ps.isPlaying
     LaunchedEffect(Unit) { withFrameNanos { }; runCatching { scrubFocus.requestFocus() } }
     Column(
         Modifier.fillMaxWidth()
@@ -356,14 +386,14 @@ private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUi
         Scrubber(
             positionMs = s.scrubTargetMs ?: ps.positionMs,
             durationMs = ps.durationMs,
-            playing = ps.isPlaying,
+            playing = playing,
             seekable = ps.seekable,
             onSeek = vm::scrubBy,
-            onToggle = { vm.player.togglePlayPause() },
+            onToggle = vm::togglePlayPause,
             modifier = Modifier.focusRequester(scrubFocus),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ShButton(if (ps.isPlaying) "Pause" else "Play", { vm.player.togglePlayPause() })
+            ShButton(if (playing) "Pause" else "Play", vm::togglePlayPause)
             ShButton("−10 s", { vm.scrubBy(-PlayerKeyMap.SEEK_STEP_MS) }, enabled = ps.seekable)
             ShButton("+10 s", { vm.scrubBy(PlayerKeyMap.SEEK_STEP_MS) }, enabled = ps.seekable)
             ShButton("Start over", vm::startOver, enabled = ps.seekable)
@@ -371,6 +401,8 @@ private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUi
         }
         Text(
             when {
+                room != null && room.controlsLocked && !room.isHost -> "Only the host can control playback"
+                room != null -> "Play, pause and seek move everyone in the room · Back to leave"
                 s.bufferTimeshift -> "Buffered history · Go Live is under Audio & subtitles"
                 d?.archiveStart != null -> "Provider archive · Go Live is under Audio & subtitles"
                 !ps.seekable -> "This stream can't be seeked"
@@ -469,13 +501,32 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         if(confirmation!=null && confirmation !in ps.audioTracks) {confirmation=null;trackMessage="Audio tracks changed. Choose again.";withFrameNanos{};runCatching{first.requestFocus()}}
     }
     LaunchedEffect(Unit) { delay(50); runCatching { first.requestFocus() } }
-    val isChannel = s.descriptor?.id?.startsWith("ch:") == true
+    val room = s.room
+    val inRoom = s.roomCode != null
+    // No archive or Go Live in a room: it stays on the room clock.
+    val isChannel = s.descriptor?.id?.startsWith("ch:") == true && !inRoom
+    /** A section above Audio holds the menu's first focus. */
+    val topSection = isChannel || inRoom
     // Initial focus must land on something focusable: tracks this TV cannot decode are listed but disabled.
     val firstAudio = ps.audioTracks.indexOfFirst { it.supported }
     Column(
         Modifier.fillMaxHeight().width(420.dp).background(t.overlay).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = Tokens.Canvas.SafeMarginY),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        if (inRoom) {
+            Text("Watch room ${RoomCode.display(s.roomCode.orEmpty())}", style = MaterialTheme.typography.titleSmall, color = t.text)
+            Text(
+                (room?.members?.size ?: 0).let { n -> if (n == 1) "1 person watching" else "$n people watching" } +
+                    if (room?.controlsLocked == true) " · only the host controls playback" else "",
+                color = t.textMuted, style = MaterialTheme.typography.bodySmall,
+            )
+            if (room?.isHost == true) {
+                ShButton(if (room.controlsLocked) "Let everyone control playback" else "Only I control playback", vm::toggleRoomLock, Modifier.focusRequester(first))
+                ShButton("Leave the room", vm::askLeaveRoom)
+            } else {
+                ShButton("Leave the room", vm::askLeaveRoom, Modifier.focusRequester(first))
+            }
+        }
         if(isChannel) {
             ShButton(if(s.bufferWindow!=null) "Buffered rewind" else "Provider archive · unverified", vm::openRewind, Modifier.focusRequester(first))
             ShButton("Go Live", vm::goLive)
@@ -498,10 +549,10 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
                 trackMessage=null
                 if(vm.player.audioTrackNeedsConfirmation(tr)) {vm.player.pause();confirmOpener=opener;confirmation=tr}
                 else if(!vm.player.selectTrack(tr,C.TRACK_TYPE_AUDIO)) trackMessage="Audio tracks changed. Choose again."
-            },Modifier.focusRequester(opener).then(if(i==firstAudio && !isChannel)Modifier.focusRequester(first) else Modifier), enabled = tr.supported)
+            },Modifier.focusRequester(opener).then(if(i==firstAudio && !topSection)Modifier.focusRequester(first) else Modifier), enabled = tr.supported)
         }
         Text("Subtitles", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
-        ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (firstAudio < 0 && !isChannel) Modifier.focusRequester(first) else Modifier)
+        ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (firstAudio < 0 && !topSection) Modifier.focusRequester(first) else Modifier)
         ps.textTracks.forEach { tr ->
             ShChip(tr.label + if (tr.supported) "" else UNSUPPORTED_TRACK, !ps.subtitlesOff && tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) }, enabled = tr.supported)
         }
@@ -528,5 +579,51 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             }
         }
         LaunchedEffect(track){withFrameNanos{};runCatching{cancelFocus.requestFocus()}}
+    }
+}
+
+/** Who is in the room: slim, top-left, shown with the controls and whenever the room is waiting. */
+@Composable
+private fun RoomStrip(code: String, room: RoomUiState, modifier: Modifier = Modifier) {
+    Row(
+        modifier.background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(Tokens.Radius.Pill)).padding(horizontal = 14.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Room ${RoomCode.display(code)}", color = Color.White, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        room.members.take(MAX_STRIP_MEMBERS).forEach { m ->
+            // Host and buffering are said with a mark, not with colour alone.
+            Text(
+                (if (m.host) "★ " else "") + m.name.ifBlank { "Guest" } + (if (m.buffering) " …" else ""),
+                color = Color.White.copy(alpha = if (m.buffering) 0.6f else 0.9f), style = MaterialTheme.typography.labelMedium, maxLines = 1,
+            )
+        }
+        if (room.members.size > MAX_STRIP_MEMBERS) Text("+${room.members.size - MAX_STRIP_MEMBERS}", color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.labelMedium)
+        if (room.controlsLocked) Text("Host controls", color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+    }
+}
+
+private const val MAX_STRIP_MEMBERS = 6
+
+/** Back in a room. Focus starts on staying: leaving is the choice that has to be made on purpose. */
+@Composable
+private fun LeaveRoomDialog(isHost: Boolean, onLeave: () -> Unit, onEnd: () -> Unit, onStay: () -> Unit) {
+    val t = LocalThemeTokens.current
+    val stay = remember { FocusRequester() }
+    Dialog(onDismissRequest = onStay) {
+        Column(Modifier.width(520.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Leave the room?", style = MaterialTheme.typography.titleLarge, color = t.text)
+            Text(
+                if (isHost) "The others can keep watching without you, or you can end the room for everyone."
+                else "The others keep watching. You can come back with the room's code while it is open.",
+                style = MaterialTheme.typography.bodyLarge, color = t.textMuted,
+            )
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ShButton("Stay", onStay, Modifier.focusRequester(stay), style = ButtonStyle.Primary)
+                ShButton("Leave", onLeave)
+                if (isHost) ShButton("End for everyone", onEnd, style = ButtonStyle.Danger)
+            }
+        }
+        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { stay.requestFocus() } }
     }
 }

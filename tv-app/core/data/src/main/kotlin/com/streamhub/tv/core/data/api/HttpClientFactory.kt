@@ -16,6 +16,7 @@ import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
+import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -73,6 +74,8 @@ fun createStreamHubHttpClient(
 ): HttpClient = HttpClient(CIO) {
     expectSuccess = false
     install(ContentNegotiation) { json(StreamHubJson) }
+    // Watch rooms (see room/RoomClient); keep-alive is the room protocol's own ping, every 5 s.
+    install(WebSockets)
     install(HttpTimeout) {
         connectTimeoutMillis = 8_000
         requestTimeoutMillis = 20_000

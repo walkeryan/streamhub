@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -47,9 +49,10 @@ import com.streamhub.tv.core.ui.theme.Tokens
  * once dismissed (Back closes the IME and focus lands on the field; Right moves into results).
  * Entering the screen never focuses the field (that would raise the keyboard over a search that is
  * already there): focus starts on the results when there are any, otherwise on the language chips.
+ * [onJoinRoom], when the signed-in user may join watch rooms, puts "Join a room" above the field.
  */
 @Composable
-fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
+fun SearchScreen(onJoinRoom: (() -> Unit)? = null, vm: SearchViewModel = hiltViewModel()) {
     val t = LocalThemeTokens.current
     val q by vm.query.collectAsStateWithLifecycle()
     val language by vm.language.collectAsStateWithLifecycle()
@@ -76,6 +79,9 @@ fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
             .focusGroup(),
     ) {
         Column(Modifier.width(320.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX, end = 16.dp)) {
+            if (onJoinRoom != null) {
+                ShButton("Join a room", onJoinRoom, Modifier.padding(bottom = 12.dp).leftOpensRail(rail), icon = Icons.Filled.Group)
+            }
             ShTextField(
                 value = q,
                 onValueChange = vm::onQuery,

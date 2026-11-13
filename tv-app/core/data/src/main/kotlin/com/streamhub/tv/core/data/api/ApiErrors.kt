@@ -65,6 +65,15 @@ object ApiErrors {
                 "What this account may do was changed on the server. Try again.",
                 canRetry = true,
             )
+            "room_not_found" -> UserError(
+                "No room with that code",
+                "Check the six characters and try again. A room closes once everyone has left it for a while.",
+                canRetry = false,
+            )
+            "room_full" -> UserError("The room is full", "This room already has as many people as it can hold. Try again when someone has left.", canRetry = true)
+            "room_limit" -> UserError("Too many rooms", "The server is already running as many watch rooms as it allows. Try again when one has closed.", canRetry = true)
+            "room_unsupported" -> UserError("Can't be watched together", "This title can't be played in a watch room on this TV.", canRetry = false)
+            "content_restricted" -> UserError("Not available for this profile", "This profile isn't allowed to watch this.", canRetry = false)
             "disclaimer_required" -> UserError(
                 "Legal notice not accepted",
                 "This can't play until the legal notice has been accepted for this profile. Restart StreamHub to read and accept it.",

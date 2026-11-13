@@ -1,5 +1,6 @@
 package com.streamhub.tv.feature.details
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistAddCheck
@@ -27,6 +29,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.streamhub.tv.core.data.model.MediaKind
+import com.streamhub.tv.core.data.room.RoomCode
+import com.streamhub.tv.core.ui.components.QrCode
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -100,6 +111,7 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
     InitialFocusOnce(initial = playFocus, restore = listFocus, key = d.id)
     LaunchedEffect(s.toast) { if (s.toast != null) { delay(2500); vm.clearToast() } }
 
+    s.together?.let { WatchTogetherDialog(it, d.title, onStart = vm::startRoom, onRetry = vm::watchTogether, onCancel = vm::cancelRoom) }
     Box(Modifier.fillMaxSize()) {
         HeroBackdrop(d.asTile())
         PivotScroll(0.dp) {
@@ -140,6 +152,10 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                                 modifier = Modifier.focusRequester(playFocus).leftOpensRail(rail),
                             )
                         }
+                        // A room plays one title for everyone: films and episodes, not a whole series.
+                        if (s.canWatchTogether && inApp.isNotEmpty() && d.kind !in SERIES_KINDS) item("together") {
+                            ShButton("Watch together", vm::watchTogether, icon = Icons.Filled.Group)
+                        }
                         if (inApp.size > 1) {
                             items(inApp, key = { "src-${it.sourceId}" }) { b ->
                                 ShChip("${b.shortLabel()}${b.quality?.let { " $it" } ?: ""}", chosenSource == b, { chosenSource = b })
@@ -170,6 +186,72 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                 }
             }
         }
+    }
+}
+
+private val SERIES_KINDS = setOf(MediaKind.SHOW, MediaKind.SERIES, MediaKind.SEASON)
+
+/**
+ * The room's code, large enough to read across the room, and a QR code of `<server>/room/<code>` for
+ * phones and computers. Start joins the room and opens the player; Back or Cancel closes the room.
+ */
+@Composable
+private fun WatchTogetherDialog(state: WatchTogether, title: String, onStart: () -> Unit, onRetry: () -> Unit, onCancel: () -> Unit) {
+    val t = LocalThemeTokens.current
+    val focus = remember { FocusRequester() }
+    Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Row(
+            Modifier.width(820.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(32.dp),
+            horizontalArrangement = Arrangement.spacedBy(32.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Watch together", style = MaterialTheme.typography.titleLarge, color = t.text)
+                Text(title, style = MaterialTheme.typography.bodyLarge, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                when (state) {
+                    WatchTogether.Creating -> {
+                        Text("Opening a room…", style = MaterialTheme.typography.bodyLarge, color = t.text)
+                        ShButton("Cancel", onCancel, Modifier.focusRequester(focus))
+                    }
+                    is WatchTogether.Failed -> {
+                        Text(state.error.title, style = MaterialTheme.typography.titleMedium, color = t.danger)
+                        Text(state.error.body, style = MaterialTheme.typography.bodyLarge, color = t.textMuted)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (state.error.canRetry) ShButton("Try again", onRetry, Modifier.focusRequester(focus), style = ButtonStyle.Primary)
+                            ShButton("Close", onCancel, if (state.error.canRetry) Modifier else Modifier.focusRequester(focus))
+                        }
+                    }
+                    is WatchTogether.Ready -> {
+                        Text("Room code", style = MaterialTheme.typography.labelLarge, color = t.textMuted)
+                        Text(
+                            RoomCode.display(state.room.code),
+                            style = MaterialTheme.typography.displayLarge.copy(fontFamily = FontFamily.Monospace, fontSize = 64.sp, letterSpacing = 6.sp),
+                            color = t.accent,
+                        )
+                        Text(
+                            "On another TV: Search, then Join a room, and enter this code. On a phone or computer: scan the QR code" +
+                                (state.shareUrl?.let { " or open $it" } ?: "") + ".",
+                            style = MaterialTheme.typography.bodyMedium, color = t.textMuted,
+                        )
+                        when {
+                            state.needsAudioConsent -> Text("This room's source has no confirmed audio in your languages. Start anyway to watch it with the audio it has.", style = MaterialTheme.typography.bodyMedium, color = t.text)
+                            state.error != null -> Text("${state.error.title}. ${state.error.body}", style = MaterialTheme.typography.bodyMedium, color = t.danger)
+                            else -> Text("Start when you're ready. The film waits, paused, until someone presses Play.", style = MaterialTheme.typography.bodyMedium, color = t.text)
+                        }
+                        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            ShButton(
+                                when { state.starting -> "Starting…"; state.needsAudioConsent -> "Start with this audio"; else -> "Start" },
+                                onStart, Modifier.focusRequester(focus), icon = HeroIcons.Play, style = ButtonStyle.Primary,
+                            )
+                            ShButton("Cancel room", onCancel)
+                        }
+                    }
+                }
+            }
+            if (state is WatchTogether.Ready && state.shareUrl != null) QrCode(state.shareUrl, size = 220.dp)
+        }
+        // Re-armed when the dialog moves on (opening → code → failure): the focused button may have gone.
+        LaunchedEffect(state::class) { withFrameNanos { }; runCatching { focus.requestFocus() } }
     }
 }
 

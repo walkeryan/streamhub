@@ -326,6 +326,19 @@ class StreamHubApi @Inject constructor(
         return true
     }
 
+    // ---- Watch rooms ---------------------------------------------------------------------------
+
+    /** A room for a title or channel; it starts empty and paused at 0 (a live room starts playing). */
+    suspend fun createRoom(titleId: String, variantId: String? = null): Room =
+        client.post(url("/rooms")) { setBody(RoomCreate(titleId, variantId)) }.ok()
+    /** The join screen: title, host, members, state. 404 `room_not_found`. */
+    suspend fun room(code: String): Room = get("/rooms/${id(code)}")
+    /** Takes a seat; resolves playback exactly as /playback/resolve would and returns its refusals unchanged. */
+    suspend fun joinRoom(code: String, allowUnverifiedAudio: Boolean = false): RoomJoined =
+        client.post(url("/rooms/${id(code)}/join")) { setBody(RoomJoinRequest(allowUnverifiedAudio = allowUnverifiedAudio)) }.ok()
+    /** Host or administrator: closes the room for everyone. */
+    suspend fun deleteRoom(code: String) = client.delete(url("/rooms/${id(code)}")).unit()
+
     // ---- Favorites / watchlist / history -------------------------------------------------------
 
     suspend fun favorites(): List<Tile> = get("/favorites")

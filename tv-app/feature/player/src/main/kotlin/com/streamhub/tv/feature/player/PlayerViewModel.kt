@@ -1,6 +1,19 @@
 package com.streamhub.tv.feature.player
 
+import android.os.SystemClock
 import androidx.lifecycle.SavedStateHandle
+import androidx.media3.common.Player
+import com.streamhub.tv.core.data.repo.RoomRepository
+import com.streamhub.tv.core.data.repo.RoomSeat
+import com.streamhub.tv.core.data.room.RoomClient
+import com.streamhub.tv.core.data.room.RoomClock
+import com.streamhub.tv.core.data.room.RoomConnection
+import com.streamhub.tv.core.data.room.RoomSync
+import com.streamhub.tv.core.data.room.RoomUiState
+import com.streamhub.tv.core.data.room.SyncAction
+import com.streamhub.tv.core.data.room.roomClosedMessage
+import com.streamhub.tv.core.data.room.roomRefusalText
+import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.handoff.DeepLinkLauncher
@@ -87,6 +100,13 @@ data class PlayerScreenState(
     val retrying: Boolean = false,
     /** Where the scrubber is heading while Left/Right is still being pressed; null once the seek has landed. */
     val scrubTargetMs: Long? = null,
+    /** Set while playing as a member of a watch room: its code, and what the room last said. */
+    val roomCode: String? = null,
+    val room: RoomUiState? = null,
+    /** Back was pressed in a room: "Leave the room?" is up. */
+    val leaveAsk: Boolean = false,
+    /** The room is over (closed by the host, expired, seat lost); acknowledged with Back to the title. */
+    val roomEnded: UserError? = null,
 )
 
 /**
@@ -99,6 +119,9 @@ data class PlayerScreenState(
  *  - Sleep timer → pause and exit.
  *  - Films and buffered history get a focusable control row (scrubber + buttons) instead of the live banner.
  *  - "Try again" resolves the accepted request again; it never replays the descriptor on screen.
+ *  - In a watch room (the player key carries a RoomSeat) play, pause and seek go to the room instead
+ *    of the player; what the room answers is applied through RoomSync, so every member, this one
+ *    included, moves on the same message. Buffering is reported so the room can wait.
  */
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
@@ -108,6 +131,7 @@ class PlayerViewModel @Inject constructor(
     private val launcher: DeepLinkLauncher,
     private val api: StreamHubApi,
     private val sessions: SessionStore,
+    private val rooms: RoomRepository,
     playerFactory: PlayerFactory,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState["key"])
@@ -143,6 +167,11 @@ class PlayerViewModel @Inject constructor(
     })
     private var audioOwner: CatalogScope? = null
     private var choiceArchiveAction = false
+    /** This player's seat in a watch room; null for ordinary playback. */
+    private var seat: RoomSeat? = rooms.seat(key)
+    private var roomClient: RoomClient? = null
+    private var roomJob: Job? = null
+    private var messageJob: Job? = null
 
     init {
         coordinator.registerActivePlayer(key) { stopCurrentPlayback() }
@@ -154,6 +183,7 @@ class PlayerViewModel @Inject constructor(
             currentRequest = coordinator.requestFor(key) ?: PlaybackRequest(d.id)
             // Known before the first frame so the right overlay (live banner or film controls) is chosen.
             _state.update { it.copy(live = d.live) }
+            seat?.let(::startRoom)
             attachJob = viewModelScope.launch { start(d); if(d.live) loadChannelList(d) }
         }
         showOsd()
@@ -177,7 +207,10 @@ class PlayerViewModel @Inject constructor(
         releaseCurrentBuffer()
     }
 
-    private suspend fun start(d: PlaybackDescriptor, startPositionMs: Long? = null) {
+    private suspend fun start(descriptor: PlaybackDescriptor, startPositionMs: Long? = null) {
+        // A room runs on the room clock: no private timeshift buffer, and it starts where the room is.
+        val shared = seat != null
+        val d = if (shared) descriptor.copy(bufferAvailable = false) else descriptor
         releaseCurrentBuffer()
         if (d.mode == PlaybackMode.HANDOFF) {
             d.handoff?.let { launcher.launch(it) }; _exit.tryEmit(Unit); return
@@ -192,7 +225,11 @@ class PlayerViewModel @Inject constructor(
             currentCoroutineContext().ensureActive()
             if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
             currentStopped=false
-            if (startPositionMs != null) player.play(d, reportOwner, startPositionMs) else player.play(d, reportOwner)
+            if (shared) {
+                player.play(d, reportOwner, roomPosition() ?: 0L)
+                // A new room is paused at the start; until the room says "playing" this member waits.
+                if (roomClient?.state?.value?.clock?.playing != true) player.pause()
+            } else if (startPositionMs != null) player.play(d, reportOwner, startPositionMs) else player.play(d, reportOwner)
             _state.update { it.copy(bufferWindow=lease?.window,bufferBusy=false) }
             if(lease != null) bufferHeartbeat=viewModelScope.launch {
                 try {
@@ -316,13 +353,27 @@ class PlayerViewModel @Inject constructor(
      */
     fun scrubBy(deltaMs: Long) {
         val ps = player.state.value
+        val client = roomClient
+        if (seat != null) {
+            val room = client?.state?.value
+            val clock = room?.clock
+            when {
+                room == null || room.connection != RoomConnection.Connected -> { flash(ROOM_RECONNECTING); return }
+                room.controlsLocked && !room.isHost -> { flash(ROOM_HOST_ONLY); return }
+                // Nothing to seek from until the room has said where it is.
+                clock == null -> return
+                clock.live -> { flash(roomRefusalText("live_no_seek").orEmpty()); return }
+            }
+        }
         if (!ps.seekable || ps.durationMs <= 0) return
-        val target = ((_state.value.scrubTargetMs ?: ps.positionMs) + deltaMs).coerceIn(0, ps.durationMs)
+        // In a room the bar starts from where the room is, not from where this player happens to be.
+        val target = ((_state.value.scrubTargetMs ?: roomPosition() ?: ps.positionMs) + deltaMs).coerceIn(0, ps.durationMs)
         _state.update { it.copy(scrubTargetMs = target) }
         scrubJob?.cancel()
         scrubJob = viewModelScope.launch {
             delay(SCRUB_SETTLE_MS)
-            player.seekTo(target)
+            // The room's answer (a state message) moves every member, this one included.
+            if (client != null) client.seek(target) else player.seekTo(target)
             // Keep showing the target until the player's position ticker has caught up with it.
             delay(SCRUB_RELEASE_MS)
             _state.update { it.copy(scrubTargetMs = null) }
@@ -332,14 +383,151 @@ class PlayerViewModel @Inject constructor(
     fun startOver() {
         scrubJob?.cancel()
         _state.update { it.copy(scrubTargetMs = null) }
-        player.seekTo(0)
+        if (seat != null) roomControl { it.seek(0) } else player.seekTo(0)
+    }
+
+    // ---- Play / pause (the room's, when in one) -------------------------------------------------
+
+    fun togglePlayPause() {
+        if (seat == null) { player.togglePlayPause(); return }
+        val playing = roomClient?.state?.value?.clock?.playing ?: player.exoPlayer.playWhenReady
+        roomControl { if (playing) it.pause() else it.play() }
+    }
+    fun resumePlayback() { if (seat == null) player.resume() else roomControl { it.play() } }
+    fun pausePlayback() { if (seat == null) player.pause() else roomControl { it.pause() } }
+
+    // ---- Watch room ----------------------------------------------------------------------------
+
+    val inRoom: Boolean get() = seat != null
+
+    /** Where the room is now, when in a room that has a position (not a live one) and has said so. */
+    private fun roomPosition(): Long? {
+        val client = roomClient ?: return null
+        return client.state.value.clock?.let { RoomSync.positionAt(it, client.serverNowMs()) }
+    }
+
+    private fun startRoom(s: RoomSeat) {
+        val client = rooms.client(s)
+        roomClient = client
+        roomJob?.cancel()
+        _state.update { it.copy(roomCode = s.code, room = client.state.value, roomEnded = null) }
+        roomJob = viewModelScope.launch {
+            // Cancelling this job is how the room is left: run() gives the seat back on its way out.
+            launch { client.run() }
+            launch {
+                client.state.collect { room ->
+                    _state.update { it.copy(room = room) }
+                    if (room.connection == RoomConnection.Closed) roomOver(room.closedReason)
+                }
+            }
+            launch { client.refusals.collect { refusal -> roomRefusalText(refusal.code)?.let(::flash) } }
+            launch {
+                // Buffering start/stop, and again after every reconnect: the room pauses for a member who stalls.
+                combine(
+                    player.state.map { it.buffering }.distinctUntilChanged(),
+                    client.state.map { it.connection == RoomConnection.Connected }.distinctUntilChanged(),
+                ) { buffering, connected -> buffering to connected }.collect { (buffering, connected) -> if (connected) client.buffering(buffering) }
+            }
+            launch { keepInStep(client) }
+        }
+    }
+
+    /** Applies [RoomSync] twice a second: the room clock decides, this player follows. */
+    private suspend fun keepInStep(client: RoomClient) {
+        var lastSeekAt = 0L
+        var seekedFor: RoomClock? = null
+        while (true) {
+            delay(ROOM_SYNC_TICK_MS)
+            val room = client.state.value
+            val clock = room.clock ?: continue
+            val s = _state.value
+            if (room.connection != RoomConnection.Connected || currentStopped || s.failure != null || s.retrying) continue
+            val exo = player.exoPlayer
+            if (exo.playbackState == Player.STATE_IDLE || exo.playbackState == Player.STATE_ENDED || player.state.value.audioBlocked) continue
+            when (val action = RoomSync.decide(clock, client.serverNowMs(), exo.currentPosition, exo.playWhenReady)) {
+                SyncAction.None -> Unit
+                SyncAction.Play -> player.resume()
+                SyncAction.Pause -> player.pause()
+                is SyncAction.SeekTo -> {
+                    val now = SystemClock.elapsedRealtime()
+                    val canSeek = exo.isCurrentMediaItemSeekable && exo.duration > 0
+                    // A playing room's position depends on the server clock: wait for the first pong.
+                    val trusted = client.clockSynced || !clock.playing
+                    // Once per room state at once; after that only from a settled player, so a member who is
+                    // still buffering towards the last target is not sent chasing a newer one every tick.
+                    val due = clock != seekedFor || (exo.playbackState == Player.STATE_READY && now - lastSeekAt >= ROOM_SEEK_COOLDOWN_MS)
+                    when {
+                        s.scrubTargetMs != null -> Unit
+                        canSeek && trusted && due -> { player.seekTo(action.positionMs); lastSeekAt = now; seekedFor = clock }
+                        // A stream that cannot be seeked can still stop and start with the room.
+                        !canSeek && exo.playbackState == Player.STATE_READY && clock.playing != exo.playWhenReady ->
+                            if (clock.playing) player.resume() else player.pause()
+                    }
+                }
+            }
+        }
+    }
+
+    /** Play, pause and seek in a room: refused here when the room would refuse them, sent otherwise. */
+    private fun roomControl(send: suspend (RoomClient) -> Boolean) {
+        val client = roomClient ?: return
+        val room = client.state.value
+        when {
+            room.controlsLocked && !room.isHost -> flash(ROOM_HOST_ONLY)
+            room.connection != RoomConnection.Connected -> flash(ROOM_RECONNECTING)
+            else -> viewModelScope.launch { if (!send(client)) flash(ROOM_RECONNECTING) }
+        }
+    }
+
+    /** Host: only the host's play, pause and seek apply while locked. */
+    fun toggleRoomLock() {
+        val client = roomClient ?: return
+        val room = client.state.value
+        if (!room.isHost) { flash("Only the host can do that"); return }
+        viewModelScope.launch { if (!client.lock(!room.controlsLocked)) flash(ROOM_RECONNECTING) }
+    }
+
+    private fun roomOver(reason: String?) {
+        player.pause()
+        _state.update { it.copy(roomEnded = roomClosedMessage(reason), leaveAsk = false, overlay = Overlay.None) }
+    }
+
+    fun askLeaveRoom() { if (seat != null && _state.value.roomEnded == null) _state.update { it.copy(leaveAsk = true, overlay = Overlay.None) } }
+    fun stayInRoom() { _state.update { it.copy(leaveAsk = false) }; showOsd() }
+
+    fun leaveRoom() {
+        roomJob?.cancel(); roomJob = null
+        _state.update { it.copy(leaveAsk = false) }
+        _exit.tryEmit(Unit)
+    }
+
+    /** Host: closes the room for everyone, then leaves. */
+    fun endRoom() {
+        val code = seat?.code ?: return
+        _state.update { it.copy(leaveAsk = false) }
+        viewModelScope.launch {
+            try { rooms.close(code) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { flash("Couldn't end the room. ${ApiErrors.describe(e).title}."); return@launch }
+            roomJob?.cancel(); roomJob = null
+            _exit.tryEmit(Unit)
+        }
+    }
+
+    /** A short message over the picture. */
+    private fun flash(text: String) {
+        if (text.isBlank()) return
+        messageJob?.cancel()
+        _state.update { it.copy(message = text) }
+        messageJob = viewModelScope.launch { delay(FLASH_MS); _state.update { if (it.message == text) it.copy(message = null) else it } }
     }
 
     fun hideOverlay() { rewindJob?.cancel(); bufferSeekJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false, bufferBusy=false, audioChoice=null) } }
-    fun openMiniList() { if (_state.value.live && _state.value.channels.isNotEmpty()) _state.update { it.copy(overlay = Overlay.MiniList) } }
+    fun openMiniList() { if (seat == null && _state.value.live && _state.value.channels.isNotEmpty()) _state.update { it.copy(overlay = Overlay.MiniList) } }
     fun openMenu() { _state.update { it.copy(overlay = Overlay.Menu) } }
 
     fun openRewind() {
+        if(seat != null) return
         if(buffer.leaseId != null) { openBuffer(); return }
         val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
         rewindJob?.cancel()
@@ -360,6 +548,7 @@ class PlayerViewModel @Inject constructor(
     fun goLive() { if(buffer.leaseId!=null) seekBuffer(null) else resolveChannelTime(null) }
 
     private fun resolveChannelTime(at: Instant?) {
+        if(seat != null) return
         val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
         submitChannel(PlaybackRequest(id, rewindAt=at?.toString()), archiveAction=true)
     }
@@ -429,7 +618,7 @@ class PlayerViewModel @Inject constructor(
     /** +1 = next channel in the list, -1 = previous. Wraps around. */
     fun zap(delta: Int) {
         val s = _state.value
-        if (!s.live || s.channels.isEmpty()) return
+        if (!s.live || s.channels.isEmpty() || seat != null) return
         rewindJob?.cancel(); audioOwner=null
         _state.update { it.copy(audioChoice=null, rewindLoading=false) }
         val from = s.channels.indexOfFirst { it.id == s.osdChannel?.id }.takeIf { it >= 0 } ?: s.index.coerceAtLeast(0)
@@ -444,6 +633,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun tuneTo(ch: Channel) {
+        // A room stays on what it is watching together.
+        if(seat != null) return
         if(ch.id == _state.value.descriptor?.id && _state.value.live && !currentStopped) { _state.update { it.copy(osdChannel=ch) }; return }
         submitChannel(PlaybackRequest(ch.id))
     }
@@ -459,7 +650,7 @@ class PlayerViewModel @Inject constructor(
     // ---- Number entry --------------------------------------------------------------------------
 
     fun digit(d: Int) {
-        if (!_state.value.live) return
+        if (!_state.value.live || seat != null) return
         val next = ChannelNumberEntry.append(_state.value.numberEntry, d)
         _state.update { it.copy(numberEntry = next, overlay = Overlay.Osd) }
         osdJob?.cancel()
@@ -513,6 +704,8 @@ class PlayerViewModel @Inject constructor(
             submitChannel(zap, archiveAction = zap.rewindAt != null)
             return
         }
+        val held = seat
+        if (held != null) { rejoinRoom(held); return }
         val stale = _state.value.descriptor
         val request = currentRequest ?: stale?.let { PlaybackRequest(it.id) } ?: return
         // A film resumes where it failed; live and archive streams restart where the server puts them.
@@ -540,6 +733,32 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /** "Try again" in a room: a new seat (its stream address and member token are both fresh), same room. */
+    private fun rejoinRoom(held: RoomSeat) {
+        attachJob?.cancel(); rewindJob?.cancel()
+        _state.update { it.copy(failure = null, retrying = true, message = null) }
+        attachJob = viewModelScope.launch {
+            try {
+                releaseCurrentBuffer()
+                // Give the old seat back before taking another: a full room would otherwise turn its own member away.
+                roomJob?.let { it.cancel(); it.join() }
+                val fresh = rooms.rejoin(key, held.code)
+                currentCoroutineContext().ensureActive()
+                seat = fresh
+                startRoom(fresh)
+                start(fresh.descriptor)
+                if (fresh.descriptor.live) loadChannelList(fresh.descriptor)
+                _state.update { it.copy(retrying = false) }
+                showOsd()
+            } catch (e: CancellationException) {
+                _state.update { it.copy(retrying = false) }
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(retrying = false, failure = ApiErrors.describe(e), failureKeepsPlaying = false) }
+            }
+        }
+    }
+
     /** Closes a failure that left the previous stream playing. */
     fun dismissFailure() { failedRequest = null; _state.update { it.copy(failure = null, failureKeepsPlaying = false) } }
 
@@ -547,6 +766,8 @@ class PlayerViewModel @Inject constructor(
         rewindJob?.cancel(); attachJob?.cancel(); bufferHeartbeat?.cancel(); bufferSeekJob?.cancel()
         cleanupScope.launch { buffer.close() }
         coordinator.unregisterActivePlayer(key)
+        // roomJob ends with viewModelScope; RoomClient.run() closes the socket normally on its way out, which frees the seat.
+        rooms.release(key)
         // stop() reports the final position; release() alone would leave "continue watching" at the last 10 s tick.
         player.stop()
         player.release()
@@ -562,6 +783,11 @@ class PlayerViewModel @Inject constructor(
         const val CONTROLS_HIDE_MS = 5_000L
         const val SCRUB_SETTLE_MS = 300L
         const val SCRUB_RELEASE_MS = 700L
+        const val ROOM_SYNC_TICK_MS = 500L
+        const val ROOM_SEEK_COOLDOWN_MS = 2_000L
+        const val FLASH_MS = 2_500L
+        const val ROOM_HOST_ONLY = "Only the host can control playback"
+        const val ROOM_RECONNECTING = "Reconnecting to the room…"
         val SLEEP_OPTIONS = listOf<Int?>(null, 15, 30, 60, 90, 120)
     }
 }

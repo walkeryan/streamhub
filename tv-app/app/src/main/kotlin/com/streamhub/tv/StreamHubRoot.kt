@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
@@ -49,6 +50,7 @@ import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.handoff.HandoffResult
+import com.streamhub.tv.core.data.model.Permissions
 import com.streamhub.tv.core.data.repo.LocalPrefs
 import com.streamhub.tv.core.data.repo.MeRepository
 import com.streamhub.tv.core.data.repo.MeState
@@ -81,6 +83,7 @@ import com.streamhub.tv.feature.home.SportsScreen
 import com.streamhub.tv.feature.onboarding.OnboardingScreen
 import com.streamhub.tv.feature.onboarding.WhoIsWatchingScreen
 import com.streamhub.tv.feature.player.PlayerScreen
+import com.streamhub.tv.feature.search.JoinRoomScreen
 import com.streamhub.tv.feature.search.SearchScreen
 import com.streamhub.tv.feature.settings.SettingsScreen
 import com.streamhub.tv.feature.sources.SourcesScreen
@@ -116,6 +119,8 @@ object Routes {
     const val FAVORITES = "favorites"
     const val SOURCES = "sources"
     const val SETTINGS = "settings"
+    /** Join a watch room by its code. */
+    const val JOIN_ROOM = "rooms/join"
     /** "Who's watching?" opened from the rail or Settings: Back returns. */
     const val WHO = "who"
     /** The same picker standing between a cold start (or pairing) and the app on a shared TV: Back offers to exit. */
@@ -129,9 +134,14 @@ object Routes {
 /** Screens that own the whole display: no rail beside them. */
 private val FULL_SCREEN_ROUTES = setOf(Routes.ONBOARDING, Routes.PLAYER, Routes.MULTIVIEW, Routes.WHO, Routes.WHO_GATE)
 
-private val RAIL = listOf(
+/**
+ * The rail for what the signed-in user may do. The rail has no "more" area, so a destination that
+ * depends on a permission sits beside the one it belongs with and is simply absent without it.
+ */
+private fun railItems(access: MeState): List<RailItem> = listOfNotNull(
     RailItem(Routes.HOME, "Home", Icons.Filled.Home),
     RailItem(Routes.SEARCH, "Search", Icons.Filled.Search),
+    RailItem(Routes.JOIN_ROOM, "Join a room", Icons.Filled.Group).takeIf { access.can(Permissions.ROOMS_JOIN) },
     RailItem(Routes.LIVE, "Live TV", Icons.Filled.LiveTv),
     RailItem(Routes.SPORTS, "Sports", Icons.Filled.SportsSoccer),
     RailItem(Routes.discover(), "Discover", Icons.Filled.Search),
@@ -368,7 +378,12 @@ private fun AppShell(
                         )
                     }
                     composable(Routes.HOME) { TopLevel(onTopLevelBack) { HomeScreen() } }
-                    composable(Routes.SEARCH) { TopLevel(onTopLevelBack) { SearchScreen() } }
+                    composable(Routes.SEARCH) {
+                        TopLevel(onTopLevelBack) {
+                            SearchScreen(onJoinRoom = if (access.can(Permissions.ROOMS_JOIN)) ({ nav.navigate(Routes.JOIN_ROOM) { launchSingleTop = true } }) else null)
+                        }
+                    }
+                    composable(Routes.JOIN_ROOM) { TopLevel(onTopLevelBack) { JoinRoomScreen() } }
                     composable(Routes.LIVE) { TopLevel(onTopLevelBack) { LiveDestination() } }
                     composable(Routes.SPORTS) { TopLevel(onTopLevelBack) { SportsScreen(onMultiview={nav.navigate(Routes.MULTIVIEW)}) } }
                     composable(Routes.MULTIVIEW) { MultiviewScreen(onExit={nav.popBackStack()}) }
@@ -407,7 +422,7 @@ private fun AppShell(
             }
             if (showRail) {
                 LeftRail(
-                    items = RAIL,
+                    items = remember(access) { railItems(access) },
                     selectedRoute = when {
                         route == Routes.DISCOVER -> Routes.discover()
                         route == Routes.GUIDE -> Routes.LIVE

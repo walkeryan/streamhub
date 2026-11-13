@@ -101,4 +101,34 @@ class PlayerKeyMapTest {
         val steps = (0..60).map(PlayerKeyMap::seekStepMs)
         assertTrue(steps.zipWithNext().all { (a, b) -> b >= a })
     }
+
+    // ---- watch rooms ---------------------------------------------------------------------------
+
+    private fun liveRoom(key: Int, longPress: Boolean = false) =
+        PlayerKeyMap.resolve(key, isLive = true, menuOpen = false, controlsVisible = false, longPress = longPress, inRoom = true)
+
+    @Test fun aLiveRoomStaysOnItsChannel() {
+        val changesChannel = listOf(
+            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_0, KeyEvent.KEYCODE_7, KeyEvent.KEYCODE_NUMPAD_3, KeyEvent.KEYCODE_LAST_CHANNEL,
+        )
+        for (key in changesChannel) assertEquals("key $key", PlayerCommand.None, liveRoom(key))
+        assertEquals(PlayerCommand.ShowInfo, liveRoom(KeyEvent.KEYCODE_DPAD_UP))
+        assertEquals(PlayerCommand.ShowInfo, liveRoom(KeyEvent.KEYCODE_DPAD_DOWN))
+    }
+
+    @Test fun aLiveRoomPlaysAndPausesWithSelectAndKeepsTheMenu() {
+        assertEquals(PlayerCommand.TogglePlayPause, liveRoom(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertEquals(PlayerCommand.OpenMenu, liveRoom(KeyEvent.KEYCODE_DPAD_CENTER, longPress = true))
+        assertEquals(PlayerCommand.OpenMenu, liveRoom(KeyEvent.KEYCODE_DPAD_RIGHT))
+        assertEquals(PlayerCommand.OpenMenu, liveRoom(KeyEvent.KEYCODE_MENU))
+        assertEquals(PlayerCommand.TogglePlayPause, liveRoom(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
+        assertEquals(PlayerCommand.Back, liveRoom(KeyEvent.KEYCODE_BACK))
+    }
+
+    @Test fun aFilmRoomKeepsTheFilmMapping() {
+        for (key in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_REWIND)) {
+            assertEquals("key $key", film(key), PlayerKeyMap.resolve(key, isLive = false, menuOpen = false, controlsVisible = false, inRoom = true))
+        }
+    }
 }

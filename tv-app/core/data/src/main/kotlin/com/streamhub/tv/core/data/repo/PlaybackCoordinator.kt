@@ -137,6 +137,9 @@ class PlaybackCoordinator @Inject constructor(
         return key
     }
 
+    /** Opens the player on a descriptor that was [put] here by something other than [play] (a watch room's join). */
+    fun open(key: String) { lastFailed = null; _events.tryEmit(PlayEvent.StartPlayer(key)) }
+
     fun take(key: String): PlaybackDescriptor? = cache[key]
     /** The accepted request (source and audio choice included) that produced [take]'s descriptor. */
     fun requestFor(key: String): PlaybackRequest? = requests[key]
