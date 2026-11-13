@@ -29,4 +29,6 @@ include(
     ":feature:favorites",
     ":feature:sources",
     ":feature:settings",
+    ":feature:recordings",
+    ":feature:requests",
 )

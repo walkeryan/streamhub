@@ -26,5 +26,6 @@ object DataModule {
         sessionStore = sessionStore,
         debug = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
         onSessionExpired = events::emitExpired,
+        onTokensRefreshed = events::emitRefreshed,
     )
 }

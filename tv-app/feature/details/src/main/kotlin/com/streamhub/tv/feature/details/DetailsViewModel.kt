@@ -6,7 +6,18 @@ import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.sameSwitchSession
+import com.streamhub.tv.core.data.api.ApiErrors
+import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.StreamHubApi
+import com.streamhub.tv.core.data.api.UserError
+import com.streamhub.tv.core.data.model.Permissions
+import com.streamhub.tv.core.data.model.Room
+import com.streamhub.tv.core.data.repo.MeRepository
+import com.streamhub.tv.core.data.repo.RequestsRepository
+import com.streamhub.tv.core.data.repo.RoomRepository
+import com.streamhub.tv.core.data.repo.canPickSeasons
+import com.streamhub.tv.core.data.repo.requestTarget
+import kotlinx.coroutines.CancellationException
 import com.streamhub.tv.core.data.model.Favorite
 import com.streamhub.tv.core.data.model.PlaybackState
 import com.streamhub.tv.core.data.model.ProgressReport
@@ -27,12 +38,42 @@ data class DetailsState(
     val selectedSeason: String? = null,
     val seasonEpisodes: List<com.streamhub.tv.core.data.model.Tile> = emptyList(),
     val toast: String? = null,
+    /** The signed-in user may ask for titles (requests.create). */
+    val canRequest: Boolean = false,
+    /** Where this title's request stands; starts from the detail and follows a request made here. */
+    val requestState: String? = null,
+    val requesting: Boolean = false,
+    /** A series whose seasons can be picked: the season dialog is open. */
+    val seasonPicker: Boolean = false,
+    val requestError: UserError? = null,
+    /** The signed-in user may start a watch room (rooms.create). */
+    val canWatchTogether: Boolean = false,
+    /** "Watch together" in progress: the room being opened, or open and waiting for Start. */
+    val together: WatchTogether? = null,
 )
+
+/** The "Watch together" dialog: a room is created first, shown with its code, then joined with Start. */
+sealed interface WatchTogether {
+    data object Creating : WatchTogether
+    data class Failed(val error: UserError) : WatchTogether
+    data class Ready(
+        val room: Room,
+        /** `<server>/room/<code>` for the QR code. */
+        val shareUrl: String?,
+        val starting: Boolean = false,
+        val error: UserError? = null,
+        /** The room's source has no confirmed audio in this profile's languages; Start asks to go ahead with it. */
+        val needsAudioConsent: Boolean = false,
+    ) : WatchTogether
+}
 
 @HiltViewModel
 class DetailsViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val sessions: SessionStore,
+    private val rooms: RoomRepository,
+    private val me: MeRepository,
+    private val requests: RequestsRepository,
     savedState: SavedStateHandle,
 ) : ViewModel() {
     val titleId: String = checkNotNull(savedState["id"])
@@ -41,7 +82,88 @@ class DetailsViewModel @Inject constructor(
 
     private var detailOwner:Session?=null
 
-    init { load() }
+    init {
+        load()
+        viewModelScope.launch {
+            me.state.collect { access ->
+                _state.update { it.copy(canWatchTogether = access.can(Permissions.ROOMS_CREATE), canRequest = access.can(Permissions.REQUESTS_CREATE)) }
+            }
+        }
+    }
+
+    // ---- Request -------------------------------------------------------------------------------
+
+    /** "Request": a film or a whole series at once, or the season dialog when seasons can be picked. */
+    fun request() {
+        val d = _state.value.detail ?: return
+        val target = requestTarget(d.id) ?: return
+        if (_state.value.requesting) return
+        if (canPickSeasons(target, d.requestSeasons)) _state.update { it.copy(seasonPicker = true) } else submitRequest(null)
+    }
+
+    /** [seasons] null = the whole series. */
+    fun submitRequest(seasons: List<Int>?) {
+        val d = _state.value.detail ?: return
+        val target = requestTarget(d.id) ?: return
+        if (_state.value.requesting) return
+        _state.update { it.copy(requesting = true, seasonPicker = false, requestError = null) }
+        viewModelScope.launch {
+            try {
+                val made = requests.request(target, seasons)
+                _state.update { it.copy(requesting = false, requestState = made.state) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(requesting = false, requestError = ApiErrors.describe(e)) } }
+        }
+    }
+
+    fun closeSeasonPicker() = _state.update { it.copy(seasonPicker = false) }
+    fun dismissRequestError() = _state.update { it.copy(requestError = null) }
+    fun say(text: String) = _state.update { it.copy(toast = text) }
+
+    // ---- Watch together ------------------------------------------------------------------------
+
+    /** Creates the room; the dialog then shows its code until Start (which joins it) or Cancel (which closes it). */
+    fun watchTogether() {
+        if (_state.value.together is WatchTogether.Creating || _state.value.together is WatchTogether.Ready) return
+        _state.update { it.copy(together = WatchTogether.Creating) }
+        viewModelScope.launch {
+            val next = try {
+                val room = rooms.create(titleId)
+                WatchTogether.Ready(room, rooms.shareUrl(room))
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { WatchTogether.Failed(ApiErrors.describe(e)) }
+            _state.update { if (it.together == WatchTogether.Creating) it.copy(together = next) else it }
+        }
+    }
+
+    fun startRoom() {
+        val ready = _state.value.together as? WatchTogether.Ready ?: return
+        if (ready.starting) return
+        _state.update { it.copy(together = ready.copy(starting = true, error = null)) }
+        viewModelScope.launch {
+            try {
+                val key = rooms.join(ready.room.code, allowUnverifiedAudio = ready.needsAudioConsent)
+                _state.update { it.copy(together = null) }
+                rooms.openPlayer(key)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                val consent = (e as? ApiException)?.error?.code == "audio_selection_required" && !ready.needsAudioConsent
+                _state.update {
+                    it.copy(together = ready.copy(starting = false, needsAudioConsent = consent || ready.needsAudioConsent, error = if (consent) null else ApiErrors.describe(e)))
+                }
+            }
+        }
+    }
+
+    /** Closes the dialog; a room nobody was let into is closed again rather than left to expire. */
+    fun cancelRoom() {
+        val together = _state.value.together
+        if (together is WatchTogether.Ready && together.starting) return
+        _state.update { it.copy(together = null) }
+        if (together is WatchTogether.Ready) viewModelScope.launch {
+            try { rooms.close(together.room.code) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
+    }
 
     fun load() {
         viewModelScope.launch {
@@ -51,7 +173,7 @@ class DetailsViewModel @Inject constructor(
                 .onSuccess { d ->
                     if(!sameSwitchSession(owner,sessions.current())) return@onSuccess
                     detailOwner=owner
-                    _state.update { it.copy(loading = false, detail = d, seasonEpisodes = d.episodes, selectedSeason = d.seasons.firstOrNull()?.id) }
+                    _state.update { it.copy(loading = false, detail = d, seasonEpisodes = d.episodes, selectedSeason = d.seasons.firstOrNull()?.id, requestState = d.requestState) }
                     runCatching { api.watchlist() }.onSuccess { wl -> _state.update { it.copy(inWatchlist = wl.any { t -> t.id == titleId }) } }
                 }
                 .onFailure { e -> _state.update { it.copy(loading = false, error = e.message) } }

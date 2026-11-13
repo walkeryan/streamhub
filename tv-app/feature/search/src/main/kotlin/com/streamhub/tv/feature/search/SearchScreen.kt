@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -27,6 +29,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.streamhub.tv.core.data.repo.availabilityBadge
 import com.streamhub.tv.core.ui.components.ChannelTile
 import com.streamhub.tv.core.ui.components.FocusRow
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
@@ -47,9 +50,10 @@ import com.streamhub.tv.core.ui.theme.Tokens
  * once dismissed (Back closes the IME and focus lands on the field; Right moves into results).
  * Entering the screen never focuses the field (that would raise the keyboard over a search that is
  * already there): focus starts on the results when there are any, otherwise on the language chips.
+ * [onJoinRoom], when the signed-in user may join watch rooms, puts "Join a room" above the field.
  */
 @Composable
-fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
+fun SearchScreen(onJoinRoom: (() -> Unit)? = null, vm: SearchViewModel = hiltViewModel()) {
     val t = LocalThemeTokens.current
     val q by vm.query.collectAsStateWithLifecycle()
     val language by vm.language.collectAsStateWithLifecycle()
@@ -76,6 +80,9 @@ fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
             .focusGroup(),
     ) {
         Column(Modifier.width(320.dp).fillMaxHeight().padding(start = Tokens.Canvas.SafeMarginX, end = 16.dp)) {
+            if (onJoinRoom != null) {
+                ShButton("Join a room", onJoinRoom, Modifier.padding(bottom = 12.dp).leftOpensRail(rail), icon = Icons.Filled.Group)
+            }
             ShTextField(
                 value = q,
                 onValueChange = vm::onQuery,
@@ -113,7 +120,8 @@ fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
                         val ranked = res.results ?: (res.playHere + res.openInApp)
                         if (ranked.isNotEmpty()) item("results") {
                             FocusRow(ranked, key = { it.id }, title = "Titles · relevance", contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)) { _, tile, _ ->
-                                PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) })
+                                // No in-app source: say so (or where its request stands) on the tile itself.
+                                PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) }, badge = availabilityBadge(tile))
                             }
                         }
                         res.discoveryNote?.let { note -> item("discovery") {

@@ -1,6 +1,7 @@
 package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.model.ActiveStream
+import com.streamhub.tv.core.data.model.Permissions
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.nio.channels.UnresolvedAddressException
@@ -46,6 +47,42 @@ object ApiErrors {
                 "No source for this title has confirmed audio in your languages. Try again and pick the one to play.",
                 canRetry = true,
             )
+            "forbidden" -> UserError("Not allowed", forbiddenBody(error.missing), canRetry = false)
+            "user_suspended" -> UserError(
+                "Account suspended",
+                "This account has been suspended. Ask the owner of this StreamHub server to reinstate it.",
+                canRetry = false,
+            )
+            "approval_pending" -> UserError(
+                "Waiting for approval",
+                "The owner of this StreamHub server hasn't approved this account yet. Try again once they have.",
+                canRetry = true,
+            )
+            "user_stream_limit" -> UserError("Already watching", ownStreamsBody(error.active), canRetry = true)
+            // Reached only when the silent refresh and its one retry did not settle it (see HttpClientFactory).
+            "session_stale" -> UserError(
+                "Access updated",
+                "What this account may do was changed on the server. Try again.",
+                canRetry = true,
+            )
+            "room_not_found" -> UserError(
+                "No room with that code",
+                "Check the six characters and try again. A room closes once everyone has left it for a while.",
+                canRetry = false,
+            )
+            "room_full" -> UserError("The room is full", "This room already has as many people as it can hold. Try again when someone has left.", canRetry = true)
+            "room_limit" -> UserError("Too many rooms", "The server is already running as many watch rooms as it allows. Try again when one has closed.", canRetry = true)
+            "room_unsupported" -> UserError("Can't be watched together", "This title can't be played in a watch room on this TV.", canRetry = false)
+            "content_restricted" -> UserError("Not available for this profile", "This profile isn't allowed to watch this.", canRetry = false)
+            "recording_forbidden" -> UserError("Not allowed", "This account can't schedule or remove recordings.", canRetry = false)
+            "recording_unavailable" -> UserError("Recording isn't set up", "The server has nowhere to keep recordings, or can't record this right now.", canRetry = false)
+            "programme_ended" -> UserError("Already over", "This programme has finished, so it can't be recorded.", canRetry = false)
+            "already_scheduled" -> UserError("Already being recorded", "Someone else in the household has already scheduled this programme.", canRetry = false)
+            "guide_changed" -> UserError("The guide has changed", "This programme is no longer where the guide showed it. Reload the guide and try again.", canRetry = false)
+            "rule_limit" -> UserError("Too many rules", "This profile has as many recording rules as the server allows. Remove one under Recordings first.", canRetry = false)
+            "already_available" -> UserError("Already available", "This title can already be watched here. Go back and open it again.", canRetry = false)
+            "request_manager_unconfigured" -> UserError("Requests aren't set up", "The server has no request manager to pass requests to. Its owner can add one in the server's settings.", canRetry = false)
+            "metadata_unavailable" -> UserError("Can't look this title up", "The server couldn't get this title's details right now, so it can't be requested. Try again in a moment.", canRetry = true)
             "disclaimer_required" -> UserError(
                 "Legal notice not accepted",
                 "This can't play until the legal notice has been accepted for this profile. Restart StreamHub to read and accept it.",
@@ -64,6 +101,23 @@ object ApiErrors {
                 0 -> UserError("No server set", "This TV isn't connected to a StreamHub server yet.", canRetry = false)
                 else -> UserError("That didn't work", detail ?: "The server refused the request (error ${e.status}).", canRetry = e.status == 408 || e.status == 409 || e.status == 429)
             }
+        }
+    }
+
+    /** "You don't have permission for this." and, when the server names them, what is missing. */
+    private fun forbiddenBody(missing: List<String>): String {
+        val named = missing.filter { it.isNotBlank() }.map(Permissions::label)
+        return if (named.isEmpty()) "You don't have permission for this."
+        else "You don't have permission for this. Ask the owner to let you ${named.joinToString(", ")}."
+    }
+
+    /** "You're already watching <title> on another device." when the server lists the streams in the way. */
+    private fun ownStreamsBody(active: List<ActiveStream>): String {
+        val titles = active.mapNotNull { it.title?.takeIf(String::isNotBlank) }
+        return when (titles.size) {
+            0 -> "You're already watching on as many devices as your account allows. Stop playback on one of them, then try again."
+            1 -> "You're already watching ${titles[0]} on another device. Stop it there, then try again."
+            else -> "You're already watching ${titles.dropLast(1).joinToString(", ")} and ${titles.last()} on other devices. Stop one of them, then try again."
         }
     }
 

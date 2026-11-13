@@ -21,8 +21,10 @@ data class ActiveStream(
 data class ApiError(
     val code: String = "",
     val message: String = "",
-    /** Optional on `source_busy`: who is using the source's connections right now. */
+    /** Optional on `source_busy` and `user_stream_limit`: the streams in the way right now. */
     val active: List<ActiveStream> = emptyList(),
+    /** Optional on 403 `forbidden`: the permissions the caller lacks. */
+    val missing: List<String> = emptyList(),
 )
 
 // ---- Auth ------------------------------------------------------------------------------------
@@ -196,6 +198,10 @@ data class Tile(
     @SerialName("is_favorite") val isFavorite: Boolean = false,
     val sources: List<SourceBadge> = emptyList(),
     @SerialName("now_playing") val nowPlaying: Programme? = null,
+    /** The open request for this title, else its most recent closed one; null when never requested. */
+    @SerialName("request_state") val requestState: String? = null,
+    /** No in-app source, a request manager is configured and the profile may request. */
+    val requestable: Boolean = false,
 ) {
     val playableInApp: Boolean get() = sources.any { it.playableInApp }
 }
@@ -245,8 +251,12 @@ data class TitleDetail(
     val seasons: List<Tile> = emptyList(),
     val episodes: List<Tile> = emptyList(),
     val attribution: String? = null,
+    @SerialName("request_state") val requestState: String? = null,
+    val requestable: Boolean = false,
+    /** Requestable series only: season numbers a request may pick from (empty = whole series only). */
+    @SerialName("request_seasons") val requestSeasons: List<Int> = emptyList(),
 ) {
-    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying)
+    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable)
 }
 
 @Serializable
@@ -290,6 +300,10 @@ data class Programme(
     val category: String? = null,
     val icon: String? = null,
     @SerialName("catchup_available") val catchupAvailable: Boolean = false,
+    /** State of the household's recording of this programme, if there is one; null also when recording is off. */
+    @SerialName("recording_state") val recordingState: String? = null,
+    /** Not in the contract today: honoured if a server sends it, otherwise sport is told from title and category. */
+    @SerialName("is_sport") val isSport: Boolean? = null,
 )
 
 @Serializable

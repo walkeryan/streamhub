@@ -11,8 +11,9 @@ import com.streamhub.tv.core.data.model.AuthConfig
 import com.streamhub.tv.core.data.model.AuthTokens
 import com.streamhub.tv.core.data.model.OwnerPinChallenge
 import com.streamhub.tv.core.data.model.OwnerPinCancel
-import com.streamhub.tv.core.data.repo.ChannelListCache
-import com.streamhub.tv.core.data.repo.PlaybackCoordinator
+import com.streamhub.tv.core.data.repo.MeRepository
+import com.streamhub.tv.core.data.model.Permissions
+import com.streamhub.tv.core.data.repo.UserSwitchRepository
 import com.streamhub.tv.core.data.repo.ProfileSwitchPath
 import com.streamhub.tv.core.data.repo.profileSwitchPath
 import com.streamhub.tv.core.data.repo.AuthorizationCommitGate
@@ -53,6 +54,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -61,7 +63,7 @@ import javax.inject.Inject
 
 enum class SettingsSection(val label: String) {
     Profiles("Profiles"), Theme("Theme"), Languages("Languages"), Rows("Home rows"),
-    Parental("Parental controls"), Playback("Playback"), About("About"),
+    Parental("Parental controls"), Requests("Requests"), Playback("Playback"), About("About"),
 }
 
 data class SettingsState(
@@ -87,6 +89,10 @@ data class SettingsState(
     val update: UpdateInfo? = null,
     val updateBusy: Boolean = false,
     val updateStatus: String? = null,
+    /** A household TV on a server that has the picker: "Who's watching?" is how people are switched. */
+    val sharedDevice: Boolean = false,
+    /** The signed-in user may ask for titles or decide on requests: the Requests section is listed. */
+    val showRequests: Boolean = false,
 )
 
 @HiltViewModel
@@ -95,8 +101,8 @@ class SettingsViewModel @Inject constructor(
     private val session: SessionStore,
     private val prefs: LocalPrefs,
     private val themes: ThemeRepository,
-    private val playback: PlaybackCoordinator,
-    private val channelCache: ChannelListCache,
+    private val switcher: UserSwitchRepository,
+    private val me: MeRepository,
     private val updates: UpdateRepository,
     private val installer: UpdateInstaller,
 ) : ViewModel() {
@@ -110,7 +116,19 @@ class SettingsViewModel @Inject constructor(
     private var switchJob: Job? = null
     private var ownerPinInput: Channel<String>? = null
     private val authorization=AuthorizationCommitGate { finishing -> _state.update{it.copy(authorizationFinishing=finishing)} }
-    init { load() }
+    init {
+        load()
+        viewModelScope.launch {
+            me.state.collectLatest { access ->
+                _state.update { it.copy(showRequests = access.can(Permissions.REQUESTS_CREATE) || access.can(Permissions.REQUESTS_APPROVE)) }
+                // "Who's watching?" replaces the profile list only where there really is a picker: a server
+                // that calls this a shared TV but has no picker yet keeps the list.
+                val picker = access.sharedDevice && try { switcher.switchable() != null }
+                    catch (e: CancellationException) { throw e } catch (_: Exception) { false }
+                _state.update { it.copy(sharedDevice = picker) }
+            }
+        }
+    }
 
     private fun pid() = _state.value.current?.id ?: "default"
 
@@ -224,7 +242,7 @@ class SettingsViewModel @Inject constructor(
                     ProfileSwitchPath.SameProfile -> Unit
                     ProfileSwitchPath.OwnerPin -> ownerPinSafely(original,p)
                     ProfileSwitchPath.Secure -> {
-                        loadJob?.cancel();playback.clearForProfileSwitch()
+                        loadJob?.cancel();switcher.releasePlayback()
                         authorization.finish {commitSwitch(original,p,api.switchProfile(LoginRequest(p.id)))}
                     }
                     ProfileSwitchPath.Legacy -> if(p.hasPin && pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.login(LoginRequest(p.id,pin=pin)))
@@ -263,7 +281,7 @@ class SettingsViewModel @Inject constructor(
             if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
             // Verify revokes the initiating SID: release its playback lease while it is still valid.
             loadJob?.cancel()
-            playback.clearForProfileSwitch()
+            switcher.releasePlayback()
             val active=api.startOwnerPin(target.id)
             challenge=active
             currentCoroutineContext().ensureActive()
@@ -299,11 +317,10 @@ class SettingsViewModel @Inject constructor(
         if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
         loadJob?.cancel()
         _state.update{it.copy(rows=emptyList(),groups=emptyList(),languages=emptyList(),pinPromptFor=null)}
-        playback.clearForProfileSwitch()
-        channelCache.clear()
         currentCoroutineContext().ensureActive()
-        session.saveSwitchedTokens(original,target.id,tokens)
-        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}")
+        // Tokens, session generation and per-user caches change hands in one place, shared with "Who's watching?".
+        switcher.commitProfileSwitch(original,target.id,tokens)
+        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}",sharedDevice=_state.value.sharedDevice,showRequests=_state.value.showRequests)
         themes.select(tokens.profile.themeId)
         load()
     }

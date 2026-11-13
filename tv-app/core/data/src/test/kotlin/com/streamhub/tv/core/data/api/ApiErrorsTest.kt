@@ -112,4 +112,49 @@ class ApiErrorsTest {
         assertEquals("boom", unknown.body)
         assertEquals("Try again in a moment.", ApiErrors.describe(IllegalStateException()).body)
     }
+
+    @Test fun forbiddenSaysSoAndNamesWhatIsMissing() {
+        val plain = ApiErrors.describe(api(403, "forbidden"))
+        assertEquals("You don't have permission for this.", plain.body)
+        assertFalse(plain.canRetry)
+        val named = ApiErrors.describe(ApiException(403, ApiError("forbidden", "You do not have permission to do this", missing = listOf("recordings.schedule", "rooms.create")), "x"))
+        assertEquals("You don't have permission for this. Ask the owner to let you schedule recordings, start watch rooms.", named.body)
+        // A permission this build has no wording for is still named.
+        assertTrue(ApiErrors.describe(ApiException(403, ApiError("forbidden", "", missing = listOf("future.thing")), "x")).body.contains("future.thing"))
+    }
+
+    @Test fun forbiddenMissingListDecodesFromTheWire() {
+        val err = StreamHubJson.decodeFromString(ApiError.serializer(), """{"code":"forbidden","message":"no","missing":["rooms.join"]}""")
+        assertEquals(listOf("rooms.join"), err.missing)
+        assertEquals(emptyList<String>(), StreamHubJson.decodeFromString(ApiError.serializer(), """{"code":"forbidden","message":"no"}""").missing)
+    }
+
+    @Test fun suspendedAndPendingAccountsAreExplained() {
+        val suspended = ApiErrors.describe(api(401, "user_suspended"))
+        assertEquals("Account suspended", suspended.title)
+        assertFalse(suspended.canRetry)
+        // The users service answers the same code with 403.
+        assertEquals("Account suspended", ApiErrors.describe(api(403, "user_suspended")).title)
+        val pending = ApiErrors.describe(api(403, "approval_pending"))
+        assertEquals("Waiting for approval", pending.title)
+        assertTrue(pending.canRetry)
+    }
+
+    @Test fun userStreamLimitNamesWhatIsPlayingElsewhere() {
+        val one = ApiErrors.describe(api(409, "user_stream_limit", active = listOf(ActiveStream("Sam", "The Long Film"))))
+        assertEquals("Already watching", one.title)
+        assertEquals("You're already watching The Long Film on another device. Stop it there, then try again.", one.body)
+        assertTrue(one.canRetry)
+        val two = ApiErrors.describe(api(409, "user_stream_limit", active = listOf(ActiveStream(null, "Evening News"), ActiveStream(null, "The Long Film"))))
+        assertEquals("You're already watching Evening News and The Long Film on other devices. Stop one of them, then try again.", two.body)
+        val unnamed = ApiErrors.describe(api(409, "user_stream_limit", active = listOf(ActiveStream("Sam", null))))
+        assertTrue(unnamed.body.startsWith("You're already watching on as many devices"))
+        assertFalse(unnamed.body.contains("raw server text"))
+    }
+
+    @Test fun staleSessionThatSurvivedTheSilentRefreshCanBeRetried() {
+        val e = ApiErrors.describe(api(401, "session_stale"))
+        assertEquals("Access updated", e.title)
+        assertTrue(e.canRetry)
+    }
 }

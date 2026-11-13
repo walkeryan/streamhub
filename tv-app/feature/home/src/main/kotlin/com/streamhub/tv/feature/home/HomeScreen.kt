@@ -1,6 +1,20 @@
 package com.streamhub.tv.feature.home
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Text
+import com.streamhub.tv.core.data.model.Notice
+import com.streamhub.tv.core.ui.components.FocusRow
+import com.streamhub.tv.core.ui.focus.FocusSurface
+import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,19 +60,20 @@ import kotlinx.coroutines.delay
 @Composable
 fun HomeScreen(vm: HomeViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val notices by vm.notices.collectAsStateWithLifecycle()
     when (val u = ui) {
         HomeUi.Loading -> LoadingView()
         is HomeUi.Error -> CenterMessage("Couldn't load Home", u.message) { ShButton("Retry", vm::refresh, style = ButtonStyle.Primary) }
         is HomeUi.Ready -> if (u.rows.isEmpty() && u.hero.isEmpty()) {
             CenterMessage("Nothing here yet", "Add a source in Sources to fill your Home screen.")
         } else {
-            HomeContent(u)
+            HomeContent(u, notices, vm::dismissNotice)
         }
     }
 }
 
 @Composable
-private fun HomeContent(u: HomeUi.Ready) {
+private fun HomeContent(u: HomeUi.Ready, notices: List<Notice>, onDismissNotice: (Notice) -> Unit) {
     val now by produceState(Instant.now()) { while (true) { delay(30_000); value = Instant.now() } }
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
@@ -78,6 +93,13 @@ private fun HomeContent(u: HomeUi.Ready) {
     // Hero Play gets focus on first show only; after Back the list's focusRestorer returns focus to the
     // tile that opened Details (each MediaRow's LazyRow has its own focusRestorer).
     InitialFocusOnce(initial = playFocus, restore = listFocus)
+    // A notice that was marked read took focus with it: go to the notices that are left, or to the hero.
+    val noticesFocus = remember { FocusRequester() }
+    var noticeCount by remember { mutableIntStateOf(notices.size) }
+    LaunchedEffect(notices.size) {
+        if (notices.size < noticeCount) { withFrameNanos { }; runCatching { (if (notices.isEmpty()) playFocus else noticesFocus).requestFocus() } }
+        noticeCount = notices.size
+    }
 
     val listState = rememberLazyListState()
     Box(Modifier.fillMaxSize()) {
@@ -88,10 +110,14 @@ private fun HomeContent(u: HomeUi.Ready) {
                 modifier = Modifier.fillMaxSize().focusRequester(listFocus).focusRestorer(),
                 contentPadding = PaddingValues(bottom = Tokens.Canvas.SafeMarginY),
             ) {
+                // Unread notices sit above everything; Up from the hero reaches them.
+                if (notices.isNotEmpty()) item(key = "notices") {
+                    NoticeRow(notices, Modifier.padding(top = Tokens.Canvas.SafeMarginY).focusRequester(noticesFocus), onOpen = { launcher.openDetails(it) }, onDismiss = onDismissNotice)
+                }
                 item(key = "hero") {
                     HeroInfo(
                         tile = heroTile,
-                        modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = Tokens.Canvas.SafeMarginY, bottom = 16.dp),
+                        modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = if (notices.isEmpty()) Tokens.Canvas.SafeMarginY else 0.dp, bottom = 16.dp),
                         height = 208.dp,
                     ) {
                         val tile = heroTile
@@ -123,6 +149,35 @@ private fun HomeContent(u: HomeUi.Ready) {
                 }
                 item { Spacer(Modifier.fillMaxWidth().height(120.dp)) }
             }
+        }
+    }
+}
+
+/**
+ * Unread notices as a banner row. Select opens the title a notice is about; "Mark read" beside it
+ * (or holding Select) dismisses it. A notice about nothing in particular is dismissed by Select.
+ */
+@Composable
+private fun NoticeRow(notices: List<Notice>, modifier: Modifier = Modifier, onOpen: (String) -> Unit, onDismiss: (Notice) -> Unit) {
+    val t = LocalThemeTokens.current
+    FocusRow(notices, key = { it.id }, modifier = modifier, title = if (notices.size == 1) "New for you" else "New for you · ${notices.size}") { _, notice, m ->
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            val target = notice.refId?.takeIf(String::isNotBlank)
+            FocusSurface(
+                onClick = { if (target != null) onOpen(target) else onDismiss(notice) },
+                onLongClick = { onDismiss(notice) },
+                modifier = m.size(380.dp, 72.dp),
+                containerColor = t.surfaceAlt,
+            ) {
+                Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(notice.title.ifBlank { "Notice" }, style = MaterialTheme.typography.titleSmall, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        notice.body?.takeIf(String::isNotBlank) ?: if (target != null) "Select to open it" else "Select to dismiss",
+                        style = MaterialTheme.typography.labelMedium, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            ShButton("Mark read", { onDismiss(notice) })
         }
     }
 }

@@ -90,6 +90,8 @@ dependencies {
     implementation(project(":feature:favorites"))
     implementation(project(":feature:sources"))
     implementation(project(":feature:settings"))
+    implementation(project(":feature:recordings"))
+    implementation(project(":feature:requests"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

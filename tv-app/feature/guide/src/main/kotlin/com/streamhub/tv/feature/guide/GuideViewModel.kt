@@ -7,6 +7,8 @@ import com.streamhub.tv.core.data.model.LiveGuideFilters
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.data.model.Programme
 import com.streamhub.tv.core.data.repo.ChannelListCache
+import com.streamhub.tv.core.data.repo.ProgrammeRecorder
+import com.streamhub.tv.core.data.repo.RecordingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -51,11 +53,20 @@ fun floor30(i: Instant): Instant {
 class GuideViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val cache: ChannelListCache,
+    recordings: RecordingsRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(GuideState())
     val state: StateFlow<GuideState> = _state.asStateFlow()
 
     private var loadJob: Job? = null
+
+    /** The Record actions of the programme dialog; a scheduled programme gets its badge at once. */
+    val recorder = ProgrammeRecorder(recordings, viewModelScope) { programme, state -> markRecording(programme, state) }
+
+    private fun markRecording(programme: Programme, state: String?) = _state.update { s ->
+        fun GuideProgramme.marked() = if (p.id == programme.id && p.channelId == programme.channelId) copy(p = p.copy(recordingState = state)) else this
+        s.copy(programmes = s.programmes.mapValues { (_, list) -> list.map { it.marked() } }, selected = s.selected?.marked())
+    }
 
     private var initialized = false
 

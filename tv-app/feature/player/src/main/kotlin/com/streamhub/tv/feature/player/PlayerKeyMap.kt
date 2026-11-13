@@ -33,6 +33,9 @@ sealed interface PlayerCommand {
  *  Film:  Select or Down brings up the control row (scrubber + buttons) · Left/Right seek 10 s
  *  Both:  hold Select or Menu = audio/subtitle/picture menu · media keys always work
  *
+ *  Room:  a watch room stays on what it is watching, so on a live channel there is no zapping,
+ *         channel list, number entry or archive: Select plays/pauses for everyone, Up/Down show the banner
+ *
  * While a menu is open, or the control row has focus, D-pad and Select belong to the focused
  * control and come back as [PlayerCommand.None].
  */
@@ -45,8 +48,9 @@ object PlayerKeyMap {
      * @param menuOpen a focus-holding overlay is up: channel list, menu, archive or buffer dialog
      * @param controlsVisible the film control row is up and holds focus
      * @param longPress Select has been held past the long-press timeout
+     * @param inRoom playing as a member of a watch room
      */
-    fun resolve(key: Int, isLive: Boolean, menuOpen: Boolean, controlsVisible: Boolean, longPress: Boolean = false): PlayerCommand {
+    fun resolve(key: Int, isLive: Boolean, menuOpen: Boolean, controlsVisible: Boolean, longPress: Boolean = false, inRoom: Boolean = false): PlayerCommand {
         if (key == KeyEvent.KEYCODE_BACK) return PlayerCommand.Back
         if (menuOpen) return PlayerCommand.None
         when (key) {
@@ -57,15 +61,20 @@ object PlayerKeyMap {
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> return PlayerCommand.Seek(MEDIA_SEEK_STEP_MS)
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> return PlayerCommand.OpenMenu
             KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE -> return PlayerCommand.ShowInfo
-            KeyEvent.KEYCODE_LAST_CHANNEL -> return if (isLive) PlayerCommand.LastChannel else PlayerCommand.None
+            KeyEvent.KEYCODE_LAST_CHANNEL -> return if (isLive && !inRoom) PlayerCommand.LastChannel else PlayerCommand.None
         }
         if (isSelect(key)) return when {
             longPress -> PlayerCommand.OpenMenu
             controlsVisible -> PlayerCommand.None
-            isLive -> PlayerCommand.OpenChannelList
+            isLive -> if (inRoom) PlayerCommand.TogglePlayPause else PlayerCommand.OpenChannelList
             else -> PlayerCommand.ShowControls
         }
         if (controlsVisible) return PlayerCommand.None
+        if (isLive && inRoom) return when (key) {
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> PlayerCommand.ShowInfo
+            KeyEvent.KEYCODE_DPAD_RIGHT -> PlayerCommand.OpenMenu
+            else -> PlayerCommand.None
+        }
         ChannelNumberEntry.digitOf(key)?.let { return if (isLive) PlayerCommand.Digit(it) else PlayerCommand.None }
         return when (key) {
             KeyEvent.KEYCODE_DPAD_UP -> if (isLive) PlayerCommand.Zap(+1) else PlayerCommand.ShowControls

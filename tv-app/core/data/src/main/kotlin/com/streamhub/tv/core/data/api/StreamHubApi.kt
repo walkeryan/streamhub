@@ -26,6 +26,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -76,6 +78,27 @@ class StreamHubApi @Inject constructor(
     /** Used by onboarding to validate a server URL before saving it. */
     suspend fun health(serverBase: String): Boolean =
         runCatching { client.get("$serverBase/api/v1/health").status.isSuccess() }.getOrDefault(false)
+
+    /** Who this TV is signed in as and what they may do. Servers without users and roles answer 404. */
+    suspend fun me(): Me = get("/auth/me")
+
+    /** The people who can be picked on this shared TV. 404 = no such feature; 403 `not_shared_device` = a personal device. */
+    suspend fun switchableUsers(): SwitchableUsers = get("/auth/switchable")
+
+    /**
+     * Become another person on this TV. The usual 401 handling is kept out of this one call: here a
+     * 401 says the PIN is missing or wrong, and refreshing the session and sending the same PIN again
+     * would count as a second wrong attempt. `pin` is sent as an explicit null when there is none.
+     */
+    suspend fun switchUser(from: Session, userId: String, pin: String?): AuthTokens {
+        val base = from.apiBase ?: throw ApiException(0, null, "Server URL not set")
+        val token = from.accessToken ?: throw ApiException(401, null, "Not signed in")
+        return client.post("$base/auth/switch") {
+            attributes.put(AuthCircuitBreaker, Unit)
+            header(HttpHeaders.Authorization, "Bearer $token")
+            setBody(buildJsonObject { put("user_id", userId); put("pin", pin) })
+        }.ok()
+    }
 
     suspend fun login(req: LoginRequest): AuthTokens = client.post(url("/auth/login")) { setBody(req) }.ok()
     suspend fun startDevicePairing(): DeviceCode = client.post(url("/auth/device")).ok()
@@ -302,6 +325,47 @@ class StreamHubApi @Inject constructor(
         }.unit()
         return true
     }
+
+    // ---- Watch rooms ---------------------------------------------------------------------------
+
+    /** A room for a title or channel; it starts empty and paused at 0 (a live room starts playing). */
+    suspend fun createRoom(titleId: String, variantId: String? = null): Room =
+        client.post(url("/rooms")) { setBody(RoomCreate(titleId, variantId)) }.ok()
+    /** The join screen: title, host, members, state. 404 `room_not_found`. */
+    suspend fun room(code: String): Room = get("/rooms/${id(code)}")
+    /** Takes a seat; resolves playback exactly as /playback/resolve would and returns its refusals unchanged. */
+    suspend fun joinRoom(code: String, allowUnverifiedAudio: Boolean = false): RoomJoined =
+        client.post(url("/rooms/${id(code)}/join")) { setBody(RoomJoinRequest(allowUnverifiedAudio = allowUnverifiedAudio)) }.ok()
+    /** Host or administrator: closes the room for everyone. */
+    suspend fun deleteRoom(code: String) = client.delete(url("/rooms/${id(code)}")).unit()
+
+    // ---- Recordings ----------------------------------------------------------------------------
+
+    /** The current profile's recordings (everyone's for an admin), earliest first; cancelled ones are left out. */
+    suspend fun recordings(): RecordingsResponse = get("/recordings")
+    /** 201 scheduled, or 200 when this programme was already scheduled: both answer with the recording. */
+    suspend fun record(req: RecordRequest): Recording = client.post(url("/recordings")) { setBody(req) }.ok()
+    /** Cancels an upcoming or running recording; deletes a finished one and its file. */
+    suspend fun deleteRecording(recordingId: String) = client.delete(url("/recordings/${id(recordingId)}")).unit()
+    suspend fun recordingRules(): RecordingRulesResponse = get("/recording-rules")
+    suspend fun createRecordingRule(req: RecordingRuleCreate): RecordingRule = client.post(url("/recording-rules")) { setBody(req) }.ok()
+    suspend fun patchRecordingRule(ruleId: String, patch: RecordingRulePatch): RecordingRule =
+        client.patch(url("/recording-rules/${id(ruleId)}")) { setBody(patch) }.ok()
+    suspend fun deleteRecordingRule(ruleId: String) = client.delete(url("/recording-rules/${id(ruleId)}")).unit()
+
+    // ---- Requests / notices ---------------------------------------------------------------------
+
+    /** Newest first. [all] lists everyone's and needs permission to approve. */
+    suspend fun requests(all: Boolean = false): RequestsResponse = get("/requests") { parameter("scope", if (all) "all" else "mine") }
+    /** 201 created, or 200 when an open request for this title already exists: both answer with the request. */
+    suspend fun createRequest(req: RequestCreate): MediaRequest = client.post(url("/requests")) { setBody(req) }.ok()
+    suspend fun approveRequest(requestId: String, note: String? = null): MediaRequest =
+        client.post(url("/requests/${id(requestId)}/approve")) { setBody(RequestDecision(note)) }.ok()
+    suspend fun declineRequest(requestId: String, note: String? = null): MediaRequest =
+        client.post(url("/requests/${id(requestId)}/decline")) { setBody(RequestDecision(note)) }.ok()
+    /** Notices for the current profile, unread first. */
+    suspend fun notices(): NoticesResponse = get("/notices")
+    suspend fun markNoticeRead(noticeId: String) = client.post(url("/notices/${id(noticeId)}/read")).unit()
 
     // ---- Favorites / watchlist / history -------------------------------------------------------
 

@@ -68,6 +68,10 @@ import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShTextField
 import com.streamhub.tv.core.ui.components.programmeProgress
+import com.streamhub.tv.core.ui.components.ProgrammeDialog
+import com.streamhub.tv.core.data.model.Programme
+import com.streamhub.tv.core.data.model.RecordingStates
+import com.streamhub.tv.core.data.repo.recordingStateMark
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.focus.LocalRailController
 import com.streamhub.tv.core.ui.focus.PivotScroll
@@ -97,6 +101,10 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
     DisposableEffect(Unit) { onDispose { vm.stopPreview() } }
+    val recording by vm.recorder.availability.collectAsStateWithLifecycle()
+    val record by vm.recorder.state.collectAsStateWithLifecycle()
+    // Channel id and programme id of the now/next entry whose actions are open.
+    var actionsFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     var groupsOpen by remember { mutableStateOf(false) }
     var restoreGroupFocus by remember { mutableStateOf(false) }
     val groupOpener = remember { FocusRequester() }
@@ -159,6 +167,27 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
             withFrameNanos { }
             groupOpener.requestFocus()
             restoreGroupFocus = false
+        }
+    }
+    actionsFor?.let { (channelId, programmeId) ->
+        val ch = s.channels.firstOrNull { it.id == channelId }
+        val programme = listOfNotNull(ch?.now, ch?.next).firstOrNull { it.id == programmeId }
+        val close = { actionsFor = null; vm.recorder.reset() }
+        // The list was reloaded under the dialog and the programme is no longer in it: nothing left to act on.
+        if (ch == null || programme == null) LaunchedEffect(Unit) { close() } else {
+            val onAir = programme.id == ch.now?.id
+            ProgrammeDialog(
+                programme = programme,
+                subtitle = "${ch.name} · ${hhmm(programme.start)}–${hhmm(programme.stop)}",
+                onWatch = if (onAir) ({ close(); launcher.play(ch.id) }) else null,
+                canRecordThis = !hasEnded(programme.stop) && programme.recordingState != RecordingStates.SCHEDULED && programme.recordingState != RecordingStates.RECORDING,
+                busy = record.busy,
+                outcome = record.outcome,
+                onRecord = { vm.recorder.recordOnce(programme) },
+                onRecordSeries = { vm.recorder.recordSeries(programme) },
+                onRecordTeam = vm.recorder::recordTeam,
+                onDismiss = close,
+            )
         }
     }
     if (groupsOpen) GroupDrawer(
@@ -275,9 +304,11 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                 val ch = s.channels.firstOrNull { it.id == s.previewChannelId }
                 if (ch != null) {
                     Text("${ch.number}  ${ch.name}", style = MaterialTheme.typography.titleMedium, color = t.text, modifier = Modifier.padding(top = 12.dp))
-                    ch.now?.let { Text("Now  ${hhmm(it.start)}–${hhmm(it.stop)}  ${it.title}", style = MaterialTheme.typography.bodyMedium, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    // Where recordings can be scheduled, now and next are rows Select opens (Watch · Record…);
+                    // otherwise they are the plain lines they always were.
+                    ch.now?.let { NowNextLine("Now  ${hhmm(it.start)}–${hhmm(it.stop)}", it, t.text, recording.canSchedule) { vm.recorder.reset(); actionsFor = ch.id to it.id } }
                     ch.now?.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = t.textMuted, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp)) }
-                    ch.next?.let { Text("Next ${hhmm(it.start)}  ${it.title}", style = MaterialTheme.typography.bodyMedium, color = t.textMuted, maxLines = 1, modifier = Modifier.padding(top = 4.dp)) }
+                    ch.next?.let { NowNextLine("Next ${hhmm(it.start)}", it, t.textMuted, recording.canSchedule) { vm.recorder.reset(); actionsFor = ch.id to it.id } }
                     Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         ShButton("Watch", { launcher.play(ch.id) })
                         ShButton(if (ch.isFavorite) "Remove favorite" else "Add favorite", { vm.toggleFavorite(ch) })
@@ -285,6 +316,35 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                 }
             }
         }
+    }
+}
+
+/** Whether a programme's stop time has passed; an unreadable time counts as not yet. */
+internal fun hasEnded(stopIso: String, now: java.time.Instant = java.time.Instant.now()): Boolean =
+    runCatching { ZonedDateTime.parse(stopIso).toInstant() <= now }.getOrDefault(false)
+
+/**
+ * One of the two programme lines beside the channel list. [selectable] makes it a row Select opens;
+ * the mark in front says whether the household is recording it.
+ */
+@Composable
+private fun NowNextLine(lead: String, programme: Programme, color: androidx.compose.ui.graphics.Color, selectable: Boolean, onSelect: () -> Unit) {
+    val text = "$lead  ${recordingStateMark(programme.recordingState)?.let { "$it " }.orEmpty()}${programme.title}"
+    if (!selectable) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+        return
+    }
+    val t = LocalThemeTokens.current
+    FocusSurface(
+        onClick = onSelect,
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(36.dp),
+        shape = RoundedCornerShape(Tokens.Radius.Sm),
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        focusedContainerColor = t.surfaceAlt,
+        scaleOnFocus = false,
+        glow = false,
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 8.dp))
     }
 }
 
