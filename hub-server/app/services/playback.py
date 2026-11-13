@@ -393,8 +393,15 @@ class PlaybackResolver:
                 limit=principal.limits.max_streams,
             )
 
+    def _governed(self) -> bool:
+        """Does the content policy apply to whoever is asking? Under the legacy flag, to everyone;
+        otherwise to a caller their own rating limits restrict."""
+        from app.services.content_policy import active_principal
+
+        return self.content_policy is not None and self.content_policy.applies_to(active_principal.get())
+
     async def _require_content(self, profile_id: str, ref: str, at: datetime | None = None) -> None:
-        if self.content_policy is not None and self.content_policy.enabled:
+        if self._governed():
             await self.content_policy.require(profile_id, ref, at=at)
 
     async def resolve(
@@ -893,7 +900,7 @@ class PlaybackResolver:
             pinfo = ProgrammeInfo(
                 channel=ch.epg_id or ch.ext_id, start=archive_start, stop=archive_end, title="Provider archive"
             )
-            if self.content_policy is not None and self.content_policy.enabled:
+            if self._governed():
                 await self.content_policy.require_channel_interval(profile_id, hub_id, pinfo.start, pinfo.stop)
             target = await prov.catchup_for_channel(info, pinfo)
             if target is None:
@@ -909,7 +916,7 @@ class PlaybackResolver:
                 raise ServiceError("Programme is outside provider archive retention.", code="catchup_unavailable")
             archive_start, archive_end = prog.start, prog.stop
             pinfo = ProgrammeInfo(channel=prog.epg_channel, start=prog.start, stop=prog.stop, title=prog.title)
-            if self.content_policy is not None and self.content_policy.enabled:
+            if self._governed():
                 await self.content_policy.require_channel_interval(profile_id, hub_id, pinfo.start, pinfo.stop)
             target = await prov.catchup_for_channel(info, pinfo)
             if target is None:
@@ -1353,7 +1360,8 @@ class PlaybackResolver:
             active_on_source=self.active.count(src.id),
             cors_ok=self._sources.decrypt_config(src).get("cors", True) is not False,
         )
-        if self.content_policy is not None and self.content_policy.enabled:
+        if self._governed():
+            # Only what this server serves itself is checked again while it plays.
             if target.live:
                 mode = PlaybackMode.HLS
             elif mode == PlaybackMode.DIRECT:

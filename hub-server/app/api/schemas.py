@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool
 
@@ -176,6 +176,8 @@ class Programme(_M):
     category: str | None = None
     icon: str | None = None
     catchup_available: bool = False
+    is_sport: bool = False
+    teams: list[str] = Field(default_factory=list)
     recording_state: RecordingStateL | None = None
 
 
@@ -488,6 +490,10 @@ class Settings(_M):
     signup_mode: Literal["approval", "invite_only"] = "approval"
     notify_webhook_set: bool = False
     home_networks: str | None = Field(default=None, description="system.manage only: the home networks, as CIDRs")
+    home_shelves: list[str] | None = Field(default=None, description="system.manage only: Home's shelves, in order")
+    home_shelves_unknown: list[str] | None = Field(
+        default=None, description="system.manage only: the home_shelves entries no shelf has right now"
+    )
 
 
 class SettingsPatch(_M):
@@ -499,6 +505,9 @@ class SettingsPatch(_M):
     signup_mode: Literal["approval", "invite_only"] | None = None
     notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
     home_networks: str | None = Field(default=None, max_length=1024, description="null restores the defaults")
+    home_shelves: list[Annotated[str, Field(max_length=200)]] | None = Field(
+        default=None, max_length=24, description="null or empty lets Home choose its shelves"
+    )
 
 
 class ClassificationRun(_M):
@@ -946,6 +955,9 @@ class RoomJoin(_M):
     prefer_hls: bool = False
     recovery_generation: str | None = Field(default=None, max_length=64)
     allow_unverified_audio: bool = False
+    member_token: str | None = Field(
+        default=None, max_length=2048, description="a seat this caller already holds: it is kept, not added to"
+    )
 
 
 class RoomTitle(_M):
@@ -1009,6 +1021,7 @@ class Recording(_M):
     season: int | None = None
     episode: int | None = None
     is_sport: bool = False
+    teams: list[str] = Field(default_factory=list)
     starts_at: datetime
     ends_at: datetime
     pad_before_s: int = 0

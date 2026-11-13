@@ -6,7 +6,9 @@ info:
     Unified streaming hub. All clients (Android TV, web) use this contract. Base path /api/v1.
     A user without the remote.access permission is served on the home network only (the
     home_networks setting): from anywhere else every authenticated call answers 403
-    remote_access_denied, except GET /auth/me.
+    remote_access_denied, except GET /auth/me. The signed media URLs follow the user they were
+    issued to: /stream/{token}... and, for artwork the hub serves itself, /images/{token} answer
+    the same 403 away from home.
 servers:
   - url: /api/v1
 security:
@@ -467,6 +469,8 @@ components:
         category: {type: string, nullable: true}
         icon: {type: string, nullable: true}
         catchup_available: {type: boolean, default: false}
+        is_sport: {type: boolean, description: "Always sent. The server's sports classifier says this listing is sport (from its title and category); the classifier behind /sports/now and the recorder."}
+        teams: {type: array, items: {type: string}, description: "The two sides, in title order, when is_sport and the title spells out a matchup (A vs B, A v B, A versus B, A at B, A @ B; a league prefix and trailing notes are dropped). Empty otherwise: nothing is guessed."}
         recording_state: { oneOf: [{ $ref: '#/components/schemas/RecordingState' }, { type: 'null' }], description: "State of the household's recording of this programme, if there is one. Null when recording is off." }
 
     PlaybackRecoveryStatus:
@@ -643,7 +647,7 @@ components:
         buffer_available: {type: boolean, default: false}
         archive_start: {type: string, format: date-time, nullable: true}
         archive_end: {type: string, format: date-time, nullable: true}
-        resume_position_ms: {type: integer, default: 0}
+        resume_position_ms: {type: integer, default: 0, description: "Where to start. In a room descriptor (join or GET /rooms/{code}/descriptor) this is the room's position when the descriptor was built, for every kind of title, never the member's own history."}
         duration_ms: {type: integer, nullable: true}
         title: {type: string}
         subtitle: {type: string, nullable: true}
@@ -728,6 +732,8 @@ components:
         notify_webhook_set: {type: boolean, readOnly: true, description: "A notification webhook is stored. The address is never returned."}
         notify_webhook: {type: string, nullable: true, writeOnly: true, description: "PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it"}
         home_networks: {type: string, nullable: true, description: "Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges)"}
+        home_shelves: {type: array, nullable: true, maxItems: 24, items: {type: string, maxLength: 200}, description: "The shelves Home shows after New Releases, in order (at most 12 are shown). An entry is a shelf (category) name, or movies:Name / shows:Name for one side only. Empty: Home chooses its shelves. Stored trimmed, without blanks or repeats. Null for callers without system.manage; PATCH null or [] clears it."}
+        home_shelves_unknown: {type: array, nullable: true, readOnly: true, items: {type: string}, description: "The entries of home_shelves that name no shelf of an enabled source right now. They are kept (the shelf may arrive with a later sync) and skipped by Home. Null for callers without system.manage."}
     Disclaimer:
       type: object
       required: [version, text]
@@ -781,6 +787,7 @@ components:
         season: {type: integer, nullable: true}
         episode: {type: integer, nullable: true}
         is_sport: {type: boolean}
+        teams: {type: array, items: {type: string}, description: "As Programme.teams, from the recorded programme's title."}
         starts_at: {type: string, format: date-time, description: "listed start; capture begins pad_before_s earlier"}
         ends_at: {type: string, format: date-time, description: "listed end; capture runs pad_after_s longer"}
         pad_before_s: {type: integer}
@@ -826,6 +833,7 @@ components:
         prefer_hls: {type: boolean, default: false}
         recovery_generation: {type: string, nullable: true, maxLength: 64, description: "As in PlaybackRequest. Required for web clients."}
         allow_unverified_audio: {type: boolean, default: false, description: "Consent to the room's variant_id when its audio is unverified or not this profile's preference."}
+        member_token: {type: string, nullable: true, maxLength: 2048, description: "The token of a seat this session already holds in this room. The join then keeps that seat (same member_id, a fresh member_token, the descriptor as it is now) instead of adding a member. A token that is expired, another session's or another room's, or whose seat the room has dropped, is ignored: the join takes a new seat."}
     RoomTitle:
       type: object
       required: [id, kind, title]
@@ -922,6 +930,19 @@ components:
         descriptor says which. Titles from other sources are resolved per member, and live channels
         share the proxy's upstream as any two viewers of a channel do: for both, `stream_epoch` is
         null and `state` carries neither field.
+
+        Reloading after a seek. `state` is the whole signal; there is no separate message.
+        - `state` carries `stream_epoch` (shared stream): compare it with the epoch the client is
+          playing (the descriptor's, then the last `state`'s). Different: reload the playlist URL it
+          already has and take `stream_start_ms` as media time zero, so the player position is
+          `position_ms - stream_start_ms`. Same: seek inside what is playing.
+        - `state` carries no `stream_epoch` (a library title each member plays for themselves): there
+          is nothing to reload. The member's own stream covers the whole title; seek the player to
+          `position_ms`. `state` alone suffices.
+        - A live room has no position: `position_ms` is null and only `playing` applies.
+        A client that lost its place (a player error, an expired stream URL, a reconnect after a
+        missed `state`) asks GET /rooms/{code}/descriptor for its descriptor as it is now, or joins
+        again with its `member_token`; neither changes its seat.
       properties:
         member_token: {type: string, description: "valid 2 h, for this room and member only"}
         member_id: {type: string}
@@ -1107,15 +1128,18 @@ paths:
       description: >-
         Keeps the device's session and re-binds it to the target, with fresh tokens; the previous
         user's tokens for this device stop working. A target with a PIN needs it. A target with
-        more access than the current user must have one. Switching to oneself changes nothing.
-      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
+        more access than the current user must have one. Switching to oneself hands nothing over
+        and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the
+        current user's PIN is verified (pin_invalid when wrong, counted against the same five
+        guesses), and a user without a PIN has nothing to check.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "null or absent: no PIN offered"} } } } } }
       responses:
         '200': { description: switched, content: { application/json: { schema: { $ref: '#/components/schemas/Switched' } } } }
-        '401': { description: "pin_required | pin_invalid" }
+        '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry." }
         '403': { description: not_shared_device }
         '404': { description: not a user this device can switch to }
         '409': { description: "pin_setup_required (the target has more access and no PIN) | switch_conflict (retry)" }
-        '429': { description: Five wrong PINs for this target in 15 minutes; respect Retry-After }
+        '429': { description: "rate_limited: five wrong PINs for this target in 15 minutes. Retry-After is whole seconds (an integer), as on every 429 of this API." }
   /auth/adult-unlock:
     post:
       summary: Open the adult category on this session for four hours
@@ -1481,6 +1505,7 @@ paths:
       parameters: [{name: token, in: path, required: true, schema: {type: string}}]
       responses:
         '200': { description: stream }
+        '403': { description: "remote_access_denied: the user the token was issued to lacks remote.access and the request comes from outside home_networks. content_restricted: the content policy no longer admits it for them." }
         '401': { description: "session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again." }
         '409': { description: "source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what. user_stream_limit: this stream went quiet for 30 seconds or was replaced on its device, and the user's limit is now used by other streams.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /stream/{token}/index.m3u8:
@@ -1490,6 +1515,7 @@ paths:
       responses:
         '200': { description: hls playlist }
         '401': { description: "as for /stream/{token}; segments answer the same" }
+        '403': { description: "as for /stream/{token}; segments answer the same" }
         '409': { description: "source_busy or user_stream_limit, as for /stream/{token}", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /favorites:
@@ -1651,7 +1677,7 @@ paths:
   /rooms/{code}/join:
     post:
       summary: Take a seat in the room
-      description: Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). A room has at most 8 members and expires after 30 minutes with none.
+      description: Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). Every call adds a member unless the body carries the member_token of a seat the caller already holds, which is then kept. The member starts at the room's position (descriptor.resume_position_ms). A room has at most 8 members and expires after 30 minutes with none.
       parameters: [{name: code, in: path, required: true, schema: {type: string}}]
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoin' } } } }
       responses:
@@ -1659,9 +1685,34 @@ paths:
         '403': { description: "content_restricted and the other /playback/resolve refusals" }
         '404': { description: "room_not_found, or the room's title or variant is not available to this profile" }
         '409': { description: "room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them)" }
+  /rooms/{code}/descriptor:
+    get:
+      security: []
+      summary: A member's playback descriptor as it is now
+      description: >-
+        Authorized like the room WebSocket, by the member token in the query (no bearer token). The
+        seat is unchanged. In a room that plays one shared stream the descriptor has the playlist URL
+        the member already holds (a new one only once that URL's grant has expired or their session
+        changed) with the current stream_epoch and start_position_ms; for a title each member plays
+        for themselves it is a freshly resolved descriptor. resume_position_ms is the room's position
+        now. Resolved for the member's access as it stands now, with the refusals of the join.
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+        - {name: member_token, in: query, required: true, schema: {type: string, maxLength: 2048}}
+        - {name: client, in: query, schema: {type: string, enum: [android_tv, web], default: web}}
+        - {name: prefer_hls, in: query, schema: {type: boolean, default: false}}
+        - {name: recovery_generation, in: query, schema: {type: string, maxLength: 64}, description: "As in PlaybackRequest. Required for web clients."}
+        - {name: allow_unverified_audio, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } }
+        '401': { description: "room_unauthorized: not a member token of this room, or expired. session_revoked | user_suspended: the session the seat was taken with no longer stands." }
+        '403': { description: "remote_access_denied, a missing rooms.join or watch.* permission, content_restricted and the other /playback/resolve refusals" }
+        '404': { description: "room_not_found, or not_a_member: the room dropped this seat (20 s of silence); join again" }
+        '409': { description: "as for the join, except room_full" }
   /recordings:
     get:
-      summary: The current profile's recordings (everyone's for an admin), earliest first
+      summary: The current profile's recordings (everyone's for a holder of users.manage), earliest first
+      description: A user under a rating ceiling sees, plays and manages only recordings whose programme was rated within it when it was scheduled.
       parameters:
         - { name: state, in: query, schema: { $ref: '#/components/schemas/RecordingState' }, description: "omitted = every state except cancelled" }
       responses: { '200': { description: "enabled is false, and the list empty, until the server has a recordings directory", content: { application/json: { schema: { type: object, required: [enabled, recordings], properties: { enabled: {type: boolean}, can_schedule: {type: boolean, description: "The current profile may schedule, cancel and delete."}, recordings: { type: array, items: { $ref: '#/components/schemas/Recording' } } } } } } } }
@@ -1677,7 +1728,7 @@ paths:
   /recordings/{id}:
     delete: { summary: Cancel an upcoming or running recording; delete a finished one and its file, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
   /recording-rules:
-    get: { summary: The current profile's rules (everyone's for an admin), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }
+    get: { summary: The current profile's rules (everyone's for a holder of users.manage), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }
     post:
       summary: Record every matching programme, now and after each guide refresh
       requestBody: { content: { application/json: { schema: { type: object, required: [kind, match], properties: { kind: {type: string, enum: [series, team, keyword]}, match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean, default: false}, keep: {type: integer, nullable: true} } } } } }

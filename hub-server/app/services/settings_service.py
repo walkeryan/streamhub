@@ -24,12 +24,15 @@ DEFAULTS: dict[str, Any] = {
     "notify_webhook": None,
     # Where a user without remote.access may use the server from.
     "home_networks": DEFAULT_HOME_NETWORKS,
+    # The shelves Home shows, in order ("Name", "movies:Name", "shows:Name"); empty: Home chooses.
+    "home_shelves": [],
 }
 ALLOWED = {
     "transcode_hw": {"none", "vaapi", "nvenc", "qsv"},
     "proxy_mode": {"auto", "always", "never"},
     "signup_mode": {"approval", "invite_only"},
 }
+MAX_HOME_SHELVES = 24
 TMDB_KEY = "tmdb_api_key_enc"
 REQUEST_MANAGER_URL = "request_manager_url"
 REQUEST_MANAGER_KEY = "request_manager_api_key_enc"
@@ -65,6 +68,18 @@ def clean_webhook_url(url: Any) -> str | None:
     if not valid or parts.fragment or len(url) > 1024:
         raise ValueError("invalid notify_webhook")
     return url
+
+
+def clean_shelves(value: Any) -> list[str]:
+    """A ``home_shelves`` list as it is stored: trimmed, in order, without blanks or repeats."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+        raise ValueError("invalid home_shelves")
+    names = list(dict.fromkeys(name.strip() for name in value if name.strip()))
+    if len(names) > MAX_HOME_SHELVES or any(len(name) > 200 for name in names):
+        raise ValueError("invalid home_shelves")
+    return names
 
 
 def _origin(url: str | None) -> tuple[str, str, int | None] | None:
@@ -119,6 +134,7 @@ class SettingsService:
             # The address may embed a secret path; only whether one is set is public.
             "notify_webhook_set": bool(self.get("notify_webhook")),
             "home_networks": self.get("home_networks") or DEFAULT_HOME_NETWORKS,
+            "home_shelves": list(self.get("home_shelves") or []),
         }
 
     async def _put(self, key: str, value: Any) -> None:
@@ -149,6 +165,8 @@ class SettingsService:
             if k == "home_networks":
                 # Null goes back to the defaults; anything else must be a list of networks.
                 v = DEFAULT_HOME_NETWORKS if v is None else clean_networks(v)
+            if k == "home_shelves":
+                v = clean_shelves(v)
             await self._put(k, v)
         return self.public()
 

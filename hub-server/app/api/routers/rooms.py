@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Response, WebSocket
+from fastapi import APIRouter, Query, Request, Response, WebSocket
 
 from app.api import schemas as S
-from app.api.deps import C, P
+from app.api.deps import C, P, acting_as, require_reachable
 from app.container import Container
 from app.services import room_policy
 from app.services.auth import Principal
 from app.services.context import is_https
-from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError
+from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 from app.services.room_hub import CLOSE_NOT_FOUND, CLOSE_UNAUTHORIZED, LEAVE_CODES, Connection, RoomHub
-from app.services.rooms import MAX_MEMBERS, Room
+from app.services.rooms import MAX_MEMBERS, Member, Room
 
 router = APIRouter()
 
@@ -95,7 +95,10 @@ async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
     if not room_policy.can_join(p):
         raise PermissionDenied(["rooms.join"])
     await _require_rated(c, p, room.ref)
-    room.require_space()
+    # A caller who presents the token of a seat they hold keeps it; anything else is a new seat.
+    seat = _seat(c, room, body.member_token, p) if body.member_token else None
+    if seat is None:
+        room.require_space()
     # The member token outlives this request, so it is only minted for a session that is valid now.
     profile = await c.auth.session_valid(p.profile_id, p.token_version, p.session_id)
     descriptor = await c.room_playback.descriptor_for(
@@ -107,10 +110,16 @@ async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
         recovery_generation=body.recovery_generation,
         allow_unverified_audio=body.allow_unverified_audio,
         https_site=is_https.get(),
+        member_id=seat.id if seat is not None else None,
     )
     if room.closed:  # closed while the title was being resolved
         raise NotFound("This room no longer exists.", code="room_not_found")
-    member = c.rooms.join(room, p.profile_id, profile.name)
+    if seat is not None and seat.id in room.members:
+        member = seat
+        room.touch(member, c.rooms.clock())
+    else:
+        member = c.rooms.join(room, p.profile_id, profile.name)
+    c.room_playback.seated(room, member.id, descriptor)
     return {
         "member_token": c.rooms.tokens.issue(room.code, member.id, p),
         "member_id": member.id,
@@ -118,6 +127,61 @@ async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
         "ws_path": f"{API_PREFIX}/rooms/{room.code}/ws",
         "descriptor": descriptor,
     }
+
+
+def _seat(c: Container, room: Room, member_token: str, p: Principal) -> Member | None:
+    """The seat a join's ``member_token`` names, when it is this caller's own and still in the room."""
+    claims = c.rooms.tokens.verify(member_token)
+    if claims is None or claims.room != room.code:
+        return None
+    if (claims.profile_id, claims.session_id) != (p.profile_id, p.session_id):
+        return None
+    member = room.members.get(claims.member_id)
+    return member if member is not None and member.profile_id == p.profile_id else None
+
+
+@router.get("/rooms/{code}/descriptor", response_model=S.PlaybackDescriptor, tags=["rooms"])
+async def room_descriptor(
+    code: str,
+    request: Request,
+    c: C,
+    member_token: str = Query(max_length=2048),
+    client: Literal["android_tv", "web"] = "web",
+    prefer_hls: bool = False,
+    recovery_generation: str | None = Query(None, max_length=64),
+    allow_unverified_audio: bool = False,
+) -> dict[str, Any]:
+    """The member's descriptor as it is now. Authorized like the socket: by the member token."""
+    claims = c.rooms.tokens.verify(member_token)
+    if claims is None or claims.room != code.upper():
+        raise Unauthorized("This is not a seat in this room.", code="room_unauthorized")
+    # The member's access as it stands now, not as it stood when they joined.
+    p = await c.auth.session_principal(claims.profile_id, claims.token_version, claims.session_id)
+    require_reachable(request, c, "remote.access" in p.permissions)
+    room = _room(c, code)
+    member = room.members.get(claims.member_id)
+    if member is None or member.profile_id != claims.profile_id:
+        raise NotFound("This seat is no longer in the room; join again.", code="not_a_member")
+    if not room_policy.can_join(p):
+        raise PermissionDenied(["rooms.join"])
+    async with acting_as(c, p):
+        await _require_rated(c, p, room.ref)
+        descriptor = await c.room_playback.descriptor_for(
+            room,
+            p,
+            client,
+            now_ms=c.rooms.clock(),
+            prefer_hls=prefer_hls,
+            recovery_generation=recovery_generation,
+            allow_unverified_audio=allow_unverified_audio,
+            https_site=is_https.get(),
+            member_id=member.id,
+        )
+    if room.closed or member.id not in room.members:  # ended while the title was being resolved
+        raise NotFound("This room no longer exists.", code="room_not_found")
+    room.touch(member, c.rooms.clock())
+    c.room_playback.seated(room, member.id, descriptor)
+    return descriptor
 
 
 @router.delete("/rooms/{code}", status_code=204, tags=["rooms"])

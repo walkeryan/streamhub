@@ -5,15 +5,20 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.infra.models import AuthSession
+from app.infra.models import AuthSession, Recording
 from app.infra.settings import AppSettings
+from app.services.classification import classification_record, summarize
 from app.services.network import DEFAULT_HOME_NETWORKS, clean_networks, client_address, is_home
+from app.services.streams import VALID_TTL_S
 from tests.conftest import Api
 from tests.people import Member, member
 
@@ -212,3 +217,97 @@ async def test_legacy_owner_pin_transport_is_gated_too(api: Api) -> None:
             headers=kid.headers,
         )
     assert denied(r)
+
+
+# ---------------------------------------------------------------- signed media URLs
+@pytest.fixture
+def recordings(api: Api, tmp_path: Path) -> Path:
+    root = tmp_path / "recordings"
+    root.mkdir()
+    api.c.recorder.recordings_dir = root
+    return root
+
+
+async def stream_url(api: Api, who: Member, root: Path, rid: str) -> str:
+    """A proxied stream of ``who``'s own: a finished recording, so no upstream is involved."""
+    (root / f"{rid}.mkv").write_bytes(b"\x1a\x45\xdf\xa3" * 64)
+    start = datetime(2026, 3, 1, 20, 0, tzinfo=UTC)
+    rating = summarize("xmltv", "programme", [classification_record("US", "US-TVPG", "TV-G")])
+    async with api.c.db.session() as s:
+        s.add(
+            Recording(
+                id=rid,
+                profile_id=who.profile_id,
+                channel_id="ch:gone:1",
+                programme_key=rid,
+                title="Evening News",
+                starts_at=start,
+                ends_at=start + timedelta(hours=1),
+                state="done",
+                path=f"{rid}.mkv",
+                age_evidence=rating,
+            )
+        )
+        await s.commit()
+    r = await who.post("/playback/resolve", json={"id": f"rec:{rid}", "client": "android_tv"})
+    assert r.status_code == 200, r.text
+    return str(urlsplit(r.json()["url"]).path)
+
+
+async def fetch(api: Api, peer: str, path: str, forwarded: str | None = None) -> Any:
+    async with from_address(api, peer) as client:
+        return await client.get(path, headers={"X-Forwarded-For": forwarded} if forwarded is not None else {})
+
+
+async def test_stream_urls_follow_their_users_remote_access(api: Api, recordings: Path) -> None:
+    kid = await member(api, "kid", "Kid")
+    parent = await member(api, "family", "Parent")
+    theirs, hers = await stream_url(api, kid, recordings, "kids"), await stream_url(api, parent, recordings, "hers")
+    assert (await fetch(api, HOME, theirs)).status_code == 200
+    assert denied(await fetch(api, AWAY, theirs))
+    # Every route under the token is the same door.
+    for rest in ("/index.m3u8", "/hls/anything/seg_00000.ts", "/seg/anything"):
+        assert denied(await fetch(api, AWAY, theirs + rest)), rest
+    # The address is the proxy's word only when the proxy is one we trust.
+    assert (await fetch(api, PROXY, theirs, forwarded=HOME)).status_code == 200
+    assert denied(await fetch(api, PROXY, theirs, forwarded=AWAY))
+    assert denied(await fetch(api, PROXY, theirs, forwarded=f"{HOME}, {AWAY}"))
+    assert denied(await fetch(api, AWAY, theirs, forwarded=HOME))
+    assert denied(await fetch(api, AWAY, theirs, forwarded=f"{HOME}, 127.0.0.1"))
+    # With the permission the same kind of URL plays anywhere.
+    assert (await fetch(api, AWAY, hers)).status_code == 200
+    assert (await fetch(api, PROXY, hers, forwarded=AWAY)).status_code == 200
+
+
+async def test_the_stream_check_costs_no_lookup_of_its_own(api: Api, recordings: Path, monkeypatch: Any) -> None:
+    kid = await member(api, "kid", "Kid")
+    path = await stream_url(api, kid, recordings, "kids")
+    api.c.guard._valid.clear()
+    validate, calls = api.c.auth.validate, []
+
+    async def counted(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        return await validate(*args, **kwargs)
+
+    monkeypatch.setattr(api.c.auth, "validate", counted)
+    for _ in range(3):
+        assert (await fetch(api, HOME, path)).status_code == 200
+        assert denied(await fetch(api, AWAY, path))
+    assert len(calls) == 1  # the guard's own validation, remembered; nothing more per request
+
+
+async def test_losing_remote_access_ends_streams_away_from_home(api: Api, recordings: Path) -> None:
+    from tests.test_stream_sessions import Clock
+
+    clock = Clock()
+    api.c.guard.clock = clock
+    parent = await member(api, "family", "Parent")
+    path = await stream_url(api, parent, recordings, "hers")
+    assert (await fetch(api, AWAY, path)).status_code == 200
+    assert (await api.patch(f"/users/{parent.id}", json={"denials": ["remote.access"]})).status_code == 200
+    clock.now += VALID_TTL_S + 0.1
+    # The grant is out of date wherever it is used; a new one is theirs at home only.
+    assert (await fetch(api, AWAY, path)).status_code == 401
+    await parent.refresh()
+    again = await stream_url(api, parent, recordings, "again")
+    assert (await fetch(api, HOME, again)).status_code == 200 and denied(await fetch(api, AWAY, again))

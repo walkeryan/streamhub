@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from starlette.requests import Request
 
 from app.api.routers.playback import image_proxy
 from app.infra.crypto import Crypto
@@ -34,7 +35,14 @@ def ctx() -> Any:
         sources=SimpleNamespace(provider_for=AsyncMock(return_value=(None, prov))),
         http_factory=Mock(return_value=client),
         client=client,
+        # The fixture's kid has no ``remote.access``: the artwork is fetched from the home network.
+        settings=SimpleNamespace(forwarded_allow_ips=""),
+        app_settings=SimpleNamespace(get=lambda key: None),
     )
+
+
+def request(peer: str = "192.168.1.20") -> Request:
+    return Request({"type": "http", "headers": [], "client": (peer, 40000)})
 
 
 async def test_exact_library_and_session_validated(ctx: Any) -> None:
@@ -63,7 +71,7 @@ async def test_invalid_binding_rejected(ctx: Any, change: dict[str, Any]) -> Non
 async def test_legacy_rejected_before_fetch(ctx: Any) -> None:
     token = ctx.crypto.sign_json({"s": "plex", "u": "https://fixture.invalid/art"})
     with pytest.raises(Forbidden):
-        await image_proxy(token, ctx)
+        await image_proxy(token, request(), ctx)
     ctx.sources.provider_for.assert_not_called()
     ctx.http_factory.assert_not_called()
 
@@ -71,19 +79,19 @@ async def test_legacy_rejected_before_fetch(ctx: Any) -> None:
 async def test_revoked_session_rejected_before_fetch(ctx: Any) -> None:
     ctx.auth.session_valid.side_effect = Forbidden("revoked")
     with pytest.raises(Forbidden):
-        await image_proxy(ctx.crypto.sign_json(ctx.payload), ctx)
+        await image_proxy(ctx.crypto.sign_json(ctx.payload), request(), ctx)
     ctx.http_factory.assert_not_called()
 
 
 async def test_policy_change_while_fetching_rejected(ctx: Any) -> None:
     ctx.content_policy.require.side_effect = [None, Forbidden("content restricted")]
     with pytest.raises(Forbidden):
-        await image_proxy(ctx.crypto.sign_json(ctx.payload), ctx)
+        await image_proxy(ctx.crypto.sign_json(ctx.payload), request(), ctx)
     assert ctx.auth.session_valid.await_count == 2
 
 
 async def test_enabled_artwork_private_and_rechecked(ctx: Any) -> None:
-    response = await image_proxy(ctx.crypto.sign_json(ctx.payload), ctx)
+    response = await image_proxy(ctx.crypto.sign_json(ctx.payload), request(), ctx)
     assert response.body == b"fixture-image"
     assert response.headers["cache-control"] == "private, no-store"
     assert ctx.auth.session_valid.await_count == 2
@@ -92,7 +100,7 @@ async def test_enabled_artwork_private_and_rechecked(ctx: Any) -> None:
 async def test_disabled_preserves_legacy_artwork(ctx: Any) -> None:
     ctx.content_policy.enabled = False
     token = ctx.crypto.sign_json({"s": "plex", "u": "https://fixture.invalid/art"})
-    response = await image_proxy(token, ctx)
+    response = await image_proxy(token, request(), ctx)
     assert response.headers["cache-control"] == "public, max-age=86400"
     ctx.auth.session_valid.assert_not_called()
 
@@ -146,3 +154,12 @@ def test_catalog_factory_carries_exact_reference(ctx: Any) -> None:
         assert image(src, "https://fixture.invalid/art", None) is None
     finally:
         active_principal.reset(token)
+
+
+async def test_home_only_artwork_is_refused_elsewhere_before_anything_is_checked(ctx: Any) -> None:
+    assert ctx.payload["home"] is True
+    with pytest.raises(Forbidden) as caught:
+        await image_proxy(ctx.crypto.sign_json(ctx.payload), request("203.0.113.9"), ctx)
+    assert caught.value.code == "remote_access_denied"
+    ctx.auth.session_valid.assert_not_called()
+    ctx.http_factory.assert_not_called()

@@ -27,6 +27,7 @@ from app.infra.models import (
     OwnerCredential,
     Profile,
     Programme,
+    Recording,
     RevokedSession,
     Role,
     Source,
@@ -299,7 +300,7 @@ class ContentPolicy:
         if not self.restricts(profile):
             return set(refs)
         allowed: set[str] = set()
-        canonical, programmes = [], []
+        canonical, programmes, recordings = [], [], []
         libraries: dict[str, list[str]] = {}
         channels: dict[str, list[str]] = {}
         for ref in set(refs):
@@ -310,6 +311,9 @@ class ContentPolicy:
                 (libraries if parts[0] == "lib" else channels).setdefault(parts[1], []).append(parts[2])
             elif len(parts) == 2 and parts[0] == "prog" and parts[1].isdigit():
                 programmes.append(int(parts[1]))
+            elif len(parts) == 2 and parts[0] == "rec" and not self.enabled:
+                # Under the legacy flag a restricted profile plays no recording at all, as before.
+                recordings.append(parts[1])
         reset = active_policy.set(None)
         try:
             async with self.db.session() as session:
@@ -344,6 +348,16 @@ class ContentPolicy:
                         )
                     ).scalars()
                     allowed.update(f"prog:{pk}" for pk in programme_hits)
+                if recordings:
+                    # A recording is its programme: judged by the evidence it kept of it.
+                    recorded = (
+                        await session.execute(
+                            select(Recording.id).where(
+                                Recording.id.in_(recordings), self.programme_clause(Recording.age_evidence, profile)
+                            )
+                        )
+                    ).scalars()
+                    allowed.update(f"rec:{rid}" for rid in recorded)
         finally:
             active_policy.reset(reset)
         return allowed

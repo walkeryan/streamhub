@@ -21,6 +21,7 @@ from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme
 from app.services import ids
 from app.services.errors import NotFound, ServiceError
 from app.services.sources import SourceService, apply_overrides
+from app.services.sports import sport_facts
 from app.services.tiles import ImageFn
 
 LIST_PREFIX = "chlist:"
@@ -32,6 +33,7 @@ def programme_dict(p: Programme, ch: Channel | None = None, now: datetime | None
     catchup = False
     if ch is not None and ch.catchup_days > 0:
         catchup = p.stop <= now and p.start >= now - timedelta(days=ch.catchup_days)
+    is_sport, teams = sport_facts(p.title, p.category)
     return {
         "id": ids.prog_id(p.id),
         "channel_id": ids.channel_id(ch.source_id, ch.ext_id) if ch else p.epg_channel,
@@ -42,6 +44,8 @@ def programme_dict(p: Programme, ch: Channel | None = None, now: datetime | None
         "category": p.category,
         "icon": p.icon,
         "catchup_available": catchup,
+        "is_sport": is_sport,
+        "teams": list(teams),
     }
 
 

@@ -84,18 +84,44 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
 - **Shelves** (`services/catalog.py`, `services/home.py`): `GET /browse/{section}/shelves` lists shelves with their first
   titles, New Releases first, then by size (a shelf with nothing new in 30 days counts half). Home runs Continue
   Watching, On Now, New Releases, up to eight shelves alternating shows and movies, the personal rows, Recently Added.
-  A `setting` row `home_shelves` (JSON list of shelf names, `shows:Name` or `movies:Name` to name one side) replaces
-  the automatic eight; nothing in the API writes it yet. The hero features New Releases, never an adult title.
+  The `home_shelves` setting (ordered list of shelf names, `shows:Name` or `movies:Name` to name one side) replaces
+  the automatic eight. `PATCH /settings` writes it (`system.manage`; up to 24 entries, null or `[]` clears it); entries
+  no shelf has are kept and listed in `home_shelves_unknown`. The hero features New Releases, never an adult title.
 - **Rating ceilings** (`services/content_policy.py`): a user's limits (`rating_ceiling_movie`, `rating_ceiling_tv`,
   `allow_unrated`, from the role or per-user overrides) run the content-policy engine for that user's requests, whatever
   `CONTENT_POLICY_ENABLED` says; that flag only keeps the older owner-PIN regime. Ratings are US certifications from
   TMDB. A background job (`services/classifier.py`, every 2 minutes, 60 titles a run, no-op without a TMDB key) keeps
   them fresh for every title with a TMDB id; `POST /api/v1/settings/classification/run` runs one batch on demand.
+  Playback follows the same question (`ContentPolicy.applies_to`): for a rating-limited user live is always served as
+  server HLS with every segment checked against the guide, files and provider archives go through the guarded proxy
+  (never `direct`), rewind and catch-up intervals are checked whole, and segments and bound artwork are sent
+  `private, no-store`. Changing a user's limits moves their version, so streams already running stop within seconds.
+- **Recordings** (`services/recorder.py`, `services/recording_policy.py`): `recordings.view` lists and plays
+  (`rec:<id>` through `/playback/resolve`), `recordings.schedule` schedules and cancels, and a holder of `users.manage`
+  sees and manages everyone's (`system.manage` alone does not). A recording keeps the rating evidence its programme
+  had when it was scheduled (`recording.age_evidence`, revision 0012), and a rating-limited user sees, plays and
+  schedules only what their ceiling admits; recordings from before that revision have no evidence and count as
+  unrated. The padding recorded around a programme is not judged.
+- **Guide facts** (`services/sports.py`): every programme payload carries `is_sport` (the classifier behind `/sports`
+  and the recorder) and `teams`, the two sides of a title that spells out a matchup (`A vs B`, `A at B`), else `[]`.
+- **Watch rooms** (`services/rooms.py`, `room_hub.py`, `room_playback.py`): `POST /rooms/{code}/join` adds a member on
+  every call unless the body carries the caller's own `member_token`, which keeps that seat.
+  `GET /rooms/{code}/descriptor?member_token=…` (no bearer, authorized like the socket) returns the member's
+  descriptor as it is now: on a shared stream the playlist URL they already hold with the current `stream_epoch`,
+  otherwise a freshly resolved one. A member always starts at the room's position (`resume_position_ms`). After a
+  seek the `state` message is all a client needs: a changed `stream_epoch` means reload the same playlist with
+  `stream_start_ms` as time zero; no `stream_epoch` (each member plays their own file) means just seek.
+- **Shared devices** (`services/sessions.py`): `POST /auth/switch` to the current user is a no-op that returns fresh
+  tokens; sent with a PIN it verifies that PIN (401 `pin_invalid`, same five-guess budget), which is how a client
+  asks "is this their PIN?". An expired or stale session answers `token_expired` / `session_stale` before any PIN is
+  looked at. Every 429 carries `Retry-After` in whole seconds.
 - **Remote access** (`services/network.py`): a user without `remote.access` is served only from the `home_networks`
   setting (private, loopback, link-local and `100.64.0.0/10` ranges by default); elsewhere every call but
   `GET /auth/me` answers 403 `remote_access_denied`. The client address is the connection's peer, or the
-  `X-Forwarded-For` hop a proxy listed in `FORWARDED_ALLOW_IPS` appended. Behind a reverse proxy or tunnel that is
-  **not** listed there, every client appears to come from the proxy's own address, which is usually a home one.
+  `X-Forwarded-For` hop a proxy listed in `FORWARDED_ALLOW_IPS` appended. The signed media URLs follow the user
+  they were issued to: `/stream/{token}…` checks the grant's user (from the validation the grant guard already
+  caches, so no lookup per segment), and artwork URLs signed for a user without `remote.access` are marked home-only
+  and never publicly cacheable. See "Deploying behind a reverse proxy or tunnel" below.
 - **TV app release**: `GET /api/v1/app/tv` (no sign-in) answers from `tv-release.json` in `WEB_DIST/downloads/`, next
   to the APK, which is served at `/downloads/<file>`. See "TV app release manifest" below. No manifest, or an invalid
   one, is a 404, which the TV app reads as "no update service".
@@ -117,6 +143,28 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
   it again (zapping). Channel numbers = per-source offset (+1000 per IPTV source) + tvg-chno/position; user override wins.
 - **Progress**: `stopped` with `position_ms >= duration_ms` (or ≥95%) marks watched; forwarded to Plex `/:/timeline`
   and Jellyfin `/Sessions/Playing/*`.
+
+## Deploying behind a reverse proxy or tunnel
+
+`remote.access` is only enforceable when the server can tell where a request really comes from. Behind a reverse
+proxy or a tunnel connector, every connection reaches the server from the proxy's own address, which is usually a
+private one, so without further configuration every remote client looks like a device at home and the rule never
+refuses anyone.
+
+- List the proxy's address (or its network) in `FORWARDED_ALLOW_IPS`, for example `FORWARDED_ALLOW_IPS=172.18.0.0/16`
+  for a proxy on a container network or `127.0.0.1,192.168.1.2` for one on the LAN. Only then is its
+  `X-Forwarded-For` read, and only for the hop it appended; a header written by anyone else is ignored.
+- Make sure the proxy appends the client address to `X-Forwarded-For` (most do by default) and does not pass a
+  client-supplied value through as the last hop.
+- Do not set `FORWARDED_ALLOW_IPS=*` on a server reachable without the proxy: every client could then name its own
+  address.
+- If the tunnel connector runs on the same host, its address is typically loopback or the container gateway; list
+  that address, not the tunnel's public one.
+- `home_networks` (Settings) says which client addresses count as home. An overlay network's range is in the
+  defaults (`100.64.0.0/10`); remove it there if devices on the overlay should count as remote.
+
+To check: sign in as a user without `remote.access` from outside; every call but `GET /auth/me` should answer 403
+`remote_access_denied`, and that user's row in the session list should show the outside address.
 
 ## TV app release manifest
 

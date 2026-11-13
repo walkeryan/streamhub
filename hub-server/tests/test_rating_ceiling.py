@@ -521,9 +521,12 @@ async def test_a_catch_up_programme_is_no_way_past_the_gate(seeded: Api) -> None
     earlier = (NOW - timedelta(hours=1)).isoformat()
     assert refused(await resolve({"id": "ch:catalog:kids", "rewind_at": earlier}))
     # What the ceiling admits gets past the policy (the fixture source then has nothing to play).
-    for fine in ({"id": "ch:catalog:kids"}, {"id": "ch:catalog:late", "catchup_programme_id": allowed_programme}):
+    for fine in ({"id": "ch:catalog:kids"}, {"id": "ch:catalog:kids", "catchup_programme_id": allowed_programme}):
         r = await resolve(fine)
         assert not refused(r), r.text
+    # A past programme is a way onto the channel that carried it and no other: the resolver
+    # judges the channel by what it aired then, which on "late" was over the ceiling.
+    assert refused(await resolve({"id": "ch:catalog:late", "catchup_programme_id": allowed_programme}))
 
 
 def test_limits_restrict_helper() -> None:
