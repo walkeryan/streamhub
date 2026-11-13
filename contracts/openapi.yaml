@@ -356,7 +356,7 @@ components:
         last_sync: {type: string, format: date-time, nullable: true}
         counts: { type: object, additionalProperties: {type: integer} }
         service_key: {type: string, nullable: true, description: "for streaming_service: netflix, hulu, …"}
-        config_summary: { type: object, additionalProperties: true, description: "never includes secrets" }
+        config_summary: { type: object, additionalProperties: true, description: "Never includes secrets. Where the source lives (server address, account name) is here only for a caller with sources.manage; for everyone else it is empty." }
     SourceCreate:
       type: object
       required: [type, name, config]
