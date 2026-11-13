@@ -2,6 +2,7 @@ package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.model.ActiveStream
 import com.streamhub.tv.core.data.model.ApiError
+import com.streamhub.tv.core.data.repo.SessionEnd
 import kotlinx.serialization.SerializationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -178,5 +179,32 @@ class ApiErrorsTest {
         assertEquals(ApiErrors.describe(api(404, "not_found", message = " ")), ApiErrors.describeRecordingPlayback(api(404, "not_found", message = " ")))
         assertEquals("Server problem", ApiErrors.describeRecordingPlayback(api(503, "upstream_error")).title)
         assertEquals("Can't reach the server", ApiErrors.describeRecordingPlayback(IOException("down")).title)
+    }
+
+    @Test fun anEndedSessionSaysWhichKindOfEndItWas() {
+        val revoked = ApiErrors.sessionEnded(SessionEnd.Revoked)
+        assertEquals("Signed out", revoked.title)
+        assertTrue(revoked.body.contains("Pair it again"))
+        assertEquals(revoked, ApiErrors.describe(api(401, "session_revoked")))
+        assertEquals("Sign-in expired", ApiErrors.sessionEnded(SessionEnd.Expired).title)
+        // A suspension is not a reason to pair again: the pairing is kept.
+        val suspended = ApiErrors.sessionEnded(SessionEnd.Suspended)
+        assertEquals(suspended, ApiErrors.describe(api(401, "user_suspended")))
+        assertFalse(suspended.body.contains("Pair"))
+        for (end in SessionEnd.entries) assertFalse("$end", ApiErrors.sessionEnded(end).canRetry)
+    }
+
+    @Test fun onlyRevocationAndSuspensionEndASession() {
+        assertEquals(SessionEnd.Revoked, SessionEnd.ofCode("session_revoked"))
+        assertEquals(SessionEnd.Suspended, SessionEnd.ofCode("user_suspended"))
+        // Refreshed and repeated, or about something else altogether.
+        for (code in listOf("session_stale", "token_expired", "pin_invalid", "pin_required", "unauthorized", "", null)) assertEquals("$code", null, SessionEnd.ofCode(code))
+    }
+
+    @Test fun awayFromHomeIsSaidOnAnyCall() {
+        val e = ApiErrors.describe(api(403, "remote_access_denied"))
+        assertEquals("Home network only", e.title)
+        assertTrue(e.body.startsWith("This account can only be used on the home network."))
+        assertFalse(e.body.contains("raw server text"))
     }
 }
