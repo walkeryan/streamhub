@@ -595,11 +595,13 @@ async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
     path: Path = sess.workdir / name
     if not path.is_file():
         raise NotFound("segment not found")
-    await c.guard.require_segment(g, path, sess.workdir / "index.m3u8")
+    viewer = await c.guard.require_segment(g, path, sess.workdir / "index.m3u8")
+    # What the content policy let through for this viewer is not for a cache to hand to the next one.
+    private = c.content_policy.enabled or viewer.rated
     return FileResponse(
         path,
         media_type="video/mp2t" if name.endswith(".ts") else "application/octet-stream",
-        headers={"Cache-Control": "private, no-store"} if c.content_policy.enabled else {"Cache-Control": "max-age=60"},
+        headers={"Cache-Control": "private, no-store" if private else "max-age=60"},
     )
 
 
@@ -648,11 +650,13 @@ async def image_proxy(token: str, c: C) -> Response:
         await validate_image_grant(d, c.content_policy, c.auth)
         if cache is not None and media_type.lower().startswith("image/"):
             await cache.put(source_id, url, body, media_type)
+    private = c.content_policy.enabled or "profile" in d
     return Response(
         body,
         media_type=media_type,
         headers={
-            "Cache-Control": "private, no-store" if c.content_policy.enabled else "public, max-age=86400",
+            # Bound to one viewer by the content policy: theirs alone.
+            "Cache-Control": "private, no-store" if private else "public, max-age=86400",
             # Never let a browser reinterpret or run what a provider called an image (SVG included).
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'none'; sandbox",

@@ -127,6 +127,20 @@ async def test_proxied_artwork_only_serves_images(api: Api) -> None:
         assert (await api.client.get(f"/api/v1/images/{token}")).status_code == 404
 
 
+@respx.mock
+async def test_artwork_signed_under_a_rating_ceiling_is_private(api: Api) -> None:
+    from tests.people import member
+
+    respx.get(f"{MANAGER}/player_api.php").mock(side_effect=catalog())
+    respx.get(POSTER).mock(return_value=httpx.Response(200, content=PNG, headers={"content-type": "image/png"}))
+    await add_xtream(api, proxy="always")
+    # The URL is bound to the session it was signed for: never cacheable.
+    teen = await member(api, "family", "Teen", limits={"rating_ceiling_movie": "R"})
+    tile = (await teen.get("/browse/movies", params={"language": "all"})).json()["tiles"][0]
+    bound = await api.client.get(image_path(tile["poster"]))
+    assert bound.status_code == 200 and bound.headers["cache-control"] == "private, no-store"
+
+
 def test_channel_artwork_grants_bind_to_the_channel_under_content_policy() -> None:
     policy = SimpleNamespace(enabled=True, applies_to=lambda principal: True)
     token = active_principal.set(Principal("kid", False, True, 4, "kid-session"))

@@ -14,7 +14,8 @@ and the replaced stream's grant stops being served. Two panes of a multiview are
 ``GrantGuard`` re-validates the viewer behind a grant: session not revoked, user active, user
 version current (``AuthService.validate``). A positive answer is reused for ``VALID_TTL_S``, so a
 revocation or suspension cuts a running stream within that time plus one segment or one second of
-passthrough.
+passthrough. What the routes need to know about that viewer (are they under a rating ceiling)
+is remembered with the answer, so no request asks twice.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from sqlalchemy import select
 
 from app.infra.models import Profile, utcnow
 from app.proxy.stream_proxy import UpstreamRefused
+from app.services.content_policy import restricts
 from app.services.errors import BadGateway, Conflict, ServiceError, Unauthorized
 
 RECENT_S = 30.0
@@ -280,6 +282,16 @@ class StreamRegistry:
         ]
 
 
+@dataclass(frozen=True, slots=True)
+class Validated:
+    """A viewer the guard validated, as of ``at``. Any change to these moves the user's version."""
+
+    at: float
+    user_id: str
+    max_streams: int | None
+    rated: bool  # under a rating ceiling: every segment is checked, and nothing sent is cacheable
+
+
 class GrantGuard:
     """The viewer check and the content policy, for every request made with a stream grant."""
 
@@ -290,38 +302,46 @@ class GrantGuard:
         self._policy = content_policy
         self._streams = streams
         self.clock = clock
-        # (profile, profile version, session, user version) -> (validated at, user id, max_streams)
-        self._valid: dict[tuple[str, int, str, int], tuple[float, str, int | None]] = {}
+        # (profile, profile version, session, user version) -> the last positive answer
+        self._valid: dict[tuple[str, int, str, int], Validated] = {}
 
-    async def viewer(self, grant: Any) -> None:
+    async def viewer(self, grant: Any) -> Validated:
         """401 unless the session, the user and the user version the grant was issued to still stand."""
         if not grant.session_id or grant.profile_version is None or grant.user_version is None:
             raise Unauthorized("Start playback again.", code="session_revoked")
         key = (str(grant.profile_id), int(grant.profile_version), str(grant.session_id), int(grant.user_version))
         now = self.clock()
         held = self._valid.get(key)
-        if held is None or now - held[0] >= VALID_TTL_S:
+        if held is None or now - held.at >= VALID_TTL_S:
             self._valid.pop(key, None)
             state = await self._auth.validate(*key)
             user = state.identity.user
             if grant.user_id and grant.user_id != user.id:
                 raise Unauthorized("Start playback again.", code="session_revoked")
             if len(self._valid) >= MAX_VALID:
-                self._valid = {k: v for k, v in self._valid.items() if now - v[0] < VALID_TTL_S}
-            held = self._valid[key] = (now, str(user.id), state.identity.limits.max_streams)
-        blocking = self._streams.touch(held[1], grant, held[2])
+                self._valid = {k: v for k, v in self._valid.items() if now - v.at < VALID_TTL_S}
+            identity = state.identity
+            held = self._valid[key] = Validated(
+                now,
+                str(user.id),
+                identity.limits.max_streams,
+                restricts(identity.limits),
+            )
+        blocking = self._streams.touch(held.user_id, grant, held.max_streams)
         if blocking is not None:
-            raise await self._streams.conflict(blocking, held[2] or 0)
+            raise await self._streams.conflict(blocking, held.max_streams or 0)
+        return held
 
-    async def require_grant(self, grant: Any) -> None:
-        await self.viewer(grant)
+    async def require_grant(self, grant: Any) -> Validated:
+        viewer = await self.viewer(grant)
         if is_recording(grant):
             # No source stands behind a recording. Who may see it was decided when the grant was
             # issued, and a change to that moves the user's version, which was just checked.
             if self._policy.enabled:
                 await self._policy.require(grant.profile_id, grant.content_ref)
-            return
+            return viewer
         await self._policy.require_grant(grant, self._auth)
+        return viewer
 
     async def guard_stream(self, grant: Any, stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
         """Pass ``stream`` on, checking the grant again about once a second while bytes flow."""
@@ -338,9 +358,9 @@ class GrantGuard:
             if close is not None:
                 await close()
 
-    async def require_segment(self, grant: Any, path: Path, manifest: Path) -> None:
+    async def require_segment(self, grant: Any, path: Path, manifest: Path) -> Validated:
         if is_recording(grant):
-            await self.require_grant(grant)
-            return
-        await self.viewer(grant)
+            return await self.require_grant(grant)
+        viewer = await self.viewer(grant)
         await self._policy.require_segment(grant, self._auth, path, manifest)
+        return viewer
