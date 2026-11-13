@@ -128,7 +128,7 @@ async def test_proxied_artwork_only_serves_images(api: Api) -> None:
 
 
 def test_channel_artwork_grants_bind_to_the_channel_under_content_policy() -> None:
-    policy = SimpleNamespace(enabled=True)
+    policy = SimpleNamespace(enabled=True, applies_to=lambda principal: True)
     token = active_principal.set(Principal("kid", False, True, 4, "kid-session"))
     try:
         payload = image_payload("panel", LOGO, "ch:panel:100", policy)

@@ -346,6 +346,17 @@ async def test_five_wrong_pins_lock_the_target(api: Api) -> None:
     assert (await switch(api, tv, parent["id"], "2468")).status_code == 200
 
 
+async def test_parallel_guesses_share_the_budget(api: Api) -> None:
+    import asyncio
+
+    parent = await user(api, "Parent", "family", pin="2468")
+    kid = await user(api, "Kid", "kid")
+    tv = await pair(api, shared_device=True, profile_id=kid["profile_id"])
+    guesses = await asyncio.gather(*(switch(api, tv, parent["id"], f"{n:04d}") for n in range(12)))
+    codes = [r.json()["code"] for r in guesses]
+    assert codes.count("pin_invalid") == 5 and codes.count("rate_limited") == 7
+
+
 async def test_a_correct_pin_clears_earlier_failures(api: Api) -> None:
     parent = await user(api, "Parent", "family", pin="2468")
     kid = await user(api, "Kid", "kid")

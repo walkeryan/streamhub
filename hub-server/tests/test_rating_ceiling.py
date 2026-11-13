@@ -476,6 +476,40 @@ async def test_channels_follow_the_programme_on_air(seeded: Api) -> None:
     assert r.status_code == 403 and r.json()["code"] == "content_restricted"
 
 
+async def test_a_catch_up_programme_is_no_way_past_the_gate(seeded: Api) -> None:
+    from sqlalchemy import select
+
+    api = seeded
+    kid = await member(api, "kid", "Kid")
+    async with api.c.db.session() as s:
+        rows = {p.title: f"prog:{p.id}" for p in (await s.execute(select(Programme))).scalars()}
+    generation = api.c.proxy.recovery_epoch
+
+    async def resolve(*panes: dict[str, Any]) -> Any:
+        body: dict[str, Any] = {"recovery_generation": generation}
+        body.update(panes[0] if len(panes) == 1 else {"panes": list(panes)})
+        return await kid.post("/playback/resolve" if len(panes) == 1 else "/playback/multiview", json=body)
+
+    def refused(r: Any) -> bool:
+        return bool(r.status_code == 403 and r.json()["code"] == "content_restricted")
+
+    allowed_programme, refused_programme = rows["Morning Songs"], rows["After Dark"]
+    # Naming an admitted programme next to a title does not excuse the title.
+    assert refused(await resolve({"id": "lib:catalog:r", "catchup_programme_id": allowed_programme}))
+    assert refused(await resolve({"id": "ch:catalog:kids", "catchup_programme_id": refused_programme}))
+    # Nor does a second pane asking for the same channel as a past programme's carrier.
+    live = {"id": "ch:catalog:late"}
+    carrier = {"id": "ch:catalog:late", "catchup_programme_id": allowed_programme}
+    assert refused(await resolve(live, carrier)) and refused(await resolve(carrier, live))
+    # A rewind is judged by what aired at that moment: nothing rated did, an hour ago.
+    earlier = (NOW - timedelta(hours=1)).isoformat()
+    assert refused(await resolve({"id": "ch:catalog:kids", "rewind_at": earlier}))
+    # What the ceiling admits gets past the policy (the fixture source then has nothing to play).
+    for fine in ({"id": "ch:catalog:kids"}, {"id": "ch:catalog:late", "catchup_programme_id": allowed_programme}):
+        r = await resolve(fine)
+        assert not refused(r), r.text
+
+
 def test_limits_restrict_helper() -> None:
     from app.services.content_policy import rating_key, restricts
 

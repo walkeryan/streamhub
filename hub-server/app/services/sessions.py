@@ -301,8 +301,9 @@ class SessionsService:
                 key = self._switch_budget(user.id)
                 if not pin:
                     raise Unauthorized("Enter this user's PIN", code="pin_required")
+                # Counted before it is checked, so guesses sent in parallel share the one budget.
+                self._pin_failures.setdefault(key, []).append(time.monotonic())
                 if not await asyncio.to_thread(verify_secret, pin, profile.pin_hash):
-                    self._pin_failures.setdefault(key, []).append(time.monotonic())
                     raise Unauthorized("Wrong PIN", code="pin_invalid")
                 self._pin_failures.pop(key, None)
             elif is_wider(*access(user, role), frozenset(actor.permissions), actor.limits):

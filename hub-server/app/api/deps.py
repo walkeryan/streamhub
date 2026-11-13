@@ -160,13 +160,10 @@ async def playback_watch_gate(request: Request, c: C) -> None:
     if scheme.lower() != "bearer" or not token:
         return  # the route's own principal dependency answers 401
     principal = await resolve(request, c, token)
-    refs: list[tuple[str, str | None]] = []
-    # Channel ids asked for at a past moment (rewind): the policy judges what aired then.
-    moments: dict[str, datetime] = {}
-    # Channels asked for as the carrier of a past programme: that programme is what is judged.
-    carriers: set[str] = set()
+    # (id, source, judged by the rating policy?, the moment it is asked for)
+    refs: list[tuple[str, str | None, bool, datetime | None]] = []
     if request.method == "GET":
-        refs.append((request.query_params.get("id", ""), request.query_params.get("source_id")))
+        refs.append((request.query_params.get("id", ""), request.query_params.get("source_id"), True, None))
     else:
         try:
             body = await request.json()
@@ -177,24 +174,23 @@ async def playback_watch_gate(request: Request, c: C) -> None:
             panes = listed if isinstance(listed, list) else [body]
             for pane in panes:
                 if isinstance(pane, dict):
-                    source = pane.get("source_id") if isinstance(pane.get("source_id"), str) else None
-                    for key in ("id", "catchup_programme_id"):
-                        if isinstance(pane.get(key), str):
-                            refs.append((pane[key], source))
-                    if isinstance(pane.get("id"), str):
-                        moment = _moment(pane.get("rewind_at"))
-                        if pane.get("catchup_programme_id"):
-                            carriers.add(pane["id"])
-                        elif moment is not None:
-                            moments[pane["id"]] = moment
+                    source: str | None = pane.get("source_id") if isinstance(pane.get("source_id"), str) else None
+                    ref = str(pane["id"]) if isinstance(pane.get("id"), str) else ""
+                    programme = pane.get("catchup_programme_id")
+                    if isinstance(programme, str) and programme:
+                        refs.append((programme, source, True, None))
+                    # A channel carrying a past programme is judged by that programme, just added;
+                    # a channel rewound is judged by what aired then; anything else as it is now.
+                    carrier = bool(programme) and ref.startswith("ch:")
+                    refs.append((ref, source, not carrier, _moment(pane.get("rewind_at"))))
     policy = c.content_policy
     # Under the legacy flag the resolver makes these checks itself, with the same arguments.
     rated = not policy.enabled and policy.applies_to(principal)
-    for ref, source in refs:
+    for ref, source, judged, moment in refs:
         if ref:
             await require_watch(c.db, principal.permissions, ref, source)
-            if rated and ref not in carriers:
-                await policy.require(principal.profile_id, ref.removeprefix("trailer:"), at=moments.get(ref))
+            if rated and judged:
+                await policy.require(principal.profile_id, ref.removeprefix("trailer:"), at=moment)
 
 
 def _moment(value: Any) -> datetime | None:
