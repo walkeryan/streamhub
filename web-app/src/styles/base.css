@@ -79,6 +79,8 @@ h1, h2, h3, p { margin: 0; }
   font-size: var(--text-label); font-weight: 500; white-space: nowrap;
 }
 .chip[aria-pressed='true'] { background: var(--t-accent); color: var(--t-accent-text); font-weight: 600; }
+/* A button in a row of chips (the drop-down of a channel group's children) takes their height and shape. */
+.btn.btn-chip { min-height: 2.125rem; padding: 0 0.875rem; border-radius: var(--radius-pill); font-size: var(--text-label); gap: 0.375rem; }
 
 .field {
   display: flex; align-items: center; min-height: 2.75rem; padding: 0 0.875rem; border-radius: var(--radius-md);

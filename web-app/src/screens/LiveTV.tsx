@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
@@ -8,6 +8,7 @@ import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
 import { ChannelRow } from '../components/ChannelRow'
+import { Icon } from '../components/Icon'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
 import { useHistoryState } from '../nav/historyState'
@@ -22,7 +23,7 @@ import { RecordDialog } from '../recordings/RecordDialog'
 import { RecordingBadge } from '../recordings/RecordingBadge'
 
 const PAGE = 80
-// Groups shown as chips; a provider with more keeps the rest behind one searchable picker.
+// Top-level groups shown as chips; a provider with more keeps the rest behind one searchable picker.
 const GROUP_CHIPS = 24
 const Guide = lazy(() => import('./Guide').then((m) => ({ default: m.Guide })))
 
@@ -31,7 +32,8 @@ const liveFilterSchema = z.object({
   group: z.string().max(512), source: z.string().max(256), favorites: z.boolean(),
 })
 type SavedLiveFilters = z.infer<typeof liveFilterSchema>
-const channelCount = (groups?: ChannelGroup[]) => groups?.reduce((sum, g) => sum + g.channel_count, 0)
+// A parent's count already includes its children's.
+const channelCount = (groups?: ChannelGroup[]) => groups?.reduce((sum, g) => sum + (g.parent ? 0 : g.channel_count), 0)
 const validateLiveFilters = (raw: unknown) => { const parsed = liveFilterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
 
 const PREVIEW_KEY = 'sh.live.preview'
@@ -46,6 +48,7 @@ export function LiveTV() {
   const setLang = (language: string) => saved.update((v) => ({ ...v, language, group: '' }))
   const setCountry = (country: SavedLiveFilters['country']) => saved.update((v) => ({ ...v, country, group: '' }))
   // All, Favorites and each group are one row of choices: picking one replaces the others.
+  // `group` is the id of the group filtered by, a parent's or a child's: the chip row works out the rest.
   const pick = (group: string, favorites = false) => saved.update((v) => ({ ...v, group, favorites }))
   const setSource = (source: string) => saved.update((v) => ({ ...v, source, group: '' }))
   const [search, setSearch] = useHistoryState('live:search', '')
@@ -122,6 +125,18 @@ export function LiveTV() {
   const reset = () => { saved.update((v) => ({ ...v, group: '', source: '', favorites: false })); setSearch(''); setPage(0) }
   const changePage = (p: number) => { setPage(p); setPreviewId(null); setFocusedId(null); void setFocus('live:search') }
   const shownGroups = (groups.data ?? []).filter((g) => !g.hidden)
+  // Chips are the top level. A group's children are one drop-down beside its chip, offered while it is the choice.
+  const topGroups = shownGroups.filter((g) => !g.parent)
+  const childrenOf = (top: ChannelGroup) => shownGroups.filter((g) => g.parent === top.name && g.source_id === top.source_id)
+  const chosen = shownGroups.find((g) => g.id === group)
+  const chip = chosen?.parent ? topGroups.find((g) => g.name === chosen.parent && g.source_id === chosen.source_id) : chosen
+  const children = chip ? childrenOf(chip) : []
+  const parents = new Set(shownGroups.filter((g) => g.parent).map((g) => `${g.source_id}|${g.parent}`))
+  const chipGroups = topGroups.slice(0, GROUP_CHIPS)
+  // Beside its chip where the row has room to grow; on a phone, or for a group past the chips, on a line of its own.
+  const besideChip = !phone && chipGroups.some((g) => g.id === chip?.id)
+  const subgroups = chip && children.length > 0 && <CatalogPicker scope="live:subgroup" label={chip.name} search={false} testId="live-subgroup" className={besideChip ? 'btn-chip' : undefined} value={group}
+    options={[{ id: chip.id, label: `All ${chip.name}`, count: chip.channel_count }, ...children.map((g) => ({ id: g.id, label: g.name, count: g.channel_count }))]} onChange={(id) => pick(id)} />
   const sourceOptions = [{ id: '', label: 'All sources' }, ...(sources.data ?? []).filter((s) => s.type === 'm3u' || s.type === 'xtream').map((s) => ({ id: s.id, label: s.name }))]
 
   if (!saved.ready) return <div className="page-pad" data-testid="live"><h1 className="display">Live TV</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="live:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
@@ -143,9 +158,13 @@ export function LiveTV() {
       <FocusGroup focusKey="live:groups" className="chip-scroll" role="group" label="Channel groups">
         <Chip focusKey="live:group:all" pressed={!group && !favOnly} onEnter={() => pick('')}>All</Chip>
         <Chip focusKey="live:fav" pressed={favOnly} onEnter={() => pick('', !favOnly)} testId="live-fav-filter">Favorites</Chip>
-        {shownGroups.slice(0, GROUP_CHIPS).map((g) => <Chip key={g.id} focusKey={`live:group:${g.id}`} pressed={group === g.id} onEnter={() => pick(g.id)}>{g.name}</Chip>)}
-        {shownGroups.length > GROUP_CHIPS && <CatalogPicker scope="live:category" label="More groups" value={group} options={[{ id: '', label: 'All groups' }, ...shownGroups.map((g) => ({ id: g.id, label: g.name, count: g.channel_count }))]} onChange={(id) => pick(id)} />}
+        {chipGroups.map((g) => <Fragment key={g.id}>
+          <Chip focusKey={`live:group:${g.id}`} pressed={(chip?.id ?? group) === g.id} onEnter={() => pick(g.id)}>{g.name}{parents.has(`${g.source_id}|${g.name}`) && <Icon name="down" size={14} />}</Chip>
+          {besideChip && chip?.id === g.id && subgroups}
+        </Fragment>)}
+        {topGroups.length > GROUP_CHIPS && <CatalogPicker scope="live:category" label="More groups" value={group} options={[{ id: '', label: 'All groups' }, ...shownGroups.map((g) => ({ id: g.id, label: g.path, count: g.channel_count }))]} onChange={(id) => pick(id)} />}
       </FocusGroup>
+      {!besideChip && subgroups && <FocusGroup focusKey="live:subgroups" className="flex">{subgroups}</FocusGroup>}
       {/* a row with a single choice is not shown */}
       {languageOffered && <LanguageFilter scope="live" value={lang} onChange={setLang} />}
       {regionOffered && <div className="flex gap-2 flex-wrap" role="group" aria-label="Region">
