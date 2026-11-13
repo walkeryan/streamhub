@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import ColumnElement, Select, String, case, cast, func, literal, or_, select, text, true
@@ -16,7 +17,7 @@ from app.domain.entities import CatalogItem, MediaKind
 from app.domain.ports import DetailProvider, ImageAuthProvider, MetadataProvider
 from app.infra.crypto import Crypto
 from app.infra.db import Database
-from app.infra.models import Channel, Favorite, Profile, Progress, Source, Title, Watchlist
+from app.infra.models import Channel, Favorite, Profile, Progress, Setting, Source, Title, Watchlist
 from app.services import ids
 from app.services.adult import general_audience, is_general_audience
 from app.services.availability import ATTRIBUTION, AvailabilityService
@@ -36,10 +37,24 @@ BROWSE_KINDS: dict[str, tuple[str, ...]] = {
     "series": ("series",),
 }
 SORTS = {"added", "title", "year", "rating"}
+NEW_RELEASES = "New Releases"
+# A shelf that received nothing for this long counts half when shelves are ranked.
+SHELF_FRESH = timedelta(days=30)
+HOME_SHELVES = "home_shelves"
 
 
 def _escape_like(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def is_replay_shelf(name: str) -> bool:
+    """Recorded sports events: a library of fixtures, not something to put on a billboard."""
+    return "replay" in name.lower()
+
+
+def shelf_path(section: str, name: str) -> str:
+    """Where a client's "See all" goes for one shelf."""
+    return f"/browse/{section}?category={quote(name, safe='')}"
 
 
 class CatalogService:
@@ -709,6 +724,138 @@ class CatalogService:
             tile["progress_pct"] = ctx.progress_pct(hub, *matched_refs)
         tiles = await self._enrich_page([merged[hub] for hub in hubs])
         return {"tiles": tiles, "page": page, "total": total, "has_more": page * PAGE_SIZE < total}
+
+    # ------------------------------------------------------------------ shelves
+    async def shelf_stats(
+        self,
+        section: str,
+        ctx: TileContext,
+        languages: list[str],
+        *,
+        source_id: str | None = None,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Shelves of a section, best first: New Releases, then by size, stale shelves counting half."""
+        kinds = BROWSE_KINDS.get(section)
+        if kinds is None:
+            raise NotFound("unknown section")
+        query = self._filter_title_languages(self._browse_query(kinds, self._enabled(ctx), source_id, None), languages)
+        async with self._db.session() as session:
+            rows = (
+                await session.execute(
+                    query.where(Title.group_name.is_not(None), Title.group_name != "")
+                    .with_only_columns(
+                        Title.group_name, func.count(func.distinct(self._canonical_key())), func.max(Title.added_at)
+                    )
+                    .group_by(Title.group_name)
+                )
+            ).all()
+        fresh_since = (now or datetime.now(UTC)) - SHELF_FRESH
+
+        def rank(row: Any) -> tuple[bool, float, str]:
+            name, count, latest = row
+            fresh = latest is not None and latest >= fresh_since
+            return name != NEW_RELEASES, -(count if fresh else count / 2), name
+
+        return [{"name": name, "count": int(count)} for name, count, _ in sorted(rows, key=rank)]
+
+    async def shelf_items(
+        self,
+        section: str,
+        names: list[str],
+        ctx: TileContext,
+        languages: list[str],
+        limit: int,
+        *,
+        source_id: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """The first tiles of each named shelf in one query: titles with a poster first, then newest."""
+        kinds = BROWSE_KINDS.get(section)
+        if kinds is None:
+            raise NotFound("unknown section")
+        if not names:
+            return {}
+        query = self._filter_title_languages(self._browse_query(kinds, self._enabled(ctx), source_id, None), languages)
+        # Twice the limit: variants of one title merge into a single tile afterwards.
+        position = (
+            func.row_number()
+            .over(
+                partition_by=Title.group_name,
+                order_by=(Title.poster.is_(None), Title.added_at.desc().nulls_last(), Title.id.desc()),
+            )
+            .label("position")
+        )
+        ranked = query.where(Title.group_name.in_(names)).with_only_columns(Title.id, position).subquery()
+        async with self._db.session() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(Title)
+                        .join(ranked, ranked.c.id == Title.id)
+                        .where(ranked.c.position <= limit * 2)
+                        .order_by(ranked.c.position)
+                    )
+                ).scalars()
+            )
+        by_shelf: dict[str, list[Title]] = {}
+        for row in rows:
+            by_shelf.setdefault(str(row.group_name), []).append(row)
+        return {name: ctx.merge(ctx.title_tile(row) for row in found)[:limit] for name, found in by_shelf.items()}
+
+    async def shelves(
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        language: str | None = None,
+        source_id: str | None = None,
+        limit_rows: int = 12,
+        limit_items: int = 20,
+    ) -> dict[str, Any]:
+        ctx = await self.tile_context(profile_id)
+        languages = await self.preferred_languages(profile_id, language)
+        stats = (await self.shelf_stats(section, ctx, languages, source_id=source_id))[:limit_rows]
+        items = await self.shelf_items(
+            section, [shelf["name"] for shelf in stats], ctx, languages, limit_items, source_id=source_id
+        )
+        return {
+            "shelves": [
+                {**shelf, "items": items[shelf["name"]], "browse_path": shelf_path(section, shelf["name"])}
+                for shelf in stats
+                if items.get(shelf["name"])
+            ]
+        }
+
+    async def spotlight(
+        self, section: str, shelf: str, ctx: TileContext, languages: list[str], limit: int, *, billboard: bool
+    ) -> list[dict[str, Any]]:
+        """Newest titles of one shelf fit to feature; never an adult row, whatever the request asked to list.
+
+        ``billboard`` keeps titles with a backdrop and a rating of 6 or more; without it any artwork will do.
+        """
+        art = Title.backdrop.is_not(None) if billboard else or_(Title.backdrop.is_not(None), Title.poster.is_not(None))
+        query = self._browse_query(BROWSE_KINDS[section], self._enabled(ctx), None, None).where(
+            Title.group_name == shelf, Title.adult.is_not(True), art
+        )
+        if billboard:
+            query = query.where(Title.rating >= 6)
+        query = self._filter_title_languages(query, languages)
+        async with self._db.session() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        query.order_by(Title.added_at.desc().nulls_last(), Title.id.desc()).limit(limit * 2)
+                    )
+                ).scalars()
+            )
+        return ctx.merge(ctx.title_tile(row) for row in rows)[:limit]
+
+    async def home_shelf_names(self) -> list[str]:
+        """The owner's ordered ``home_shelves`` setting; empty means Home chooses its shelves."""
+        async with self._db.session() as session:
+            row = await session.get(Setting, HOME_SHELVES)
+        value = row.value if row is not None else None
+        return [str(name).strip() for name in value if str(name).strip()] if isinstance(value, list) else []
 
     async def genre_facets(
         self,

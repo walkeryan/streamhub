@@ -134,7 +134,9 @@ async def test_home_rows_and_hero_hide_adult_rows(seeded: Api) -> None:
     assert_clean(home)
     rows = {row["id"]: [t["id"] for t in row["tiles"]] for row in home["rows"]}
     assert rows["recently_added"] == ["lib:catalog:watched", "lib:catalog:harbour"]
-    assert rows["source:catalog"] == rows["recently_added"]
+    assert rows["shelf:movies:New Releases"] == rows["recently_added"]
+    assert not any("Late Night" in rid for rid in rows)  # the adult shelf gets no row
+    assert "source:catalog" not in rows  # one library source would only repeat Recently Added
     assert rows["continue_watching"] == ["lib:catalog:watched"]
     assert rows["recommendations"] == ["lib:catalog:harbour"]
     assert "favorites" not in rows and "watchlist" not in rows  # only adult items were saved
@@ -160,7 +162,9 @@ async def test_admin_can_include_adult_rows(seeded: Api) -> None:
     rows = {row["id"]: [t["id"] for t in row["tiles"]] for row in home["rows"]}
     assert rows["recently_added"][:3] == ["lib:catalog:night", "tmdb:movie:900", "lib:catalog:hours"]
     assert rows["favorites"] == ["lib:catalog:night"] and rows["watchlist"] == ["tmdb:movie:900"]
-    assert home["hero"][0]["id"] in ADULT_IDS
+    assert "shelf:movies:Late Night" in rows
+    # The opt-in lists adult rows; the billboard still never features one.
+    assert [t["id"] for t in home["hero"]] == ["lib:catalog:watched", "lib:catalog:harbour"]
     assert shown((await api.get("/favorites", params={"include_adult": "true"})).json())[0] == {"lib:catalog:night"}
 
     # The flag is per request and never leaks into a cached general listing.

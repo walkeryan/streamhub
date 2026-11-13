@@ -198,6 +198,8 @@ class Row(_M):
     title: str
     layout: Literal["poster", "landscape", "hero", "channel"] = "poster"
     tiles: list[Tile]
+    # Client route for the row's "See all"; absent when the row has no fuller listing.
+    browse_path: str | None = None
 
 
 class Home(_M):
