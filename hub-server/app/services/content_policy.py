@@ -289,7 +289,12 @@ class ContentPolicy:
             ),
         )
 
-    async def allowed_refs(self, profile_id: str, refs: list[str], at: datetime | None = None) -> set[str]:
+    async def allowed_refs(
+        self, profile_id: str, refs: list[str], at: datetime | None = None, *, proven: bool = False
+    ) -> set[str]:
+        """Which of ``refs`` the profile may see. ``proven`` admits a ``tmdb:`` id only on fresh
+        evidence, even for a profile that is allowed unknown ratings: for titles that are only
+        metadata so far, "not looked up yet" is not the same as "has no rating"."""
         profile = await self.profile(profile_id)
         if not self.restricts(profile):
             return set(refs)
@@ -309,7 +314,7 @@ class ContentPolicy:
         try:
             async with self.db.session() as session:
                 if canonical:
-                    allowed.update(await self._canonical(session, profile, canonical))
+                    allowed.update(await self._canonical(session, profile, canonical, proven))
                 for source, ext_ids in libraries.items():
                     hits = (
                         await session.execute(
@@ -343,10 +348,10 @@ class ContentPolicy:
             active_policy.reset(reset)
         return allowed
 
-    async def _canonical(self, session: Any, profile: Profile, refs: list[str]) -> set[str]:
+    async def _canonical(self, session: Any, profile: Profile, refs: list[str], proven: bool = False) -> set[str]:
         """Which ``tmdb:`` ids the profile's rule set admits."""
         keys = select(AgeClassification.subject_key).where(AgeClassification.subject_key.in_(refs))
-        if self.enabled or not self.values(profile)["allow_unknown"]:
+        if self.enabled or proven or not self.values(profile)["allow_unknown"]:
             found = set((await session.execute(keys.where(*self._proven(profile)))).scalars())
             if self.enabled:
                 return found

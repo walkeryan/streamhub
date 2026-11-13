@@ -448,7 +448,7 @@ class CatalogService:
                 # Restricted discovery uses verified classification only. Provider
                 # counts are not counts of permitted titles and must not be shown.
                 if restricted:
-                    allowed = await policy.allowed_refs(profile_id, list(by_id))
+                    allowed = await policy.allowed_refs(profile_id, list(by_id), proven=True)
                     by_id = {hub: meta for hub, meta in by_id.items() if hub in allowed}
                 matches = await self.availability.library_matches_many(list(by_id.values()), general=True)
                 match_ids = {row.id for rows in matches.values() for row in rows if row.source_id in enabled}

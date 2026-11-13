@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.domain.entities import MetaTitle
 from app.infra.models import AgeClassification, Channel, ChannelGroup, Profile, Programme, Source, Title
 from app.services.classification import MOVIE_CODES, TV_CODES, classification_record, summarize
 from app.services.content_policy import active_principal
@@ -424,6 +425,21 @@ async def test_ceiling_with_unknown_ratings_allowed(seeded: Api) -> None:
     }
     assert (await teen.get("/titles/lib:catalog:show-ma-e1")).status_code in (403, 404)
     assert (await teen.get("/titles/lib:catalog:unrated")).status_code == 200
+    # Metadata discovery is the exception: a title nobody has looked up yet is not "unrated".
+    assert set(await api.c.content_policy.allowed_refs(teen.profile_id, canonical, proven=True)) == {
+        "tmdb:movie:101",
+        "tmdb:movie:103",
+        "tmdb:tv:201",
+    }
+    meta = AsyncMock()
+    meta.enabled = True
+    found = [MetaTitle(n, "movie", f"Film {n}", 2020) for n in (101, 103, 104, 105, 999)]
+    meta.discover.return_value = (found, 5)
+    api.c.catalog.meta = meta
+    page = await teen.get("/discover/movies", params=ALL_LANGUAGES)
+    assert page.status_code == 200, page.text
+    assert [t["id"] for t in page.json()["tiles"]] == ["tmdb:movie:101", "tmdb:movie:103"]
+    assert page.json()["total"] is None
 
 
 async def test_adult_rows_are_never_admitted_under_a_ceiling(seeded: Api) -> None:
