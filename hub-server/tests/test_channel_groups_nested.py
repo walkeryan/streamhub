@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.infra.models import Channel, ChannelGroup, Source
 from app.services.sources import group_id
 from tests.conftest import Api
+from tests.test_channel_presentation import add_lineup
 from tests.test_presentation_sync import MANAGER, add_xtream, panel
 
 GROUP_MAP = {
@@ -300,3 +301,30 @@ async def test_groups_stored_before_parents_had_rows_get_one_when_it_is_needed(a
     async with api.c.db.session() as session:
         row = await session.get(ChannelGroup, sports)
         assert row is not None and (row.name, row.sort, row.sync_gen, row.hidden) == ("Sports", 2, 4, True)
+
+
+async def test_a_playlist_nests_by_its_own_names_and_a_late_parent_takes_its_childs_place(api: Api) -> None:
+    lineup = [
+        ("news", "News", "News One"),
+        ("league", "Sports / League One", "League One 01"),
+        ("hoops", "Sports / College Basketball", "College Hoops 01"),
+        ("local", "Locals", "Local One"),
+    ]
+    source = await add_lineup(api, lineup)
+    expected = [
+        ("News", None, "News", 1),
+        ("Sports", None, "Sports", 2),
+        ("Sports / League One", "Sports", "League One", 1),
+        ("Sports / College Basketball", "Sports", "College Basketball", 1),
+        ("Locals", None, "Locals", 1),
+    ]
+    assert shape(await groups(api)) == expected
+    # As a catalog synced before parents had rows: the listing is the same, and so is the next sync's.
+    async with api.c.db.session() as session:
+        await session.delete(await session.get(ChannelGroup, group_id(source["id"], "Sports")))
+        await session.commit()
+    assert shape(await groups(api)) == expected
+    assert await api.c.sync.sync_source(source["id"])
+    assert shape(await groups(api)) == expected
+    async with api.c.db.session() as session:
+        assert await session.get(ChannelGroup, group_id(source["id"], "Sports")) is not None

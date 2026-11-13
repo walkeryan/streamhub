@@ -346,6 +346,7 @@ class DbCatalogSink:
         self._offset = int((source.hints or {}).get("channel_offset") or 0)
         self._groups: dict[str, str] = {}
         self._group_overrides: dict[str, str | None] = {}
+        self._group_sorts: dict[str, int] = {}
         self._group_sort = 0
         self.hints: dict[str, Any] = {}
         self.channel_count = 0
@@ -359,6 +360,7 @@ class DbCatalogSink:
             rows = (await s.execute(select(ChannelGroup).where(ChannelGroup.source_id == self._source.id))).scalars()
             for g in rows:
                 self._group_overrides[g.name] = g.language_override
+                self._group_sorts[g.name] = g.sort
                 self._group_sort = max(self._group_sort, g.sort)
         self._loaded = True
 
@@ -380,16 +382,14 @@ class DbCatalogSink:
                 for name in (parent, gname) if parent else (gname,):
                     if name not in self._groups:
                         self._groups[name] = group_id(sid, name)
-                        self._group_sort += 1
-                        group_rows.append(
-                            {
-                                "id": self._groups[name],
-                                "source_id": sid,
-                                "name": name,
-                                "sort": self._group_sort,
-                                "sync_gen": self._gen,
-                            }
-                        )
+                        # A child stored before parents had rows keeps its place, and its new parent takes
+                        # that place too instead of the end of the list. (A stored row keeps its own sort.)
+                        sort = self._group_sorts.get(gname)
+                        if sort is None:
+                            self._group_sort += 1
+                            sort = self._group_sort
+                        row = {"id": self._groups[name], "source_id": sid, "name": name, "sort": sort}
+                        group_rows.append({**row, "sync_gen": self._gen})
                 gid = self._groups[gname]
             self.channel_count += 1
             # An adapter that cleaned the group name keeps the provider's own in raw_group;

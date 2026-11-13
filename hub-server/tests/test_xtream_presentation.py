@@ -147,7 +147,7 @@ def test_adult_from_panel_flag_or_configured_category() -> None:
         ("UK| BBC HD", "BBC HD"),
         ("US| TNT2 EXTRA", "TNT2 Extra"),
         # Two or three letters with no vowel cannot be a word.
-        ("US| QVC SHOPPING", "QVC Shopping"),
+        ("US| ZRT SHOPPING", "ZRT Shopping"),
         ("US| DJ MIXES", "DJ Mixes"),
         ("US| SKY HIGH", "Sky High"),
         ("US| ART FILMS", "Art Films"),
