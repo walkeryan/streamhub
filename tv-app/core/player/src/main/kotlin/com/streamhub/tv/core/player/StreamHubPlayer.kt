@@ -15,7 +15,6 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
@@ -24,6 +23,7 @@ import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.sameSwitchSession
 import kotlinx.coroutines.CoroutineStart
 import com.streamhub.tv.core.data.repo.OwnedProgressJobs
+import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackState
@@ -67,6 +67,12 @@ data class PlayerUiState(
     val subtitlesOff: Boolean = true,
     val audioBlocked: Boolean = false,
     val audioNotice: String? = null,
+    /**
+     * Set with [error] when the failure was the server refusing the media URL itself (see
+     * StreamRefusals): the session or account behind the stream, the home network, the rating
+     * ceiling or the user's stream limit. Never reconnected; the screen decides what to do about it.
+     */
+    val refusal: ApiException? = null,
 )
 
 /**
@@ -118,7 +124,7 @@ class StreamHubPlayer(
         .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
 
     private val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractors)
-        .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(6))
+        .setLoadErrorHandlingPolicy(RefusalAwareLoadErrorPolicy(6))
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .setRenderersFactory(
@@ -146,7 +152,7 @@ class StreamHubPlayer(
             _state.value = _state.value.copy(buffering = playbackState == Player.STATE_BUFFERING)
             if (playbackState == Player.STATE_READY) {
                 reconnectJob?.cancel()
-                _state.value = _state.value.copy(error = null, reconnectAttempt = 0)
+                _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0)
                 enforceAudioLanguage()
             }
             if (playbackState == Player.STATE_ENDED) {
@@ -157,6 +163,14 @@ class StreamHubPlayer(
 
         override fun onPlayerError(error: PlaybackException) {
             val d = current
+            // The server refused the stream for a reason the same address cannot get past: say so instead
+            // of reconnecting. (A two-pane player keeps its own wording and has no screen for this.)
+            val refusal = if (allowLiveReconnect) streamRefusal(error) else null
+            if (refusal != null) {
+                reconnectJob?.cancel()
+                _state.value = _state.value.copy(error = friendly(error), refusal = refusal, reconnectAttempt = 0)
+                return
+            }
             if(d?.bufferAvailable == true) {
                 _state.value = _state.value.copy(error="Buffered playback interrupted. Choose Go Live or retry.")
             } else if (d?.live == true && allowLiveReconnect) {
@@ -224,7 +238,7 @@ class StreamHubPlayer(
             .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
             .setPreferredAudioLanguages(*d.preferredAudioLanguages.toTypedArray()).build()
         reconnectJob?.cancel()
-        _state.value = _state.value.copy(error = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList())
+        _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList())
         httpFactory.setDefaultRequestProperties(d.headers.filterKeys { !it.equals("User-Agent", true) })
         httpFactory.setUserAgent(d.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: DEFAULT_UA)
         val item = MediaItemMapper.toMediaItem(d)

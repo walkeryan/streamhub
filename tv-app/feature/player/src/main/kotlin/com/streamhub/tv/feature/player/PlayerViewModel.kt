@@ -19,6 +19,8 @@ import com.streamhub.tv.core.data.room.roomSeatLost
 import com.streamhub.tv.core.data.room.roomSeatRecoverable
 import com.streamhub.tv.core.data.room.roomStream
 import com.streamhub.tv.core.data.api.ApiException
+import com.streamhub.tv.core.data.api.StreamRefusals
+import com.streamhub.tv.core.data.repo.SessionEnd
 import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -140,6 +142,10 @@ data class PlayerScreenState(
  *  - Sleep timer → pause and exit.
  *  - Films and buffered history get a focusable control row (scrubber + buttons) instead of the live banner.
  *  - "Try again" resolves the accepted request again; it never replays the descriptor on screen.
+ *  - A refusal of the media URL itself (StreamRefusals: the session or account, the home network, the
+ *    rating ceiling, the user's stream limit) is worded like the same refusal of a resolve. One about
+ *    the session is first put to the server: refreshed and resolved again once, or, when the session
+ *    really is over, left to the shell, which explains and returns to the picker or to pairing.
  *  - In a watch room (the player key carries a RoomSeat) play, pause and seek go to the room instead
  *    of the player; what the room answers is applied through RoomSync, so every member, this one
  *    included, moves on the same message. Buffering is reported so the room can wait.
@@ -219,10 +225,51 @@ class PlayerViewModel @Inject constructor(
             attachJob = viewModelScope.launch { start(d); if(d.live) loadChannelList(d) }
         }
         showOsd()
+        viewModelScope.launch { player.state.map { it.refusal }.distinctUntilChanged().collect { refusal -> if (refusal != null) streamRefused(refusal) } }
+        viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) reauthorized = false } }
         viewModelScope.launch {
             sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
                 rewindJob?.cancel(); _state.update { it.copy(audioChoice=null) }; stopCurrentPlayback(); _exit.emit(Unit)
             }
+        }
+    }
+
+    // ---- The server refused the stream itself ------------------------------------------------------
+
+    /** One silent refresh-and-resolve per stretch of playback: a stream refused again straight away is put to the viewer. */
+    private var reauthorized = false
+
+    private fun streamRefused(refusal: ApiException) {
+        if (refusal.error?.code in StreamRefusals.ABOUT_THE_SESSION && !reauthorized) { reauthorize(); return }
+        // Worded as the same refusal of a resolve would be; "Try again" resolves afresh.
+        attachJob?.cancel()
+        _state.update { it.copy(failure = ApiErrors.describe(refusal), failureKeepsPlaying = false, retrying = false, roomCatchUp = false) }
+    }
+
+    /**
+     * The stream says its session no longer stands. Any authenticated call settles what that means:
+     * a stale session (a role, permission or limit changed) is refreshed by the client on the way and
+     * playback is resolved again, once; a session that is revoked, or an account that is suspended,
+     * fails the call the same way, and the shell is told by the client itself (see SessionEvents).
+     */
+    private fun reauthorize() {
+        reauthorized = true
+        attachJob?.cancel(); rewindJob?.cancel()
+        _state.update { it.copy(failure = null, retrying = true, roomCatchUp = false, message = null) }
+        attachJob = viewModelScope.launch {
+            try { api.me() }
+            catch (e: CancellationException) { _state.update { it.copy(retrying = false) }; throw e }
+            catch (e: Exception) {
+                _state.update { it.copy(retrying = false) }
+                if (SessionEnd.ofCode((e as? ApiException)?.error?.code) != null) {
+                    // Over for good or for now: nothing here can play. The shell explains and moves on.
+                    stopCurrentPlayback()
+                    _exit.emit(Unit)
+                } else _state.update { it.copy(failure = ApiErrors.describe(e), failureKeepsPlaying = false) }
+                return@launch
+            }
+            _state.update { it.copy(retrying = false) }
+            retry()
         }
     }
 
@@ -467,7 +514,8 @@ class PlayerViewModel @Inject constructor(
             launch {
                 // This member lost its place: the stream address expired, or the segments are those of a
                 // start the room has left behind. Asked for again a few times before the viewer is.
-                player.state.map { it.error != null && it.reconnectAttempt == 0 && !it.audioBlocked }.distinctUntilChanged().collect { failed ->
+                // A refusal of the stream is not a lost place: it has its own answer (see streamRefused).
+                player.state.map { it.error != null && it.refusal == null && it.reconnectAttempt == 0 && !it.audioBlocked }.distinctUntilChanged().collect { failed ->
                     if (failed && _state.value.roomEnded == null && autoRecoveries < MAX_AUTO_RECOVERIES) { autoRecoveries++; recoverRoom(auto = true) }
                 }
             }

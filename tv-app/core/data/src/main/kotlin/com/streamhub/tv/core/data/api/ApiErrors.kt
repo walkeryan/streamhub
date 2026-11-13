@@ -77,6 +77,12 @@ object ApiErrors {
                 canRetry = true,
             )
             "user_stream_limit" -> UserError("Already watching", ownStreamsBody(error.active), canRetry = true)
+            // Every call answers this away from home for a user without remote.access; so do the media URLs.
+            "remote_access_denied" -> UserError(
+                "Home network only",
+                "This account can only be used on the home network. Connect this TV to it, or ask the owner to allow watching away from home.",
+                canRetry = true,
+            )
             // Reached only when the silent refresh and its one retry did not settle it (see HttpClientFactory).
             "session_stale" -> UserError(
                 "Access updated",

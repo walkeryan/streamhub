@@ -273,13 +273,20 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     var sessionNotice by remember { mutableStateOf<SessionEnd?>(null) }
     var suspensionSaidFor by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val toPickerIfShared: () -> Unit = {
+        if ((vm.me.state.value.sharedDevice || sharedHint == SharedHint.Shared) && nav.currentDestination?.route !in ACCOUNT_ROUTES) {
+            vm.coordinator.cancelPending()
+            nav.navigate(Routes.WHO_GATE) { popUpTo(nav.graph.id) { inclusive = true }; launchSingleTop = true }
+        }
+    }
     LaunchedEffect(Unit) {
         vm.sessionEvents.ended.collect { end ->
             if (end == SessionEnd.Suspended) {
                 val person = vm.session.value?.profile?.id
-                if (nav.currentDestination?.route in ACCOUNT_ROUTES || suspensionSaidFor == person) return@collect
-                suspensionSaidFor = person
-                sessionNotice = end
+                if (nav.currentDestination?.route in ACCOUNT_ROUTES) return@collect
+                if (suspensionSaidFor != person) { suspensionSaidFor = person; sessionNotice = end }
+                // Said already: a shared TV still goes back to the picker, which says it again in place.
+                else if (sessionNotice == null) toPickerIfShared()
                 return@collect
             }
             audioChoice = null
@@ -339,10 +346,7 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
             sessionNotice?.let { end ->
                 ErrorDialog(ApiErrors.sessionEnded(end), onRetry = {}, onDismiss = {
                     sessionNotice = null
-                    if (end == SessionEnd.Suspended && (vm.me.state.value.sharedDevice || sharedHint == SharedHint.Shared) && nav.currentDestination?.route !in ACCOUNT_ROUTES) {
-                        vm.coordinator.cancelPending()
-                        nav.navigate(Routes.WHO_GATE) { popUpTo(nav.graph.id) { inclusive = true }; launchSingleTop = true }
-                    }
+                    if (end == SessionEnd.Suspended) toPickerIfShared()
                 })
             }
             // Play failures: a dialog the remote can answer, focused on Try again when retrying can help.
