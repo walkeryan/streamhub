@@ -1,8 +1,95 @@
 # StreamHub for Android TV
 
-Native Android TV client for the StreamHub server (`hub-server/`). Kotlin 2.3 · Compose for TV
-(`tv-material 1.1.0`, `tv-foundation 1.0.0`) · Media3 1.11 · Hilt · Ktor (CIO) · Coil 3 · DataStore.
-minSdk 24, target/compileSdk 36, leanback-only (no touchscreen required).
+A thin native shell around the StreamHub web app (`web-app/`), with native playback. Kotlin 2.3 ·
+`android.webkit.WebView` · Compose for TV (`tv-material 1.1.0`) for the few native screens · Media3 1.11 ·
+Hilt · Ktor (CIO) · DataStore. minSdk 24, target/compileSdk 36, leanback-only (no touchscreen required).
+
+## What is web, what is native
+
+The TV shows the paired server's web app full screen, exactly as a 1920×1080 desktop browser shows it.
+Every screen a person browses (Home, Movies, Shows, Live TV and the guide, Search, Sports, My List,
+Recordings, Requests, Sources, Settings, profiles, "Who's watching?", watch-room join pages) is the web
+app, so every change to it reaches the TV the moment the server serves it. Native are only:
+
+| Native | Why |
+|---|---|
+| Pairing: legal notice, server address, device code | How a TV signs in (`POST /auth/device`, `/auth/device/poll`), before there is a session for the web app |
+| Playback (`PlayerActivity`, `feature/player`) | Smooth 4K, surround passthrough to a receiver or soundbar, formats a browser cannot play, live zapping, watch rooms |
+| "Cannot reach your server" | Shown when the page fails to load: *Retry*, *Change server*, *TV settings* |
+| TV settings | Server address, *Sign out of this TV*, app version, update check (`GET /app/tv`, verified download, system installer) |
+
+### The shell (`app/…/MainActivity`, `app/…/shell/`)
+
+- **Layout.** The WebView uses `useWideViewPort`; in shell mode the web app sets its viewport to
+  `width=1920` at the scale that fits the screen (`web-app/src/shellProtocol.ts`, `shellViewport`).
+  Google TV WebViews report about 960×540 CSS pixels, so without this the web app would fall into its
+  tablet layout; with it `window.innerWidth` is 1920 and the root font is the web app's TV size (24 px).
+- **Keys.** D-pad arrives as arrow keys, Select as Enter; digits and media keys pass through to the
+  page. The hardware **Back** key calls `window.streamhubShell.back()`, the same handling as Escape and
+  Backspace in a browser (close the open dialog, else go back). It answers `false` only on the home
+  screen with nothing to close, and then the app is left like any TV app.
+- **Lifecycle.** The activity handles configuration changes itself and keeps its WebView, so a change
+  of display mode, a trip to the player or to the home screen never reloads the page. Backgrounded,
+  the page's timers pause; behind the player it keeps running (it answers token requests). The WebView
+  holds no wake lock; the video surface keeps the screen awake only while the picture plays.
+- **Locked down.** No address bar, zoom, long-press menus, selection callouts, pop-up windows, file or
+  content access, or permission grants. Only the paired server's origin (`scheme://host:port`) may load;
+  any other address, scheme or external link loads nowhere (`mayLoad`). Debug builds enable WebView
+  remote debugging (`chrome://inspect`); release builds do not.
+
+### The session: one owner
+
+The web app owns the session: it refreshes, and refresh tokens rotate on every `/auth/refresh` (a
+replayed old one ends the session). The TV never keeps a second refreshing copy:
+
+1. Pairing gives the TV a token pair. Before the web app is loaded, the shell opens a blank document of
+   the server's origin (`loadDataWithBaseURL`), writes the pair into that origin's `localStorage` under
+   `sh.session.v1` in the exact shape `web-app/src/store/session.ts` reads (`{access, refresh, profile}`),
+   checks it is there, and only then loads the web app.
+2. The TV then drops its refresh token (`SessionStore.handOverToWeb`). It keeps the server address, the
+   person, the last access token it was handed and the session's identity (generation), so progress
+   reports and stream leases stay bound to the right person.
+3. An install of an earlier version (it has a native pair) is migrated the same way on its first start.
+4. When the web app signs out (or finds no session), it calls `signedOut()` and the TV returns to its
+   pairing screen, showing the reason when there is one. *Sign out of this TV* does the same from the
+   native side.
+
+### The bridge
+
+`window.StreamHubTV` is added before the first page loads, so the web app finds it at document start.
+Version 1:
+
+| Page → TV (`window.StreamHubTV`) | |
+|---|---|
+| `play(json): boolean` | Start native playback. `{"v":1,"kind":"title","id",…}` with optional `source_id`, `variant_id`, `allow_unverified_audio` (only with a variant), `catchup_programme_id` or `rewind_at`, `start_position_ms`, `audio_track`; or `{"v":1,"kind":"room","room_code","member_token","allow_unverified_audio"}`. Every field is type- and shape-checked (`parseShellPlay`); unknown fields are ignored; false when refused |
+| `signedOut(reason)` | The web app has no session any more |
+| `capabilities(): string` | `{"bridge":1,"shell":"1.2.0","version_code":7,"native_playback":true,"hdr":[…],"video_codecs":[…],"audio_passthrough":[…]}` |
+| `deliverToken(id, json)` | The answer to a token request: `{"access","profile"}`, or `null` |
+
+| TV → page (`window.streamhubShell`) | |
+|---|---|
+| `back(): boolean` | One press of Back (above) |
+| `token(id, rejected)` | Asks for a current access token. The web app refreshes first when its token has expired or is the one the server just refused (`rejected`), and answers through `deliverToken` with the same id |
+| `playbackEnded()` | The player closed: the page reads progress on tiles again; screen and focus are where they were |
+
+Nothing that arrives from the page is used as an address: `play()` carries only the inputs to a
+resolve, and the TV resolves them itself through the API with `client=android_tv` and the web app's
+access token. Token request ids are random, single-use and expire after 15 s (`WebTokenBroker`).
+
+### Native playback
+
+Play in the web app (a tile, a title's Play, a channel, catch-up, a recording `rec:<id>`) never starts
+the web player in the shell. The web app hands the request over; the TV first takes the web app's
+current token and person (`WebSessionTokens`), then resolves through `PlaybackCoordinator` exactly as
+before (its own audio check and dialog when the web app had not chosen a variant, hand-off to another
+TV app for sources that live there) and opens `PlayerActivity`. A watch room is joined by the web app
+with `client=android_tv`; the TV takes the seat up with its member token (`RoomRepository.joinHeld`)
+and the player runs in room mode as before. Back from the player returns to the WebView.
+
+The player's API calls (resolve, progress, room descriptor, buffer leases) carry the access token the
+web app handed over. On a 401 the HTTP client asks the web app for a current one and repeats the call
+once (`createStreamHubHttpClient(webTokens = …)`); progress reports, which carry their token outside
+the bearer plugin, do the same. The TV never calls `/auth/refresh` itself.
 
 ## Build
 
@@ -12,7 +99,7 @@ Requirements: JDK 17+ (21 tested) and an Android SDK with `platforms;android-36`
 cd tv-app
 cp local.properties.example local.properties   # set sdk.dir to your SDK path
 ./gradlew :app:assembleDebug                    # → app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:assembleRelease                  # minified; signed with the debug key for sideloading
+./gradlew :app:assembleRelease                  # minified; unsigned unless STREAMHUB_SIGNING_PROPERTIES names a signing file
 ./gradlew testDebugUnitTest                     # JVM unit tests of every module (what CI runs)
 ```
 
@@ -54,7 +141,7 @@ means bumping these together.
 2. Find the TV's IP (Settings → Network) and connect:
 
    ```bash
-   adb connect 192.168.1.50:5555          # accept the prompt on the TV
+   adb connect 192.0.2.50:5555          # accept the prompt on the TV
    adb install -r app/build/outputs/apk/debug/app-debug.apk
    adb shell am start -n com.streamhub.tv.debug/com.streamhub.tv.MainActivity
    ```
@@ -64,308 +151,19 @@ means bumping these together.
 
 ## Point the app at your server
 
-On first launch:
+On first launch: the legal notice (docs/LEGAL.md), then the server address (e.g. `192.0.2.10:8787`;
+`http://` and `:8787` are added if left out; the app checks `GET /api/v1/health`), then a 6-character
+code and a QR code (`<server>/pair?code=XXXXXX`) to approve from the web app on a phone while signed in.
+The web app then opens full screen. To change server: *Change server* on the "Cannot reach your server"
+screen or in TV settings. Cleartext HTTP is allowed (`network_security_config.xml`) because the server
+and most IPTV upstreams are on the LAN over plain HTTP.
 
-1. **Disclaimer** (docs/LEGAL.md v1.0), shown before anything else: *I accept* is focused by default
-   but stays disabled for 3 s. *Exit* closes the app. The built-in copy is used until a server is known;
-   if the server later serves a newer version, the gate is shown again before pairing. A TV that was
-   paired without accepting (older build) gets the gate on next launch and then goes straight to Home.
-2. **Server address**: enter the StreamHub host, e.g. `192.168.1.10:8787` (the Unraid IP and port).
-   `http://` and `:8787` are added if you leave them out, and `/api/v1` is appended automatically. The
-   app calls `GET /api/v1/health` before it continues.
-3. **Pair**: the TV shows a 6-character code and a QR code (`<server>/pair?code=XXXXXX`). Approve it
-   from the web app while signed in. The TV polls `POST /auth/device/poll` and continues automatically.
+## The native player
 
-To change server later: Settings → Playback & server → *Sign out of this TV*, then enter the new address.
-Cleartext HTTP is allowed (`network_security_config.xml`) because the server and most IPTV upstreams are on the LAN over plain HTTP.
-
-## What the app does
-
-Everything is driven with the D-pad, Select and Back.
-
-- **Home, Movies, Shows, Discover, Sports, My List, Search**: browse and play what the server's
-  sources have; titles that live in another app are handed off to it. *Search* is one field and
-  three rows (On TV, Channels, Movies & Shows): the hub's own answer (`discover=false`) is shown
-  first and the metadata provider's titles join the end. *Sports* lists live games, what is coming
-  by day, game feeds and sports channels.
-- **Live TV and Guide**: channel list with number keys, top-level group chips (a parent opens a
-  list of its children) and languages; EPG grid with catch-up.
-- **Who's watching?** on shared TVs: pick a person, with their PIN (below).
-- **Watch together**: start a room on a film, a series, an episode or a live channel, or join one
-  with its six-character code (below).
-- **Recordings**: record one programme, every new episode, or every game for a team; manage and play
-  them (below).
-- **Requests**: ask for a title no source has; see the answer on Home (below).
-- **Updates**: a newer build offered by the server is downloaded, verified and handed to the installer.
-
-### The rail
-
-Top to bottom, which is also the D-pad order:
-
-1. **Home · Search · Live TV · Movies · Shows · My List**
-2. the secondary destinations: **Sports · Discover · Join a room · Recordings · Requests · Sources**
-3. **Settings**, then the avatar (the picker on a shared TV, Settings → Profiles otherwise)
-
-A thin line separates the three. *Join a room*, *Recordings* and *Requests* are there only for
-someone who may use them (table below); a destination that is not offered is absent, not greyed out.
-The order and the gating are `RailOrder` in `core/ui/.../LeftRail.kt`, a pure function with tests.
-The rail's items sit inside the 48 / 27 dp safe area and the list scrolls with focus when it is
-taller than the screen. *My List* is the Favorites screen under the name the web app uses.
-
-### Permissions
-
-On start, after pairing and after a switch of person the app reads `GET /auth/me` and keeps the
-answer (`MeRepository`). It is read again whenever the token pair had to be exchanged, which is what
-a `401 session_stale` (a role or permission was changed on the server) leads to: the tokens are
-refreshed silently and the call is repeated once. Actions the signed-in person may not use are not
-shown:
-
-| Needs | Shows |
-|---|---|
-| `rooms.create` | *Watch together* on a title's page, on an episode and on a live channel |
-| `rooms.join` | *Join a room* in the rail and in Search |
-| `recordings.schedule` | the Record actions in the Guide and on Live TV |
-| `recordings.view` | *Recordings* in the rail (and only when the server records) |
-| `requests.create` | *Request* on a title's page; *Requests* in the rail |
-| `requests.approve` | *All requests* with Approve / Decline (Settings → Requests for someone who may only approve) |
-
-A server without `/auth/me` (404) is treated as before permissions existed: everything is offered
-except what only an administrator could do. Refusals are worded for the screen (`ApiErrors`): no
-permission (with what is missing), a suspended account, an account waiting for approval, "this
-account can only be used on the home network" (`remote_access_denied`), and "you're already
-watching … on another device" for a per-person stream limit.
-
-### When the session ends
-
-| The server says | What the TV does |
-|---|---|
-| 401 `token_expired`, `session_stale` | exchanges the token pair and repeats the call once, silently. Refresh tokens rotate: the answered refresh token replaces the stored one in the same write as the access token, before either is used (`refreshedSession`), and a request that used an older pair takes the stored one instead of presenting the old token again (`rotatedSince`) |
-| 401 `session_revoked` (signed out elsewhere, or the session changed hands) | drops the tokens, keeps the server address, explains in a dialog and goes back to pairing |
-| 401 `user_suspended` | keeps the pairing and explains once. A shared TV then returns to the picker, which offers *Pair this TV again* while nobody can be picked; a personal TV stays where it is |
-
-The same holds when the refusal comes from `POST /auth/switch` or from a media URL (see "When the
-server refuses a stream").
-
-### Who's watching? (shared TVs)
-
-When `/auth/me` says `shared_device`, the TV belongs to the household rather than to one person:
-
-- **After pairing and on every cold start** the first screen is a grid of the people who can be
-  picked here (`GET /auth/switchable`): picture or initial, name, role, and a lock with "PIN" for
-  people who have one. This picker cannot be dismissed: Back offers *Exit app*. Picking the person
-  who was already signed in still asks for their PIN, if they have one.
-- **From the rail's avatar** (and Settings → Profiles) the same picker is a visit: Back returns, and
-  picking the current person just closes it.
-- **PINs** are typed on an on-screen number pad. The D-pad walks it and the remote's own digit keys
-  type into it from anywhere; digits show as dots; 4 to 8 digits. Each failure has its own text: a
-  wrong PIN, a person who has to set a PIN first (done in the web app), too many attempts (with a
-  countdown from the server's `Retry-After`), or the reason the server could not be reached.
-- A switch (`POST /auth/switch`) saves the new tokens, bumps the session generation and clears what
-  was cached for the previous person (stream leases, channel lists, permissions).
-
-How each answer of `POST /auth/switch` is handled (`UserSwitchRepository`, tested against a fake):
-
-| Answer | Handling |
-|---|---|
-| 200 | switched; `pin` is sent as `null` when there is none |
-| 401 `pin_required` | the pad opens, also for someone the list said had no PIN |
-| 401 `pin_invalid` | "That PIN isn't right"; never sent twice. A switch to oneself with a PIN is a PIN check |
-| 409 `pin_setup_required` | "… needs a PIN first", set in the web app |
-| 409 `switch_conflict` | repeated once; still in conflict → a notice with *Try again* |
-| 404 | the person is no longer listed: said, and the list is read again |
-| 429 | the pad is locked for the integer `Retry-After`, with a countdown |
-| 403 `not_shared_device` | explained; the list then answers the same and the picker closes |
-| 401 `token_expired`, `session_stale` | the session is refreshed and the switch repeated once |
-| 401 `session_revoked`, `user_suspended` | not a PIN answer: see "When the session ends" |
-
-Whether the TV is shared is remembered on the device, so the next cold start opens on the picker at
-once; if the flag was not known yet, the picker appears as soon as the server has answered.
-
-There is no picker on a personal device (`GET /auth/switchable` answers 403 `not_shared_device`) and
-on a server too old to have the route (a 404 for the path itself, as opposed to the server's own
-`not_found`): the app opens on Home and the avatar leads to Settings → Profiles. Any other refusal of
-the list is shown with *Try again*. That 404 is the only allowance left for older servers here.
-
-### Watch together (rooms)
-
-- **Starting one**: *Watch together* creates a room and shows its six-character code in large
-  type, with a QR code of `<server>/room/<code>` for phones and computers. *Start* joins the room and
-  opens the player; *Cancel room* closes it again. It is offered on:
-  - a **film's** or an **episode's** page;
-  - a **series'** page: the room is created on the series and the server opens it on the next
-    episode to watch;
-  - an **episode tile**: hold Select on it for its actions (*Play*, *Watch together*);
-  - a **live channel**, among its actions on Live TV: a live room, with no position.
-  One launcher and one dialog serve all of them (`WatchTogetherLauncher`, `WatchTogetherDialog`).
-- **Joining one**: *Join a room* (rail) has six slots and a picker of the code
-  alphabet for the D-pad; the remote's 2–9 keys and a keyboard's letters type directly. Once the code
-  is complete the room is shown (title, host, who is there) with *Join*.
-- **In the room** the player works on the room's clock, not its own:
-  - Play, pause and seek are sent to the room. The room's answer moves everyone, this TV included,
-    so the picture changes a moment after the key press rather than at once.
-  - Twice a second the player compares itself with the room (`RoomSync.decide`): more than one
-    second away from the room's position it seeks; smaller differences are left alone. The server's
-    clock is estimated from ping/pong, keeping the sample with the shortest round trip.
-  - When this TV stalls it tells the room, which pauses for it: everyone sees
-    "Waiting for <name>…". A strip at the top left shows the room code and who is there (★ host,
-    … buffering) while the controls are up or the room is waiting.
-  - If the host has locked the controls, a guest's play/pause/seek says
-    "Only the host can control playback". The host locks and unlocks from the player menu.
-  - A room on a live channel has no position: only play and pause are shared, Select plays/pauses,
-    and there is no zapping, channel list, number entry or archive.
-  - **Back asks "Leave the room?"** (the host can also end it for everyone). Leaving closes the
-    socket normally, which frees the seat at once.
-  - A dropped connection is retried with the same seat after 1, 2, 4, 8 s and then every 15 s. If
-    the room dropped the seat meanwhile (20 s of silence, a member token past its two hours) or was
-    out of reach for a minute, the TV joins again once with the member token it holds
-    (`POST /rooms/{code}/join {member_token}`), which keeps the same seat while the room still has
-    it; the old connection is dropped without a close frame for that. If the room itself is over
-    (closed by the host, expired) or that join fails, a short explanation is shown and Back returns
-    to where the room was opened.
-- **One shared stream.** A title from a source that limits its connections is played to the whole
-  room from one stream. The descriptor then carries `stream_epoch` and `start_position_ms`, and
-  every `state` carries `stream_epoch` and `stream_start_ms`:
-  - The stream's media time zero is `stream_start_ms` into the title, so the player belongs at
-    `position_ms − stream_start_ms` (`RoomSync.playerPosition`). The scrubber, the clock and the
-    progress reports are in title time, against the title's full length.
-  - A seek restarts the stream on the server. When a `state` names an epoch later than the one being
-    played, the TV fetches its descriptor again
-    (`GET /rooms/{code}/descriptor?member_token=…&client=android_tv`, no bearer token), reloads the
-    media item and lets `RoomSync` position it; "Catching up with the room…" shows meanwhile. The
-    same epoch is a seek inside what is playing. A descriptor that is ahead of the last `state`
-    waits for that `state` (`RoomSync.streamStep`: `Same`, `Reload`, `Wait`).
-  - The stream is a playlist that grows faster than it plays, so it is always opened at an exact
-    position (0 included) and held at 1× (`MediaItemMapper.pinsPosition`).
-- **Coming back.** The member token of the last seat is kept for the run of the app, and a join of
-  the same room offers it, so typing the code again after a dropped connection takes the old seat up
-  when the room still has it.
-- **A member that lost its place** (a player error, a stream address that expired) asks the same
-  descriptor call for its stream as it is now, twice at most before the viewer is asked; if the
-  room no longer honours the seat's token (401 `room_unauthorized`, 404 `not_a_member`) it joins
-  again with it. A room on a library title each member plays for themselves has no epoch: a `state`
-  alone drives `RoomSync`, as before.
-
-### Recordings
-
-Shown to someone with `recordings.schedule` on a server that has a recordings folder:
-
-- **Guide and Live TV now/next**: Select on a programme that is on air or still to come opens
-  *Watch* (when on air) · *Record this* · *Record every new episode* (a `series` rule on the title)
-  and, for a programme the server marks `is_sport`, *Record every game for <team>*: one action per
-  side in the programme's `teams` (a `team` rule each). Only when the server found no sides in the
-  title is there a single *Record every game for…* that asks for the team's name. The app does not
-  guess: what is sport and who is playing is the server's classifier, the same one its recorder
-  matches team rules with. A single recording is asked for by programme id together with the channel
-  and start shown on the guide, so it survives a guide refresh. Without the permission Select
-  behaves as before.
-- **Marks on guide cells**: ○ will record · ● recording · ✓ recorded · ! failed or missed.
-- **Recordings** (rail; needs `recordings.view`): rows *Upcoming*, *Recorded* and *Rules*. Select on
-  a card opens what can be done with it (play, cancel, delete, turn a rule off or on, delete a rule)
-  and, for a failed recording, the reason. A game shows its sides ("A vs B") when the server names
-  them.
-- **Playing a recording**: *Play* is offered for a recording that is done, and for one that failed
-  but kept a file. It resolves `rec:<id>` through the same path as any pressed Play
-  (`POST /playback/resolve`), and progress is reported under the same id. A refusal that is about
-  the recording (403 `content_restricted` for one above the viewer's rating ceiling, 404 for one
-  deleted meanwhile) is shown in the server's own words, in the usual dialog.
-
-### Requests and notices
-
-- A title the server marks `requestable` gets **Request** as its first button: a film or a whole
-  series at once, or chosen seasons when the detail lists `request_seasons`. While a request is open
-  the page shows its status instead of offering Request again: a chip per phase (Requested,
-  Approved, Searching, Downloading, Importing, Partly available, Available, Declined, Failed,
-  Stalled, Status unknown) and, while downloading, a bar with the percent and the time left.
-- Posters carry the same chip (and a thin bar) while a request is in progress; in Search a title
-  that plays here carries a tick and one that does not carries nothing else.
-- **Home** shows unread notices ("your request is ready", "your request was declined") as a row above
-  the hero: Select opens the title, *Mark read* beside it (or holding Select) dismisses it.
-- **Requests** (rail, for someone with `requests.create`) lists *My requests*; someone who may
-  approve also gets *All requests* with *Approve* and *Decline*. Someone who may only approve
-  reaches the same screen from Settings → Requests, and Back returns there.
-
-### When the server refuses a stream
-
-A media URL (`/stream/{token}`, its playlist and segments) can be refused after playback was
-resolved. Media3 reports that as an `HttpDataSource.InvalidResponseCodeException` carrying the
-status and the server's error body; `StreamRefusals` reads them and the player reports the refusal
-at once, without the usual load retries or a live reconnect loop:
-
-| Refusal | What the viewer gets |
-|---|---|
-| 409 `user_stream_limit` | "You're already watching <title> on another device", from `active`; *Try again* |
-| 403 `remote_access_denied` | "This account can only be used on the home network" |
-| 403 `content_restricted` (the rating ceiling changed) | "Not available for this profile" |
-| 401 `session_stale` | nothing to read: the session is refreshed and playback resolved again, once (in a room: the descriptor) |
-| 403 `playback_paused` (a stream issued before a server restart, or an administrator's stop) | the first one for a playback: `GET /playback/generation`, then one resolve carrying it as `recovery_generation`, with no dialog (`PausedRetry`). A server that really is stopped refuses that, and then, or on a second such answer, "Playback is stopped" with *Try again* |
-| 403 `stream_epoch_stale` (a room segment of a start the room has left) | the room's descriptor is fetched again, twice at most before the viewer is asked |
-| 401 `session_revoked`, `user_suspended` | the session is put to the server first. If it still stands, playback is resolved again once; if not, playback ends and the shell explains (see "When the session ends") |
-
-Anything else (a provider's own 403 on a direct stream, `source_busy` on a live channel) is handled
-as before. The player treats the descriptor's URL as opaque: it never assumes an upstream address,
-so a server that hands everyone without `sources.manage` its own stream URLs changes nothing here.
-
-**Stream info** (player menu) shows the descriptor's `media_info` (source, container, codecs,
-resolution, delivery, encoder) and Media3's own numbers (resolution, dropped frames, buffered
-seconds, bandwidth estimate), refreshed every second (`streamInfoLines`). `max_height` is the web
-player's quality cap and is never sent.
-
-### Sign-in away from home
-
-Pairing is by device code only (`POST /auth/device`, `/auth/device/poll`) and works from anywhere;
-it never asks `GET /profiles` or `POST /auth/login`, which answer only on the home network. The
-per-profile switch in Settings does use that login: when `/auth/config` says `profiles_enabled`
-false, or the login answers 403 `home_network_only`, it is not tried and the TV says to sign out and
-pair with a code. Changing or removing a PIN asks for the current one first and sends `current_pin`.
-
-## Module map
-
-```
-:app                    MainActivity, nav graph, left-rail shell, PlayLauncher wiring, Coil loader, manifest
-:core:ui                Tokens.kt (generated) · StreamHubTheme/ThemeRepository · FocusSurface · PivotBringIntoViewSpec
-                        LeftRail (RailOrder) · FocusRow/MediaRow · tiles · hero · QR (zxing) · DisclaimerGate
-                        text field · PinPadDialog · ProgrammeDialog · WatchTogetherDialog
-:core:data              DTOs + StreamHubApi (hand-written from contracts/openapi.yaml) · SessionStore (DataStore)
-                        Ktor bearer auth w/ refresh · DeepLinkLauncher · PlaybackCoordinator · ChannelListCache
-                        MeRepository (permissions) · UserSwitchRepository · SessionEvents · room/ (RoomClient
-                        over WebSockets, RoomSync, RoomProtocol, RoomCode) · RoomRepository (RoomDirectory)
-                        WatchTogetherLauncher · RecordingsRepository · RequestsRepository
-                        ApiErrors · StreamRefusals (refused media URLs)
-:core:player            StreamHubPlayer (Media3) · MediaItemMapper · VideoSurface · StreamRefusalErrors
-:feature:onboarding     server URL → disclaimer gate → device-code pairing · "Who's watching?" picker
-:feature:home           hero + rows; Movies/Shows as category shelves with a "See all" grid
-:feature:search         one search field, rows On TV / Channels / Movies & Shows · Join a room (its own screen)
-:feature:livetv         channel list + details pane (no auto-preview: it would use a source connection),
-                        number keys, language chips, nested group chips, favorites filter, Watch together
-:feature:guide          EPG grid (30-min columns, now-line, catch-up, recording marks and Record actions)
-:feature:details        title detail, resume label, source picker, seasons/episodes (hold Select: episode
-                        actions), Available on, Watch together, Request
-:feature:player         full-screen player overlays; watch-room mode (stream epochs, recovery); stream refusals;
-                        one silent re-resolve after playback_paused; Stream info
-:feature:recordings     Upcoming / Recorded (Play) / Rules
-:feature:requests       My requests / All requests
-:feature:favorites      favorites by kind ("My List" in the rail)
-:feature:sources        Plex PIN+QR, Jellyfin, Xtream, M3U, streaming services + Test link
-:feature:settings       profiles, PIN, theme picker (live preview), languages, home rows, parental, about
-```
-
-### Design tokens
-
-`core/ui/.../theme/Tokens.kt` is generated from `../design/tokens.json` and checked in:
-
-```bash
-./gradlew :core:ui:generateTokens   # regenerate after editing tokens.json
-./gradlew :core:ui:checkTokens      # fails if Tokens.kt is stale (wired into `check`)
-```
-
-Themes switch at runtime through `ThemeRepository` (DataStore) and `LocalThemeTokens`. In the Settings
-theme picker, focusing a swatch previews that theme across the whole app, and pressing OK applies it.
-The applied theme is also written to the profile's `theme_id`. *Poster Adaptive* takes the Midnight
-values and replaces accent and glow with `ThemeRepository.setAdaptiveAccent()`: when a poster or
-landscape tile gains focus, its Coil-decoded bitmap goes through `androidx.palette` off the main thread
-(`AdaptiveAccent.kt`; dominant swatch, falling back to vibrant/muted when the dominant is grey or
-near-black/white, dark colours lifted ×1.8 like the web client). Results are cached per artwork URL.
-Accent text is black or white, whichever contrasts more with the extracted accent.
+Everything below is unchanged from the native app and is what `PlayerActivity` shows: audio tracks
+and passthrough, subtitles, aspect ratio, sleep timer, live zapping and number entry, catch-up and
+buffered history, stream refusals, watch rooms (the room's clock, shared streams and their epochs, seat
+recovery, "Leave the room?").
 
 ### Remote control in the player
 
@@ -431,24 +229,46 @@ you need (see `libraries/decoder_ffmpeg/README.md` in the Media3 source for the 
 the resulting AAR to `core/player` as a file dependency. The stock renderer in it is also picked
 up by reflection (`EXTENSION_RENDERER_MODE_PREFER`); check FFmpeg's licence for your configure flags.
 
+## Module map
+
+```
+:app                    MainActivity (WebView shell), shell/ (bridge protocol, ShellBridge, WebView controller,
+                        native screens: Cannot reach your server, TV settings), PlayerActivity, manifest
+:core:ui                Tokens.kt (generated) · StreamHubTheme/ThemeRepository · buttons, dialogs, DisclaimerGate
+:core:data              DTOs + StreamHubApi · SessionStore (DataStore) · WebSessionTokens/WebTokenBroker (tokens
+                        from the web app) · Ktor client · PlaybackCoordinator · room/ (RoomClient, RoomSync) ·
+                        RoomRepository · UpdateRepository/UpdateInstaller · ApiErrors · StreamRefusals
+:core:player            StreamHubPlayer (Media3) · MediaItemMapper · VideoSurface · StreamRefusalErrors
+:feature:onboarding     legal notice → server address → device-code pairing
+:feature:player         full-screen player overlays; watch-room mode; stream refusals
+```
+
+The native browsing screens (`feature/home`, `details`, `livetv`, `guide`, `search`, `favorites`,
+`recordings`, `requests`, `settings`, `sources`) were deleted with version 1.2.0: the web app is those
+screens now. Left in the code but not reachable: the native "Who's watching?" picker in
+`feature/onboarding`, the two-pane `MultiviewScreen` in `feature/player`, and the rail and tile
+components in `core/ui`.
+
+## Design tokens
+
+`core/ui/.../theme/Tokens.kt` is generated from `../design/tokens.json` and checked in:
+
+```bash
+./gradlew :core:ui:generateTokens   # regenerate after editing tokens.json
+./gradlew :core:ui:checkTokens      # fails if Tokens.kt is stale (wired into `check`)
+```
+
+The native screens (pairing, the player's overlays, TV settings) use the theme last selected through
+`ThemeRepository` (DataStore); the web app has its own themes, chosen in its settings.
+
 ## What is stubbed / known gaps
 
-- The browsing screens are due to be replaced by the web app in a WebView, with playback staying
-  native: the Live TV group chips, the Sports screen, the one-field Search and the request status
-  were brought up to the server's contract but not polished further, and a series with many
-  seasons or a film with many audio tracks still lists them as a row of chips.
-- Not run on real hardware or an emulator yet. Only the build and JVM unit tests have been verified.
-  That includes everything above: the picker, rooms, recordings, requests and the handling of
-  refused streams follow `contracts/openapi.yaml` and are unit-tested against fakes, not exercised
-  against a running server. What most needs a TV: a shared-stream room across a seek (the reload,
-  the position after it, and that playback holds 1×), the focus after the session-ended dialog, and
-  the rail's scrolling with every secondary destination shown.
-- A shared TV whose signed-in person is suspended cannot list or switch people (the server answers
-  both calls with 401 `user_suspended`), so the picker can only explain and offer *Pair this TV
-  again*.
-- In a room on a series whose source does not share one stream, each member resolves the next
-  episode for their own history, so two members can be given different episodes.
-- "Join a room" in a two-pane (multiview) player, and *Watch together* from inside the player, are
-  not offered.
-- The trailer button sends `trailer:<id>` to `/playback/resolve`; the server must map that to a YouTube hand-off.
-- Profile create/edit happens in the web app; the TV can switch profiles and set or remove a PIN.
+- Built and unit-tested only (JVM tests; the web side with Playwright against a fake bridge). The shell
+  has not been run on a TV or an emulator yet. What most needs a device: the computed layout width
+  (1920) on the TV's own WebView, D-pad and Select reaching the page, Back on the home screen leaving
+  the app, the session seed on first start (new pairing and the upgrade from 1.1.x), and a film played
+  for longer than an access token lives (the token request round trip while the player is in front).
+- A frame from another origin inside the web app would see `window.StreamHubTV` too (the platform adds
+  it to every frame). The web app embeds none; `play()` and `signedOut()` only act while the top page is
+  the paired server's, and token answers are only taken for ids the TV issued.
+- The audio check the TV makes itself (no variant chosen in the web app) uses the native dialog.
