@@ -29,8 +29,14 @@ export interface paths {
                     content: {
                         "application/json": {
                             google_enabled: boolean;
-                            /** @description Google sign-in is the only way in for people */
+                            /** @description "Continue with Plex" is offered */
+                            plex_enabled: boolean;
+                            /** @description Username and password sign-in is offered */
+                            password_enabled: boolean;
+                            /** @description GOOGLE_AUTH_REQUIRED: the household profile picker (GET /profiles without a token, POST /auth/login) is closed everywhere, the home network included. People sign in with Google, Plex or a username and password; a TV pairs. */
                             google_required: boolean;
+                            /** @description The profile picker is open to this request: it comes from the home network and google_required is false. Elsewhere a sign-in screen shows the other ways in instead of profile tiles. */
+                            profiles_enabled: boolean;
                             content_policy_enabled: boolean;
                             owner_pin_configured: boolean;
                             owner_pin_setup_required: boolean;
@@ -124,6 +130,196 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/plex/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin "Continue with Plex"
+         * @description The server opens a strong PIN at plex.tv and answers Plex's own sign-in page (https://app.plex.tv/auth#?clientID=…&code=…&forwardUrl=…). The browser goes there; Plex sends it back to return_to with ?plex=<state> added. The PIN is bound to this browser by an HttpOnly, SameSite=Lax cookie that lives ten minutes, and its id never leaves the server. Nothing is registered with Plex for this. 403 plex_disabled when the method is off, 502 plex_unavailable when plex.tv cannot be reached.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * @description /, /pair, /pair?code=XXXXXX or /settings. Anything else is /.
+                         * @default /
+                         */
+                        return_to?: string;
+                        /** @description Invite token from /invite/<token>; held server-side for the sign-in, never sent to Plex */
+                        invite?: string;
+                        /**
+                         * @description Needs a bearer token: link the Plex account to the caller's own user instead of signing in. Not on a shared device (403 shared_device).
+                         * @default false
+                         */
+                        link?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            auth_url: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/plex/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish "Continue with Plex" in the browser that started it
+         * @description Reads the PIN, asks plex.tv whose token it yields (account id, username, confirmed e-mail, avatar) and discards the token: it is never stored or logged. The user is the Plex account id, never the e-mail: an unknown account whose address matches another user's is a new user, not that one. Answers as /auth/google/complete does: tokens with status "active", or status "pending" with a token good only for GET /auth/me. 401 sign_in_expired for a state that is unknown, used, older than ten minutes, started by another browser, or never completed at Plex; 403 invite_required (invite-only mode, no usable invite), 403 user_suspended, 502 plex_unavailable. A flow started with link true needs the same user's bearer token here and answers status "linked": the Plex account is attached to that user and nobody is signed in. 409 identity_in_use when it already signs in as someone else, 409 already_linked when the user has another Plex account.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description The plex query parameter Plex's redirect came back with */
+                        state: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": (components["schemas"]["AuthTokens"] & {
+                            /** @enum {string} */
+                            status?: "active";
+                        }) | components["schemas"]["PendingApproval"] | {
+                            /** @enum {string} */
+                            status: "linked";
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/google/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin linking a Google account to one's own user
+         * @description Answers Google's sign-in page. Google sends the browser back to /auth/google/callback, which attaches the identity and lands on /settings?linked=google, or on /settings?link_error=<code> (identity_in_use, already_linked, failed). Nobody is signed in by it. Not on a shared device.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            auth_url: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/methods/{method}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove one of one's own ways of signing in
+         * @description 409 last_method for the last one, 404 when it is not linked, 403 shared_device. The device asking stays signed in.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    method: components["schemas"]["SignInMethod"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -452,7 +648,7 @@ export interface paths {
         put?: never;
         /**
          * Open the adult category on this session for four hours
-         * @description Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true.
+         * @description Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true. The same two conditions hold wherever an adult title is named by its id: GET /titles/{id}, POST /playback/resolve, POST /playback/multiview, GET /playback/options and /playback/rewind, and creating, showing or joining a watch room on one answer 403 with missing [watch.adult], or 403 adult_locked for a session that holds the permission but is not unlocked.
          */
         post: {
             parameters: {
@@ -960,7 +1156,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Profile login (password for admin, PIN for profiles) */
+        /**
+         * Profile login on the home network (password for admin, PIN for profiles)
+         * @description A household convenience, answered only for a request from the home network and never under GOOGLE_AUTH_REQUIRED. From anywhere else it is 403 home_network_only before anything is looked up: the same answer for every profile id, real or not.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -995,6 +1194,194 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change one's own password, or set a first one
+         * @description With a password already set, current_password is required (403 wrong_password, throttled like a sign-in) and every other session of the user is revoked. Without one, this links a password to the account: username is required unless the user has one (409 username_taken, 400 invalid_username). A username is 3 to 32 of a-z 0-9 . - _ and is stored lower case. A password has at least 10 characters, does not contain the username and is not one of the most common (400 weak_password). Not on a shared device (403 shared_device).
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        current_password?: string | null;
+                        new_password: string;
+                        username?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        /**
+         * Sign in with a username and a password
+         * @description A wrong username and a wrong password are one answer: 401 invalid_credentials, the same body, and the same work (an unknown name is verified against a stand-in hash). Guessing is throttled by username and by client address: five attempts for a name, twenty from an address, in fifteen minutes, then a lock of 60 seconds that doubles each time up to an hour, and a ceiling of 300 failures in five minutes for everyone. A refused attempt is 429 rate_limited with Retry-After, whoever the name belongs to. 403 password_disabled when the method is off. A suspended user is told so (401 user_suspended) only after the right password.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        username: string;
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+                /** @description invalid_credentials | user_suspended */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description rate_limited; Retry-After is whole seconds */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/invite/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What the page behind an invite or setup link shows
+         * @description The token travels in the body. Every link that cannot be used (unknown, used, expired, revoked) answers the same valid false.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            valid: boolean;
+                            display_name?: string | null;
+                            /** @description A setup link for someone who already has a username: it is kept */
+                            username?: string | null;
+                            /** @description A password setup link for one existing user rather than an invitation */
+                            setup: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/invite/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an invite, or use a setup link, by choosing a username and a password
+         * @description An invite makes a new active user with the invite's role and signs them in. A setup link sets the password of the user it names (who keeps a username they already have). Nothing is spent unless it goes through: 400 invalid_username, 400 weak_password and 409 username_taken leave the link good. 403 invite_invalid for any link that cannot be used.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        token: string;
+                        username: string;
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthTokens"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/refresh": {
         parameters: {
             query?: never;
@@ -1004,6 +1391,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /**
+         * Exchange a refresh token for a new pair; refresh tokens rotate
+         * @description Every refresh answers a new refresh token and makes the presented one the previous one. The previous one is still honoured for 60 seconds (two tabs, or a retried request, refreshing at once) and answers the current pair without rotating again. A token older than that being presented means a copy is being replayed: the session is revoked (401 session_revoked) for whoever holds it, and the device signs in again. A client stores the new refresh token before it uses the new access token.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1062,6 +1453,56 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["DeviceCode"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/device/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What is asking to pair under a code, shown before it is approved
+         * @description A link with a code in it is how someone else's device gets signed in as the person who approves it, so the approval screen says what is asking: the address and user agent the request for the code came from. Signs nothing in. 404 for a code that is unknown, expired, used or already approved.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_code: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            user_code: string;
+                            ip?: string | null;
+                            user_agent?: string | null;
+                            expires_in: number;
+                        };
                     };
                 };
             };
@@ -1180,6 +1621,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * The household's profiles, for the picker on the home network
+         * @description Without a token: the list on the home network; 404 from anywhere else (which says nothing about what exists); 401 under GOOGLE_AUTH_REQUIRED. With a token: the list on the home network, otherwise the caller's own profile only.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -1295,6 +1740,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        /** Set or clear a profile's PIN (the older route; see PUT /users/{id}/pin for the rule on changing one's own) */
         put: {
             parameters: {
                 query?: never;
@@ -1308,6 +1754,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         pin?: string | null;
+                        current_pin?: string | null;
+                        current_password?: string | null;
                     };
                 };
             };
@@ -4046,7 +4494,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set or clear a user's PIN (one's own; anyone's with users.manage) */
+        /**
+         * Set or clear a user's PIN (one's own; anyone's with users.manage)
+         * @description Changing or clearing one's own existing PIN needs proof that this is still its owner: current_pin (403 pin_invalid when wrong; five guesses in fifteen minutes, then 429), or current_password, or a sign-in made in the last ten minutes. Otherwise 403 current_pin_required. A first PIN needs nothing; someone else's is a user manager's to set. PUT /profiles/{id}/pin asks the same.
+         */
         put: {
             parameters: {
                 query?: never;
@@ -4061,6 +4512,8 @@ export interface paths {
                     "application/json": {
                         /** @description 4 to 8 digits; null clears */
                         pin?: string | null;
+                        current_pin?: string | null;
+                        current_password?: string | null;
                     };
                 };
             };
@@ -4075,6 +4528,89 @@ export interface paths {
             };
         };
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/methods/{method}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove one way a user signs in (users.manage)
+         * @description Their sessions are revoked. 409 last_method for the last one (suspend or remove the user instead). Only an owner changes an owner.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    method: components["schemas"]["SignInMethod"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a user's password and answer a setup link (users.manage)
+         * @description The password stops working and every session of that user is revoked at once (the caller's own device stays when resetting oneself). The answer is a one-time link, good for 72 hours, where that person chooses a new password; an earlier setup link for them stops working. Also how someone without a password gets one. Only an owner resets an owner; 409 not_active for a pending user. There is no e-mail recovery and no self-registration.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SetupLink"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -4265,6 +4801,8 @@ export interface paths {
                         expires_in_hours?: number;
                         /** @default 1 */
                         max_uses?: number;
+                        /** @description Add a person: who the invite is for. Used once (max_uses must be 1). They accept it with Google, with Plex, or by choosing a username and password. */
+                        name?: string | null;
                     };
                 };
             };
@@ -5773,8 +6311,11 @@ export interface components {
         };
         User: {
             id: string;
-            /** @enum {string} */
-            kind: "google" | "managed";
+            /**
+             * @description How this user came to be. What they can sign in with now is sign_in_methods.
+             * @enum {string}
+             */
+            kind: "google" | "plex" | "password" | "managed";
             display_name: string;
             email?: string | null;
             picture?: string | null;
@@ -5790,6 +6331,12 @@ export interface components {
             on_shared_devices?: boolean;
             /** @description This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state. */
             plex_account_linked?: boolean;
+            /** @description The name of username-and-password sign-in, lower case */
+            username?: string | null;
+            /** @description The Plex account this user signs in with. No Plex token is kept for it. */
+            plex_username?: string | null;
+            /** @description The ways this user can sign in from anywhere. Empty for a managed user, who is entered on the household's devices. */
+            sign_in_methods?: components["schemas"]["SignInMethod"][];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -5797,6 +6344,8 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
         };
+        /** @enum {string} */
+        SignInMethod: "google" | "plex" | "password";
         /** @description One stream a user is playing. Listed while it shows activity - bytes or a segment served, or a progress report, in the last 30 seconds - and for 30 seconds after it was resolved. */
         NowPlaying: {
             /** @description The id that was resolved */
@@ -5905,6 +6454,16 @@ export interface components {
             uses: number;
             /** @enum {string} */
             state: "open" | "used" | "expired" | "revoked";
+            /** @description Who the invite is for, when it was made for one person ("Add person"). The new user starts under this name. */
+            display_name?: string | null;
+            /** @description Set on a password setup link (POST /users/{id}/password-reset): the one user whose password it sets. Such a link admits nobody and is ignored by Google and Plex sign-in. */
+            user_id?: string | null;
+        };
+        SetupLink: {
+            /** @description /invite/<token>. The token is shown this once and stored only as a hash. */
+            url: string;
+            /** Format: date-time */
+            expires_at: string;
         };
         InviteCreated: components["schemas"]["Invite"] & {
             /** @description /invite/<token>. The token is shown this once and stored only as a hash. */
@@ -6022,7 +6581,7 @@ export interface components {
             };
             /** @description for streaming_service: netflix, hulu, … */
             service_key?: string | null;
-            /** @description never includes secrets */
+            /** @description Never includes secrets. Where the source lives (server address, account name) is here only for a caller with sources.manage; for everyone else it is empty. */
             config_summary?: {
                 [key: string]: unknown;
             };
@@ -6531,10 +7090,16 @@ export interface components {
             /** @enum {string} */
             proxy_mode?: "auto" | "always" | "never";
             /**
-             * @description Who may sign in with Google unasked: anyone (then waits for approval) or invitees only
+             * @description Who may sign in with Google or Plex unasked: anyone (then waits for approval) or invitees only
              * @enum {string}
              */
             signup_mode?: "approval" | "invite_only";
+            /** @description Offer "Continue with Plex" (system.manage to change). Default true. */
+            plex_sign_in?: boolean;
+            /** @description Offer username and password sign-in (system.manage to change). Default true. */
+            password_sign_in?: boolean;
+            /** @description Default false. When true and a Plex server is linked, a first Plex sign-in by an account that server is shared with (the linking account's friends at plex.tv, fetched with the stored token, cached for five minutes, nobody on any error) is an active user with the Friend role at once, in either signup_mode. Never the Owner role. */
+            plex_friends_auto_approve?: boolean;
             /** @description A notification webhook is stored. The address is never returned. */
             readonly notify_webhook_set?: boolean;
             /** @description PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it */

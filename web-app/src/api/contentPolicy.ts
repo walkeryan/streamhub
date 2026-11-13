@@ -7,8 +7,12 @@ export type ContentPolicy = components['schemas']['ContentPolicy']
 export type ContentPolicyInput = components['schemas']['ContentPolicyInput']
 export interface AuthCapabilities {
   google_enabled: boolean; google_required: boolean; content_policy_enabled?: boolean; owner_pin_configured?: boolean; owner_pin_setup_required?: boolean
-  /** Whether a new Google account waits for approval or needs an invite. */
+  /** Whether a new Google or Plex account waits for approval or needs an invite. */
   signup_mode?: 'approval' | 'invite_only'
+  /** "Continue with Plex" and username-and-password sign-in. Absent on a server from before them: off. */
+  plex_enabled?: boolean; password_enabled?: boolean
+  /** The profile picker is open to this browser (it is on the home network). Absent on an older server, which always offered it. */
+  profiles_enabled?: boolean
 }
 /**
  * What the sign-in screen has to know before anyone is signed in. GET /auth/config is the server's one

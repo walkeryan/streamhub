@@ -60,7 +60,13 @@ export function ago(iso: string | null | undefined, now = Date.now()): string {
   return new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short', year: minutes > 60 * 24 * 300 ? 'numeric' : undefined })
 }
 
-export const SIGN_IN: Record<string, string> = { google: 'Google', managed: 'Managed' }
+export const SIGN_IN: Record<string, string> = { google: 'Google', plex: 'Plex', password: 'Password', managed: 'Managed' }
+/** "Google sign-in", "Google + Plex sign-in"; someone with no sign-in of their own is "Managed". */
+export function signInSummary(u: { kind: string; sign_in_methods?: string[] }): string {
+  const held = u.sign_in_methods ?? []
+  // A server from before linked sign-ins says only how the user came to be.
+  return `${held.length ? held.map((m) => SIGN_IN[m] ?? m).join(' + ') : SIGN_IN[u.kind] ?? u.kind} sign-in`
+}
 export const STATUS: Record<string, string> = { active: 'Active', pending: 'Waiting for approval', suspended: 'Suspended' }
 export const DEVICE_KIND: Record<string, string> = { browser: 'Browser', tv: 'TV', api: 'App' }
 
@@ -93,6 +99,14 @@ export function auditLine(e: AuditEntry, roleName: (id: string) => string): stri
     case 'user.remove': return `${who} removed ${whom}`
     case 'user.pin_set': return `${who} set a PIN for ${whom}`
     case 'user.pin_clear': return `${who} cleared ${whom}'s PIN`
+    case 'user.signin_link': return `${whom} linked ${SIGN_IN[said(e.detail.method) ?? ''] ?? 'a'} sign-in`
+    case 'user.signin_unlink': return `${who} removed ${SIGN_IN[said(e.detail.method) ?? ''] ?? 'a'} sign-in${e.target_name && e.target_name !== who ? ` from ${e.target_name}` : ''}`
+    case 'user.password_set': return `${whom} chose a password`
+    case 'user.password_change': return `${whom} changed their password`
+    case 'user.password_reset': return `${who} reset ${whom}'s password and made a setup link`
+    case 'user.plex_friend_accept': return `${whom} joined through Plex, as someone the Plex server is shared with`
+    case 'auth.lockout': return `Too many wrong sign-in attempts${e.target_name ? ` for ${e.target_name}` : e.detail.scope === 'address' ? ' from one address' : ''}: locked for a while`
+    case 'session.refresh_reuse': return `A device of ${whom} was signed out: an old sign-in token was used again`
     case 'role.create': return `${who} created the role ${said(e.detail.name) ?? (role ? roleName(role) : '')}`.trim()
     case 'role.update': return `${who} edited the role ${role ? roleName(role) : ''}`.trim()
     case 'role.delete': return `${who} deleted the role ${said(e.detail.name) ?? ''}`.trim()

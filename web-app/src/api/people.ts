@@ -69,7 +69,13 @@ export const people = {
   createRole: (body: RoleInput & { name: string }) => unwrap<Role>(api.POST('/roles', { body })),
   patchRole: (id: string, body: RoleInput) => unwrap<Role>(api.PATCH('/roles/{id}', { ...path(id), body })),
   removeRole: (id: string) => ok(api.DELETE('/roles/{id}', path(id))),
-  invite: (body: { role_id: string; expires_in_hours: number; max_uses: number }) => unwrap<InviteCreated>(api.POST('/invites', { body })),
+  /** With `name` the invite is for one person ("Add person"): used once, and they start out under that name. */
+  invite: (body: { role_id: string; expires_in_hours: number; max_uses: number; name?: string }) => unwrap<InviteCreated>(api.POST('/invites', { body })),
+  /** Takes the password and every session away and answers a one-time link to choose a new one. */
+  resetPassword: (id: string) => unwrap<S['SetupLink']>(api.POST('/users/{id}/password-reset', path(id))),
+  unlinkMethod: (id: string, method: S['SignInMethod']) => unwrap<UserDetail>(api.DELETE('/users/{id}/methods/{method}', { params: { path: { id, method } } })),
+  /** What is asking to pair under a TV code, for the approval screen. */
+  lookupDevice: (user_code: string) => unwrap<{ user_code: string; ip?: string | null; user_agent?: string | null; expires_in: number }>(api.POST('/auth/device/lookup', { body: { user_code } })),
   revokeInvite: (id: string) => ok(api.DELETE('/invites/{id}', path(id))),
   revokeSession: (sid: string) => ok(api.DELETE('/auth/sessions/{sid}', { params: { path: { sid } } })),
   patchSession: (sid: string, body: { shared_device?: boolean; label?: string }) => unwrap<AuthSession>(api.PATCH('/auth/sessions/{sid}', { params: { path: { sid } }, body })),

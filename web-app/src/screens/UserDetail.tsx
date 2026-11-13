@@ -7,17 +7,20 @@ import type { components } from '../api/schema'
 import { Avatar } from '../components/Avatar'
 import { DeviceRow } from '../components/DeviceRow'
 import { Icon } from '../components/Icon'
+import { LinkToCopy } from '../components/LinkToCopy'
 import { LimitsEditor, PermissionSwitches, Toggle } from '../components/PeopleControls'
 import { PinDialog } from '../components/PinPad'
 import { Button, Chip, ErrorState, Modal, Skeleton } from '../components/ui'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { setFocus } from '../nav/spatial'
-import { SIGN_IN, STATUS, ago, type Limits } from '../lib/people'
+import { SIGN_IN, STATUS, ago, signInSummary, type Limits } from '../lib/people'
 import { useUi } from '../store/ui'
 
 type Permission = components['schemas']['Permission']
 type Change = Parameters<typeof people.patch>[1]
+type Method = components['schemas']['SignInMethod']
+const METHODS: Method[] = ['google', 'plex', 'password']
 const HISTORY_SHOWN = 8
 const LIMIT_KEYS = ['max_streams', 'rating_ceiling_movie', 'rating_ceiling_tv', 'allow_unrated'] as const
 
@@ -40,7 +43,11 @@ export function UserDetail() {
   const pin = usePeopleChange((value: string | null) => people.setPin(id!, value))
   const status = usePeopleChange((to: 'suspend' | 'reinstate') => people[to](id!))
   const remove = usePeopleChange(() => people.remove(id!))
-  const [asking, setAsking] = useState<'suspend' | 'remove' | 'pin' | null>(null)
+  const [asking, setAsking] = useState<'suspend' | 'remove' | 'pin' | 'reset' | null>(null)
+  const [unlinking, setUnlinking] = useState<Method | null>(null)
+  const [setupLink, setSetupLink] = useState<string | null>(null)
+  const unlink = usePeopleChange((method: Method) => people.unlinkMethod(id!, method))
+  const reset = usePeopleChange(() => people.resetPassword(id!))
   useRestoreFocus(!!user.data && !!roles.data, 'ud:back')
   if (!allowed) return <Navigate to="/" replace />
   // Back to the list this was opened from, where the remote's place is remembered; a deep link has no such list.
@@ -65,6 +72,7 @@ export function UserDetail() {
   // them all), and null in one lifts that limit for this person. Only the four fields the contract takes are sent.
   const overrides: Partial<Limits> = Object.fromEntries(LIMIT_KEYS.filter((k) => k in u.limit_overrides).map((k) => [k, u.limit_overrides[k]]))
   const resetLimit = (key: keyof Limits) => apply({ limits: Object.fromEntries(Object.entries(overrides).filter(([k]) => k !== key)) })
+  const methods: Method[] = u.sign_in_methods ?? []
   const sharedOverridden = u.on_shared_devices_override !== null && u.on_shared_devices_override !== undefined
 
   return (
@@ -74,7 +82,7 @@ export function UserDetail() {
         <Avatar name={u.display_name} avatar={u.avatar} picture={u.picture} size={4.5} />
         <div className="flex flex-col gap-1 min-w-0" style={{ flex: '1 1 14rem' }}>
           <h1 className="title-xl flex items-center gap-2 flex-wrap">{u.display_name}{u.id === me?.user.id && <span className="badge">You</span>}</h1>
-          <p className="label">{[u.email, `${SIGN_IN[u.kind] ?? u.kind} sign-in`, `Last seen ${ago(u.last_seen_at)}`].filter(Boolean).join(' · ')}</p>
+          <p className="label">{[u.email, signInSummary(u), `Last seen ${ago(u.last_seen_at)}`].filter(Boolean).join(' · ')}</p>
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`badge ${u.status === 'active' ? 'badge-ok' : 'badge-warn'}`} data-testid="user-status">{STATUS[u.status] ?? u.status}</span>
             {u.now_playing.length > 0 && <span className="label flex items-center gap-1" style={{ color: 'var(--t-text)' }}><Icon name="play" size={12} />Watching {u.now_playing.map((n) => n.title ?? 'something').join(', ')}</span>}
@@ -122,6 +130,24 @@ export function UserDetail() {
         </FocusGroup>
       </section>
 
+      {u.status !== 'pending' && <section className="panel flex flex-col gap-3" data-testid="user-signin">
+        <h2 className="heading">Sign-in methods</h2>
+        <FocusGroup focusKey="ud:signin" className="flex flex-col gap-2">
+          {methods.length ? METHODS.filter((m) => methods.includes(m)).map((m) => (
+            <div key={m} className="person-row device-row" data-testid={`user-method-${m}`}>
+              <span className="who"><strong>{SIGN_IN[m]}</strong>
+                <span className="label truncate">{(m === 'google' ? u.email : m === 'plex' ? u.plex_username : u.username) ?? 'Linked'}{methods.length === 1 ? ' · Their only way to sign in' : ''}</span></span>
+              <Button focusKey={`ud:unlink:${m}`} danger disabled={methods.length === 1 || unlink.isPending} label={`Remove ${SIGN_IN[m]} sign-in from ${u.display_name}`} onEnter={() => setUnlinking(m)} testId={`user-unlink-${m}`}>Unlink</Button>
+            </div>
+          )) : <p className="muted">No sign-in of their own: {u.display_name} is entered on the household's shared devices.</p>}
+          <div className="person-row device-row">
+            <span className="who"><strong>{methods.includes('password') ? 'Reset password' : 'Password setup link'}</strong>
+              <span className="label">{methods.includes('password') ? 'Their password stops working, they are signed out everywhere, and you get a link for them to choose a new one.' : 'A one-time link where they choose a username and a password.'}</span></span>
+            <Button focusKey="ud:reset" icon="link" disabled={reset.isPending} onEnter={() => setAsking('reset')} testId="user-reset">{methods.includes('password') ? 'Reset password' : 'Make setup link'}</Button>
+          </div>
+        </FocusGroup>
+      </section>}
+
       <section className="panel flex flex-col gap-3" data-testid="user-devices">
         <h2 className="heading">Devices and sessions</h2>
         {u.sessions.length ? <FocusGroup focusKey="ud:devices" className="flex flex-col gap-2">
@@ -162,6 +188,27 @@ export function UserDetail() {
           <Button focusKey="ask:ok" danger icon="trash" disabled={remove.isPending} testId="confirm-remove"
             onEnter={() => remove.mutate(undefined, { onSuccess: () => { toast(`${u.display_name} was removed.`, 'success'); navigate('/users', { replace: true }) }, onError: (e) => { setAsking(null); failed(e) } })}>Remove</Button>
         </div>
+      </Modal>
+      <Modal open={!!unlinking} onClose={() => setUnlinking(null)} title={unlinking ? `Remove ${SIGN_IN[unlinking]} sign-in from ${u.display_name}?` : ''} firstFocusKey="ask:cancel">
+        <p>They can no longer sign in that way and are signed out everywhere. Their other sign-in methods keep working.</p>
+        <div className="flex gap-3 flex-wrap">
+          <Button focusKey="ask:cancel" onEnter={() => setUnlinking(null)}>Cancel</Button>
+          <Button focusKey="ask:ok" danger disabled={unlink.isPending} testId="confirm-unlink"
+            onEnter={() => { const m = unlinking; if (m) unlink.mutate(m, { onSuccess: () => toast(`${SIGN_IN[m]} sign-in removed from ${u.display_name}.`, 'success'), onError: failed, onSettled: () => { setUnlinking(null); void setFocus('ud:reset') } }) }}>Unlink</Button>
+        </div>
+      </Modal>
+      <Modal open={asking === 'reset'} onClose={() => setAsking(null)} title={methods.includes('password') ? `Reset ${u.display_name}'s password?` : `Make a setup link for ${u.display_name}?`} firstFocusKey="ask:cancel">
+        <p>{methods.includes('password') ? 'Their password stops working at once and they are signed out on every device.' : 'They are signed out on every device.'} You get a link, good once and for three days, where they choose a password. There is no e-mail: you pass the link on yourself.</p>
+        <div className="flex gap-3 flex-wrap">
+          <Button focusKey="ask:cancel" onEnter={() => setAsking(null)}>Cancel</Button>
+          <Button focusKey="ask:ok" danger={methods.includes('password')} icon="link" disabled={reset.isPending} testId="confirm-reset"
+            onEnter={() => reset.mutate(undefined, { onSuccess: (link) => { setAsking(null); setSetupLink(link.url) }, onError: (e) => { setAsking(null); failed(e) } })}>{methods.includes('password') ? 'Reset and make link' : 'Make link'}</Button>
+        </div>
+      </Modal>
+      <Modal open={!!setupLink} onClose={() => setSetupLink(null)} title={`Setup link for ${u.display_name}`} firstFocusKey="reset-link:copy" wide testId="setup-link">
+        <p role="status">Send this link to {u.display_name}. It works once, for three days, and is shown only now.</p>
+        {setupLink && <LinkToCopy scope="reset-link" url={setupLink} label="Setup link" />}
+        <div><Button focusKey="reset-link:done" primary onEnter={() => setSetupLink(null)}>Done</Button></div>
       </Modal>
       <PinDialog open={asking === 'pin'} onClose={() => setAsking(null)} title={`New PIN for ${u.display_name}`} hint="Four to eight digits." confirm submitLabel="Save PIN"
         onSubmit={async (value) => { await pin.mutateAsync(value); toast('PIN saved.', 'success'); setAsking(null) }} />

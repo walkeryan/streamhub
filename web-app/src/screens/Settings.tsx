@@ -5,6 +5,7 @@ import { people, usePeopleChange, useSessions, type AuthSession } from '../api/p
 import { DEVICE_GONE, DeviceRow } from '../components/DeviceRow'
 import { deviceName } from '../lib/people'
 import { OwnerPinSettings } from '../components/OwnerPinSettings'
+import { SignInMethods } from '../components/SignInMethods'
 import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
@@ -20,6 +21,7 @@ import type { Profile } from '../api/types'
 import { Button, Chip, ErrorState, Modal } from '../components/ui'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
+import { setFocus } from '../nav/spatial'
 import { setTheme } from '../lib/theme'
 import { LANG_NAMES } from '../lib/util'
 import { themes } from '../tokens'
@@ -85,12 +87,20 @@ function ProfilesTab() {
   const go = useGo()
   const toast = useUi((s) => s.toast)
   const [pin, setPin] = useState('')
+  const [currentPin, setCurrentPin] = useState('')
   const [pinErr, setPinErr] = useState<string | null>(null)
   const savePin = async (value: string | null) => {
     if (value !== null && !/^\d{4,8}$/.test(value)) { setPinErr('Use 4 to 8 digits.'); return }
     setPinErr(null)
-    try { await ok(api.PUT('/profiles/{id}/pin', { params: { path: { id: me.id } }, body: { pin: value } })); setPin(''); void qc.invalidateQueries({ queryKey: qk.profiles }); toast(value ? 'PIN saved.' : 'PIN removed.', 'success') }
-    catch (e) { toast(e instanceof Error ? e.message : 'Could not change the PIN.', 'error') }
+    // A PIN that exists is only changed or removed by someone who knows it (or who has just signed in).
+    const body = { pin: value, ...(me.has_pin && currentPin ? { current_pin: currentPin } : {}) }
+    try { await ok(api.PUT('/profiles/{id}/pin', { params: { path: { id: me.id } }, body })); setPin(''); setCurrentPin(''); void qc.invalidateQueries({ queryKey: qk.profiles }); toast(value ? 'PIN saved.' : 'PIN removed.', 'success') }
+    catch (e) {
+      const code = (e as { code?: string }).code
+      if (code === 'current_pin_required') setPinErr('Enter your current PIN to change or remove it.')
+      else if (code === 'pin_invalid') setPinErr('That is not your current PIN.')
+      else toast(e instanceof Error ? e.message : 'Could not change the PIN.', 'error')
+    }
   }
   return (
     <div className="flex flex-col gap-6">
@@ -108,11 +118,13 @@ function ProfilesTab() {
           <div><Button focusKey="prof:users" icon="users" onEnter={() => go('/users')} testId="open-users">Open Users</Button></div>
         </section>
       )}
+      <SignInMethods />
       <OwnerPinSettings />
       {!me.content_restricted && (!capabilities.data?.content_policy_enabled || owner) && <section className="flex flex-col gap-3">
         <h2 className="heading">PIN for {me.name}</h2>
         <p className="muted">{me.has_pin ? 'A PIN is required to open this profile.' : 'Anyone can open this profile. Add a PIN to lock it.'}</p>
         <div className="flex gap-3 flex-wrap items-center">
+          {me.has_pin && <div style={{ width: '12rem' }}><FocusableInput focusKey="prof:pin-current" label="Current PIN" type="password" inputMode="numeric" maxLength={8} placeholder="Current PIN" value={currentPin} onChange={setCurrentPin} onSubmit={() => void setFocus('prof:pin')} /></div>}
           <div style={{ width: '12rem' }}><FocusableInput focusKey="prof:pin" label="New PIN" type="password" inputMode="numeric" maxLength={8} placeholder="4 to 8 digits" value={pin} onChange={setPin} onSubmit={() => void savePin(pin)} /></div>
           <Button focusKey="prof:pin-save" onEnter={() => void savePin(pin)}>Save PIN</Button>
           {me.has_pin && <Button focusKey="prof:pin-clear" danger onEnter={() => void savePin(null)}>Remove PIN</Button>}

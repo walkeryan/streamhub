@@ -1483,7 +1483,7 @@ paths:
     patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '200': { description: ok } } }
     delete: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
   /profiles/{id}/pin:
-    put: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true} } } } } }, responses: { '204': { description: ok } } }
+    put: { summary: "Set or clear a profile's PIN (the older route; see PUT /users/{id}/pin for the rule on changing one's own)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }, responses: { '204': { description: ok } } }
 
   /profiles/{id}/home_layout:
     get: { summary: Per-profile Home row order / hidden rows, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
