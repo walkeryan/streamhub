@@ -146,11 +146,12 @@ function SearchPage() {
   return (
     <div className="page-pad search-page" data-testid="search">
       {phone && <PageSearchField />}
-      <div data-testid="search-results" aria-busy={stale || (asked && !shown && !error) || undefined} data-stale={stale || undefined} aria-live="polite">
+      <div data-testid="search-results" aria-busy={stale || (asked && !shown && !error) || undefined} data-stale={stale || undefined}>
         {!asked ? <SearchIdle />
           : error && !shown ? <ErrorState error={error} onRetry={() => void refetch()} />
-          : !shown ? <SearchSkeleton />
-          : found === 0 && !isPlaceholderData ? <Empty title={`No results for “${q}”`} hint="Check the spelling, or try fewer words. Channels are also found by number." />
+          // Nothing to keep on screen while this query loads (the last one found nothing): skeletons.
+          : !shown || (found === 0 && isPlaceholderData) ? <SearchSkeleton />
+          : found === 0 ? <Empty title={`No results for “${q}”`} hint="Check the spelling, or try fewer words. Channels are also found by number." />
           : <FocusGroup focusKey="search:results" className="search-sections">
             {shown.order.map((name) => section(name, shown))}
             {shown.results.length > 0 && <Attribution text={shown.attribution} />}
