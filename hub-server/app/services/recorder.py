@@ -366,14 +366,18 @@ class RecorderService:
         except OSError:
             return None
 
-    async def playable(self, p: Principal, recording_id: str) -> tuple[Recording, Path]:
-        """A recording this caller may watch, and its file: what ``list`` shows them, once it has a file.
+    def playable_file(self, row: Recording) -> Path | None:
+        """The file ``rec:<id>`` playback serves for this row, if there is one.
 
-        That is a finished recording, and also one that failed part-way and kept what it had.
+        That is a finished recording's, and also what one that failed part-way kept.
         """
+        return self.file_of(row) if row.state in ("done", "failed") else None
+
+    async def playable(self, p: Principal, recording_id: str) -> tuple[Recording, Path]:
+        """A recording this caller may watch, and its file: what ``list`` shows them, once it has a file."""
         self._require_view(p)
         row = await self._owned(p, recording_id)
-        path = self.file_of(row) if row.state in ("done", "failed") else None
+        path = self.playable_file(row)
         if path is None:
             raise NotFound("recording not found")
         return row, path
@@ -423,6 +427,8 @@ class RecorderService:
 
     async def to_api(self, rows: builtins.list[Recording]) -> builtins.list[dict[str, Any]]:
         names = await self._profile_names() if rows else {}
+        # Asked of the disk, off the event loop: the recordings directory may be slow storage.
+        files = await asyncio.to_thread(lambda: {r.id for r in rows if self.playable_file(r) is not None})
         return [
             {
                 "id": r.id,
@@ -444,6 +450,7 @@ class RecorderService:
                 "state": r.state,
                 "error": r.error,
                 "size_bytes": r.size_bytes,
+                "has_file": r.id in files,
                 "created_at": r.created_at,
                 "updated_at": r.updated_at,
             }

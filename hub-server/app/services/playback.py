@@ -965,6 +965,43 @@ class PlaybackResolver:
                 return e
         return eps[0]
 
+    async def room_episode(
+        self, profile_id: str, hub_id: str, variant_id: str | None = None
+    ) -> tuple[Title, Title] | None:
+        """The (show, episode) a watch room made from ``hub_id`` is on, or None when that is not a show.
+
+        The episode is the one ``resolve`` would start for this profile now: the next one of the
+        variant named, or of the variant ``resolve`` would pick. It is asked once, for whoever
+        makes the room, because members who each resolved the show would each get their own.
+        Nothing is probed or opened, and nothing is refused over audio: each member's own
+        resolution of the episode still answers for that.
+        """
+        try:
+            h = ids.parse(hub_id)
+        except ValueError:
+            return None
+        rows: list[Title] = []
+        if h.scheme == "lib":
+            row = await self._catalog.title_row(h.a, h.b)
+            rows = [row] if row is not None else []
+        elif h.scheme == "tmdb" and h.a == "tv" and h.b.isdigit():
+            rows = (await self._tmdb_matches(h.a, int(h.b)))[3]
+        rows = [r for r in rows if r.kind in ("show", "series", "season")]
+        if not rows:
+            return None
+        options = await self._audio_options(profile_id, rows)
+        if variant_id:
+            chosen = next((o for o in options if o["variant_id"] == variant_id), None)
+            if chosen is None:
+                raise NotFound("variant does not belong to this title or source")
+        elif options:
+            preferred = await self._catalog.preferred_languages(profile_id, None)
+            chosen = next((o for o in options if not preferred or o["preferred_audio_available"]), options[0])
+        else:
+            raise NotFound("no playable variants for this title")
+        show = next(r for r in rows if ids.lib_id(r.source_id, r.ext_id) == chosen["variant_id"])
+        return show, await self._next_episode(profile_id, show)
+
     async def _resolve_title(
         self,
         profile_id: str,
@@ -1228,6 +1265,23 @@ class PlaybackResolver:
             },
         }
 
+    async def _tmdb_matches(
+        self, media_type: str, tmdb_id: int
+    ) -> tuple[dict[str, Source], Any, list[dict[str, Any]], list[Title]]:
+        """Where a TMDB title can be had: (sources, metadata, badges, the rows of enabled sources)."""
+        sources = await self._sources.rows_by_id()
+        meta = await self._meta.details(media_type, tmdb_id) if self._meta.enabled else None
+        badges, matches = await self._availability.badges_for(
+            media_type,
+            tmdb_id=tmdb_id,
+            imdb_id=meta.imdb_id if meta else None,
+            title=meta.title if meta else None,
+            year=meta.year if meta else None,
+            sources=sources,
+            is_in_app=self._sources.registry.is_in_app,
+        )
+        return sources, meta, badges, [m for m in matches if m.source_id in sources and sources[m.source_id].enabled]
+
     async def _resolve_tmdb(
         self,
         profile_id: str,
@@ -1243,18 +1297,7 @@ class PlaybackResolver:
         start_position_ms: int | None = None,
         room: RoomScope | None = None,
     ) -> dict[str, Any]:
-        sources = await self._sources.rows_by_id()
-        meta = await self._meta.details(media_type, tmdb_id) if self._meta.enabled else None
-        badges, matches = await self._availability.badges_for(
-            media_type,
-            tmdb_id=tmdb_id,
-            imdb_id=meta.imdb_id if meta else None,
-            title=meta.title if meta else None,
-            year=meta.year if meta else None,
-            sources=sources,
-            is_in_app=self._sources.registry.is_in_app,
-        )
-        matches = [m for m in matches if m.source_id in sources and sources[m.source_id].enabled]
+        sources, meta, badges, matches = await self._tmdb_matches(media_type, tmdb_id)
         if matches and (not source_id or any(m.source_id == source_id for m in matches)):
             row = await self._select_audio(
                 profile_id,

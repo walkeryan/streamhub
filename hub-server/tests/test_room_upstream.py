@@ -180,7 +180,8 @@ def test_seek_restarts_the_session_once_before_anyone_is_told(rig: Rig, ffmpeg: 
         after = playlist(rig, host).text
         assert segment_url(after) != segment_url(before)
         assert rig.client.get(segment_url(after)).status_code == 200
-        assert rig.client.get(segment_url(before)).status_code == 403
+        stale = rig.client.get(segment_url(before))
+        assert (stale.status_code, stale.json()["code"]) == (403, "stream_epoch_stale")
         assert segment_url(playlist(rig, guest).text).rsplit("/hls/", 1)[1] == segment_url(after).rsplit("/hls/", 1)[1]
 
         # A seek the running session already starts at costs nothing.
@@ -202,6 +203,41 @@ def test_seek_restarts_the_session_once_before_anyone_is_told(rig: Rig, ffmpeg: 
             1_821_000,
         )
         assert len(ffmpeg.runs) == 2 and use(rig) == 1
+
+
+def test_an_earlier_epoch_is_refused_by_name_and_epochs_never_go_back(rig: Rig, ffmpeg: Ffmpeg, panel: Panel) -> None:
+    limit(rig)
+    code = rig.room()["code"]
+    host = rig.join(code)
+    urls = [segment_url(playlist(rig, host).text)]
+    with rig.socket(code, host["member_token"]) as ws:
+        assert [recv(ws)["type"] for _ in range(2)] == ["members", "state"]
+        for epoch, position in ((2, 1_803_000), (3, 3_600_000)):
+            ws.send_json({"type": "seek", "position_ms": position})
+            assert recv(ws)["stream_epoch"] == epoch
+            urls.append(segment_url(playlist(rig, host).text))
+        # Every earlier start of the room's stream says what it is, however long ago it was.
+        for old in urls[:2]:
+            r = rig.client.get(old)
+            assert (r.status_code, r.json()["code"]) == (403, "stream_epoch_stale"), r.text
+        assert rig.client.get(urls[2]).status_code == 200
+        # A session the room never had is no epoch of it.
+        base, name = urls[2].rsplit("/hls/", 1)[0], urls[2].rsplit("/", 1)[1]
+        r = rig.client.get(f"{base}/hls/{'0' * 20}/{name}")
+        assert (r.status_code, r.json()["code"]) == (403, "forbidden")
+        rig.left(ws, code, [])
+    wait_for(lambda: rig.c.room_playback.session(code) is None and not rig.c.proxy._hls)
+
+    # The room emptied and its stream was released. The next start is a later epoch, not the first again.
+    again = rig.join(code)
+    assert again["descriptor"]["stream_epoch"] == 4
+    with rig.socket(code, again["member_token"]) as ws:
+        assert [recv(ws) for _ in range(2)][1]["stream_epoch"] == 4
+        urls.append(segment_url(playlist(rig, again).text))
+        assert len(set(urls)) == 4 and rig.client.get(urls[3]).status_code == 200
+        for old in urls[:3]:
+            r = rig.client.get(old)
+            assert (r.status_code, r.json()["code"]) == (403, "stream_epoch_stale"), r.text
 
 
 def test_first_join_starts_at_the_room_position_and_honours_its_audio_track(
@@ -246,7 +282,7 @@ def test_last_leave_and_room_close_release_the_session(rig: Rig, ffmpeg: Ffmpeg,
 
     # The room is still there: whoever comes back starts a new session, and closing the room ends it.
     again = rig.join(code)
-    assert again["descriptor"]["stream_epoch"] == 1 and len(ffmpeg.runs) == 2 and use(rig) == 1
+    assert again["descriptor"]["stream_epoch"] == 2 and len(ffmpeg.runs) == 2 and use(rig) == 1
     assert rig.req("DELETE", f"/rooms/{code}").status_code == 204
     wait_for(lambda: use(rig) == 0)
     assert ffmpeg.running == 0 and rig.c.room_playback.session(code) is None

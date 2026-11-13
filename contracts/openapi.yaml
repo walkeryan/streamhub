@@ -637,7 +637,7 @@ components:
         audio_tracks: {type: array, items: {$ref: '#/components/schemas/AudioTrack'}, description: Tracks of the probed file (web VOD only).}
         audio_track: {type: integer, nullable: true, description: The one track the server encoded into this stream; null when the client receives the file's own tracks.}
         start_position_ms: {type: integer, nullable: true, description: "Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms."}
-        stream_epoch: {type: integer, nullable: true, description: "Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. Null for every other descriptor."}
+        stream_epoch: {type: integer, nullable: true, description: "Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor."}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
@@ -773,7 +773,7 @@ components:
     RecordingState: { type: string, enum: [scheduled, recording, done, failed, missed, cancelled] }
     Recording:
       type: object
-      description: "One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file it plays with POST /playback/resolve {id: \"rec:<id>\"}."
+      description: "One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file (has_file) it plays with POST /playback/resolve {id: \"rec:<id>\"}."
       required: [id, profile_id, channel_id, title, starts_at, ends_at, state, created_at, updated_at]
       properties:
         id: {type: string}
@@ -794,7 +794,8 @@ components:
         pad_after_s: {type: integer}
         state: { $ref: '#/components/schemas/RecordingState' }
         error: {type: string, nullable: true, description: "why it failed or was missed"}
-        size_bytes: {type: integer, nullable: true}
+        size_bytes: {type: integer, nullable: true, description: "what the capture wrote. Not whether it can be played: see has_file"}
+        has_file: {type: boolean, description: "There is a file that POST /playback/resolve {id: \"rec:<id>\"} would play now: the recording is done, or failed and kept what it had captured, and that file is still on the server. False while scheduled or recording, and for a file since removed. Always sent."}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
     RecordingRule:
@@ -823,8 +824,8 @@ components:
       type: object
       required: [id]
       properties:
-        id: {type: string, description: "title or channel id (lib:, tmdb:, ch:). A channel makes a live room."}
-        variant_id: {type: string, nullable: true, description: "source variant every member plays; validated when a member joins"}
+        id: {type: string, description: "title or channel id (lib:, tmdb:, ch:). A channel makes a live room. A show or season makes a room on one of its episodes (see POST /rooms)."}
+        variant_id: {type: string, nullable: true, description: "source variant every member plays; validated when a member joins, and for a show when the room is created"}
         audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255}
     RoomJoin:
       type: object
@@ -840,8 +841,8 @@ components:
       properties:
         id: {type: string}
         kind: { $ref: '#/components/schemas/MediaKind' }
-        title: {type: string}
-        subtitle: {type: string, nullable: true}
+        title: {type: string, description: "for an episode, the episode's own title"}
+        subtitle: {type: string, nullable: true, description: "for an episode, its show where known and its number: \"<show> · S01E02\", or \"S01E02\""}
         year: {type: integer, nullable: true}
         poster: {type: string, nullable: true}
         backdrop: {type: string, nullable: true}
@@ -867,9 +868,9 @@ components:
       properties:
         code: {type: string, description: "six characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789; accepted in either case"}
         join_path: {type: string, description: "web path of the join screen: /room/<code>"}
-        id: {type: string, description: "the title or channel the room watches"}
+        id: {type: string, description: "the title or channel the room watches: what every member plays. Never a show or a season: a room created from one names the episode it is on (see POST /rooms), so this can differ from the id the room was created with"}
         live: {type: boolean}
-        variant_id: {type: string, nullable: true}
+        variant_id: {type: string, nullable: true, description: "in a room created from a show with a variant named, the episode's id"}
         audio_track: {type: integer, nullable: true}
         host_name: {type: string}
         is_host: {type: boolean, description: "the current profile created the room"}
@@ -908,8 +909,12 @@ components:
         - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
           `host_only`, `live_no_seek`, `bad_message`.
         - `closed {reason}`: the last message before the server closes the socket: `expired`, `deleted`,
-          `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized` (4401),
-          `not_found`, `not_a_member` (4404).
+          `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized`,
+          `remote_access_denied` (4401), `not_found`, `not_a_member` (4404).
+          `remote_access_denied` is the socket's form of the API's 403 of that name: the member's
+          user lacks remote.access and the socket was opened from outside home_networks. The seat
+          is not taken away by it. POST /rooms/{code}/join and GET /rooms/{code}/descriptor answer
+          403 remote_access_denied in the same situation.
 
         On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
         Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
@@ -923,7 +928,13 @@ components:
         room closes. A seek restarts it at the new position before the seek's `state` is sent. That
         `state` carries the new `stream_epoch` and `stream_start_ms`: a client whose epoch differs
         reloads the same playlist URL (the descriptor's `url` does not change) and treats
-        `stream_start_ms` as its new time zero; segments of the previous epoch answer 403. A seek to
+        `stream_start_ms` as its new time zero; segments of an earlier epoch answer 403 with code
+        `stream_epoch_stale` (the status the stream routes use for media they refuse; the code is
+        what tells this refusal from the others), which a member who missed the `state` answers by
+        asking GET /rooms/{code}/descriptor. `stream_epoch` only ever increases within a room: it
+        counts every start of the room's stream, also one made after the room stood empty and its
+        stream was released, so a greater epoch is always the later stream and no epoch is ever
+        reused; it need not increase by one. A seek to
         a position the running stream already starts at (positions are floored to 5 s) keeps the
         epoch, and the client seeks within what it is playing. The stream's audio is the room's
         `audio_track`, else the first member's preferred or default track; `audio_track` in the
@@ -1119,8 +1130,14 @@ paths:
       description: >-
         Active users whose role (or own override) has on_shared_devices, owners and family first,
         then by name. Only a shared-device session may ask.
+        A shared device whose current user has been suspended is not stranded: while its session
+        itself stands (not revoked), this route and POST /auth/switch keep answering for it, and
+        are the only two routes that do (every other one, /auth/me and /auth/refresh included,
+        answers 401 user_suspended). The suspended user is not listed, so no entry has current true.
+        Neither route can be reached once the access token has expired, because the refresh is refused.
       responses:
         '200': { description: ok, content: { application/json: { schema: { type: object, required: [users], properties: { users: { type: array, items: { $ref: '#/components/schemas/SwitchableUser' } } } } } } }
+        '401': { description: "token_expired | session_stale | session_revoked (signed out, or the device has been handed over since this token was issued). user_suspended only on a device that is not shared." }
         '403': { description: not_shared_device }
   /auth/switch:
     post:
@@ -1132,12 +1149,16 @@ paths:
         and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the
         current user's PIN is verified (pin_invalid when wrong, counted against the same five
         guesses), and a user without a PIN has nothing to check.
+        When the current user has been suspended the device can still be handed over (see
+        GET /auth/switchable): to anyone listed, by the same PIN rules, a target's access being
+        compared with what the suspended user held. The suspended user is not a target (404),
+        and their tokens for this device stop working with the hand-over like anyone's.
       requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "null or absent: no PIN offered"} } } } } }
       responses:
         '200': { description: switched, content: { application/json: { schema: { $ref: '#/components/schemas/Switched' } } } }
-        '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry." }
+        '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. user_suspended only on a device that is not shared." }
         '403': { description: not_shared_device }
-        '404': { description: not a user this device can switch to }
+        '404': { description: not a user this device can switch to (a suspended user included) }
         '409': { description: "pin_setup_required (the target has more access and no PIN) | switch_conflict (retry)" }
         '429': { description: "rate_limited: five wrong PINs for this target in 15 minutes. Retry-After is whole seconds (an integer), as on every 429 of this API." }
   /auth/adult-unlock:
@@ -1506,7 +1527,7 @@ paths:
       responses:
         '200': { description: stream }
         '403': { description: "remote_access_denied: the user the token was issued to lacks remote.access and the request comes from outside home_networks. content_restricted: the content policy no longer admits it for them." }
-        '401': { description: "session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again." }
+        '401': { description: "session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again. The code alone tells them apart, as on API calls, with no need to ask /auth/me. session_stale: only the URL is out of date (the user's role, overrides or limits changed since it was issued) and the session stands; refresh the tokens and resolve again. session_revoked: the session it was issued to is signed out, or, on a shared device, was handed to another user; that user's tokens answer the same. unauthorized: the token is not a stream token of this server or is past its lifetime, which says nothing about the session; resolve again." }
         '409': { description: "source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what. user_stream_limit: this stream went quiet for 30 seconds or was replaced on its device, and the user's limit is now used by other streams.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /stream/{token}/index.m3u8:
     get:
@@ -1515,7 +1536,7 @@ paths:
       responses:
         '200': { description: hls playlist }
         '401': { description: "as for /stream/{token}; segments answer the same" }
-        '403': { description: "as for /stream/{token}; segments answer the same" }
+        '403': { description: "as for /stream/{token}; segments answer the same. A segment (or nested playlist) URL also answers stream_epoch_stale: it belongs to an earlier stream_epoch of a watch room's shared stream, which a seek has since restarted. The member's playlist URL is still good: reload it, and ask GET /rooms/{code}/descriptor for the current stream_epoch and start_position_ms. This playlist URL itself never answers it. Any other segment that is not of the grant's stream answers forbidden." }
         '409': { description: "source_busy or user_stream_limit, as for /stream/{token}", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /favorites:
@@ -1567,7 +1588,7 @@ paths:
   /users/{id}/deny:
     post: { summary: Refuse and remove a waiting user (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: removed }, '409': { description: not_pending } } }
   /users/{id}/suspend:
-    post: { summary: Suspend an active user; their sessions answer 401 user_suspended (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: suspended, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: "last_owner | not_active" } } }
+    post: { summary: "Suspend an active user; their sessions answer 401 user_suspended, except that a shared device they are the current user of can still be handed over (GET /auth/switchable, POST /auth/switch) (users.manage)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: suspended, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: "last_owner | not_active" } } }
   /users/{id}/reinstate:
     post: { summary: Reinstate a suspended user (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: active, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: not_suspended } } }
   /users/{id}/pin:
@@ -1655,12 +1676,19 @@ paths:
   /rooms:
     post:
       summary: Create a watch room for a title or channel
-      description: The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+      description: >-
+        The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+        A room is on one thing. Made from a show (or a season) it is on one episode: the one
+        POST /playback/resolve would start for the creator now (their next unwatched episode, of the
+        variant named or of the one resolve would pick), chosen once, here. Room.id is that episode's
+        id, Room.title describes the episode, and every member plays it whatever their own history
+        with the show; a variant_id naming a variant of the show comes back as the episode's id.
+        The episode does not change for the life of the room.
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomCreate' } } } }
       responses:
         '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
         '403': { description: "content_restricted, or not allowed to create rooms" }
-        '404': { description: unknown title }
+        '404': { description: "unknown title; a show with no episode to play; a variant_id that is not a variant of the show" }
         '409': { description: room_limit }
   /rooms/{code}:
     get:
@@ -1682,7 +1710,7 @@ paths:
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoin' } } } }
       responses:
         '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoined' } } } }
-        '403': { description: "content_restricted and the other /playback/resolve refusals" }
+        '403': { description: "remote_access_denied (as on every call of a user without remote.access away from the home network), content_restricted and the other /playback/resolve refusals" }
         '404': { description: "room_not_found, or the room's title or variant is not available to this profile" }
         '409': { description: "room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them)" }
   /rooms/{code}/descriptor:

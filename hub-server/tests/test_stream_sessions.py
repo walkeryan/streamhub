@@ -159,6 +159,69 @@ async def test_role_change_and_suspension_refuse_the_grant(api: Api, ffmpeg: lis
     await api.c.proxy.shutdown()
 
 
+async def test_a_stale_grant_is_told_apart_from_a_revoked_session(
+    api: Api, ffmpeg: list[Process], clock: Clock
+) -> None:
+    """What a media URL answers says whether to resolve again or to sign in again, without asking /auth/me."""
+    viewer = await member(api, "family", "Viewer")
+    _, token = await hls_channel(api, viewer)
+    playlist = f"/api/v1/stream/{token}/index.m3u8"
+    first = next(ln for ln in (await api.client.get(playlist)).text.splitlines() if ln and not ln.startswith("#"))
+    urls = (playlist, first, f"/api/v1/stream/{token}")
+
+    async def answers() -> set[tuple[int, str]]:
+        clock.now += VALID_TTL_S
+        return {(r.status_code, r.json()["code"]) for r in [await api.client.get(url) for url in urls]}
+
+    # The user's access changed (their version moved on): the grant is out of date, the session is not.
+    assert (await api.patch(f"/users/{viewer.id}", json={"grants": ["rooms.create"]})).status_code == 200
+    assert await answers() == {(401, "session_stale")}
+    assert (await viewer.get("/settings")).json()["code"] == "session_stale"  # as the API says it
+    assert (await viewer.refresh()).status_code == 200 and (await viewer.get("/auth/me")).status_code == 200
+    assert await answers() == {(401, "session_stale")}  # the old URL stays stale; a fresh one plays
+    _, fresh = await hls_channel(api, viewer)
+    assert (await segment(api, fresh)).status_code == 200
+
+    # A grant past its lifetime is not about the session at all.
+    lifetime, api.c.tokens.ttl_s = api.c.tokens.ttl_s, -1
+    expired = await api.client.get(f"/api/v1/stream/{fresh}/index.m3u8")
+    api.c.tokens.ttl_s = lifetime
+    assert (expired.status_code, expired.json()["code"]) == (401, "unauthorized")
+    assert (await viewer.get("/auth/me")).status_code == 200
+
+    # The session itself signed out: only now is it session_revoked, on the stale URL and the fresh one alike.
+    [session] = (await viewer.get("/auth/sessions")).json()
+    assert (await api.delete(f"/auth/sessions/{session['sid']}")).status_code == 204
+    assert await answers() == {(401, "session_revoked")}
+    gone = await segment(api, fresh)
+    assert (gone.status_code, gone.json()["code"]) == (401, "session_revoked")
+    assert (await viewer.get("/auth/me")).json()["code"] == "session_revoked"
+    await api.c.proxy.shutdown()
+
+
+async def test_a_grant_of_the_user_a_shared_device_was_taken_from_is_revoked_like_their_tokens(
+    api: Api, ffmpeg: list[Process], clock: Clock
+) -> None:
+    from tests.test_shared_devices import bearer, pair, switch, user
+
+    kid = await user(api, "Kid", "kid")
+    tv = await pair(api, shared_device=True)
+    me = (await api.get("/auth/me")).json()["user"]["id"]
+    _, token = await hls_channel(api, Member(api, me, api.profile_id, tv))
+    assert (await segment(api, token)).status_code == 200
+    handed = await switch(api, tv, kid["id"])
+    assert handed.status_code == 200, handed.text
+    # The device's session lives on under someone else. What was issued to the previous user
+    # says what their access token says, on the media URL as on the API.
+    clock.now += VALID_TTL_S
+    refused = await segment(api, token)
+    assert (refused.status_code, refused.json()["code"]) == (401, "session_revoked")
+    old = await api.client.get("/api/v1/auth/me", headers=bearer(tv))
+    assert (old.status_code, old.json()["code"]) == (401, "session_revoked")
+    assert (await api.client.get("/api/v1/auth/me", headers=bearer(handed.json()))).status_code == 200
+    await api.c.proxy.shutdown()
+
+
 class Endless(httpx.AsyncByteStream):
     """An upstream file that keeps sending until it is closed."""
 

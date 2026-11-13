@@ -12,7 +12,7 @@ import httpx
 from app.infra.models import Progress
 from app.services import rooms as R
 from tests import test_api_rooms, test_room_upstream
-from tests.test_api_rooms import FILM_URL, Rig, recv
+from tests.test_api_rooms import FILM_URL, Rig, closed_with, recv
 from tests.test_room_upstream import Ffmpeg, limit, use, wait_for
 from tests.test_upstream_session_pin import Panel
 
@@ -140,6 +140,35 @@ def test_descriptor_follows_what_the_member_may_do_now(rig: Rig) -> None:
     r = descriptor(rig, code, token)
     assert r.status_code == 403 and r.json()["missing"] == ["watch.vod"]
     assert member_of  # the helper this suite's users are modelled on
+
+
+def test_join_and_socket_keep_a_user_without_remote_access_at_home(rig: Rig) -> None:
+    code = rig.room()["code"]
+    created = rig.req("POST", "/users", json={"name": "Friend", "role_id": "friend", "pin": "1234"}).json()
+    assert rig.req("PATCH", f"/users/{created['id']}", json={"denials": ["remote.access"]}).status_code == 200
+    login = rig.client.post("/api/v1/auth/login", json={"profile_id": created["profile_id"], "pin": "1234"})
+    friend = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    seat = rig.join(code, friend)  # at home, as the rig's peer is
+
+    rig.c.app_settings._cache["home_networks"] = "198.51.100.0/24"
+    # Away from home the join is refused as every call of theirs is, and takes no seat.
+    r = rig.join_raw(code, friend)
+    assert r.status_code == 403 and r.json()["code"] == "remote_access_denied", r.text
+    r = rig.join_raw(code, friend, member_token=seat["member_token"])
+    assert r.status_code == 403 and r.json()["code"] == "remote_access_denied", r.text
+    # The socket carries no bearer: the seat's own user is held to the same rule, by the same name.
+    with rig.socket(code, seat["member_token"]) as ws:
+        assert recv(ws) == {"type": "closed", "reason": "remote_access_denied"}
+        assert closed_with(ws) == 4401
+    assert rig.members(code) == ["Friend"]  # refused, not removed: the seat is theirs when they are home
+    # Someone who holds remote.access is at home anywhere.
+    mine = rig.join(code)
+    with rig.socket(code, mine["member_token"]) as ws:
+        assert recv(ws)["type"] == "members"
+
+    rig.c.app_settings._cache.pop("home_networks")
+    with rig.socket(code, seat["member_token"]) as ws:
+        assert [recv(ws)["type"] for _ in range(2)] == ["members", "state"]
 
 
 # ---------------------------------------------------------------------- joining again

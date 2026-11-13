@@ -197,6 +197,34 @@ async def test_a_recording_needs_a_file_to_play(api: Api) -> None:
     assert (await api.client.get(d["url"])).status_code == 404
 
 
+async def test_has_file_says_which_recordings_play(api: Api) -> None:
+    """``has_file`` is the answer ``rec:<id>`` playback would give, row by row."""
+    await recorded(api, "soon", state="scheduled", path=None)
+    await recorded(api, "running", state="recording")  # being written: not served yet
+    await recorded(api, "done")
+    await recorded(api, "partial", state="failed", error="The capture stopped before the programme ended.")
+    await recorded(api, "nothing", state="failed", path=None, error="The channel never started.")
+    await recorded(api, "missed", state="missed", path=None)
+    await recorded(api, "lost")  # a size, and no file any more
+    (Path(api.c.settings.recordings_dir) / "Evening News (lost).mkv").unlink()
+    await recorded(api, "outside", path="../outside.mkv")
+    listed = {r["id"]: r for r in (await api.get("/recordings")).json()["recordings"]}
+    assert {rid: r["has_file"] for rid, r in listed.items()} == {
+        "soon": False,
+        "running": False,
+        "done": True,
+        "partial": True,
+        "nothing": False,
+        "missed": False,
+        "lost": False,
+        "outside": False,
+    }
+    # Size alone does not say it: a lost file keeps its size, and a capture in progress has one.
+    assert listed["lost"]["size_bytes"] == len(BODY) and listed["running"]["size_bytes"] == len(BODY)
+    for rid, row in listed.items():
+        assert ((await resolve(api, rid)).status_code == 200) is row["has_file"], rid
+
+
 async def test_recording_grants_are_revalidated_like_any_other(api: Api) -> None:
     clock = Clock()
     api.c.guard.clock = clock

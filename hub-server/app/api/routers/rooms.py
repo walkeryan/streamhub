@@ -10,7 +10,7 @@ from fastapi import APIRouter, Query, Request, Response, WebSocket
 from app.api import schemas as S
 from app.api.deps import C, P, acting_as, require_reachable
 from app.container import Container
-from app.services import room_policy
+from app.services import ids, room_policy
 from app.services.auth import Principal
 from app.services.context import is_https
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
@@ -36,11 +36,15 @@ async def _require_rated(c: Container, p: Principal, ref: str) -> None:
         await c.content_policy.require(p.profile_id, ref)
 
 
-async def _title(c: Container, p: Principal, ref: str) -> dict[str, Any]:
+async def _title(c: Container, p: Principal, ref: str, series: str | None = None) -> dict[str, Any]:
     """What the join screen shows of the title, and only to a profile that may watch it."""
     await _require_rated(c, p, ref)
     detail = await c.catalog.detail(ref, p.profile_id)
-    return {k: detail.get(k) for k in TITLE_FIELDS}
+    title = {k: detail.get(k) for k in TITLE_FIELDS}
+    if series and title["kind"] == "episode" and " · " not in (title["subtitle"] or ""):
+        # Not every source says which show an episode belongs to; the room knows where it took it from.
+        title["subtitle"] = " · ".join(part for part in (series, title["subtitle"]) if part)
+    return title
 
 
 def _out(c: Container, room: Room, p: Principal, title: dict[str, Any]) -> dict[str, Any]:
@@ -69,14 +73,26 @@ async def create_room(body: S.RoomCreate, c: C, p: P) -> dict[str, Any]:
     if not room_policy.can_create(p):
         raise PermissionDenied(["rooms.create"])
     title = await _title(c, p, body.id)
+    ref, variant_id, series = body.id, body.variant_id, None
+    # A show is watched an episode at a time, and a room is on one thing: the episode its creator
+    # would be given now. Members resolving the show for themselves would each get their own.
+    pinned = await c.playback.room_episode(p.profile_id, body.id, body.variant_id)
+    if pinned is not None:
+        show, episode = pinned
+        ref = ids.lib_id(episode.source_id, episode.ext_id)
+        # The variant named was a show's; of the episode there is the one.
+        variant_id = ref if body.variant_id else None
+        series = ids.clean_display_title(show.title) if show.kind != "season" else None
+        title = await _title(c, p, ref, series)
     host = await c.auth.get_profile(p.profile_id)
     room = c.rooms.create(
-        body.id,
+        ref,
         host_profile_id=p.profile_id,
         host_name=host.name,
-        variant_id=body.variant_id,
+        variant_id=variant_id,
         audio_track=body.audio_track,
-        live=body.id.startswith("ch:"),
+        live=ref.startswith("ch:"),
+        series=series,
     )
     return _out(c, room, p, title)
 
@@ -86,7 +102,7 @@ async def show_room(code: str, c: C, p: P) -> dict[str, Any]:
     room = _room(c, code)
     if not room_policy.can_join(p):
         raise PermissionDenied(["rooms.join"])
-    return _out(c, room, p, await _title(c, p, room.ref))
+    return _out(c, room, p, await _title(c, p, room.ref, room.series))
 
 
 @router.post("/rooms/{code}/join", response_model=S.RoomJoined, tags=["rooms"])
@@ -193,15 +209,18 @@ async def close_room(code: str, c: C, p: P) -> Response:
     return Response(status_code=204)
 
 
-async def _admit(c: Container, code: str, member_token: str) -> Connection | tuple[str, int]:
+async def _admit(c: Container, ws: WebSocket, code: str, member_token: str) -> Connection | tuple[str, int]:
     """The member's connection, or why (and with which close code) the socket is refused."""
     claims = c.rooms.tokens.verify(member_token)
     if claims is None or claims.room != code.upper():
         return "unauthorized", CLOSE_UNAUTHORIZED
     try:
-        await c.auth.session_valid(claims.profile_id, claims.token_version, claims.session_id)
-    except ServiceError:
-        return "unauthorized", CLOSE_UNAUTHORIZED
+        # The socket carries no bearer, so the member's user is held to the home network here,
+        # as the join that seated them was and as their descriptor is.
+        p = await c.auth.session_principal(claims.profile_id, claims.token_version, claims.session_id)
+        require_reachable(ws, c, "remote.access" in p.permissions)
+    except ServiceError as exc:
+        return "remote_access_denied" if exc.code == "remote_access_denied" else "unauthorized", CLOSE_UNAUTHORIZED
     # No await between here and attach: the room cannot change under the checks.
     room = c.rooms.registry.get(code)
     if room is None:
@@ -235,7 +254,7 @@ async def room_socket(ws: WebSocket, code: str, member_token: str = "") -> None:
     c: Container = ws.app.state.container
     # Admitted before the handshake completes, so nothing the room says after the
     # client sees the socket open can be missed.
-    admitted = await _admit(c, code, member_token)
+    admitted = await _admit(c, ws, code, member_token)
     if not isinstance(admitted, Connection):
         # Accept, then close with a reason: a browser cannot read a refused handshake.
         reason, close_code = admitted

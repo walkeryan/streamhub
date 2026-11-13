@@ -594,6 +594,11 @@ async def stream_hls_segment(token: str, sid: str, name: str, request: Request, 
     # After a room seek the room's session has a new id: segments of the old one are not served.
     expected = c.room_playback.sid(g) if g.room else c.proxy.session_id(_hls_session_key(c, g)[0])
     if sid != expected:
+        if g.room and c.room_playback.superseded(g, sid):
+            # A member who missed the room's ``state`` event: their playlist is of an earlier start.
+            raise Forbidden(
+                "The room's stream has restarted. Ask for the room's descriptor again.", code="stream_epoch_stale"
+            )
         raise Forbidden("Segment does not belong to this playback grant.")
     sess = c.proxy.hls_by_sid(sid)
     if sess is None or "/" in name or ".." in name or not name.endswith((".ts", ".m4s", ".mp4", ".m3u8")):
