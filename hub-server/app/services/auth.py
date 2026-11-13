@@ -405,6 +405,15 @@ class AuthService:
         await self.sessions.touch(state.session.sid, state.identity.user.id)
         return self._principal(state, claims)
 
+    async def session_principal(self, profile_id: str, version: int, session_id: str) -> Principal:
+        """The principal behind a session that is named without its access token (a room member
+        token): the session validated as for any request, with the user's access as it is now."""
+        identity = await self.users.identity(profile_id)
+        if identity is None:
+            raise Unauthorized("Session revoked; sign in again", code="session_revoked")
+        state = await self.validate(profile_id, version, session_id, identity.user.version)
+        return self._principal(state, {})
+
     # ------------------------------------------------------------------ pending sign-ins
     async def issue_pending(self, profile: Profile, meta: SessionMeta | None = None) -> str:
         """A token for a user still waiting for approval. It opens ``GET /auth/me`` and nothing else."""

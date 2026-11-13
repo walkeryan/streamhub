@@ -946,6 +946,9 @@ class RoomJoin(_M):
     prefer_hls: bool = False
     recovery_generation: str | None = Field(default=None, max_length=64)
     allow_unverified_audio: bool = False
+    member_token: str | None = Field(
+        default=None, max_length=2048, description="a seat this caller already holds: it is kept, not added to"
+    )
 
 
 class RoomTitle(_M):

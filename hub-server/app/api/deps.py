@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -97,13 +98,9 @@ async def resolve(request: Request, c: Container, token: str, *, owner_entry: bo
     return principal
 
 
-async def current_principal(
-    request: Request, c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
-) -> AsyncIterator[Principal]:
-    if creds is None or not creds.credentials:
-        raise Unauthorized("missing bearer token")
-    principal = await resolve(request, c, creds.credentials)
-    request.state.principal = principal
+@asynccontextmanager
+async def acting_as(c: Container, principal: Principal) -> AsyncIterator[None]:
+    """Run a block as this caller: the content policy and the watch scope every catalog read follows."""
     from app.services.content_policy import active_policy, active_principal
 
     policy = c.content_policy
@@ -115,11 +112,22 @@ async def current_principal(
     token = active_policy.set((policy, profile) if profile is not None else None)
     watch_token = set_watch(principal.permissions)
     try:
-        yield principal
+        yield
     finally:
         reset_watch(watch_token)
         active_policy.reset(token)
         active_principal.reset(principal_token)
+
+
+async def current_principal(
+    request: Request, c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+) -> AsyncIterator[Principal]:
+    if creds is None or not creds.credentials:
+        raise Unauthorized("missing bearer token")
+    principal = await resolve(request, c, creds.credentials)
+    request.state.principal = principal
+    async with acting_as(c, principal):
+        yield principal
 
 
 P = Annotated[Principal, Depends(current_principal)]

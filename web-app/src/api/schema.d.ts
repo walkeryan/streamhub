@@ -3266,6 +3266,13 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description remote_access_denied: the user the token was issued to lacks remote.access and the request comes from outside home_networks. content_restricted: the content policy no longer admits it for them. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
                 /** @description source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what. user_stream_limit: this stream went quiet for 30 seconds or was replaced on its device, and the user's limit is now used by other streams. */
                 409: {
                     headers: {
@@ -3312,6 +3319,13 @@ export interface paths {
                 };
                 /** @description as for /stream/{token}; segments answer the same */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description as for /stream/{token}; segments answer the same */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4967,7 +4981,7 @@ export interface paths {
         put?: never;
         /**
          * Take a seat in the room
-         * @description Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). A room has at most 8 members and expires after 30 minutes with none.
+         * @description Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). Every call adds a member unless the body carries the member_token of a seat the caller already holds, which is then kept. The member starts at the room's position (descriptor.resume_position_ms). A room has at most 8 members and expires after 30 minutes with none.
          */
         post: {
             parameters: {
@@ -5022,6 +5036,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/rooms/{code}/descriptor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A member's playback descriptor as it is now
+         * @description Authorized like the room WebSocket, by the member token in the query (no bearer token). The seat is unchanged. In a room that plays one shared stream the descriptor has the playlist URL the member already holds (a new one only once that URL's grant has expired or their session changed) with the current stream_epoch and start_position_ms; for a title each member plays for themselves it is a freshly resolved descriptor. resume_position_ms is the room's position now. Resolved for the member's access as it stands now, with the refusals of the join.
+         */
+        get: {
+            parameters: {
+                query: {
+                    member_token: string;
+                    client?: "android_tv" | "web";
+                    prefer_hls?: boolean;
+                    /** @description As in PlaybackRequest. Required for web clients. */
+                    recovery_generation?: string;
+                    allow_unverified_audio?: boolean;
+                };
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackDescriptor"];
+                    };
+                };
+                /** @description room_unauthorized: not a member token of this room, or expired. session_revoked | user_suspended: the session the seat was taken with no longer stands. */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description remote_access_denied, a missing rooms.join or watch.* permission, content_restricted and the other /playback/resolve refusals */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found, or not_a_member: the room dropped this seat (20 s of silence); join again */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description as for the join, except room_full */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/recordings": {
         parameters: {
             query?: never;
@@ -5029,7 +5119,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The current profile's recordings (everyone's for an admin), earliest first */
+        /**
+         * The current profile's recordings (everyone's for a holder of users.manage), earliest first
+         * @description A user under a rating ceiling sees, plays and manages only recordings whose programme was rated within it when it was scheduled.
+         */
         get: {
             parameters: {
                 query?: {
@@ -5172,7 +5265,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The current profile's rules (everyone's for an admin) */
+        /** The current profile's rules (everyone's for a holder of users.manage) */
         get: {
             parameters: {
                 query?: never;
@@ -6177,7 +6270,10 @@ export interface components {
             archive_start?: string | null;
             /** Format: date-time */
             archive_end?: string | null;
-            /** @default 0 */
+            /**
+             * @description Where to start. In a room descriptor (join or GET /rooms/{code}/descriptor) this is the room's position when the descriptor was built, for every kind of title, never the member's own history.
+             * @default 0
+             */
             resume_position_ms: number;
             duration_ms?: number | null;
             title?: string;
@@ -6400,6 +6496,8 @@ export interface components {
              * @default false
              */
             allow_unverified_audio: boolean;
+            /** @description The token of a seat this session already holds in this room. The join then keeps that seat (same member_id, a fresh member_token, the descriptor as it is now) instead of adding a member. A token that is expired, another session's or another room's, or whose seat the room has dropped, is ignored: the join takes a new seat. */
+            member_token?: string | null;
         };
         RoomTitle: {
             id: string;
@@ -6495,6 +6593,19 @@ export interface components {
          *     descriptor says which. Titles from other sources are resolved per member, and live channels
          *     share the proxy's upstream as any two viewers of a channel do: for both, `stream_epoch` is
          *     null and `state` carries neither field.
+         *
+         *     Reloading after a seek. `state` is the whole signal; there is no separate message.
+         *     - `state` carries `stream_epoch` (shared stream): compare it with the epoch the client is
+         *       playing (the descriptor's, then the last `state`'s). Different: reload the playlist URL it
+         *       already has and take `stream_start_ms` as media time zero, so the player position is
+         *       `position_ms - stream_start_ms`. Same: seek inside what is playing.
+         *     - `state` carries no `stream_epoch` (a library title each member plays for themselves): there
+         *       is nothing to reload. The member's own stream covers the whole title; seek the player to
+         *       `position_ms`. `state` alone suffices.
+         *     - A live room has no position: `position_ms` is null and only `playing` applies.
+         *     A client that lost its place (a player error, an expired stream URL, a reconnect after a
+         *     missed `state`) asks GET /rooms/{code}/descriptor for its descriptor as it is now, or joins
+         *     again with its `member_token`; neither changes its seat.
          */
         RoomJoined: {
             /** @description valid 2 h, for this room and member only */

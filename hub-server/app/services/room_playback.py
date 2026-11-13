@@ -61,6 +61,7 @@ class RoomSession:
     user_id: str | None  # who started it: the proxy session is tagged with a user like any other
     start_s: int
     epoch: int = 1  # counts the session's starts; clients reload their playlist when it changes
+    urls: dict[str, str] = field(default_factory=dict)  # member id -> the playlist URL they were given
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
     joining: int = 0  # joins in flight: the session is theirs although the room has no member yet
 
@@ -117,8 +118,12 @@ class RoomPlayback:
         recovery_generation: str | None = None,
         allow_unverified_audio: bool = False,
         https_site: bool = False,
+        member_id: str | None = None,
     ) -> dict[str, Any]:
         """The descriptor this member plays the room's title with.
+
+        ``member_id`` is a member asking again: resolved again all the same, and on the room's
+        one session given the playlist URL they already hold while its grant is still good.
 
         Every member is resolved as ``POST /playback/resolve`` would resolve them, so each refusal
         (watch permission, rating ceiling, adult, audio selection, unknown variant, stream limit)
@@ -166,9 +171,11 @@ class RoomPlayback:
         result["resume_position_ms"] = position
         if scope is None or not scope.shared or scope.vod is None:
             return result
-        return await self._seat(room, principal, scope, result)
+        return await self._seat(room, principal, scope, result, member_id)
 
-    async def _seat(self, room: Room, principal: Principal, scope: RoomScope, result: dict[str, Any]) -> dict[str, Any]:
+    async def _seat(
+        self, room: Room, principal: Principal, scope: RoomScope, result: dict[str, Any], member_id: str | None = None
+    ) -> dict[str, Any]:
         """Attach a resolved member to the room's session, starting it for the first one."""
         vod = scope.vod
         assert vod is not None
@@ -211,6 +218,9 @@ class RoomPlayback:
             session.joining -= 1
             if room.closed:  # closed while the title was being resolved: nobody will come for it
                 self.room_changed(room)
+        held = session.urls.get(member_id or "")
+        if held is not None and self._granted_to(held, principal):
+            result["url"] = held
         result.update(session.audio)
         result.update(
             audio_tracks=session.tracks,
@@ -234,6 +244,23 @@ class RoomPlayback:
             return exc  # cancellation
         log.warning("room session failed", exc_info=exc, extra={"err": type(exc).__name__})
         return BadGateway("could not start HLS session")
+
+    def _granted_to(self, url: str, principal: Principal) -> bool:
+        """Is this playlist URL still one the member's current session can play?"""
+        grant = self._playback.tokens.verify(url.split("/stream/", 1)[-1].split("/", 1)[0])
+        return (
+            grant is not None
+            and grant.session_id == principal.session_id
+            and grant.profile_version == principal.token_version
+            and grant.user_version == principal.user_version
+        )
+
+    def seated(self, room: Room, member_id: str, descriptor: dict[str, Any]) -> None:
+        """Remember the playlist URL a member of the room's one session holds, for when they ask again."""
+        session = self._sessions.get(room.code)
+        if session is not None and descriptor.get("stream_epoch") is not None and descriptor.get("url"):
+            session.urls = {k: v for k, v in session.urls.items() if k in room.members}
+            session.urls[member_id] = str(descriptor["url"])
 
     def _viewer(self, session: RoomSession) -> Viewer:
         """The room as the source's ``source_busy`` answer names it."""
