@@ -1,19 +1,24 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
+import { matchPath, Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './api/client'
 import type { Profile } from './api/types'
 import { useDisclaimer } from './api/hooks'
+import { useMe } from './api/me'
+import { useSwitchable } from './api/people'
 import { useCatalogFreshness } from './api/catalogFreshness'
 import { Rail } from './components/Rail'
-import { ErrorState, Skeleton, Toasts } from './components/ui'
+import { WhoIsWatching } from './components/WhoIsWatching'
+import { Button, ErrorState, Skeleton, Toasts } from './components/ui'
 import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
 import { bootTheme, useTheme } from './lib/theme'
 import { useSession } from './store/session'
 import { useReturnToRoom } from './room/returnToRoom'
+import { useWho } from './store/who'
 import { DisclaimerGate } from './screens/Gate'
 import { LoginGate } from './screens/GoogleLogin'
+import { InviteLanding } from './screens/Invite'
 import { Home } from './screens/Home'
 import { Search } from './screens/Search'
 import { TitleScreen } from './screens/Title'
@@ -31,6 +36,8 @@ const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default:
 // watch rooms and recordings
 const RoomScreen = lazy(() => import('./screens/Room').then((m) => ({ default: m.RoomScreen })))
 const Recordings = lazy(() => import('./screens/Recordings').then((m) => ({ default: m.Recordings })))
+const Users = lazy(() => import('./screens/Users').then((m) => ({ default: m.Users })))
+const UserDetail = lazy(() => import('./screens/UserDetail').then((m) => ({ default: m.UserDetail })))
 
 bootTheme()
 
@@ -50,9 +57,22 @@ function Shell() {
 export function App() {
   const profile = useSession((s) => s.profile)
   const setProfile = useSession((s) => s.setProfile)
+  const signOut = useSession((s) => s.clear)
+  const me = useMe()
+  // A shared household device asks who is watching before it shows anything. No list (an older server,
+  // or the server calls this a personal device) means no picker.
+  const shared = !!profile && !!me.data?.shared_device
+  const switchable = useSwitchable(shared)
+  const who = useWho()
+  const asks = shared && !who.picked && switchable.data !== null
+  // "At the start" means just that: a device made shared while it is in use keeps going until its next start.
+  const pickNow = who.pick
+  const personal = me.data ? !me.data.shared_device : me.data === null
+  useEffect(() => { if (personal) pickNow() }, [personal, pickNow])
   useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')
+  const invite = matchPath('/invite/:token', useLocation().pathname)?.params.token
   const current = useQuery({
     queryKey: ['current-profile', profile?.id],
     enabled: !!profile && !googleComplete,
@@ -73,9 +93,20 @@ export function App() {
   useReturnToRoom(!!profile && !googleComplete)
 
   let body
-  if (!profile || googleComplete) body = <LoginGate />
-  else if (current.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
-  else if (current.error) body = <div className="page-pad"><ErrorState error={current.error} onRetry={() => void current.refetch()} /></div>
+  // An invitation is answered before anything else, whoever is or is not signed in.
+  if (invite !== undefined && !googleComplete) body = <InviteLanding token={invite} />
+  else if (!profile || googleComplete) body = <LoginGate />
+  // Nothing is offered before the server has said what this user may do.
+  else if (current.isPending || me.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
+  else if (current.error || me.error) body = (
+    <div className="page-pad">
+      <ErrorState error={current.error ?? me.error} onRetry={() => { void current.refetch(); void me.refetch() }}>
+        <Button focusKey="boot:signout" onEnter={signOut}>Sign out</Button>
+      </ErrorState>
+    </div>
+  )
+  else if (asks && switchable.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
+  else if (asks) body = <WhoIsWatching mandatory users={switchable.data ?? undefined} error={switchable.error} onRetry={() => void switchable.refetch()} />
   else if (disclaimer.data && profile.disclaimer_accepted_version !== disclaimer.data.version) {
     body = <DisclaimerGate onAccepted={() => setProfile({ ...profile, disclaimer_accepted_version: disclaimer.data!.version })} />
   } else if (disclaimer.isLoading) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
@@ -97,12 +128,15 @@ export function App() {
             <Route path="favorites" element={<Favorites />} />
             <Route path="requests" element={<Requests />} />
             <Route path="sources" element={<Sources />} />
+            <Route path="users" element={<Users />} />
+            <Route path="users/:id" element={<UserDetail />} />
             <Route path="settings" element={<Settings />} />
             <Route path="pair" element={<Pair />} />
             <Route path="recordings" element={<Recordings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
+        {who.open && switchable.data && <WhoIsWatching users={switchable.data} />}
       </Suspense>
     )
   }

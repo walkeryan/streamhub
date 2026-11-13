@@ -17,7 +17,7 @@ import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { usePhone } from '../lib/layout'
 import { fmtTime, useDebounced } from '../lib/util'
-import { can } from '../lib/can'
+import { useCan } from '../api/me'
 import { RecordDialog } from '../recordings/RecordDialog'
 import { RecordingBadge } from '../recordings/RecordingBadge'
 
@@ -78,7 +78,7 @@ export function LiveTV() {
   const setChannelList = useUi((s) => s.setChannelList)
   const toggleFav = useToggleFavorite()
   // Recording the focused channel's now or next, where the server has recording on and this profile may schedule.
-  const recordings = useRecordings(can(profile, 'recordings'), false)
+  const recordings = useRecordings(useCan('recordings'), false)
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
   const [recordingId, setRecordingId] = useState<string | null>(null)
   const recordingChannel = channels.find((c) => c.id === recordingId)

@@ -6,6 +6,9 @@ import { Modal } from './ui'
 import { useGo, useBackHandler } from '../nav/back'
 import { setFocus } from '../nav/spatial'
 import { can, type Capability } from '../lib/can'
+import { useAccess, useMe } from '../api/me'
+import { useSwitchable } from '../api/people'
+import { useWho } from '../store/who'
 import { usePhone } from '../lib/layout'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
@@ -27,13 +30,14 @@ const NAV: Destination[] = [
 ]
 /** A phone's bar holds five: Movies and Shows share Library (the screen has the switch), My List moves under More. */
 const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: 'Library', icon: 'film', at: ['/browse', '/discover'] }]
-/** Everything else, each offered only to a profile that may use it. Recordings and Users join this
- *  list, with their capability, once those screens exist. */
+/** Everything else, each offered only to a user who may use it. Recordings joins this list, with
+ *  its capability, once that screen exists. */
 const MORE: Destination[] = [
   { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' },
   { to: '/requests', label: 'Requests', icon: 'list', needs: 'requests' },
   { to: '/recordings', label: 'Recordings', icon: 'record', needs: 'recordings' },
   { to: '/sources', label: 'Sources', icon: 'source', needs: 'sources' },
+  { to: '/users', label: 'Users', icon: 'users', needs: 'users' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
 const testId = (label: string) => `nav-${label.toLowerCase().replace(' ', '-')}`
@@ -43,6 +47,7 @@ export function Rail() {
   const go = useGo()
   const phone = usePhone()
   const profile = useSession((s) => s.profile)
+  const access = useAccess()
   const pinned = useUi((s) => s.railPinned)
   const setPinned = useUi((s) => s.setRailPinned)
   const [hasFocus, setHasFocus] = useState(false)
@@ -57,10 +62,14 @@ export function Rail() {
   }, hasFocus || pinned)
   const here = (d: Destination) => (d.to === '/' ? loc.pathname === '/' : [d.to, ...(d.at ?? [])].some((p) => loc.pathname.startsWith(p)))
   // Recordings: offered once the server says recording is on; an admin also sees it while it is off, to learn why.
-  const recordings = useRecordings(can(profile, 'recordings'), false)
-  const recordingsOffered = !!recordings.data?.enabled || (!!recordings.data && !!profile?.is_admin)
-  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (!d.needs || can(profile, d.needs)) && (d.to !== '/recordings' || recordingsOffered))]
+  const recordings = useRecordings(can(access, 'recordings'), false)
+  const recordingsOffered = !!recordings.data?.enabled || (!!recordings.data && can(access, 'settings.admin'))
+  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (!d.needs || can(access, d.needs)) && (d.to !== '/recordings' || recordingsOffered))]
   const open = (to: string) => { setPinned(false); setMenu(false); go(to) }
+  // On a shared household device the profile entry asks who is watching; elsewhere it opens the profile's settings.
+  const switchable = useSwitchable(!!useMe().data?.shared_device).data
+  const showWho = useWho((s) => s.show)
+  const openProfile = () => { if (switchable) { setPinned(false); setMenu(false); showWho() } else open('/settings?tab=profiles') }
   return <>
     <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember onFocusChange={setHasFocus}
       data-testid="rail" data={{ expanded }}>
@@ -79,7 +88,7 @@ export function Rail() {
       {!phone && <>
         <div className="spacer" style={{ flex: 1 }} />
         <Focusable focusKey="rail:profile" className="rail-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`} title={profile?.name}
-          data-testid="nav-profile" onEnter={() => open('/settings?tab=profiles')}>
+          data-testid="nav-profile" onEnter={openProfile}>
           <Avatar name={profile?.name} />
           <span className="lbl">{profile?.name ?? 'Profile'}</span>
         </Focusable>
@@ -99,7 +108,7 @@ export function Rail() {
           <Icon name="people" />Join a room
         </Focusable>
         {phone && <Focusable focusKey="more:profile" className="menu-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`}
-          data-testid="nav-profile" onEnter={() => open('/settings?tab=profiles')}>
+          data-testid="nav-profile" onEnter={openProfile}>
           <Avatar name={profile?.name} />{profile?.name ?? 'Profile'}
         </Focusable>}
       </FocusGroup>

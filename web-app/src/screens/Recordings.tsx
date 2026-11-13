@@ -8,10 +8,9 @@ import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { RecordingBadge } from '../recordings/RecordingBadge'
-import { can } from '../lib/can'
+import { useCan } from '../api/me'
 import { RULE_KIND_LABEL, episodeLabel, recordingSize } from '../lib/recordings'
 import { fmtTime } from '../lib/util'
-import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 
 type Tab = 'upcoming' | 'recorded' | 'rules'
@@ -29,8 +28,8 @@ export function Recordings() {
   const [sp] = useSearchParams()
   // ?tab= opens on a tab; changing tabs stays on this history entry, so Back and focus memory are undisturbed.
   const [tab, setTab] = useHistoryState<Tab>('rec:tab', TABS.find((t) => t.id === sp.get('tab'))?.id ?? 'upcoming')
-  const profile = useSession((s) => s.profile)
-  const allowed = can(profile, 'recordings')
+  const allowed = useCan('recordings')
+  const isAdmin = useCan('settings.admin')
   const list = useRecordings(allowed)
   const rules = useRecordingRules(allowed && !!list.data?.enabled)
   const remove = useDeleteRecording()
@@ -87,7 +86,7 @@ export function Recordings() {
   if (!allowed) body = <Empty title="Recordings are not available" hint="This profile cannot use recordings. Ask the person who runs this StreamHub." />
   else if (list.error) body = <ErrorState error={list.error} onRetry={() => void list.refetch()} />
   else if (!list.data) body = <Skeleton style={{ height: '12rem' }} />
-  else if (!list.data.enabled) body = profile?.is_admin ? (
+  else if (!list.data.enabled) body = isAdmin ? (
     <div className="panel flex flex-col gap-3 items-start" style={{ maxWidth: '44rem' }} role="status" data-testid="recordings-off">
       <h2 className="title-xl">Recording is not set up on this server</h2>
       <p className="muted">Nothing can be recorded until the server has a folder to record into. Set RECORDINGS_DIR to a writable folder on the library disk and restart the server; Record then appears on the guide.</p>

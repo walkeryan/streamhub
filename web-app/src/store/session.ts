@@ -20,6 +20,10 @@ interface SessionState {
   setSession: (access: string, refresh: string, profile: Profile) => void
   setProfile: (profile: Profile) => void
   clear: () => void
+  /** Why the server ended the last session, for the sign-in screen. Gone at the next sign-in. Never persisted. */
+  notice: string | null
+  /** Sign out because the server said so, keeping the explanation. */
+  end: (notice: string) => void
 }
 
 function load(): Pick<SessionState, 'access' | 'refresh' | 'profile'> {
@@ -41,12 +45,13 @@ const persist = (s: Pick<SessionState, 'access' | 'refresh' | 'profile'>) =>
 export const useSession = create<SessionState>((set, get) => ({
   ...load(),
   generation: 0,
+  notice: null,
   refreshSession: (access, refresh, profile, expectedRefresh, expectedGeneration) => {
     if (get().generation !== expectedGeneration || get().refresh !== expectedRefresh || get().profile?.id !== profile.id) return false
     set({ access, refresh, profile }); persist(get()); return true
   },
   setSession: (access, refresh, profile) => {
-    set({ access, refresh, profile, generation: get().generation + 1 })
+    set({ access, refresh, profile, generation: get().generation + 1, notice: null })
     persist(get())
   },
   setProfile: (profile) => {
@@ -56,5 +61,9 @@ export const useSession = create<SessionState>((set, get) => ({
   clear: () => {
     set({ access: null, refresh: null, profile: null, generation: get().generation + 1 })
     persist(get())
+  },
+  end: (notice) => {
+    get().clear()
+    set({ notice })
   },
 }))

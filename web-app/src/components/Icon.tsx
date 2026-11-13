@@ -45,6 +45,8 @@ const P: Record<string, string> = {
   copy: 'M9 9h11v11H9zM5 15V4h11',
   record: 'M12 6a6 6 0 100 12 6 6 0 000-12z',
   exit: 'M10 4H5v16h5M15 8l4 4-4 4M19 12H9',
+  users: 'M9 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zM2.5 20a6.5 6.5 0 0113 0M16 5.2a3.5 3.5 0 010 6.6M18 14.3a6.5 6.5 0 013.5 5.7',
+  delete: 'M21 5H9l-6 7 6 7h12zM12 9.5l5 5M17 9.5l-5 5',
 }
 const FILLED = new Set(['play', 'pause', 'record'])
 

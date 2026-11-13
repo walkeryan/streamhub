@@ -2,12 +2,13 @@ import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
 import type { PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
-  DISCLAIMER, channelTile, channels, episodesOf, fav, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
+  DISCLAIMER, adultShelf, channelTile, channels, episodesOf, fav, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
   sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
+import { adultUnlocked, mockProfile, ownProfile, peopleHandlers, setProfilePin } from './people'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
@@ -17,7 +18,7 @@ let pinPolls = 0
 const hiddenGroups = new Set<string>()
 
 const withProfile = (id: string) => {
-  const p = profiles.find((x) => x.id === id) ?? profiles[0]!
+  const p = profiles.find((x) => x.id === id) ?? mockProfile(id) ?? profiles[0]!
   return { ...p, disclaimer_accepted_version: accepted.has(p.id) ? DISCLAIMER.version : null }
 }
 const tokens = (id: string) => ({ access_token: `mock-access-${id}`, refresh_token: `mock-refresh-${id}`, profile: withProfile(id) })
@@ -33,6 +34,8 @@ const countryMatches = (value: string | null | undefined, country: string | null
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
 export const handlers = [
+  // first: these also stand in for the checks the server makes on every request
+  ...peopleHandlers,
   ...requestHandlers,
   // watch rooms (REST and the room socket)
   ...roomHandlers,
@@ -69,7 +72,7 @@ export const handlers = [
     return HttpResponse.json(document)
   }),
   http.get(`${B}/browse/:section/genres`, () => HttpResponse.json([{ name: 'drama', count: 8 }, { name: 'comedy', count: 5 }])),
-  http.get(`${B}/profiles`, () => HttpResponse.json(profiles.map((p) => withProfile(p.id)))),
+  http.get(`${B}/profiles`, ({ request }) => HttpResponse.json([...profiles, ...ownProfile(request)].map((p) => withProfile(p.id)))),
   http.post(`${B}/auth/login`, async ({ request }) => {
     const b = (await request.json()) as { profile_id: string; pin?: string | null; password?: string | null }
     const p = profiles.find((x) => x.id === b.profile_id)
@@ -103,6 +106,7 @@ export const handlers = [
     const b = (await request.json()) as { pin?: string | null }
     const p = profiles.find((x) => x.id === params.id)
     if (p) p.has_pin = !!b.pin
+    setProfilePin(String(params.id), b.pin ?? null)
     return new HttpResponse(null, { status: 204 })
   }),
   http.get(`${B}/disclaimer`, () => HttpResponse.json(DISCLAIMER)),
@@ -206,7 +210,9 @@ export const handlers = [
     const section = params.section === 'movies' || params.section === 'vod' ? 'movies' : 'shows'
     const rows = Number(u.searchParams.get('limit_rows') ?? 12), items = Number(u.searchParams.get('limit_items') ?? 20)
     await delay(80)
-    return HttpResponse.json({ shelves: shelvesOf(section).slice(0, rows).map((s) => ({ ...s, items: s.items.slice(0, items) })) } satisfies components['schemas']['ShelfList'])
+    // Adult titles are listed only when asked for, and only on a session that unlocked them.
+    const all = u.searchParams.get('include_adult') === 'true' && adultUnlocked(request) ? [...shelvesOf(section), ...adultShelf(section)] : shelvesOf(section)
+    return HttpResponse.json({ shelves: all.slice(0, rows).map((s) => ({ ...s, items: s.items.slice(0, items) })) } satisfies components['schemas']['ShelfList'])
   }),
   http.get(`${B}/browse/:section/categories`, () => HttpResponse.json([])),
   http.get(`${B}/browse/:section/languages`, () => HttpResponse.json([{ code: 'eng', name: 'English', count: titles.length }])),

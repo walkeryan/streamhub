@@ -7,11 +7,10 @@ import { useGo, useRestoreFocus } from '../nav/back'
 import { useUi } from '../store/ui'
 import { useHistoryState } from '../nav/historyState'
 import { fmtTime, useNow } from '../lib/util'
-import { can } from '../lib/can'
+import { useCan } from '../api/me'
 import { recordingOf, recordingStateLabel } from '../lib/recordings'
 import { RecordDialog } from '../recordings/RecordDialog'
 import { RecordingBadge } from '../recordings/RecordingBadge'
-import { useSession } from '../store/session'
 
 const COL_REM = 13 // 30-minute column width, see .epg --col
 const REM_PER_MIN = COL_REM / 30
@@ -43,8 +42,7 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
   const [catchup, setCatchup] = useState<{ ch: Channel; p: Programme } | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   // Recording: where the server has it on and this profile may schedule, OK on a programme that is on or still to come opens Record.
-  const profile = useSession((s) => s.profile)
-  const recordings = useRecordings(can(profile, 'recordings'), false)
+  const recordings = useRecordings(useCan('recordings'), false)
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
   const [recording, setRecording] = useState<{ ch: Channel; id: string } | null>(null)
   const recordingProgramme = recording && epg.data?.[recording.ch.id]?.find((x) => x.id === recording.id)

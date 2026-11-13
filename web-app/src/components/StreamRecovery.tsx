@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, unwrap } from '../api/client'
 import type { components } from '../api/schema'
+import { useCan } from '../api/me'
 import { useSession } from '../store/session'
 import { Button, Modal } from './ui'
 
@@ -27,7 +28,7 @@ function bounded<T>(run: (signal: AbortSignal) => Promise<T>, ms: number, outer?
 
 export function StreamRecovery() {
   const profile = useSession((s) => s.profile)
-  return profile?.is_admin ? <AdminStreamRecovery key={profile.id} profileId={profile.id} /> : null
+  return useCan('system.manage') && profile ? <AdminStreamRecovery key={profile.id} profileId={profile.id} /> : null
 }
 
 function AdminStreamRecovery({ profileId }: { profileId: string }) {
@@ -47,10 +48,8 @@ function AdminStreamRecovery({ profileId }: { profileId: string }) {
   const [feedback, setFeedback] = useState<{ text: string; error: boolean } | null>(null)
   const serial = useRef(0)
   const mutation = useRef(false)
-  const stillAdmin = () => {
-    const p = useSession.getState().profile
-    return p?.id === profileId && p.is_admin
-  }
+  // Unmounts as soon as the permission goes; a profile change is what a late answer must still check.
+  const stillAdmin = () => useSession.getState().profile?.id === profileId
 
   const close = () => {
     if (mutation.current) return

@@ -117,6 +117,11 @@ export function shelvesOf(section: 'movies' | 'shows'): Shelf[] {
     .map(({ name, items }) => ({ name, count: items.length, items: items.slice(0, 20), browse_path: `/browse/${section}?category=${encodeURIComponent(name)}` }))
 }
 
+// Marked adult by the provider: never in a listing unless include_adult is honoured.
+const adultSeeds = shelved('movie', 471, 'After Dark', 2024, ['Velvet Hours', 'The Night Porter Returns', 'Room 9'])
+export const adultShelf = (section: 'movies' | 'shows'): Shelf[] =>
+  section === 'movies' ? [{ name: 'After Dark', count: adultSeeds.length, items: adultSeeds.map(tileOf), browse_path: '/browse/movies?category=After%20Dark' }] : []
+
 export function episodesOf(show: number, season: number): Tile[] {
   const s = seeds.find((x) => x.n === show)
   if (!s) return []

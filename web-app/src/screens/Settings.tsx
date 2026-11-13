@@ -1,4 +1,9 @@
 import { useAuthCapabilities } from '../api/contentPolicy'
+import { useCan, useMe } from '../api/me'
+import { absent } from '../api/client'
+import { people, useAbsent, usePeopleChange, useSessions, type AuthSession } from '../api/people'
+import { DeviceRow } from '../components/DeviceRow'
+import { deviceName } from '../lib/people'
 import { OwnerPinSettings } from '../components/OwnerPinSettings'
 import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
@@ -22,7 +27,7 @@ import { useUi } from '../store/ui'
 
 const TABS = [
   ['profiles', 'Profiles'], ['appearance', 'Appearance'], ['languages', 'Languages'], ['rows', 'Home rows'],
-  ['parental', 'Parental'], ['playback', 'Playback'], ['about', 'About'],
+  ['parental', 'Parental'], ['playback', 'Playback'], ['about', 'About'], ['devices', 'Devices'],
 ] as const
 type Tab = (typeof TABS)[number][0]
 
@@ -30,11 +35,13 @@ export function Settings() {
   const [sp, setSp] = useSearchParams()
   const tab = (TABS.find((t) => t[0] === sp.get('tab'))?.[0] ?? 'profiles') as Tab
   useRestoreFocus(true, `set:tab:${tab}`)
+  // Signed-in devices are the server's users-and-sessions model; a server without it has none to list.
+  const sessions = useMe().data !== null
   return (
     <div className="page-pad flex flex-col gap-6" data-testid="settings">
       <h1 className="display">Settings</h1>
       <FocusGroup focusKey="set:tabs" className="flex gap-2 flex-wrap" role="tablist">
-        {TABS.map(([id, label]) => <Chip key={id} focusKey={`set:tab:${id}`} pressed={tab === id} onEnter={() => setSp({ tab: id }, { replace: true })} testId={`tab-${id}`}>{label}</Chip>)}
+        {TABS.filter(([id]) => id !== 'devices' || sessions).map(([id, label]) => <Chip key={id} focusKey={`set:tab:${id}`} pressed={tab === id} onEnter={() => setSp({ tab: id }, { replace: true })} testId={`tab-${id}`}>{label}</Chip>)}
       </FocusGroup>
       <div style={{ maxWidth: '60rem' }}>
         {tab === 'profiles' && <ProfilesTab />}
@@ -44,6 +51,7 @@ export function Settings() {
         {tab === 'parental' && <ParentalTab />}
         {tab === 'playback' && <PlaybackTab />}
         {tab === 'about' && <AboutTab />}
+        {tab === 'devices' && sessions && <DevicesTab />}
       </div>
     </div>
   )
@@ -69,6 +77,9 @@ function ProfilesTab() {
   const capabilities=useAuthCapabilities()
   const { data, error, refetch } = useProfiles()
   const me = useCurrent()
+  // A restricted profile never manages others, whatever its permissions say.
+  const manages = useCan('users.manage') && !me.content_restricted
+  const owner = useCan('system.manage')
   const qc = useQueryClient()
   const toast = useUi((s) => s.toast)
   const [name, setName] = useState('')
@@ -105,12 +116,12 @@ function ProfilesTab() {
           {(data ?? []).map((p) => (
             <div key={p.id} className="panel flex items-center gap-3">
               <span className="flex-1">{p.name}{p.id === me.id ? ' (you)' : ''}<span className="label"> {p.is_admin ? ' · Admin' : ''}{p.kids ? ' · Kids' : ''}{p.has_pin ? ' · PIN' : ''}</span></span>
-              {me.is_admin && !me.content_restricted && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
+              {manages && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
             </div>
           ))}
         </FocusGroup>
       </section>
-      {me.is_admin && !me.content_restricted && (
+      {manages && (
         <section className="flex flex-col gap-3">
           <h2 className="heading">Add a profile</h2>
           <div className="flex gap-3 flex-wrap items-center">
@@ -121,7 +132,7 @@ function ProfilesTab() {
         </section>
       )}
       <OwnerPinSettings />
-      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || me.is_admin) && <section className="flex flex-col gap-3">
+      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || owner) && <section className="flex flex-col gap-3">
         <h2 className="heading">PIN for {me.name}</h2>
         <p className="muted">{me.has_pin ? 'A PIN is required to open this profile.' : 'Anyone can open this profile. Add a PIN to lock it.'}</p>
         <div className="flex gap-3 flex-wrap items-center">
@@ -266,7 +277,7 @@ function ParentalTab() {
 /* ------------------------------ playback / server ------------------------------ */
 function PlaybackTab() {
   const { data, error, refetch } = useSettings()
-  const me = useCurrent()
+  const admin = useCan('settings.admin')
   const qc = useQueryClient()
   const toast = useUi((s) => s.toast)
   const [key, setKey] = useState('')
@@ -293,7 +304,48 @@ function PlaybackTab() {
           <Button focusKey="tmdb:save" disabled={!key.trim()} onEnter={async () => { await ok(api.PUT('/settings/tmdb_key', { body: { api_key: key.trim() } })); setKey(''); void qc.invalidateQueries({ queryKey: qk.settings }); toast('TMDB key saved.', 'success') }}>Save key</Button>
         </div>
       </section>
-      {me.is_admin && <RequestManagerSettings configured={!!data.request_manager_configured} />}
+      {admin && <RequestManagerSettings configured={!!data.request_manager_configured} />}
+    </div>
+  )
+}
+
+/* ------------------------------ devices ------------------------------ */
+function DevicesTab() {
+  const { data, error, refetch } = useSessions()
+  const toast = useUi((s) => s.toast)
+  const signOut = useSession((s) => s.clear)
+  const qc = useQueryClient()
+  const markAbsent = useAbsent((a) => a.markSessionEdit)
+  const [renaming, setRenaming] = useState<AuthSession | null>(null)
+  const [label, setLabel] = useState('')
+  const rename = usePeopleChange((v: { sid: string; label: string }) => people.patchSession(v.sid, { label: v.label }))
+  const save = () => {
+    const s = renaming
+    if (!s || !label.trim()) return
+    rename.mutate({ sid: s.sid, label: label.trim() }, {
+      onSuccess: () => { toast('Device renamed.', 'success'); setRenaming(null) },
+      onError: (e) => { if (absent(e)) markAbsent(); toast(absent(e) ? 'This server cannot rename devices yet.' : e.message, 'error'); setRenaming(null) },
+    })
+  }
+  if (error) return <ErrorState error={error} onRetry={() => void refetch()} />
+  return (
+    <div className="flex flex-col gap-3" data-testid="devices">
+      <h2 className="heading">Where you are signed in</h2>
+      <p className="muted">Revoke signs a device out; it has to sign in again to be used.</p>
+      {!data ? <p className="muted">Loading…</p> : (
+        <FocusGroup focusKey="dev:list" className="flex flex-col gap-2">
+          {data.map((s) => <DeviceRow key={s.sid} session={s} scope="dev" rename={() => { setLabel(s.label ?? ''); setRenaming(s) }}
+            // Revoking this very device is signing out of it.
+            onRevoked={(gone) => { if (gone.current) { signOut(); qc.clear() } }} />)}
+        </FocusGroup>
+      )}
+      <Modal open={!!renaming} onClose={() => setRenaming(null)} title={`Rename ${renaming ? deviceName(renaming.label, renaming.kind, renaming.user_agent) : ''}`} firstFocusKey="devname:input">
+        <FocusableInput focusKey="devname:input" label="Device name" placeholder="Living room TV" maxLength={64} value={label} onChange={setLabel} onSubmit={save} />
+        <div className="flex gap-3 flex-wrap">
+          <Button focusKey="devname:save" primary disabled={!label.trim() || rename.isPending} onEnter={save} testId="device-rename-save">Save name</Button>
+          <Button focusKey="devname:cancel" onEnter={() => setRenaming(null)}>Cancel</Button>
+        </div>
+      </Modal>
     </div>
   )
 }

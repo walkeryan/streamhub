@@ -16,6 +16,8 @@ async function fixture(page: Page, mode: 'admin' | 'restricted' | 'member' | 'di
     }
     window.fetch = async (input, init) => {
       const req = new Request(input, init), url = new URL(req.url)
+      // The regime under test predates users and roles: no /auth/me, so the app reads the profile's admin flag.
+      if (url.pathname === '/api/v1/auth/me') return Response.json({ code: 'not_found', message: 'Not found' }, { status: 404 })
       if (url.pathname === '/api/v1/auth/config') return Response.json({ google_enabled:false, google_required:false, content_policy_enabled:mode !== 'disabled',owner_pin_configured:true })
       if (url.pathname === '/api/v1/disclaimer/accept') { accepted = (await req.clone().json()).version; return original(req) }
       if (url.pathname === '/api/v1/profiles' && req.method === 'GET') { const res = await original(req); return Response.json((await res.json() as Array<Record<string,unknown>>).map(decorate)) }
