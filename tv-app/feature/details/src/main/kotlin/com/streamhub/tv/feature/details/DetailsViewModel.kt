@@ -7,14 +7,16 @@ import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.sameSwitchSession
 import com.streamhub.tv.core.data.api.ApiErrors
-import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.model.Permissions
-import com.streamhub.tv.core.data.model.Room
+import com.streamhub.tv.core.data.model.MediaKind
+import com.streamhub.tv.core.data.model.Tile
 import com.streamhub.tv.core.data.repo.MeRepository
 import com.streamhub.tv.core.data.repo.RequestsRepository
-import com.streamhub.tv.core.data.repo.RoomRepository
+import com.streamhub.tv.core.data.repo.RoomDirectory
+import com.streamhub.tv.core.data.repo.RoomSubject
+import com.streamhub.tv.core.data.repo.WatchTogetherLauncher
 import com.streamhub.tv.core.data.repo.canPickSeasons
 import com.streamhub.tv.core.data.repo.requestTarget
 import kotlinx.coroutines.CancellationException
@@ -48,30 +50,13 @@ data class DetailsState(
     val requestError: UserError? = null,
     /** The signed-in user may start a watch room (rooms.create). */
     val canWatchTogether: Boolean = false,
-    /** "Watch together" in progress: the room being opened, or open and waiting for Start. */
-    val together: WatchTogether? = null,
 )
-
-/** The "Watch together" dialog: a room is created first, shown with its code, then joined with Start. */
-sealed interface WatchTogether {
-    data object Creating : WatchTogether
-    data class Failed(val error: UserError) : WatchTogether
-    data class Ready(
-        val room: Room,
-        /** `<server>/room/<code>` for the QR code. */
-        val shareUrl: String?,
-        val starting: Boolean = false,
-        val error: UserError? = null,
-        /** The room's source has no confirmed audio in this profile's languages; Start asks to go ahead with it. */
-        val needsAudioConsent: Boolean = false,
-    ) : WatchTogether
-}
 
 @HiltViewModel
 class DetailsViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val sessions: SessionStore,
-    private val rooms: RoomRepository,
+    rooms: RoomDirectory,
     private val me: MeRepository,
     private val requests: RequestsRepository,
     savedState: SavedStateHandle,
@@ -122,47 +107,19 @@ class DetailsViewModel @Inject constructor(
 
     // ---- Watch together ------------------------------------------------------------------------
 
-    /** Creates the room; the dialog then shows its code until Start (which joins it) or Cancel (which closes it). */
+    /** The room dialog, shared by this title's own button and by an episode's actions. */
+    val together = WatchTogetherLauncher(rooms, viewModelScope)
+
+    /** This title: a film or an episode as it is, a series on the next episode the server resolves. */
     fun watchTogether() {
-        if (_state.value.together is WatchTogether.Creating || _state.value.together is WatchTogether.Ready) return
-        _state.update { it.copy(together = WatchTogether.Creating) }
-        viewModelScope.launch {
-            val next = try {
-                val room = rooms.create(titleId)
-                WatchTogether.Ready(room, rooms.shareUrl(room))
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { WatchTogether.Failed(ApiErrors.describe(e)) }
-            _state.update { if (it.together == WatchTogether.Creating) it.copy(together = next) else it }
-        }
+        val d = _state.value.detail ?: return
+        together.open(d.id, d.title, if (d.kind in SERIES_KINDS) RoomSubject.Series else RoomSubject.Title)
     }
 
-    fun startRoom() {
-        val ready = _state.value.together as? WatchTogether.Ready ?: return
-        if (ready.starting) return
-        _state.update { it.copy(together = ready.copy(starting = true, error = null)) }
-        viewModelScope.launch {
-            try {
-                val key = rooms.join(ready.room.code, allowUnverifiedAudio = ready.needsAudioConsent)
-                _state.update { it.copy(together = null) }
-                rooms.openPlayer(key)
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                val consent = (e as? ApiException)?.error?.code == "audio_selection_required" && !ready.needsAudioConsent
-                _state.update {
-                    it.copy(together = ready.copy(starting = false, needsAudioConsent = consent || ready.needsAudioConsent, error = if (consent) null else ApiErrors.describe(e)))
-                }
-            }
-        }
-    }
-
-    /** Closes the dialog; a room nobody was let into is closed again rather than left to expire. */
-    fun cancelRoom() {
-        val together = _state.value.together
-        if (together is WatchTogether.Ready && together.starting) return
-        _state.update { it.copy(together = null) }
-        if (together is WatchTogether.Ready) viewModelScope.launch {
-            try { rooms.close(together.room.code) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-        }
+    /** One episode of the series on screen. */
+    fun watchEpisodeTogether(episode: Tile) {
+        val show = _state.value.detail?.title.orEmpty()
+        together.open(episode.id, listOf(show, episode.title).filter(String::isNotBlank).joinToString(" · "), RoomSubject.Title)
     }
 
     fun load() {
@@ -216,3 +173,6 @@ class DetailsViewModel @Inject constructor(
 
     fun clearToast() = _state.update { it.copy(toast = null) }
 }
+
+/** Titles that are a set of episodes: a room on one opens on the next episode to watch. */
+internal val SERIES_KINDS = setOf(MediaKind.SHOW, MediaKind.SERIES, MediaKind.SEASON)

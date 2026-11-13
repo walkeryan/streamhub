@@ -69,6 +69,7 @@ import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShTextField
 import com.streamhub.tv.core.ui.components.programmeProgress
 import com.streamhub.tv.core.ui.components.ProgrammeDialog
+import com.streamhub.tv.core.ui.components.WatchTogetherDialog
 import com.streamhub.tv.core.data.model.Programme
 import com.streamhub.tv.core.data.model.RecordingStates
 import com.streamhub.tv.core.data.repo.recordingStateMark
@@ -190,6 +191,9 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
             )
         }
     }
+    val together by vm.together.state.collectAsStateWithLifecycle()
+    val canWatchTogether by vm.canWatchTogether.collectAsStateWithLifecycle()
+    together?.let { WatchTogetherDialog(it, onStart = vm.together::start, onRetry = vm.together::retry, onCancel = vm.together::cancel) }
     if (groupsOpen) GroupDrawer(
         groups = s.groups, selected = s.selectedGroup,
         loading = s.groupsLoading, error = s.groupsError,
@@ -309,9 +313,17 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                     ch.now?.let { NowNextLine("Now  ${hhmm(it.start)}–${hhmm(it.stop)}", it, t.text, recording.canSchedule) { vm.recorder.reset(); actionsFor = ch.id to it.id } }
                     ch.now?.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = t.textMuted, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp)) }
                     ch.next?.let { NowNextLine("Next ${hhmm(it.start)}", it, t.textMuted, recording.canSchedule) { vm.recorder.reset(); actionsFor = ch.id to it.id } }
-                    Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ShButton("Watch", { launcher.play(ch.id) })
-                        ShButton(if (ch.isFavorite) "Remove favorite" else "Add favorite", { vm.toggleFavorite(ch) })
+                    // The channel's actions. A row that scrolls with focus: three buttons are wider than the
+                    // pane, and none of them may reach into the overscan margin.
+                    LazyRow(
+                        Modifier.fillMaxWidth().padding(top = 4.dp).focusRestorer(),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        item("watch") { ShButton("Watch", { launcher.play(ch.id) }) }
+                        // A live room: everyone on the same channel, with play and pause for all.
+                        if (canWatchTogether) item("together") { ShButton("Watch together", { vm.watchTogether(ch) }) }
+                        item("favorite") { ShButton(if (ch.isFavorite) "Remove favorite" else "Add favorite", { vm.toggleFavorite(ch) }) }
                     }
                 }
             }

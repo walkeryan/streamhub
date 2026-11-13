@@ -6,7 +6,7 @@ import com.streamhub.tv.core.data.api.ApiErrors
 import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.model.Room
-import com.streamhub.tv.core.data.repo.RoomRepository
+import com.streamhub.tv.core.data.repo.RoomDirectory
 import com.streamhub.tv.core.data.room.RoomCode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -32,7 +32,7 @@ data class JoinRoomState(
 
 /** "Join a room": six characters, then the room is looked up and shown before it is joined. */
 @HiltViewModel
-class JoinRoomViewModel @Inject constructor(private val rooms: RoomRepository) : ViewModel() {
+class JoinRoomViewModel @Inject constructor(private val rooms: RoomDirectory) : ViewModel() {
     private val _state = MutableStateFlow(JoinRoomState())
     val state: StateFlow<JoinRoomState> = _state.asStateFlow()
     private var lookup: Job? = null

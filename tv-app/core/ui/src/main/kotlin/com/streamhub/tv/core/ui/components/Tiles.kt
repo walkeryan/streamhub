@@ -123,19 +123,21 @@ fun PosterTile(
     }
 }
 
-/** 16:9 landscape tile (Continue Watching, episodes). */
+/** 16:9 landscape tile (Continue Watching, episodes). [onLongClick]: holding Select, where the tile has more than one action. */
 @Composable
 fun LandscapeTile(
     tile: Tile,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onFocus: (Tile) -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
 ) {
     val t = LocalThemeTokens.current
     val art = rememberAdaptiveArt(tile.backdrop ?: tile.poster)
     Column(modifier.width(Tokens.Tile.LandscapeW)) {
         FocusSurface(
             onClick = onClick,
+            onLongClick = onLongClick,
             modifier = Modifier.size(Tokens.Tile.LandscapeW, Tokens.Tile.LandscapeH)
                 .onFocusChanged { art.onFocusChanged(it.isFocused); if (it.isFocused) onFocus(tile) },
         ) {
