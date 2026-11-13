@@ -118,9 +118,12 @@ class Room:
     def is_host(self, profile_id: str) -> bool:
         return profile_id == self.host_profile_id
 
-    def join(self, profile_id: str, name: str, now_ms: int) -> tuple[Member, list[Event]]:
+    def require_space(self) -> None:
         if self.full:
             raise Conflict(f"This room already has {MAX_MEMBERS} members.", code="room_full")
+
+    def join(self, profile_id: str, name: str, now_ms: int) -> tuple[Member, list[Event]]:
+        self.require_space()
         member = Member(id=secrets.token_hex(8), profile_id=profile_id, name=name, last_seen_ms=now_ms)
         self.members[member.id] = member
         return member, [self._members_event()]
@@ -339,6 +342,9 @@ class RoomRegistry:
 
     def get(self, code: str) -> Room | None:
         return self._rooms.get(code.upper())
+
+    def rooms(self) -> list[Room]:
+        return list(self._rooms.values())
 
     def remove(self, code: str, reason: str = "deleted") -> list[Event]:
         room = self._rooms.pop(code.upper(), None)

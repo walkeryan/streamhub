@@ -649,3 +649,65 @@ class RequestManagerSettings(_M):
 class RequestManagerWrite(_M):
     url: str | None = Field(default=None, max_length=512)
     api_key: str | None = Field(default=None, max_length=512, description="omit to keep the stored key")
+
+
+class RoomCreate(_M):
+    id: str = Field(min_length=1, max_length=512)
+    variant_id: str | None = Field(default=None, max_length=512)
+    audio_track: int | None = Field(default=None, ge=0, le=255)
+
+
+class RoomJoin(_M):
+    client: Literal["android_tv", "web"] = "web"
+    prefer_hls: bool = False
+    recovery_generation: str | None = Field(default=None, max_length=64)
+    allow_unverified_audio: bool = False
+
+
+class RoomTitle(_M):
+    id: str
+    kind: MediaKindL
+    title: str
+    subtitle: str | None = None
+    year: int | None = None
+    poster: str | None = None
+    backdrop: str | None = None
+
+
+class RoomMember(_M):
+    id: str
+    name: str
+    host: bool
+    buffering: bool
+
+
+class RoomState(_M):
+    playing: bool
+    position_ms: int | None = None
+    as_of_ms: int
+
+
+class Room(_M):
+    code: str
+    join_path: str
+    id: str
+    live: bool
+    variant_id: str | None = None
+    audio_track: int | None = None
+    host_name: str
+    is_host: bool
+    controls_locked: bool
+    waiting_for: str | None = None
+    max_members: int
+    members: list[RoomMember]
+    state: RoomState
+    server_ms: int
+    title: RoomTitle
+
+
+class RoomJoined(_M):
+    member_token: str
+    member_id: str
+    expires_in_seconds: int
+    ws_path: str
+    descriptor: PlaybackDescriptor

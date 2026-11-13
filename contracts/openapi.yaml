@@ -514,6 +514,105 @@ components:
         url: {type: string, nullable: true}
         api_key_set: {type: boolean}
 
+    RoomCreate:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string, description: "title or channel id (lib:, tmdb:, ch:). A channel makes a live room."}
+        variant_id: {type: string, nullable: true, description: "source variant every member plays; validated when a member joins"}
+        audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255}
+    RoomJoin:
+      type: object
+      properties:
+        client: {type: string, enum: [android_tv, web], default: web}
+        prefer_hls: {type: boolean, default: false}
+        recovery_generation: {type: string, nullable: true, maxLength: 64, description: "As in PlaybackRequest. Required for web clients."}
+        allow_unverified_audio: {type: boolean, default: false, description: "Consent to the room's variant_id when its audio is unverified or not this profile's preference."}
+    RoomTitle:
+      type: object
+      required: [id, kind, title]
+      properties:
+        id: {type: string}
+        kind: { $ref: '#/components/schemas/MediaKind' }
+        title: {type: string}
+        subtitle: {type: string, nullable: true}
+        year: {type: integer, nullable: true}
+        poster: {type: string, nullable: true}
+        backdrop: {type: string, nullable: true}
+    RoomMember:
+      type: object
+      required: [id, name, host, buffering]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        host: {type: boolean}
+        buffering: {type: boolean}
+    RoomState:
+      type: object
+      required: [playing, position_ms, as_of_ms]
+      description: "The room clock. While playing, the position now is position_ms + (server time now - as_of_ms); paused, it is position_ms."
+      properties:
+        playing: {type: boolean}
+        position_ms: {type: integer, nullable: true, description: "null in a live room: a channel has no position"}
+        as_of_ms: {type: integer, description: "server epoch ms at which position_ms was true"}
+    Room:
+      type: object
+      required: [code, join_path, id, live, host_name, is_host, controls_locked, max_members, members, state, server_ms, title]
+      properties:
+        code: {type: string, description: "six characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789; accepted in either case"}
+        join_path: {type: string, description: "web path of the join screen: /room/<code>"}
+        id: {type: string, description: "the title or channel the room watches"}
+        live: {type: boolean}
+        variant_id: {type: string, nullable: true}
+        audio_track: {type: integer, nullable: true}
+        host_name: {type: string}
+        is_host: {type: boolean, description: "the current profile created the room"}
+        controls_locked: {type: boolean, description: "only the host's play, pause and seek apply"}
+        waiting_for: {type: string, nullable: true, description: "member the room is paused for while they buffer"}
+        max_members: {type: integer}
+        members: {type: array, items: { $ref: '#/components/schemas/RoomMember' }}
+        state: { $ref: '#/components/schemas/RoomState' }
+        server_ms: {type: integer, description: "server epoch ms when this response was built"}
+        title: { $ref: '#/components/schemas/RoomTitle' }
+    RoomJoined:
+      type: object
+      required: [member_token, member_id, expires_in_seconds, ws_path, descriptor]
+      description: |
+        A seat in the room. Open the room WebSocket at `ws_path` with `?member_token=<member_token>`
+        (the access token never goes in a URL). A member who has not been heard from on the socket for
+        20 s is dropped and must join again; until then the same token reconnects and is resynchronised.
+
+        All messages are JSON objects with a `type`.
+
+        Client to server:
+        - `ping {t}`: clock sync and keep-alive; send one at least every 10 s. Answered with `pong {t, server_ms}`.
+        - `play`, `pause`, `seek {position_ms}`: become the room state for everyone. `position_ms` is an integer of at least 0.
+        - `buffering {on}`: this member's player is stalled (true) or has recovered (false).
+        - `lock {on}`: host only. While locked, only the host's play, pause and seek apply.
+
+        Server to client:
+        - `pong {t, server_ms}`: to the sender only. `t` is echoed; `server_ms` is server epoch ms.
+        - `state {playing, position_ms, as_of_ms, by, controls_locked}`: the room clock (see RoomState).
+          `by` is the member who caused it, or null when the room did. A member more than 1000 ms from
+          the room position seeks to it. Any `state` clears a `waiting` notice.
+        - `members {members: RoomMember[]}`: sent whenever someone joins, leaves or starts or stops buffering.
+        - `waiting {name}`: the room is paused for this member. It resumes when they recover or after 15 s.
+        - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
+          `host_only`, `live_no_seek`, `bad_message`.
+        - `closed {reason}`: the last message before the server closes the socket: `expired`, `deleted`,
+          `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized` (4401),
+          `not_found`, `not_a_member` (4404).
+
+        On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
+        Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
+        connection keeps the seat until the 20 s silence rule applies.
+      properties:
+        member_token: {type: string, description: "valid 2 h, for this room and member only"}
+        member_id: {type: string}
+        expires_in_seconds: {type: integer}
+        ws_path: {type: string, description: "/api/v1/rooms/<code>/ws"}
+        descriptor: { $ref: '#/components/schemas/PlaybackDescriptor' }
+
     SportsListing:
       type: object
       required: [id, sport, programme_id, title, start, stop, channel_id, channel_name, channel_number, source_name]
@@ -1018,6 +1117,40 @@ paths:
     get: { summary: Notices for the current profile; unread first, responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [notices], properties: { notices: { type: array, items: { $ref: '#/components/schemas/Notice' } } } } } } } } }
   /notices/{id}/read:
     post: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Notice' } } } } } }
+
+  /rooms:
+    post:
+      summary: Create a watch room for a title or channel
+      description: The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomCreate' } } } }
+      responses:
+        '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '403': { description: "content_restricted, or not allowed to create rooms" }
+        '404': { description: unknown title }
+        '409': { description: room_limit }
+  /rooms/{code}:
+    get:
+      summary: The join screen (title, host, members, state)
+      parameters: [{name: code, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '403': { description: "content_restricted: the current profile may not watch the room's title" }
+        '404': { description: room_not_found }
+    delete:
+      summary: Close the room (host or administrator)
+      parameters: [{name: code, in: path, required: true, schema: {type: string}}]
+      responses: { '204': { description: "closed; connected members receive a closed message with reason deleted" }, '403': { description: not the host }, '404': { description: room_not_found } }
+  /rooms/{code}/join:
+    post:
+      summary: Take a seat in the room
+      description: Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged. A room has at most 8 members and expires after 30 minutes with none.
+      parameters: [{name: code, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoin' } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoined' } } } }
+        '403': { description: "content_restricted and the other /playback/resolve refusals" }
+        '404': { description: "room_not_found, or the room's title or variant is not available to this profile" }
+        '409': { description: "room_full | room_unsupported | audio_selection_required" }
 
   /health:
     get: { security: [], responses: { '200': { description: ok } } }

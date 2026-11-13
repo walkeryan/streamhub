@@ -3530,6 +3530,222 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/rooms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a watch room for a title or channel
+         * @description The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RoomCreate"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Room"];
+                    };
+                };
+                /** @description content_restricted, or not allowed to create rooms */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description unknown title */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_limit */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The join screen (title, host, members, state) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Room"];
+                    };
+                };
+                /** @description content_restricted: the current profile may not watch the room's title */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Close the room (host or administrator) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description closed; connected members receive a closed message with reason deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not the host */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{code}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take a seat in the room
+         * @description Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged. A room has at most 8 members and expires after 30 minutes with none.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RoomJoin"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RoomJoined"];
+                    };
+                };
+                /** @description content_restricted and the other /playback/resolve refusals */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found, or the room's title or variant is not available to this profile */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_full | room_unsupported | audio_selection_required */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -4176,6 +4392,115 @@ export interface components {
         RequestManagerSettings: {
             url?: string | null;
             api_key_set: boolean;
+        };
+        RoomCreate: {
+            /** @description title or channel id (lib:, tmdb:, ch:). A channel makes a live room. */
+            id: string;
+            /** @description source variant every member plays; validated when a member joins */
+            variant_id?: string | null;
+            audio_track?: number | null;
+        };
+        RoomJoin: {
+            /**
+             * @default web
+             * @enum {string}
+             */
+            client: "android_tv" | "web";
+            /** @default false */
+            prefer_hls: boolean;
+            /** @description As in PlaybackRequest. Required for web clients. */
+            recovery_generation?: string | null;
+            /**
+             * @description Consent to the room's variant_id when its audio is unverified or not this profile's preference.
+             * @default false
+             */
+            allow_unverified_audio: boolean;
+        };
+        RoomTitle: {
+            id: string;
+            kind: components["schemas"]["MediaKind"];
+            title: string;
+            subtitle?: string | null;
+            year?: number | null;
+            poster?: string | null;
+            backdrop?: string | null;
+        };
+        RoomMember: {
+            id: string;
+            name: string;
+            host: boolean;
+            buffering: boolean;
+        };
+        /** @description The room clock. While playing, the position now is position_ms + (server time now - as_of_ms); paused, it is position_ms. */
+        RoomState: {
+            playing: boolean;
+            /** @description null in a live room: a channel has no position */
+            position_ms: number | null;
+            /** @description server epoch ms at which position_ms was true */
+            as_of_ms: number;
+        };
+        Room: {
+            /** @description six characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789; accepted in either case */
+            code: string;
+            /** @description web path of the join screen: /room/<code> */
+            join_path: string;
+            /** @description the title or channel the room watches */
+            id: string;
+            live: boolean;
+            variant_id?: string | null;
+            audio_track?: number | null;
+            host_name: string;
+            /** @description the current profile created the room */
+            is_host: boolean;
+            /** @description only the host's play, pause and seek apply */
+            controls_locked: boolean;
+            /** @description member the room is paused for while they buffer */
+            waiting_for?: string | null;
+            max_members: number;
+            members: components["schemas"]["RoomMember"][];
+            state: components["schemas"]["RoomState"];
+            /** @description server epoch ms when this response was built */
+            server_ms: number;
+            title: components["schemas"]["RoomTitle"];
+        };
+        /**
+         * @description A seat in the room. Open the room WebSocket at `ws_path` with `?member_token=<member_token>`
+         *     (the access token never goes in a URL). A member who has not been heard from on the socket for
+         *     20 s is dropped and must join again; until then the same token reconnects and is resynchronised.
+         *
+         *     All messages are JSON objects with a `type`.
+         *
+         *     Client to server:
+         *     - `ping {t}`: clock sync and keep-alive; send one at least every 10 s. Answered with `pong {t, server_ms}`.
+         *     - `play`, `pause`, `seek {position_ms}`: become the room state for everyone. `position_ms` is an integer of at least 0.
+         *     - `buffering {on}`: this member's player is stalled (true) or has recovered (false).
+         *     - `lock {on}`: host only. While locked, only the host's play, pause and seek apply.
+         *
+         *     Server to client:
+         *     - `pong {t, server_ms}`: to the sender only. `t` is echoed; `server_ms` is server epoch ms.
+         *     - `state {playing, position_ms, as_of_ms, by, controls_locked}`: the room clock (see RoomState).
+         *       `by` is the member who caused it, or null when the room did. A member more than 1000 ms from
+         *       the room position seeks to it. Any `state` clears a `waiting` notice.
+         *     - `members {members: RoomMember[]}`: sent whenever someone joins, leaves or starts or stops buffering.
+         *     - `waiting {name}`: the room is paused for this member. It resumes when they recover or after 15 s.
+         *     - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
+         *       `host_only`, `live_no_seek`, `bad_message`.
+         *     - `closed {reason}`: the last message before the server closes the socket: `expired`, `deleted`,
+         *       `shutdown`, `silent`, `replaced`, `slow` (close code 4000), `unauthorized` (4401),
+         *       `not_found`, `not_a_member` (4404).
+         *
+         *     On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
+         *     Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
+         *     connection keeps the seat until the 20 s silence rule applies.
+         */
+        RoomJoined: {
+            /** @description valid 2 h, for this room and member only */
+            member_token: string;
+            member_id: string;
+            expires_in_seconds: number;
+            /** @description /api/v1/rooms/<code>/ws */
+            ws_path: string;
+            descriptor: components["schemas"]["PlaybackDescriptor"];
         };
         SportsListing: {
             id: string;
