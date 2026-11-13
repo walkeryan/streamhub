@@ -12,6 +12,9 @@ export interface RoomStateEvent extends RoomClockState {
   /** the member who caused it, or null when the room did */
   by: string | null
   controls_locked: boolean
+  /** A room on one shared stream: which start of it this state describes, and where in the title that start is. Null in other rooms. */
+  stream_epoch: number | null
+  stream_start_ms: number | null
 }
 export type RoomStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
 export interface RoomSnapshot {
@@ -103,22 +106,11 @@ export class RoomSocket {
     this.send({ type: 'buffering', on })
   }
 
-  /** Take another seat (a fresh member token): leave this one and connect as the new member. */
-  moveTo(url: string): void {
-    if (this.current.closed) return
-    this.url = url
-    this.drop(LEFT)
-    this.attempt = 0
-    this.open()
-  }
+  /** A renewed member token: the open connection stays, the next one is made with it. */
+  setUrl(url: string): void { this.url = url }
 
-  /** Give the seat up but stay in the room's business: moveTo() follows with the next seat. */
-  vacate(): void {
-    if (this.current.closed) return
-    if (this.retryTimer !== null) { clearTimeout(this.retryTimer); this.retryTimer = null }
-    this.drop(LEFT)
-    this.update({ status: 'reconnecting' })
-  }
+  /** The seat turned out to be gone (the server said so elsewhere than on this socket): the room ends for this member. */
+  end(reason: string): void { this.finish(reason) }
 
   /** Leave the room at once (close code 1000); nothing reconnects afterwards. */
   leave(): void { this.finish('left', LEFT) }
@@ -205,6 +197,8 @@ export class RoomSocket {
         const state: RoomStateEvent = {
           playing: message.playing, position_ms: typeof message.position_ms === 'number' ? message.position_ms : null, as_of_ms: message.as_of_ms,
           by: typeof message.by === 'string' ? message.by : null, controls_locked: !!message.controls_locked,
+          stream_epoch: typeof message.stream_epoch === 'number' ? message.stream_epoch : null,
+          stream_start_ms: typeof message.stream_start_ms === 'number' ? message.stream_start_ms : null,
         }
         // Any state clears a waiting notice.
         this.update({ state, controlsLocked: state.controls_locked, waiting: null })

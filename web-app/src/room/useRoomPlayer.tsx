@@ -8,7 +8,7 @@ import type { PlayState } from '../player/usePlayback'
 import { seekPlan, seekableRanges } from '../player/restartSeek'
 import { useUi } from '../store/ui'
 import type { RoomSnapshot } from './RoomSocket.ts'
-import { decide, isSeek, positionAt } from './roomSync.ts'
+import { decide, positionAt, streamRestarted } from './roomSync.ts'
 import type { RoomSession } from './session'
 import { ShareSheet } from './ShareSheet'
 
@@ -78,7 +78,7 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
   useEffect(() => {
     const video = videoRef.current
     if (!room || !video) return
-    // One fresh descriptor per room state: a stream that still does not reach the room position will not after a second one.
+    // One descriptor asked for per room state: a stream that still does not reach the room position will not after a second one.
     let refreshedFor: number | null = null
     // How long this player's seeks take: while the room plays, aim that far ahead so the seek lands on it.
     let lead = 0
@@ -101,6 +101,11 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
       const p = link.current
       const { state, closed } = room.socket.snapshot
       if (!state || closed) return
+      // The room's shared stream was started again: load the same playlist again, from its new time zero.
+      if (streamRestarted(room.streamEpoch, state)) {
+        if (room.followStream(state)) { refreshedFor = state.as_of_ms; p.reload(); return }
+        if (refreshedFor !== state.as_of_ms) { refresh(state.as_of_ms); return }
+      }
       // The element says whether there is something to steer; the player's own state lags it by a render.
       const loading = p.state === 'resolving' || p.state === 'reconnecting' || video.readyState < HTMLMediaElement.HAVE_METADATA
       const stopped = p.state === 'error' || p.state === 'handoff'
@@ -134,11 +139,7 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
       seekStarted = 0
       tick()
     }
-    const offState = room.onState((state, previous) => {
-      // A seek may have restarted the room's stream: a server-produced stream is asked for again, a plain file is moved in place.
-      if (isSeek(previous, state) && link.current.restartable && refreshedFor !== state.as_of_ms) refresh(state.as_of_ms)
-      else tick()
-    })
+    const offState = room.onState(tick)
     const timer = window.setInterval(tick, SYNC_INTERVAL_MS)
     const events = ['playing', 'pause', 'loadedmetadata', 'canplay', 'waiting'] as const
     for (const name of events) video.addEventListener(name, tick)

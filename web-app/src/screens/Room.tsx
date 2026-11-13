@@ -13,7 +13,7 @@ import { busyHeading, busyLines, parseSourceBusy } from '../player/sourceBusy'
 import { prefersHls } from '../player/usePlayback'
 import { JoinRoomDialog } from '../room/JoinRoomDialog'
 import { positionAt } from '../room/roomSync.ts'
-import { RoomSession } from '../room/session'
+import { RoomSession, seatToken } from '../room/session'
 import { ShareSheet } from '../room/ShareSheet'
 import { useAdaptiveAccent } from '../lib/theme'
 import { fmtDuration } from '../lib/util'
@@ -66,7 +66,8 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
     setJoining(true); setRefusal(null)
     try {
       const { generation } = await unwrap<{ generation: string }>(api.GET('/playback/generation'))
-      const joined = await joinRoom(code, { client: 'web', prefer_hls: prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio })
+      // A seat this tab still holds (a reload, a connection that came back) is kept, not doubled.
+      const joined = await joinRoom(code, { client: 'web', prefer_hls: prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio, member_token: seatToken(code) })
       setSession(new RoomSession(known, joined, { generation, allowUnverifiedAudio, startAtMs }))
       setSeat((n) => n + 1)
     } catch (e) {

@@ -128,6 +128,8 @@ export const authenticatedFetch = async (input: Request): Promise<Response> => {
 }
 
 export const api = createClient<paths>({ baseUrl: API_BASE, fetch: authenticatedFetch })
+/** For the calls the contract gives no bearer token: what authorizes them is in the request itself (a room member's token). */
+export const tokenless = createClient<paths>({ baseUrl: API_BASE })
 
 /** Unwraps an openapi-fetch result, throwing ApiError on failure. */
 export async function unwrap<T>(p: Promise<{ data?: unknown; error?: unknown; response: Response }>): Promise<T> {

@@ -1,8 +1,9 @@
 import { ApiError } from '../api/client'
-import { joinRoom } from '../api/hooks'
+import { joinRoom, roomDescriptor } from '../api/hooks'
 import type { PlaybackDescriptor, Room, RoomJoined } from '../api/types'
 import { prefersHls } from '../player/usePlayback'
 import { RoomClock } from './roomClock.ts'
+import { positionAt } from './roomSync.ts'
 import { RoomSocket, type RoomStateEvent } from './RoomSocket.ts'
 
 /** ws(s)://<this origin><ws_path>?member_token=…: the member token is the only credential a socket URL carries. */
@@ -13,8 +14,27 @@ export function roomSocketUrl(joined: Pick<RoomJoined, 'ws_path' | 'member_token
   return url.toString()
 }
 
-/** A descriptor this young is handed out again instead of asking for another. */
-const FRESH_MS = 3000
+/**
+ * The member token of the seat this tab holds in each room. A join that carries it keeps the seat
+ * (coming back after a reload or a lost connection) instead of adding a member. Kept per tab: two
+ * tabs are two members.
+ */
+const SEATS = 'sh.roomSeats.v1'
+const seats = (): Record<string, string> => { try { return JSON.parse(sessionStorage.getItem(SEATS) ?? '{}') as Record<string, string> } catch { return {} } }
+export const seatToken = (code: string): string | null => seats()[code] ?? null
+function keepSeat(code: string, token: string | null): void {
+  try {
+    const all = seats()
+    if (token) all[code] = token; else delete all[code]
+    sessionStorage.setItem(SEATS, JSON.stringify(all))
+  } catch { /* storage unavailable: the next join takes a new seat */ }
+}
+
+/** A member token is renewed once this much of its life has passed, so a long film does not outlast it. */
+const RENEW_AT = 0.8
+const RENEW_RETRY_S = 60
+/** What the descriptor call says when the seat itself is gone, as the reason the room ended for this member. */
+const SEAT_LOST: Record<string, string> = { room_unauthorized: 'unauthorized', not_a_member: 'not_a_member', room_not_found: 'not_found' }
 
 type StateListener = (state: RoomStateEvent, previous: RoomStateEvent | null) => void
 type ErrorListener = (code: string, message: string) => void
@@ -32,11 +52,15 @@ export class RoomSession {
   memberId: string
   /** Seek the room here once the socket is open (a host who moved a title they were already watching into a room). */
   startAtMs: number | null
-  private latest: { descriptor: PlaybackDescriptor; at: number }
+  private memberToken: string
+  private latest: PlaybackDescriptor
+  /** `latest` has not been given to the player yet: the join's answer, or one just fetched or followed. */
+  private unused = true
   private refreshing: Promise<PlaybackDescriptor> | null = null
   private generation: string | undefined
   private readonly allowUnverifiedAudio: boolean
   private leaving: ReturnType<typeof setTimeout> | null = null
+  private renewal: ReturnType<typeof setTimeout> | null = null
   private stateListeners = new Set<StateListener>()
   private errorListeners = new Set<ErrorListener>()
 
@@ -44,10 +68,11 @@ export class RoomSession {
     this.code = room.code
     this.room = room
     this.memberId = joined.member_id
+    this.memberToken = joined.member_token
     this.generation = options.generation
     this.allowUnverifiedAudio = !!options.allowUnverifiedAudio
     this.startAtMs = options.startAtMs ?? null
-    this.latest = { descriptor: forRoom(joined.descriptor), at: Date.now() }
+    this.latest = joined.descriptor
     this.clock.seed(room.server_ms)
     this.socket = new RoomSocket({
       url: roomSocketUrl(joined),
@@ -55,44 +80,81 @@ export class RoomSession {
       onState: (state, previous) => { for (const listener of [...this.stateListeners]) listener(state, previous) },
       onError: (code, message) => { for (const listener of [...this.errorListeners]) listener(code, message) },
     })
+    keepSeat(this.code, this.memberToken)
+    // However the room ends for this member, the seat is not one to come back to.
+    this.socket.subscribe(() => { if (this.socket.snapshot.closed) this.forget() })
+    this.renewIn(joined.expires_in_seconds * RENEW_AT)
   }
 
   onState(listener: StateListener): () => void { this.stateListeners.add(listener); return () => { this.stateListeners.delete(listener) } }
   onError(listener: ErrorListener): () => void { this.errorListeners.add(listener); return () => { this.errorListeners.delete(listener) } }
 
-  /** usePlayback's descriptor source. Every attach wants a live descriptor: the join answer while it is fresh, a new one after. */
-  descriptor = (generation?: string): Promise<PlaybackDescriptor> => {
+  /** Which start of the room's one shared stream the descriptor describes; null when each member plays the title for themselves. */
+  get streamEpoch(): number | null { return this.latest.stream_epoch ?? null }
+
+  /** usePlayback's descriptor source. The join's answer serves the first attach; every later one asks how the seat stands now. */
+  descriptor = async (generation?: string): Promise<PlaybackDescriptor> => {
     if (generation) this.generation = generation
-    if (Date.now() - this.latest.at < FRESH_MS) return Promise.resolve(this.latest.descriptor)
-    return this.refreshRoomDescriptor()
+    if (!this.unused) await this.refreshRoomDescriptor()
+    this.unused = false
+    return this.latest
   }
 
   /**
-   * The one way a member gets a new descriptor for the room: after a seek restarted the room's stream,
-   * or when the player has to attach again. There is no call that renews a seat's descriptor, so this
-   * joins again: that answers with a new seat, and the socket moves to it (leaving the old one).
+   * The member's descriptor as the server has it now, for a player that lost its place: an error, a
+   * stream of its own that does not reach the room's position, an expired URL. The seat is unchanged;
+   * this never joins again.
    */
   refreshRoomDescriptor = (): Promise<PlaybackDescriptor> => {
     this.refreshing ??= (async () => {
       try {
-        const joined = await this.joinAgain()
-        this.memberId = joined.member_id
-        this.socket.moveTo(roomSocketUrl(joined))
-        this.latest = { descriptor: forRoom(joined.descriptor), at: Date.now() }
-        return this.latest.descriptor
+        this.latest = await roomDescriptor(this.code, {
+          member_token: this.memberToken, client: 'web', prefer_hls: prefersHls(), recovery_generation: this.generation, allow_unverified_audio: this.allowUnverifiedAudio,
+        })
+        this.unused = true
+        return this.latest
+      } catch (e) {
+        // Without the seat there is nothing to play: the room ends here, with Rejoin where that can help.
+        const lost = e instanceof ApiError ? SEAT_LOST[e.code ?? ''] : undefined
+        if (lost) this.socket.end(lost)
+        throw e
       } finally { this.refreshing = null }
     })()
     return this.refreshing
   }
 
-  private async joinAgain(): Promise<RoomJoined> {
-    const body = { client: 'web' as const, prefer_hls: prefersHls(), recovery_generation: this.generation ?? null, allow_unverified_audio: this.allowUnverifiedAudio }
-    try { return await joinRoom(this.code, body) } catch (e) {
-      // A full room has no second seat for a member who already holds one: give that one up, then ask again.
-      if (!(e instanceof ApiError) || e.code !== 'room_full') throw e
-      this.socket.vacate()
-      return joinRoom(this.code, body)
+  /**
+   * The room's shared stream was started again (someone seeked): the playlist URL is the one already
+   * held, its time zero is now `stream_start_ms`. False when this member has no seat on such a stream.
+   */
+  followStream(state: RoomStateEvent): boolean {
+    if (state.stream_epoch === null || this.latest.stream_epoch == null) return false
+    this.latest = {
+      ...this.latest, stream_epoch: state.stream_epoch, start_position_ms: state.stream_start_ms ?? this.latest.start_position_ms,
+      resume_position_ms: Math.round(positionAt(state, this.clock.serverNow()) ?? 0),
     }
+    this.unused = true
+    return true
+  }
+
+  private renewIn(seconds: number): void {
+    if (this.renewal !== null) clearTimeout(this.renewal)
+    this.renewal = setTimeout(() => { this.renewal = null; void this.renew() }, Math.max(1, seconds) * 1000)
+  }
+  /** Joining with the member token keeps the seat and answers with a token that lasts another two hours. */
+  private async renew(): Promise<void> {
+    if (this.socket.snapshot.closed) return
+    try {
+      const joined = await joinRoom(this.code, {
+        client: 'web', prefer_hls: prefersHls(), recovery_generation: this.generation ?? null, allow_unverified_audio: this.allowUnverifiedAudio, member_token: this.memberToken,
+      })
+      if (this.socket.snapshot.closed) return
+      this.memberId = joined.member_id
+      this.memberToken = joined.member_token
+      this.socket.setUrl(roomSocketUrl(joined))
+      keepSeat(this.code, this.memberToken)
+      this.renewIn(joined.expires_in_seconds * RENEW_AT)
+    } catch { this.renewIn(RENEW_RETRY_S) }
   }
 
   /** Mounting keeps the seat; unmounting gives it up a moment later, unless mounted again first (a development double mount). */
@@ -104,7 +166,8 @@ export class RoomSession {
     if (this.leaving !== null) return
     this.leaving = setTimeout(() => this.socket.leave(), 0)
   }
+  private forget(): void {
+    if (this.renewal !== null) { clearTimeout(this.renewal); this.renewal = null }
+    if (seatToken(this.code) === this.memberToken) keepSeat(this.code, null)
+  }
 }
-
-/** The room sets the position; the profile's own resume point must not pull the player away from it. */
-const forRoom = (descriptor: PlaybackDescriptor): PlaybackDescriptor => ({ ...descriptor, resume_position_ms: 0 })

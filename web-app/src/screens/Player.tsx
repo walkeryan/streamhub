@@ -366,7 +366,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   }
 
   return (
-    <div className="player" data-testid="player" data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} role="main" onPointerMove={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
+    <div className="player" data-testid="player" data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} data-stream-start={restartable ? desc.start_position_ms ?? 0 : undefined} role="main" onPointerMove={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
       {/* focus target for "the video itself": Up from the control bar lands here, so no hidden button keeps focus */}
       <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>
       <video ref={videoRef} playsInline loop={live && desc?.mime === 'video/webm'} style={{ objectFit: aspect }} data-testid="video" aria-label={title} onDoubleClick={fullscreen} onClick={togglePlay} />

@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
-import { api, ok, unwrap } from './client'
+import { api, ok, tokenless, unwrap } from './client'
 import { useSession } from '../store/session'
-import type { Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomJoin, RoomJoined } from './types'
+import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined } from './types'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
   Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
@@ -274,6 +274,8 @@ export const useRequestManager = (enabled: boolean) =>
 /* ---------- watch rooms ---------- */
 export const createRoom = (body: { id: string; variant_id?: string | null; audio_track?: number | null }) => unwrap<Room>(api.POST('/rooms', { body }))
 export const joinRoom = (code: string, body: RoomJoin) => unwrap<RoomJoined>(api.POST('/rooms/{code}/join', { params: { path: { code } }, body }))
+/** A member's descriptor as it is now. The member token is the credential; the seat does not change. */
+export const roomDescriptor = (code: string, query: RoomDescriptorQuery) => unwrap<PlaybackDescriptor>(tokenless.GET('/rooms/{code}/descriptor', { params: { path: { code }, query } }))
 export const closeRoom = (code: string) => ok(api.DELETE('/rooms/{code}', { params: { path: { code } } }))
 /** The join screen: who is in the room changes while it is open, so it polls. A refusal is an answer, not a fault to retry. */
 export const useRoomInfo = (code: string | undefined, poll = true) =>
