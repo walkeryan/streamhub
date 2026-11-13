@@ -1078,6 +1078,25 @@ components:
             channels_with_sports_schedule: {type: integer}
 
 paths:
+  /auth/config:
+    get:
+      security: []
+      summary: What a sign-in screen has to know before anyone is signed in
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required]
+                properties:
+                  google_enabled: {type: boolean}
+                  google_required: {type: boolean, description: "Google sign-in is the only way in for people"}
+                  content_policy_enabled: {type: boolean}
+                  owner_pin_configured: {type: boolean}
+                  owner_pin_setup_required: {type: boolean}
+                  signup_mode: {type: string, enum: [approval, invite_only], description: "As in /settings"}
   /auth/google/start:
     get:
       security: []

@@ -4,6 +4,54 @@
  */
 
 export interface paths {
+    "/auth/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What a sign-in screen has to know before anyone is signed in */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            google_enabled: boolean;
+                            /** @description Google sign-in is the only way in for people */
+                            google_required: boolean;
+                            content_policy_enabled: boolean;
+                            owner_pin_configured: boolean;
+                            owner_pin_setup_required: boolean;
+                            /**
+                             * @description As in /settings
+                             * @enum {string}
+                             */
+                            signup_mode?: "approval" | "invite_only";
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/google/start": {
         parameters: {
             query?: never;
