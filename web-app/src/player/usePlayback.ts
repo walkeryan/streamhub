@@ -8,7 +8,13 @@ import { audioAllowed, audioSelection, preferredAudioTrack } from './audioPolicy
 
 export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
 
-export interface PlaybackReq { id: string; variantId?: string; allowUnverifiedAudio?: boolean; sourceId?: string | null; catchupProgrammeId?: string | null; rewindAt?: string | null }
+export interface PlaybackReq {
+  id: string; variantId?: string; allowUnverifiedAudio?: boolean; sourceId?: string | null; catchupProgrammeId?: string | null; rewindAt?: string | null
+  /** Index into the file's probed audio tracks; the server encodes that one track (web VOD). */
+  audioTrack?: number | null
+  /** Start a restart-at-offset stream here instead of at the profile's resume position. */
+  startPositionMs?: number | null
+}
 
 async function playbackGeneration(): Promise<string> {
   const status = await unwrap<{ generation: string }>(api.GET('/playback/generation'))
@@ -19,7 +25,7 @@ export async function resolve(req: PlaybackReq, generation?: string): Promise<Pl
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null },
+      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)) },
     }),
   )
 }
@@ -29,6 +35,10 @@ const MAX_RETRIES = 6
 /**
  * Resolves + attaches a stream to <video>. Reconnects with exponential backoff on fatal errors by re-resolving
  * (fresh proxy token). Reports progress every 10 s, on pause/ended and on page unload.
+ *
+ * A descriptor with start_position_ms is a restart-at-offset stream (a VOD file the server converts for the
+ * browser): its media time zero is that position in the title and duration_ms is the title's length. Seeking
+ * outside what the stream has produced, and switching the audio track, resolve again at the wanted position.
  */
 export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: { muted?: boolean; report?: boolean; buffer?: boolean } = {}) {
   const profile = useSession((s) => s.profile)
@@ -60,6 +70,13 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const hasPlayed = useRef(false)
   const terminal = useRef(false)
   const intent = useRef<{ key: string; generation?: string }>({ key: '' })
+  // What the viewer changed since this playback began: applied to every later resolve of the same request.
+  const restart = useRef<{ audioTrack?: number; startMs?: number }>({})
+  /** Position in the title, which for a restart-at-offset stream is not the media element's time. */
+  const titlePositionMs = useCallback(() => {
+    const d = descRef.current
+    return Math.floor((d?.start_position_ms ?? 0) + (videoRef.current?.currentTime || 0) * 1000)
+  }, [videoRef])
   const clearWaiting = useCallback(() => {
     if (waitingTimer.current !== null) window.clearTimeout(waitingTimer.current)
     waitingTimer.current = null
@@ -68,11 +85,13 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
     retryTimer.current = null
   }, [])
-  const key = req ? `${profileId}|${sessionGeneration}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}` : ''
+  const key = req ? `${profileId}|${sessionGeneration}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}|${req.audioTrack ?? ''}` : ''
 
   const reconnect = useCallback((_reason: string) => {
     if (terminal.current) return
     clearWaiting()
+    // A restart-at-offset stream comes back where it stopped, not where progress was last saved.
+    if (descRef.current?.start_position_ms != null && hasPlayed.current) restart.current = { ...restart.current, startMs: titlePositionMs() }
     if (buffer.current) {
       terminal.current = true
       handle.current?.destroy()
@@ -92,7 +111,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     const wait = Math.min(15_000, 500 * 2 ** retry.current++)
     setState('reconnecting')
     retryTimer.current = window.setTimeout(() => { retryTimer.current = null; setAttempt((a) => a + 1) }, wait)
-  }, [clearWaiting])
+  }, [clearWaiting, titlePositionMs])
 
   // resolve + attach
   useEffect(() => {
@@ -104,6 +123,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (intent.current.key !== key) {
       intent.current = { key }
       terminal.current = false
+      restart.current = {}
     }
     consent.current = null
     selectedAudio.current = null
@@ -136,7 +156,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           if (cancelled) return
           intent.current.generation = generation
         }
-        const d = await resolve(req, intent.current.generation)
+        const d = await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs }, intent.current.generation)
         if (cancelled || !ownsSession()) return
         setDesc(d)
         descRef.current = d
@@ -282,7 +302,15 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (!v) return
     const onMeta = () => {
       const d = descRef.current
-      if (d && !d.live && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
+      // A restart-at-offset stream already begins at the resume position.
+      if (d && !d.live && d.start_position_ms == null && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
+    }
+    // The source can drop mid-film and ffmpeg then closes the stream as if it had ended. Carry on from there.
+    const onEnded = () => {
+      const d = descRef.current
+      if (d?.start_position_ms == null || !d.duration_ms || terminal.current) return
+      const at = titlePositionMs()
+      if (at < d.duration_ms - 30_000) { restart.current = { ...restart.current, startMs: at }; setAttempt((a) => a + 1) }
     }
     const onPlaying = () => { if (terminal.current || !checkAudio.current()) { v.muted = true; v.pause(); return }; hasPlayed.current = true; clearWaiting(); clearRetry(); setState('playing') }
     const onPause = () => { clearWaiting(); if (!v.ended) setState((s) => (s === 'playing' || s === 'buffering' ? 'paused' : s)) }
@@ -300,12 +328,13 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     v.addEventListener('pause', onPause)
     v.addEventListener('waiting', onWaiting)
     v.addEventListener('error', onError)
+    v.addEventListener('ended', onEnded)
     return () => {
       clearWaiting()
       v.removeEventListener('loadedmetadata', onMeta); v.removeEventListener('playing', onPlaying); v.removeEventListener('pause', onPause)
-      v.removeEventListener('waiting', onWaiting); v.removeEventListener('error', onError)
+      v.removeEventListener('waiting', onWaiting); v.removeEventListener('error', onError); v.removeEventListener('ended', onEnded)
     }
-  }, [videoRef, reconnect, clearRetry, clearWaiting, key])
+  }, [videoRef, reconnect, clearRetry, clearWaiting, key, titlePositionMs])
 
   // A server can connect without delivering decodable frames. Do not leave the
   // viewer on an endless spinner, or reset the retry budget on a single frame.
@@ -333,8 +362,9 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       if (!d || d.mode === 'handoff') return
       const progress = {
         id: req.id, source_id: req.sourceId ?? null, state, expected_profile_id: profileId,
-        position_ms: Math.floor((v.currentTime || 0) * 1000),
-        duration_ms: Number.isFinite(v.duration) && !d.live ? Math.floor(v.duration * 1000) : (d.duration_ms ?? null),
+        position_ms: titlePositionMs(),
+        // The media element only knows the part of a restart-at-offset stream produced so far.
+        duration_ms: d.start_position_ms != null ? (d.duration_ms ?? null) : Number.isFinite(v.duration) && !d.live ? Math.floor(v.duration * 1000) : (d.duration_ms ?? null),
       }
       reportProgress(progress, unloading)
     }
@@ -350,7 +380,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       v.removeEventListener('pause', onPause); v.removeEventListener('ended', onEnded); window.removeEventListener('pagehide', onHide)
       send('stopped', true)
     }
-  }, [videoRef, req, opts.report, key, profileId, sessionGeneration])
+  }, [videoRef, req, opts.report, key, profileId, sessionGeneration, titlePositionMs])
 
   const tracks = useCallback(() => {
     void tracksVersion
@@ -373,5 +403,20 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
     retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
+    /** Restart-at-offset streams: start a new stream at this position in the title. */
+    seekTo: (ms: number) => {
+      if (descRef.current?.start_position_ms == null || terminal.current) return
+      clearWaiting(); clearRetry(); retry.current = 0
+      restart.current = { ...restart.current, startMs: Math.max(0, Math.floor(ms)) }
+      setAttempt((a) => a + 1)
+    },
+    /** Have the server encode another audio track of the file, continuing from the current position. */
+    selectAudioTrack: (index: number) => {
+      const d = descRef.current
+      if (!d || d.audio_track == null || d.audio_track === index || terminal.current) return
+      clearWaiting(); clearRetry(); retry.current = 0
+      restart.current = { audioTrack: index, startMs: titlePositionMs() }
+      setAttempt((a) => a + 1)
+    },
   }
 }

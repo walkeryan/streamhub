@@ -47,6 +47,8 @@ def settings(tmp_path: Path) -> AppSettings:
         tmdb_api_key=None,
         cors_origins="",
         iptv_org_channels_url="http://iptv-org.invalid/channels.json",
+        # Never probe media for real, even where ffprobe is installed; probe tests inject a stub.
+        ffprobe_path=str(tmp_path / "no-ffprobe"),
     )
 
 

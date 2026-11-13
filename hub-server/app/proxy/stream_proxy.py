@@ -6,6 +6,19 @@
   HLS upstreams have their playlists rewritten so segments also flow through the proxy.
 - **HLS remux / transcode** (``/stream/{token}/index.m3u8``): ffmpeg ``-c copy -f hls``
   (or libx264 / VAAPI when enabled) into ``<transcode>/<id>/``; idle sessions are reaped.
+- **Web VOD** (``VodPlan``): a file a browser cannot decode becomes an HLS session of its own,
+  with the video copied or transcoded and one audio track encoded to AAC stereo.
+
+Seeking in a web VOD session is restart-at-offset. A session starts at ``start_s`` (``-ss`` before
+``-i``) and its playlist only ever lists what ffmpeg has produced since, as an ``EVENT`` playlist
+whose time zero is that offset; the full length comes from the playback descriptor. A seek outside
+the produced range starts a new session at the new offset and stops the viewer's old one. Limits:
+- every such seek pays a session start (an upstream reconnect and, when transcoding, encoder startup);
+- with copied video the session really starts at the keyframe before ``start_s``, so the position
+  shown can be ahead of the picture by up to one keyframe interval;
+- input is read at ``VOD_READRATE`` times playback speed after a short burst, so the produced range
+  grows only that fast and the session holds its upstream connection until the film is read;
+- segments are kept until the session is reaped, so a watched film occupies its transcoded size.
 """
 
 from __future__ import annotations
@@ -14,6 +27,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import re
 import secrets
 import shutil
 import time
@@ -42,6 +56,15 @@ HLS_ADMISSION_WAIT_S = 5.0
 HLS_STOP_TIMEOUT_S = 0.5
 PAIR_TTL_S = 60.0
 MAX_PAIR_LEASES = 16
+VOD_SEGMENT_S = 4
+VOD_READRATE = "2"
+VOD_BURST_S = "30"
+# A finished VOD session holds no upstream connection, only files: keep it through a pause.
+VOD_DONE_IDLE_S = 600.0
+# Codecs NVDEC decodes; anything else is decoded in software and only encoded on the GPU.
+CUDA_DECODE = {"h264", "hevc", "vp8", "vp9", "av1", "mpeg2video", "mpeg4", "vc1"}
+# ffmpeg's last line when the upstream refuses the request, e.g. "Server returned 403 Forbidden".
+UPSTREAM_STATUS = re.compile(rb"Server returned (\d[\dX]{2})")
 
 
 class HlsSourceBusy(Exception):
@@ -214,6 +237,29 @@ class HlsSession:
     source_id: str | None = None
     stderr_bytes: int = 0
     stderr_task: asyncio.Task[None] | None = None
+    # Web VOD sessions: the viewer+file they belong to, the attempt running and those left to try.
+    family: str | None = None
+    label: str = ""
+    fallbacks: list[tuple[str, list[str]]] = field(default_factory=list)
+    upstream_status: str | None = None
+
+    @property
+    def complete(self) -> bool:
+        """ffmpeg read a VOD file to its end: the segments remain, the upstream connection is gone."""
+        return self.family is not None and self.proc.returncode == 0
+
+
+@dataclass(frozen=True, slots=True)
+class VodPlan:
+    """One web VOD session: what to do with the video, which audio track, where to start."""
+
+    video: str  # "copy" | "transcode"
+    hw: str = "none"  # transcode_hw setting: none | vaapi | nvenc | qsv
+    codec: str | None = None  # input video codec, when the probe knew it
+    width: int | None = None
+    audio_track: int | None = None
+    start_s: int = 0
+    family: str = ""  # sessions of one viewer for one file replace each other
 
 
 @dataclass
@@ -236,6 +282,21 @@ class HttpSession:
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
+    """Input options that make ffmpeg's request look like the proxy's own."""
+    args: list[str] = []
+    if headers:
+        ua = next((v for k, v in headers.items() if k.lower() == "user-agent"), None)
+        if ua:
+            args += ["-user_agent", ua]
+        other = "".join(f"{k}: {v}\r\n" for k, v in headers.items() if k.lower() != "user-agent")
+        if other:
+            args += ["-headers", other]
+    if url.startswith("http"):
+        args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
+    return args
+
+
 def ffmpeg_args(
     ffmpeg: str,
     url: str,
@@ -254,17 +315,9 @@ def ffmpeg_args(
         args += ["-hwaccel", "qsv"]
     elif transcode == "nvenc":
         args += ["-hwaccel", "cuda"]
-    if headers:
-        ua = next((v for k, v in headers.items() if k.lower() == "user-agent"), None)
-        if ua:
-            args += ["-user_agent", ua]
-        other = "".join(f"{k}: {v}\r\n" for k, v in headers.items() if k.lower() != "user-agent")
-        if other:
-            args += ["-headers", other]
-    if url.startswith("http"):
-        args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
-        if live:
-            args += ["-reconnect_at_eof", "1"]
+    args += _upstream_args(url, headers)
+    if url.startswith("http") and live:
+        args += ["-reconnect_at_eof", "1"]
     if buffered:
         # Bound DVR startup bursts to media time before the finite HLS writer
         # can roll away retained history. Ordinary live/VOD keeps its input policy.
@@ -299,6 +352,66 @@ def ffmpeg_args(
         str(outdir / "index.m3u8"),
     ]
     return args
+
+
+def vod_ffmpeg_attempts(
+    ffmpeg: str, url: str, headers: dict[str, str], outdir: Path, plan: VodPlan, *, vaapi_device: str
+) -> list[tuple[str, list[str]]]:
+    """ffmpeg command lines for one web VOD session, in the order to try them.
+
+    Copied video has one. A transcode starts with the configured hardware and ends with libx264,
+    so a missing or busy GPU costs a restart instead of the film (``hls_session`` logs each step).
+    """
+
+    def command(decode: list[str], video: list[str]) -> list[str]:
+        args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *decode, *_upstream_args(url, headers)]
+        if plan.start_s > 0:
+            args += ["-ss", str(plan.start_s)]
+        # Faster than playback so seeking a little ahead is free, yet bounded: unthrottled, a remux
+        # would pull the whole film from the source and onto disk within minutes.
+        args += ["-readrate", VOD_READRATE, "-readrate_initial_burst", VOD_BURST_S]
+        # "V" skips cover art; one audio track only, since the browser is given no way to switch.
+        args += ["-fflags", "+genpts", "-i", url, "-map", "0:V:0?", "-map", f"0:a:{plan.audio_track or 0}?"]
+        args += video
+        args += ["-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "160k"]
+        return [
+            *args,
+            "-f",
+            "hls",
+            "-hls_time",
+            str(VOD_SEGMENT_S),
+            "-hls_list_size",
+            "0",
+            "-hls_playlist_type",
+            "event",
+            "-hls_flags",
+            "independent_segments",
+            "-hls_segment_filename",
+            str(outdir / "seg_%05d.ts"),
+            str(outdir / "index.m3u8"),
+        ]
+
+    if plan.video == "copy":
+        return [("copy", command([], ["-c:v", "copy"]))]
+    # H.264 for a browser: 8-bit 4:2:0, at most 1080p wide, a keyframe wherever a segment starts.
+    scale = "scale=1920:-2," if (plan.width or 0) > 1920 else ""
+    pace = ["-maxrate", "8M", "-bufsize", "16M", "-force_key_frames", f"expr:gte(t,n_forced*{VOD_SEGMENT_S})"]
+    software = ["-vf", f"{scale}format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", *pace]
+    attempts: list[tuple[str, list[str]]] = []
+    if plan.hw == "nvenc":
+        nvenc = ["-vf", f"{scale}format=yuv420p", "-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23"]
+        nvenc += ["-b:v", "0", *pace, "-forced-idr", "1"]
+        if plan.codec in CUDA_DECODE:
+            attempts.append(("nvenc+cuda", command(["-hwaccel", "cuda"], nvenc)))
+        attempts.append(("nvenc", command([], nvenc)))
+    elif plan.hw == "vaapi":
+        decode = ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", vaapi_device]
+        size = "w=1920:h=-2:" if scale else ""
+        filters = f"format=nv12|vaapi,hwupload,scale_vaapi={size}format=nv12"
+        attempts.append(("vaapi", command(decode, ["-vf", filters, "-c:v", "h264_vaapi", *pace])))
+    elif plan.hw == "qsv":
+        attempts.append(("qsv", command(["-hwaccel", "qsv"], ["-c:v", "h264_qsv", *pace])))
+    return [*attempts, ("libx264", command([], software))]
 
 
 class StreamProxy:
@@ -336,6 +449,7 @@ class StreamProxy:
         self._http: set[HttpSession] = set()
         self._viewers: dict[asyncio.Queue[bytes | None], tuple[SharedUpstream, str]] = {}
         self._cleanup_pending: set[Path] = set()
+        self._probes: dict[object, str] = {}  # media probes in flight -> source id
 
     def ensure_running(self, generation: int | None = None) -> None:
         if self.paused or (generation is not None and generation != self.generation):
@@ -476,10 +590,11 @@ class StreamProxy:
                             await self._stop_hls(key, expected=sess)
                             continue
                     abandoned = buffered and self.dvr.ever_leased and not held
+                    idle = VOD_DONE_IDLE_S if sess.complete else HLS_IDLE_S
                     if (
                         abandoned
-                        or (not held and now - sess.last_access > HLS_IDLE_S)
-                        or sess.proc.returncode is not None
+                        or (not held and now - sess.last_access > idle)
+                        or (sess.proc.returncode is not None and not sess.complete)
                     ):
                         await self._stop_hls(key, expected=sess)
 
@@ -494,7 +609,8 @@ class StreamProxy:
         if source_id is None:
             return 0
         return (
-            sum(s.source_id == source_id for s in self._hls.values())
+            sum(s.source_id == source_id and not s.complete for s in self._hls.values())
+            + sum(s == source_id for s in self._probes.values())
             + sum(s.source_id == source_id for s in self._http)
             + sum(s.source_id == source_id for s in self._shared.values())
             + sum(
@@ -585,6 +701,45 @@ class StreamProxy:
     def _admit_source(self, source_id: str | None, maximum: int | None) -> None:
         if maximum and maximum > 0 and self._source_use(source_id) >= maximum:
             raise Conflict("Source connection limit is occupied.", code="source_busy")
+
+    async def _evict_idle_hls(self, source_id: str | None, capacity: int, now: float) -> bool:
+        """Caller holds _hls_lock. Stop this source's HLS sessions nobody polls any more; True if still full."""
+        peers = [(k, s) for k, s in self._hls.items() if source_id and s.source_id == source_id and not s.complete]
+        full = self._source_use(source_id) >= capacity
+        # A long target duration can mean legitimately slow playlist polling.
+        # Protect it rather than assuming every five-second gap is abandonment.
+        for peer_key, peer in sorted(peers, key=lambda pair: pair[1].last_access):
+            if not full:
+                break
+            grace = HLS_SWITCH_GRACE_S
+            playlist = peer.workdir / "index.m3u8"
+            if playlist.exists():
+                for line in playlist.read_text(errors="ignore").splitlines():
+                    if line.startswith("#EXT-X-TARGETDURATION:"):
+                        with contextlib.suppress(ValueError):
+                            grace = max(grace, float(line.split(":", 1)[1]) + 2)
+                        break
+            reserved = any(peer_key in lease.members for lease in self._pairs.values())
+            if not reserved and not self.dvr.held(peer_key) and now - peer.last_access >= grace:
+                await self._stop_hls(peer_key, expected=peer)
+                full = self._source_use(source_id) >= capacity
+        return full
+
+    @contextlib.asynccontextmanager
+    async def probe_slot(self, source_id: str, max_connections: int | None) -> AsyncIterator[None]:
+        """Hold one of the source's connections for a media probe, admitted as a stream would be."""
+        slot = object()
+        async with self._hls_lock:
+            self.ensure_running()
+            capacity = max_connections or 0
+            if capacity > 0 and self._source_use(source_id) >= capacity:
+                await self._evict_idle_hls(source_id, capacity, self._clock())
+            self._admit_source(source_id, max_connections)
+            self._probes[slot] = source_id
+        try:
+            yield
+        finally:
+            self._probes.pop(slot, None)
 
     # ------------------------------------------------------------------ passthrough
     def _drop_shared(self, key: str) -> None:
@@ -764,9 +919,65 @@ class StreamProxy:
 
     async def _drain_hls_stderr(self, sess: HlsSession) -> None:
         # Never retain/log raw ffmpeg stderr: it may contain upstream credentials.
+        # The one thing kept is the HTTP status of a refused upstream request, three characters.
+        tail = b""
         if sess.proc.stderr is not None:
             while chunk := await sess.proc.stderr.read(4096):
                 sess.stderr_bytes = min(1_000_000, sess.stderr_bytes + len(chunk))
+                if sess.upstream_status is None:
+                    found = UPSTREAM_STATUS.search(tail + chunk)
+                    if found is not None:
+                        sess.upstream_status = found.group(1).decode()
+                    tail = chunk[-32:]
+
+    async def _spawn_hls(
+        self,
+        key: str,
+        sid: str,
+        workdir: Path,
+        attempts: list[tuple[str, list[str]]],
+        *,
+        source_id: str | None,
+        buffered: bool = False,
+        family: str | None = None,
+    ) -> HlsSession:
+        """Caller holds _hls_lock. Start ``attempts[0]``; the rest stay on the session as fallbacks."""
+        (label, args), *fallbacks = attempts
+
+        def owned(proc: asyncio.subprocess.Process) -> HlsSession:
+            sess = HlsSession(
+                sid=sid,
+                workdir=workdir,
+                proc=proc,
+                source_id=source_id,
+                last_access=self._clock(),
+                family=family,
+                label=label,
+                fallbacks=fallbacks,
+            )
+            sess.stderr_task = asyncio.create_task(self._drain_hls_stderr(sess))
+            self._hls[key] = sess
+            return sess
+
+        spawn = asyncio.create_task(
+            asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        )
+        try:
+            proc = await asyncio.shield(spawn)
+        except BaseException:
+            # Cancellation can race subprocess creation. Reconcile the owned
+            # spawn before releasing its slot or removing its output directory.
+            try:
+                created = await spawn
+            except Exception:
+                if buffered:
+                    self.dvr.stopped(key)
+                    shutil.rmtree(workdir)
+            else:
+                # Failure to confirm termination retains the occupied slot.
+                await self._stop_hls(key, expected=owned(created))
+            raise
+        return owned(proc)
 
     async def hls_session(
         self,
@@ -781,6 +992,7 @@ class StreamProxy:
         generation: int | None = None,
         buffered: bool = False,
         pair_lease_id: str | None = None,
+        vod: VodPlan | None = None,
     ) -> HlsSession:
         self.ensure_running(generation)
         generation = self.generation
@@ -796,8 +1008,13 @@ class StreamProxy:
                         raise Conflict("Provider capacity changed before startup.", code="multiview_capacity")
                 elif any(key in lease.members for lease in self._pairs.values()):
                     raise Conflict("Channel is reserved by a multiview session.", code="source_busy")
+                if vod is not None:
+                    # A seek or an audio switch restarts this viewer's session: free its connection now.
+                    for other_key, other in list(self._hls.items()):
+                        if other_key != key and other.family == vod.family:
+                            await self._stop_hls(other_key, expected=other)
                 sess = self._hls.get(key)
-                if sess is not None and sess.proc.returncode is None:
+                if sess is not None and (sess.proc.returncode is None or sess.complete):
                     if buffered and self.dvr.key != key:
                         raise Conflict(
                             "Live session already started without a buffer; restart it explicitly.",
@@ -809,28 +1026,11 @@ class StreamProxy:
                     await self._stop_hls(key, expected=sess)
                 peers = [(k, s) for k, s in self._hls.items() if source_id and s.source_id == source_id]
                 for peer_key, peer in peers:
-                    if peer.proc.returncode is not None:
+                    if peer.proc.returncode is not None and not peer.complete:
                         await self._stop_hls(peer_key, expected=peer)
-                peers = [(k, s) for k, s in self._hls.items() if source_id and s.source_id == source_id]
                 full = not pair_lease_id and capacity > 0 and self._source_use(source_id) >= capacity
                 if full:
-                    # A long target duration can mean legitimately slow playlist polling.
-                    # Protect it rather than assuming every five-second gap is abandonment.
-                    for peer_key, peer in sorted(peers, key=lambda pair: pair[1].last_access):
-                        grace = HLS_SWITCH_GRACE_S
-                        playlist = peer.workdir / "index.m3u8"
-                        if playlist.exists():
-                            for line in playlist.read_text(errors="ignore").splitlines():
-                                if line.startswith("#EXT-X-TARGETDURATION:"):
-                                    with contextlib.suppress(ValueError):
-                                        grace = max(grace, float(line.split(":", 1)[1]) + 2)
-                                    break
-                        reserved = any(peer_key in lease.members for lease in self._pairs.values())
-                        if not reserved and not self.dvr.held(peer_key) and now - peer.last_access >= grace:
-                            await self._stop_hls(peer_key, expected=peer)
-                            full = self._source_use(source_id) >= capacity
-                            if not full:
-                                break
+                    full = await self._evict_idle_hls(source_id, capacity, now)
                 if not full:
                     sid = self.session_id(key)
                     if buffered:
@@ -843,50 +1043,31 @@ class StreamProxy:
                         workdir = self.transcode_dir / sid
                         shutil.rmtree(workdir, ignore_errors=True)
                         workdir.mkdir(parents=True, exist_ok=True)
-                    args = ffmpeg_args(
-                        self.ffmpeg,
-                        url,
-                        headers,
-                        workdir,
-                        live=live,
-                        transcode=transcode,
-                        vaapi_device=self.vaapi_device,
-                        buffered=buffered,
-                    )
-                    spawn = asyncio.create_task(
-                        asyncio.create_subprocess_exec(
-                            *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+                    if vod is not None:
+                        attempts = vod_ffmpeg_attempts(
+                            self.ffmpeg, url, headers, workdir, vod, vaapi_device=self.vaapi_device
                         )
+                    else:
+                        legacy = ffmpeg_args(
+                            self.ffmpeg,
+                            url,
+                            headers,
+                            workdir,
+                            live=live,
+                            transcode=transcode,
+                            vaapi_device=self.vaapi_device,
+                            buffered=buffered,
+                        )
+                        attempts = [("", legacy)]
+                    sess = await self._spawn_hls(
+                        key,
+                        sid,
+                        workdir,
+                        attempts,
+                        source_id=source_id,
+                        buffered=buffered,
+                        family=vod.family if vod is not None else None,
                     )
-                    try:
-                        proc = await asyncio.shield(spawn)
-                    except BaseException:
-                        # Cancellation can race subprocess creation. Reconcile the owned
-                        # spawn before releasing its slot or removing its output directory.
-                        try:
-                            created = await spawn
-                        except Exception:
-                            if buffered:
-                                self.dvr.stopped(key)
-                                shutil.rmtree(workdir)
-                        else:
-                            abandoned = HlsSession(
-                                sid=sid,
-                                workdir=workdir,
-                                proc=created,
-                                source_id=source_id,
-                                last_access=self._clock(),
-                            )
-                            abandoned.stderr_task = asyncio.create_task(self._drain_hls_stderr(abandoned))
-                            self._hls[key] = abandoned
-                            # Failure to confirm termination retains the occupied slot.
-                            await self._stop_hls(key, expected=abandoned)
-                        raise
-                    sess = HlsSession(
-                        sid=sid, workdir=workdir, proc=proc, source_id=source_id, last_access=self._clock()
-                    )
-                    sess.stderr_task = asyncio.create_task(self._drain_hls_stderr(sess))
-                    self._hls[key] = sess
                     break
                 if now >= admission_deadline:
                     raise HlsSourceBusy("Source connection limit is occupied by another active channel")
@@ -897,15 +1078,37 @@ class StreamProxy:
         playlist = sess.workdir / "index.m3u8"
         while self._clock() < deadline:
             self.ensure_running(generation)
-            if self._hls.get(key) is not sess:
-                raise ConnectionError("HLS session stopped")
+            current = self._hls.get(key)
+            if current is not sess:
+                # Another request for this session may already have moved it to its next encoder.
+                if current is None or sess.family is None or current.sid != sess.sid:
+                    raise ConnectionError("HLS session stopped")
+                sess = current
             sess.last_access = self._clock()  # An outstanding startup request is active.
             if playlist.exists() and "#EXTINF" in playlist.read_text(errors="ignore"):
                 return sess
             if sess.proc.returncode is not None:
                 code = sess.proc.returncode
+                if sess.fallbacks and sess.stderr_task is not None:
+                    # Let the drain read ffmpeg's last words: an upstream refusal is not an encoder failure.
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(asyncio.shield(sess.stderr_task), 0.5)
                 async with self._hls_lock:
+                    # Exit 0 with nothing written is an empty input, not an encoder that failed to start.
+                    retry = code != 0 and bool(sess.fallbacks) and sess.upstream_status is None
+                    retry = retry and self._hls.get(key) is sess
                     await self._stop_hls(key, expected=sess)
+                    if retry:
+                        self.ensure_running(generation)
+                        log.warning(
+                            "transcode fallback", extra={"from": sess.label, "to": sess.fallbacks[0][0], "code": code}
+                        )
+                        sess.workdir.mkdir(parents=True, exist_ok=True)
+                        sess = await self._spawn_hls(
+                            key, sess.sid, sess.workdir, sess.fallbacks, source_id=source_id, family=sess.family
+                        )
+                        deadline = self._clock() + HLS_READY_TIMEOUT
+                        continue
                 raise ConnectionError(f"ffmpeg exited (code {code}; stderr bytes {sess.stderr_bytes})")
             await self._sleep(0.25)
         async with self._hls_lock:

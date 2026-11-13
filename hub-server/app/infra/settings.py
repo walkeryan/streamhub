@@ -41,6 +41,7 @@ class AppSettings(BaseSettings):
     log_format: str = "json"  # json | text
     enable_scheduler: bool = True
     ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
     iptv_org_channels_url: str = "https://iptv-org.github.io/api/channels.json"
     plex_product: str = "StreamHub"
     stream_token_ttl_s: int = 6 * 3600

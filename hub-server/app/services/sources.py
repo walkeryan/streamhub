@@ -11,7 +11,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 
 from app.adapters.language.country import group_country
@@ -516,6 +516,13 @@ async def upsert_titles(db: Database, rows: list[dict[str, Any]]) -> None:
             # would change the title's hub id and orphan its favorites and progress.
             for c in IDENTIFIER_COLUMNS:
                 set_[c] = func.coalesce(getattr(ex, c), getattr(Title, c))
+            # ``extra`` is the source's word and is replaced whole, except the media probe:
+            # that came from the file itself and costs an upstream connection to learn again.
+            kept = func.json_extract(Title.extra, "$.probe")
+            set_["extra"] = case(
+                (kept.is_(None), ex.extra),
+                else_=func.json_set(ex.extra, "$.probe", func.json(kept)),
+            )
             if chunk[0]["sync_gen"] == LAZY_GEN:
                 # lazy refresh must not demote a synced row to LAZY or drop sync-only data
                 set_.pop("sync_gen", None)

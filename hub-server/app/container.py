@@ -37,6 +37,7 @@ from app.services.content_policy import ContentPolicy
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
+from app.services.media_probe import MediaProbe
 from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
 from app.services.owner_reauth import OwnerReauthService
@@ -185,6 +186,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         on_stop=active.dec,
         dvr=DvrManager(settings.dvr_dir, enabled=settings.dvr_enabled, reserve_root=settings.dvr_reserve_dir),
     )
+    playback.probe = MediaProbe(settings.ffprobe_path)
+    playback.probe_slot = proxy.probe_slot
     google_auth = GoogleAuthService(settings, auth)
     return Container(
         settings=settings,

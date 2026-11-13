@@ -13,7 +13,7 @@ export function usePlayAction() {
   const pending = useRef<AbortController | null>(null)
   useEffect(() => () => pending.current?.abort(), [])
   const toast = useUi((s) => s.toast)
-  return async (t: Pick<Tile, 'id' | 'kind'>, source?: SourceBadge | null, opts?: { catchup?: string; variantId?: string; allowUnverifiedAudio?: boolean }) => {
+  return async (t: Pick<Tile, 'id' | 'kind'>, source?: SourceBadge | null, opts?: { catchup?: string; variantId?: string; allowUnverifiedAudio?: boolean; audioTrack?: number | null }) => {
     if (source && !source.playable_in_app) {
       try {
         const d = await resolve({ id: t.id, sourceId: source.source_id })
@@ -39,6 +39,8 @@ export function usePlayAction() {
     const q = new URLSearchParams()
     if (variantId) q.set('variant', variantId)
     if (opts?.allowUnverifiedAudio && variantId) q.set('audio_choice', grantAudioConsent(t.id, variantId, { sourceId: source?.source_id, catchupProgrammeId: opts.catchup }))
+    // An audio track belongs to one variant's file; without the variant the index means nothing.
+    if (opts?.audioTrack != null && variantId) q.set('audio', String(opts.audioTrack))
     if (source) q.set('source', source.source_id)
     if (opts?.catchup) q.set('catchup', opts.catchup)
     const qs = q.toString()

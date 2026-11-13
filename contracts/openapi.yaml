@@ -260,6 +260,17 @@ components:
       required: [confirm]
       properties:
         confirm: {type: boolean, const: true}
+    AudioTrack:
+      type: object
+      description: One audio stream of a VOD file, read from the file itself by a media probe.
+      required: [index]
+      properties:
+        index: {type: integer, description: Position among the file's audio streams; the value to send as audio_track.}
+        language: {type: string, default: und, description: ISO 639-2 code, or und when the file does not say.}
+        codec: {type: string, nullable: true, description: "ffmpeg codec name, e.g. ac3, eac3, aac, dts"}
+        channels: {type: integer, nullable: true}
+        title: {type: string, nullable: true}
+        default: {type: boolean, default: false}
     PlaybackOption:
       type: object
       required: [variant_id, source_id, source_name, provider_label, audio_languages, audio_verified, audio_evidence, preferred_audio_available]
@@ -275,7 +286,9 @@ components:
         audio_verified: {type: boolean}
         audio_evidence: {type: string}
         language_hint: {type: string, nullable: true}
-        preferred_audio_available: {type: boolean}
+        preferred_audio_available: {type: boolean, description: True when the default track, or any selectable track of a probed file, is in a preferred language.}
+        audio_tracks: {type: array, items: {$ref: '#/components/schemas/AudioTrack'}, description: Tracks of a probed file; empty when the source reported its own audio or the file has not been probed.}
+        preferred_audio_track: {type: integer, nullable: true, description: Index of the first track in a preferred language.}
     PlaybackOptions:
       type: object
       required: [id, preferred_languages, options, selection_required]
@@ -297,6 +310,8 @@ components:
         companion_id: {type: string, nullable: true, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
+        audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255, description: "Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself."}
+        start_position_ms: {type: integer, nullable: true, minimum: 0, description: "Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced)."}
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
@@ -381,6 +396,9 @@ components:
         audio_verified: {type: boolean}
         audio_evidence: {type: string, enum: [unknown, audio_track_metadata, media_probe]}
         default_audio_language: {type: string, nullable: true}
+        audio_tracks: {type: array, items: {$ref: '#/components/schemas/AudioTrack'}, description: Tracks of the probed file (web VOD only).}
+        audio_track: {type: integer, nullable: true, description: The one track the server encoded into this stream; null when the client receives the file's own tracks.}
+        start_position_ms: {type: integer, nullable: true, description: "Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms."}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
@@ -771,6 +789,7 @@ paths:
       parameters:
         - {name: id, in: query, required: true, schema: {type: string}}
         - {name: source_id, in: query, schema: {type: string}}
+      description: Source variants of a title and their audio. A VOD file whose source reports no audio tracks is probed once (up to ten seconds, cached for thirty days) so its tracks can be listed.
       responses: {'200': {description: Available source variants and audio evidence, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackOptions'}}}}}
   /titles/{id}:
     get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }

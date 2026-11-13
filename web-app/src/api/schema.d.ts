@@ -1642,6 +1642,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Source variants of a title and their audio. A VOD file whose source reports no audio tracks is probed once (up to ten seconds, cached for thirty days) so its tracks can be listed. */
         get: {
             parameters: {
                 query: {
@@ -3897,6 +3898,22 @@ export interface components {
             /** @constant */
             confirm: true;
         };
+        /** @description One audio stream of a VOD file, read from the file itself by a media probe. */
+        AudioTrack: {
+            /** @description Position among the file's audio streams; the value to send as audio_track. */
+            index: number;
+            /**
+             * @description ISO 639-2 code
+             * @default und
+             */
+            language: string;
+            /** @description ffmpeg codec name, e.g. ac3, eac3, aac, dts */
+            codec?: string | null;
+            channels?: number | null;
+            title?: string | null;
+            /** @default false */
+            default: boolean;
+        };
         PlaybackOption: {
             variant_id: string;
             source_id: string;
@@ -3910,7 +3927,12 @@ export interface components {
             audio_verified: boolean;
             audio_evidence: string;
             language_hint?: string | null;
+            /** @description True when the default track */
             preferred_audio_available: boolean;
+            /** @description Tracks of a probed file; empty when the source reported its own audio or the file has not been probed. */
+            audio_tracks?: components["schemas"]["AudioTrack"][];
+            /** @description Index of the first track in a preferred language. */
+            preferred_audio_track?: number | null;
         };
         PlaybackOptions: {
             id: string;
@@ -3947,6 +3969,10 @@ export interface components {
              * @default false
              */
             prefer_hls: boolean;
+            /** @description Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself. */
+            audio_track?: number | null;
+            /** @description Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced). */
+            start_position_ms?: number | null;
             catchup_programme_id?: string | null;
             /**
              * Format: date-time
@@ -4028,6 +4054,12 @@ export interface components {
             /** @enum {string} */
             audio_evidence?: "unknown" | "audio_track_metadata" | "media_probe";
             default_audio_language?: string | null;
+            /** @description Tracks of the probed file (web VOD only). */
+            audio_tracks?: components["schemas"]["AudioTrack"][];
+            /** @description The one track the server encoded into this stream; null when the client receives the file's own tracks. */
+            audio_track?: number | null;
+            /** @description Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms. */
+            start_position_ms?: number | null;
             id: string;
             /** @enum {string} */
             mode: "direct" | "proxy" | "hls" | "handoff";

@@ -317,6 +317,8 @@ class PlaybackRequest(_M):
     recovery_generation: str | None = Field(default=None, max_length=64)
     catchup_programme_id: str | None = None
     rewind_at: AwareDatetime | None = None
+    audio_track: int | None = Field(default=None, ge=0, le=255)
+    start_position_ms: int | None = Field(default=None, ge=0)
 
 
 class MultiviewRequest(_M):
@@ -387,7 +389,19 @@ class RewindCapability(_M):
     reason: str
 
 
+class AudioTrack(_M):
+    index: int
+    language: str = "und"
+    codec: str | None = None
+    channels: int | None = None
+    title: str | None = None
+    default: bool = False
+
+
 class PlaybackDescriptor(_M):
+    audio_tracks: list[AudioTrack] = Field(default_factory=list)
+    audio_track: int | None = None
+    start_position_ms: int | None = None
     preferred_audio_languages: list[str] = Field(default_factory=list)
     audio_language_required: bool = True
     audio_languages: list[str] = Field(default_factory=list)

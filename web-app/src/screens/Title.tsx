@@ -14,6 +14,7 @@ import { usePlayAction } from '../components/playAction'
 import { useAdaptiveAccent } from '../lib/theme'
 import { useSession } from '../store/session'
 import { audioDescription } from '../player/channelAudio'
+import { initialTrack, trackLabel } from '../player/audioTracks'
 import { LANG_NAMES } from '../lib/util'
 import { isOpenRequest, requestStateLabel, tmdbRef } from '../lib/requests'
 import { useUi } from '../store/ui'
@@ -31,6 +32,8 @@ function TitleDetails({ id }: { id: string }) {
   const [params] = useSearchParams()
   const audio = usePlaybackOptions(t?.kind !== 'channel' && t?.sources.some((s) => s.playable_in_app) ? id : undefined)
   const [confirmation, setConfirmation] = useState<PlaybackOption | null>(null)
+  // null until the viewer picks one: the server then plays the preferred language, else the file's default.
+  const [pickedTrack, setPickedTrack] = useState<number | null>(null)
   const qc = useQueryClient()
   const watchlist = useWatchlist()
   const toggleFav = useToggleFavorite()
@@ -73,14 +76,25 @@ function TitleDetails({ id }: { id: string }) {
   const episodes = season ? seasonQ.data?.episodes ?? [] : t.episodes ?? []
   const seasons = t.seasons ?? []
 
+  // The file whose audio tracks are listed: the variant that plays by default, or the only one there is.
+  const options = audio.data?.options ?? []
+  const trackOption = t.kind === 'channel' ? undefined : options.find((o) => o.variant_id === audio.data?.automatic_variant_id) ?? (options.length === 1 ? options[0] : undefined)
+  const tracks = trackOption?.audio_tracks ?? []
+  const shownTrack = pickedTrack ?? initialTrack(tracks, trackOption?.preferred_audio_track)
   const primary = () => {
-    if (canPlay) { if (t.kind === 'channel') return void play(t); if (audio.data?.automatic_variant_id) return void play(t, null, { variantId: audio.data.automatic_variant_id }); setPicker('play'); return }
+    if (canPlay) {
+      if (t.kind === 'channel') return void play(t)
+      // A picked track is an explicit choice of that file's audio, so it needs no second confirmation.
+      if (trackOption && pickedTrack !== null) return void play(t, null, { variantId: trackOption.variant_id, audioTrack: pickedTrack })
+      if (audio.data?.automatic_variant_id) return void play(t, null, { variantId: audio.data.automatic_variant_id })
+      setPicker('play'); return
+    }
     if (handoff.length === 1) return void play(t, handoff[0])
     setPicker('play')
   }
   const chooseVariant = (option: PlaybackOption) => {
     if (audio.data?.automatic_variant_id !== option.variant_id) { setConfirmation(option); return }
-    setPicker(null); void play(t, null, { variantId: option.variant_id })
+    setPicker(null); void play(t, null, { variantId: option.variant_id, audioTrack: option.variant_id === trackOption?.variant_id ? pickedTrack : null })
   }
   const choose = (s: SourceBadge) => { setPicker(null); void play(t, s) }
   const sendRequest = (seasons?: number[]) => {
@@ -125,7 +139,7 @@ function TitleDetails({ id }: { id: string }) {
               <p role="status" data-testid="title-request-state"><span className="badge">{requestStateLabel(t.request_state)}</span></p>
             )}
             <FocusGroup focusKey="title:actions" className="flex gap-3 flex-wrap items-center" preferred="title:play">
-              {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id ? 'Choose audio / source' : playLabel}</Button>}
+              {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id && pickedTrack === null ? 'Choose audio / source' : playLabel}</Button>}
               {t.kind !== 'channel' && inApp.length > 0 && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
               {canRequest && <Button focusKey="title:request" primary={!handoff.length} icon="plus" onEnter={startRequest} testId="title-request">{t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'}</Button>}
               <Button focusKey="title:watchlist" icon={onWatchlist ? 'check' : 'bookmark'} pressed={onWatchlist} onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })}>
@@ -137,6 +151,16 @@ function TitleDetails({ id }: { id: string }) {
               <Button focusKey="title:trailer" icon="external" onEnter={() => window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(`${t.title} ${t.year ?? ''} trailer`)}`, '_blank', 'noopener')}>Trailer</Button>
               {canPlay && <Button focusKey="title:watched" icon="eye" onEnter={markWatched}>Mark watched</Button>}
             </FocusGroup>
+            {tracks.length > 0 && (
+              <section className="flex flex-col gap-2" aria-label="Audio" data-testid="title-audio-tracks">
+                <h2 className="label">Audio</h2>
+                <FocusGroup focusKey="title:audio" className="flex gap-2 flex-wrap">
+                  {tracks.map((track) => (
+                    <Chip key={track.index} focusKey={`title:audio:${track.index}`} pressed={track.index === shownTrack} onEnter={() => setPickedTrack(track.index)}>{trackLabel(track)}</Chip>
+                  ))}
+                </FocusGroup>
+              </section>
+            )}
             {t.cast && t.cast.length > 0 && <p className="label">Cast: {t.cast.map((c) => c.name).join(', ')}</p>}
           </div>
         </div>

@@ -9,6 +9,8 @@ import { setFocus } from '../nav/spatial'
 import { ChannelAudioPrompt, useChannelAudio } from '../player/channelAudio'
 import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
+import { trackLabel } from '../player/audioTracks'
+import { seekPlan, seekableRanges } from '../player/restartSeek'
 import { LocalBufferControls } from '../player/LocalBufferControls'
 import { RewindControls } from '../player/RewindControls'
 import { useSession } from '../store/session'
@@ -27,6 +29,8 @@ export function Player() {
   const variantId = sp.get('variant') ?? undefined
   const profileId = useSession((s) => s.profile?.id)
   const audioChoice = sp.get('audio_choice')
+  const audioParam = sp.get('audio')
+  const audioTrack = audioParam !== null && /^\d{1,3}$/.test(audioParam) ? Number(audioParam) : null
   const catchup = sp.get('catchup')
   const rewindAt = sp.get('rewind')
   const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId, { sourceId, catchupProgrammeId: catchup, rewindAt }), [profileId, audioChoice, id, variantId, sourceId, catchup, rewindAt])
@@ -46,11 +50,16 @@ export function Player() {
   const activeId = useRef(id)
   useLayoutEffect(() => { activeId.current = id }, [id])
 
-  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt])
+  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, audioTrack }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, audioTrack])
   const audio = useChannelAudio(req, manualChoice === selectionKey)
   const pb = usePlayback(videoRef, audio.request, { buffer: true })
   const { desc, state } = pb
   const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
+  // A restart-at-offset stream: the media element starts at `offset` seconds into the title and only
+  // knows what the server has produced so far; the title's length comes from the descriptor.
+  const restartable = desc?.id === id && desc.start_position_ms != null
+  const offset = restartable ? (desc.start_position_ms ?? 0) / 1000 : 0
+  const fullDuration = restartable && desc.duration_ms ? desc.duration_ms / 1000 : 0
 
   const toast = useUi((s) => s.toast)
   const stored = useUi((s) => s.channelList)
@@ -89,6 +98,9 @@ export function Player() {
   const [osd, setOsd] = useState(true)
   const [paused, setPaused] = useState(true)
   const [time, setTime] = useState({ cur: 0, dur: 0, seekable: false })
+  // Where a restarting stream is headed, shown until its descriptor says where it actually began.
+  const [pendingSeek, setPendingSeek] = useState<number | null>(null)
+  useEffect(() => { setPendingSeek(null); setTime((t) => ({ ...t, cur: videoRef.current?.currentTime ?? 0 })) }, [desc])
   const [aspect, setAspect] = useState<Aspect>('contain')
   const [digits, setDigits] = useState('')
   const digitsRef = useRef('')
@@ -129,9 +141,18 @@ export function Player() {
 
   const exit = useCallback(() => navigate(-1), [navigate])
   const togglePlay = () => { const v = videoRef.current; if (!v) return; if (v.paused) pb.resume(); else pb.pause() }
+  const seekTo = useCallback((title: number) => {
+    const v = videoRef.current
+    if (!v || !restartable) return
+    const plan = seekPlan(title, offset, seekableRanges(v), fullDuration)
+    if ('within' in plan) v.currentTime = plan.within
+    else { setPendingSeek(plan.restart / 1000); pb.seekTo(plan.restart) }
+  }, [restartable, offset, fullDuration, pb])
   const seekBy = useCallback((s: number) => {
     const v = videoRef.current
-    if (!v || !v.seekable.length) return
+    if (!v) return
+    if (restartable) { seekTo(offset + v.currentTime + s); return }
+    if (!v.seekable.length) return
     const wanted = v.currentTime + s
     let closest = v.currentTime, distance = Infinity
     for (let i = 0; i < v.seekable.length; i++) {
@@ -139,7 +160,7 @@ export function Player() {
       if (Math.abs(candidate - wanted) < distance) { closest = candidate; distance = Math.abs(candidate - wanted) }
     }
     v.currentTime = closest
-  }, [])
+  }, [restartable, offset, seekTo])
   const pip = useCallback(async () => {
     const v = videoRef.current
     if (!v) return
@@ -285,7 +306,12 @@ export function Player() {
 
   const tr = pb.tracks()
   const title = desc?.title ?? channel?.name ?? 'Loading…'
-  const pct = live ? (channel?.now ? progressOf(channel.now.start, channel.now.stop, now) : 0) : time.dur ? (time.cur / time.dur) * 100 : 0
+  const position = pendingSeek ?? offset + time.cur
+  const duration = fullDuration || time.dur
+  const canSeek = restartable ? fullDuration > 0 || time.seekable : time.seekable
+  const pct = live ? (channel?.now ? progressOf(channel.now.start, channel.now.stop, now) : 0) : duration ? (position / duration) * 100 : 0
+  // The server encoded one track of the file: the others are a new stream away, not a player switch.
+  const fileTracks = desc?.id === id && desc.audio_track != null ? desc.audio_tracks ?? [] : []
 
   if (!audio.blocked && state === 'handoff' && desc?.handoff) {
     const h = desc.handoff
@@ -346,19 +372,28 @@ export function Player() {
         <div className="bottom">
           {!live && (
             <div className="flex items-center gap-3">
-              <span className="label" style={{ color: '#fff' }}>{fmtDuration(time.cur)}</span>
-              <Focusable focusKey="pb:scrub" role="slider" className="flex-1" disabled={!time.seekable}
-                label={time.seekable ? `Seek ${fmtDuration(time.cur)} of ${fmtDuration(time.dur)}. Left and right move ten seconds.` : 'This stream has not supplied a seekable range.'}
+              <span className="label" style={{ color: '#fff' }}>{fmtDuration(position)}</span>
+              <Focusable focusKey="pb:scrub" role="slider" className="flex-1" disabled={!canSeek}
+                label={canSeek ? `Seek ${fmtDuration(position)} of ${fmtDuration(duration)}. Left and right move ten seconds.` : 'This stream has not supplied a seekable range.'}
                 onArrow={(direction) => { if (direction === 'left' || direction === 'right') { seekBy(direction === 'left' ? -10 : 10); return false } return true }}
-                onEnter={togglePlay}><ProgressBar pct={pct} /></Focusable>
-              <span className="label" style={{ color: '#fff' }}>{fmtDuration(time.dur)}</span>
+                onEnter={togglePlay}>
+                {/* A pointer can jump anywhere in the title; the remote moves in steps. */}
+                <div data-testid="scrub-track" style={{ paddingBlock: '0.5rem', cursor: canSeek ? 'pointer' : 'default' }} onClick={(e) => {
+                  if (!canSeek || !duration) return
+                  e.stopPropagation()
+                  const box = e.currentTarget.getBoundingClientRect()
+                  const wanted = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)) * duration
+                  if (restartable) seekTo(wanted); else seekBy(wanted - (videoRef.current?.currentTime ?? 0))
+                }}><ProgressBar pct={pct} /></div>
+              </Focusable>
+              <span className="label" style={{ color: '#fff' }}>{fmtDuration(duration)}</span>
             </div>
           )}
 
           <FocusGroup focusKey="pb" className="flex gap-2 flex-wrap items-center" data-testid="player-bar">
             <Button focusKey="pb:play" primary iconOnly icon={paused ? 'play' : 'pause'} label={paused ? 'Play' : 'Pause'} onEnter={togglePlay} />
-            {!live && <Button focusKey="pb:back10" disabled={!time.seekable} ghost onEnter={() => seekBy(-10)}>−10 s</Button>}
-            {!live && <Button focusKey="pb:fwd10" disabled={!time.seekable} ghost onEnter={() => seekBy(10)}>+10 s</Button>}
+            {!live && <Button focusKey="pb:back10" disabled={!canSeek} ghost onEnter={() => seekBy(-10)}>−10 s</Button>}
+            {!live && <Button focusKey="pb:fwd10" disabled={!canSeek} ghost onEnter={() => seekBy(10)}>+10 s</Button>}
             {isChannel && <Button focusKey="pb:ch-" ghost icon="down" label="Channel down" onEnter={() => zap(-1)} />}
             {isChannel && <Button focusKey="pb:ch+" ghost icon="up" label="Channel up" onEnter={() => zap(1)} />}
             {isChannel && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn">Channels</Button>}
@@ -408,12 +443,14 @@ export function Player() {
             <MenuSection title="Audio">
               {pb.audioBlocked && <p role="alert" data-testid="runtime-audio-blocked">Playback paused: the selected audio language is unknown or does not match your preferences. Choose an audio track, or explicitly continue with the current audio.</p>}
               {pb.audioBlocked && <Button focusKey="pm:consent" onEnter={pb.consentToCurrentAudio}>Continue with current audio</Button>}
-              {tr.audio.length === 0 ? <span className="muted label" style={{ flexBasis: '100%' }}>Audio track language is not exposed by this player.</span> : tr.audio.map((t, i) => (
+              {fileTracks.length > 0 ? fileTracks.map((t, i) => (
+                <Chip key={t.index} focusKey={i === 0 ? 'pm:first' : `pm:f${t.index}`} pressed={t.index === desc?.audio_track} onEnter={() => { if (t.index !== desc?.audio_track) { setPendingSeek(position); pb.selectAudioTrack(t.index) } closeOverlay() }}>{trackLabel(t)}</Chip>
+              )) : tr.audio.length === 0 ? <span className="muted label" style={{ flexBasis: '100%' }}>Audio track language is not exposed by this player.</span> : tr.audio.map((t, i) => (
                 <Chip key={t.id} focusKey={i === 0 ? 'pm:first' : `pm:a${t.id}`} pressed={t.active} onEnter={() => pb.setAudio(t.id)}>{t.label}{!t.language || t.language === 'und' ? ' · language unknown' : ` · ${t.language}`}</Chip>
               ))}
             </MenuSection>
             <MenuSection title="Subtitles">
-              <Chip focusKey={tr.audio.length ? 'pm:s-off' : 'pm:first'} pressed={!tr.subs.some((s) => s.active)} onEnter={() => pb.setSubtitle(-1)}>Off</Chip>
+              <Chip focusKey={tr.audio.length || fileTracks.length ? 'pm:s-off' : 'pm:first'} pressed={!tr.subs.some((s) => s.active)} onEnter={() => pb.setSubtitle(-1)}>Off</Chip>
               {tr.subs.map((t) => <Chip key={t.id} focusKey={`pm:s${t.id}`} pressed={t.active} onEnter={() => pb.setSubtitle(t.id)}>{t.label}</Chip>)}
               {tr.subs.length === 0 && <span className="muted label" style={{ flexBasis: '100%' }}>No subtitle tracks in this stream.</span>}
             </MenuSection>

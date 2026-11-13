@@ -38,6 +38,7 @@ export ADMIN_PASSWORD=change-me     # optional; otherwise generated and logged O
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | `text` for dev |
 | `ENABLE_SCHEDULER` | `true` | catalog refresh (5 min tick) + EPG refresh (30 min tick) |
 | `FFMPEG_PATH`, `VAAPI_DEVICE` | `ffmpeg`, `/dev/dri/renderD128` | remux / transcode |
+| `FFPROBE_PATH` | `ffprobe` | reads a VOD file's codecs and audio tracks before web playback; without it files are served unprobed |
 | `IMAGE_CACHE_MAX_MB` | `512` | cap for proxied artwork in `CONFIG_DIR/cache/images` (oldest evicted first; `0` disables) |
 
 Migrations run automatically at startup (`alembic upgrade head`). Manual: `.venv/bin/alembic upgrade head`

@@ -46,7 +46,12 @@ export const handlers = [
       return HttpResponse.json({ id, preferred_languages: ['eng'], options: [option], automatic_variant_id: variant, selection_required: false })
     }
     const tile = tileById(id)
-    const options = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }))
+    // Films carry a probed two-track file; series keep source-reported audio and list no tracks.
+    const audio_tracks: components['schemas']['AudioTrack'][] = tile?.kind === 'movie' ? [
+      { index: 0, language: 'eng', codec: 'ac3', channels: 6, title: null, default: true },
+      { index: 1, language: 'fra', codec: 'aac', channels: 2, title: null, default: false },
+    ] : []
+    const options: components['schemas']['PlaybackOption'][] = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: audio_tracks.length ? ['eng', 'fra'] : ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: audio_tracks.length ? 'media_probe' : 'audio_track_metadata', preferred_audio_available: true, audio_tracks, preferred_audio_track: audio_tracks.length ? 0 : null }))
     return HttpResponse.json({ id, preferred_languages: ['eng'], options, automatic_variant_id: options[0]?.variant_id ?? null, selection_required: false })
   }),
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),

@@ -18,7 +18,7 @@ from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.api.streaming import OwnedStreamingResponse
 from app.domain.ports import ImageAuthProvider
-from app.proxy.stream_proxy import HlsSourceBusy
+from app.proxy.stream_proxy import HlsSourceBusy, VodPlan
 from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
@@ -51,6 +51,8 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         catchup_programme_id=body.catchup_programme_id,
         rewind_at=body.rewind_at,
         https_site=is_https.get(),
+        audio_track=body.audio_track,
+        start_position_ms=body.start_position_ms,
     )
     c.proxy.ensure_running(generation)
     result["buffer_available"] = False
@@ -134,6 +136,7 @@ async def multiview_release(body: S.MultiviewRelease, c: C, p: P) -> Response:
 
 @router.get("/playback/options", tags=["playback"])
 async def playback_options(id: str, c: C, p: P, source_id: str | None = None) -> dict[str, Any]:
+    """Source variants and their audio. A VOD file whose source lists no audio tracks is probed here, once."""
     return await c.playback.options(p.profile_id, id, source_id)
 
 
@@ -417,6 +420,29 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
     )
 
 
+def _hls_session_key(c: C, g: StreamGrant) -> tuple[str, str, VodPlan | None]:
+    """Producer key, transcode mode and (for web VOD) plan of the HLS session a grant plays."""
+    hw = str(c.app_settings.get("transcode_hw") or "none")
+    if g.vod_video:
+        # One session per viewer, file, audio track and start offset; the codec alone decides
+        # whether the video is transcoded, so the per-source ``transcode`` flag is not consulted.
+        family = f"{g.source_id}:{g.url}:{g.profile_id}:{g.session_id or ''}"
+        plan = VodPlan(
+            video=g.vod_video,
+            hw=hw if g.vod_video == "transcode" else "none",
+            codec=g.vod_codec,
+            width=g.vod_width,
+            audio_track=g.audio_track,
+            start_s=g.start_s,
+            family=family,
+        )
+        return f"{family}:vod:{plan.video}:{plan.hw}:{plan.audio_track}:{plan.start_s}", "none", plan
+    transcode = hw if g.transcode else "none"
+    if g.transcode and transcode == "none":
+        transcode = "software"
+    return f"{g.source_id}:{g.url}:{transcode}", transcode, None
+
+
 async def _start_hls(c: C, g: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return await c.proxy.hls_session(*args, **kwargs)
@@ -431,10 +457,7 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
     g = await _grant(c, token)
     if at is not None and g.content_ref:
         await c.content_policy.require(g.profile_id, g.content_ref, at=at)
-    transcode = str(c.app_settings.get("transcode_hw") or "none") if g.transcode else "none"
-    if g.transcode and transcode == "none":
-        transcode = "software"
-    key = f"{g.source_id}:{g.url}:{transcode}"
+    key, transcode, vod = _hls_session_key(c, g)
     if at is not None or lease_id is not None:
         if lease_id is None or c.proxy.dvr.key != key:
             raise Gone("Buffered session expired.", code="buffer_expired")
@@ -453,6 +476,7 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
             max_connections=c.sources.max_connections(source),
             generation=g.recovery_generation,
             pair_lease_id=g.pair_lease_id,
+            vod=vod,
         )
     except HlsSourceBusy as exc:
         raise Conflict("Another channel is using this source. Stop it and retry.", code="source_busy") from exc
@@ -475,6 +499,10 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
         text = (sess.workdir / "index.m3u8").read_text(errors="ignore")
     base = f"/api/v1/stream/{token}/hls/{sess.sid}/"
     lines = [base + ln if ln and not ln.startswith("#") else ln for ln in text.splitlines()]
+    if vod is not None and lines and lines[0].startswith("#EXTM3U"):
+        # The playlist grows while ffmpeg runs, which players treat as live and join at its end.
+        # It is a film from this session's start offset: begin at its first segment.
+        lines.insert(1, "#EXT-X-START:TIME-OFFSET=0")
     return Response(
         "\n".join(lines) + "\n", media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"}
     )
@@ -483,10 +511,7 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
 @router.get("/stream/{token}/hls/{sid}/{name}", tags=["playback"], include_in_schema=False)
 async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
     g = await _grant(c, token)
-    transcode = str(c.app_settings.get("transcode_hw") or "none") if g.transcode else "none"
-    if g.transcode and transcode == "none":
-        transcode = "software"
-    key = f"{g.source_id}:{g.url}:{transcode}"
+    key, _, _ = _hls_session_key(c, g)
     if sid != c.proxy.session_id(key):
         raise Forbidden("Segment does not belong to this playback grant.")
     sess = c.proxy.hls_by_sid(sid)
