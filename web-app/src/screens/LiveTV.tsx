@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
@@ -6,6 +6,7 @@ import { useChannelGroups, useChannels, useLanguages, useRecordings, useSources,
 import type { Channel, ChannelGroup } from '../api/types'
 import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { CatalogPicker } from '../components/CatalogPicker'
+import { ChipMenu } from '../components/ChipMenu'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
 import { ChannelRow } from '../components/ChannelRow'
 import { Icon } from '../components/Icon'
@@ -76,6 +77,10 @@ export function LiveTV() {
   const [searchOpen, setSearchOpen] = useState(false)
   const searching = searchOpen || search !== ''
   useEffect(() => { if (searchOpen) void setFocus('live:search') }, [searchOpen])
+  // The × beside the field empties and closes it; focus goes to the icon that takes the field's place.
+  const cleared = useRef(false)
+  const clearSearch = () => { cleared.current = true; setSearch(''); setSearchOpen(false) }
+  useEffect(() => { if (!searching && cleared.current) { cleared.current = false; void setFocus('live:search-open') } }, [searching])
   const languages = useLanguages()
   const { offered: languageOffered, language } = languageScope(languages.data, lang, profile?.languages.join(',') ?? '')
   // A region row is a choice only when United States is some, not all or none, of what is listed.
@@ -138,28 +143,19 @@ export function LiveTV() {
     setChannelList(q.data?.list_id ?? null, channels)
     go(`/play/${encodeURIComponent(c.id)}${q.data?.list_id ? `?list=${encodeURIComponent(q.data.list_id)}` : ''}`)
   }
-  // The × that cleared the filters goes with them: focus moves to All, which is now the choice.
+  // The empty list's way out: every filter off, and focus on All, which is now the choice.
   const reset = () => { saved.update((v) => ({ ...v, group: '', source: '', favorites: false })); setSearch(''); setSearchOpen(false); setPage(0); void setFocus('live:group:all') }
   const changePage = (p: number) => { setPage(p); setPreviewId(null); setFocusedId(null); void setFocus('live:groups') }
   const shownGroups = (groups.data ?? []).filter((g) => !g.hidden)
-  // Chips are the top level. A group's children are one drop-down beside its chip, offered while it is the choice.
+  // Chips are the top level. A group with children is one chip that drops them down and names the one in force.
   const topGroups = shownGroups.filter((g) => !g.parent)
   const childrenOf = (top: ChannelGroup) => shownGroups.filter((g) => g.parent === top.name && g.source_id === top.source_id)
   const chosen = shownGroups.find((g) => g.id === group)
   const chip = chosen?.parent ? topGroups.find((g) => g.name === chosen.parent && g.source_id === chosen.source_id) : chosen
-  const children = chip ? childrenOf(chip) : []
-  const parents = new Set(shownGroups.filter((g) => g.parent).map((g) => `${g.source_id}|${g.parent}`))
   const chipGroups = topGroups.slice(0, GROUP_CHIPS)
-  // Beside its chip where the row has room to grow; on a phone, or for a group past the chips, on a line of its own.
   const chipInRow = chipGroups.some((g) => g.id === chip?.id)
-  const besideChip = !phone && chipInRow
-  const subgroups = chip && children.length > 0 && <CatalogPicker scope="live:subgroup" label={chip.name} search={false} testId="live-subgroup" className="btn-chip" value={group}
-    options={[{ id: chip.id, label: `All ${chip.name}`, count: chip.channel_count }, ...children.map((g) => ({ id: g.id, label: g.name, count: g.channel_count }))]} onChange={(id) => pick(id)} />
   const sourceOptions = [{ id: '', label: 'All sources' }, ...(sources.data ?? []).filter((s) => s.type === 'm3u' || s.type === 'xtream').map((s) => ({ id: s.id, label: s.name }))]
 
-  // One small × beside the filter in force clears them all: after the chosen chip, else beside the search.
-  const clearAt = favOnly ? 'fav' : chipInRow ? chip!.id : group ? 'more' : 'search'
-  const clear = (group || source || favOnly || search) && <Chip focusKey="live:reset" label="Clear filters" onEnter={reset}><Icon name="x" size={14} /></Chip>
   // A choice made in Options is named in the header only while it is not the usual one.
   const notes = [
     view === 'guide' && !scheduledOnly && 'All channels',
@@ -184,7 +180,8 @@ export function LiveTV() {
             {searching
               ? <div className="live-search"><FocusableInput focusKey="live:search" label="Search channels or number" placeholder="Channel name or number" value={search} onChange={setSearch} inputMode="search" /></div>
               : <Button focusKey="live:search-open" className="btn-chip" iconOnly icon="search" label="Search channels" onEnter={() => setSearchOpen(true)} testId="live-search-open" />}
-            {clearAt === 'search' && clear}
+            {/* The one ×: it clears the search. A group or Favorites is left by choosing All. */}
+            {search !== '' && <Chip focusKey="live:search-clear" label="Clear search" onEnter={clearSearch}><Icon name="x" size={14} /></Chip>}
             <Button focusKey="live:options" className={notes.length ? 'btn-chip live-changed' : 'btn-chip'} iconOnly icon="filter" label="Options" onEnter={() => setOptionsOpen(true)} testId="live-options" />
           </div>
           <p className="label live-note" aria-live="polite" data-testid="live-note"><span>{counted}</span>{notes.map((n) => <span key={n} data-testid="live-choice">{n}</span>)}</p>
@@ -192,16 +189,15 @@ export function LiveTV() {
         <FocusGroup focusKey="live:groups" className="chip-scroll" role="group" label="Channel groups" preferred={favOnly ? 'live:fav' : `live:group:${chipInRow ? chip!.id : 'all'}`}>
           <Chip focusKey="live:group:all" pressed={!group && !favOnly} onEnter={() => pick('')}>All</Chip>
           <Chip focusKey="live:fav" pressed={favOnly} onEnter={() => pick('', !favOnly)} testId="live-fav-filter">Favorites</Chip>
-          {clearAt === 'fav' && clear}
-          {chipGroups.map((g) => <Fragment key={g.id}>
-            <Chip focusKey={`live:group:${g.id}`} pressed={(chip?.id ?? group) === g.id} onEnter={() => pick(g.id)}>{g.name}{parents.has(`${g.source_id}|${g.name}`) && <Icon name="down" size={14} />}</Chip>
-            {besideChip && chip?.id === g.id && subgroups}
-            {clearAt === g.id && clear}
-          </Fragment>)}
+          {chipGroups.map((g) => {
+            const below = childrenOf(g)
+            return below.length
+              ? <ChipMenu key={g.id} focusKey={`live:group:${g.id}`} name={g.name} value={group} all={{ id: g.id, label: `All ${g.name}`, count: g.channel_count }}
+                options={below.map((c) => ({ id: c.id, label: c.name, count: c.channel_count }))} onChange={(id) => pick(id)} />
+              : <Chip key={g.id} focusKey={`live:group:${g.id}`} pressed={group === g.id} onEnter={() => pick(g.id)}>{g.name}</Chip>
+          })}
           {topGroups.length > GROUP_CHIPS && <CatalogPicker scope="live:category" label="More groups" value={group} options={[{ id: '', label: 'All groups' }, ...shownGroups.map((g) => ({ id: g.id, label: g.path, count: g.channel_count }))]} onChange={(id) => pick(id)} />}
-          {clearAt === 'more' && clear}
         </FocusGroup>
-        {!besideChip && subgroups && <FocusGroup focusKey="live:subgroups" className="flex">{subgroups}</FocusGroup>}
         {saved.error && <p className="label" role="alert">{saved.error}</p>}
         {groups.error && <p role="status" className="muted">Groups could not load. You can still search channels.</p>}
       </FocusGroup>

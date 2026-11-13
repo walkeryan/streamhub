@@ -14,8 +14,8 @@ function preserveBrowserHistoryShortcut(event: KeyboardEvent): void {
 
 /** Leaf controls carry their focus key (see Focusable); a control inside a hidden parent has no box. */
 function tabStops(): HTMLElement[] {
-  // An open dialog keeps Tab to itself, the last one opened on top.
-  const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"]')
+  // An open dialog, or a chip's open menu, keeps Tab to itself, the last one opened on top.
+  const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"], [role="menu"]')
   const scope: ParentNode = dialogs.length ? dialogs[dialogs.length - 1]! : document
   const stops = [...scope.querySelectorAll<HTMLElement>('[data-focus-key]')]
     .filter((el) => el.getAttribute('aria-disabled') !== 'true' && el.getClientRects().length > 0)

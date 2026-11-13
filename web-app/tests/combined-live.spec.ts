@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { closeLiveOptions, liveChoice, openLiveOptions, searchLive, signIn } from './helpers'
+import { chooseLiveGroup, closeLiveOptions, liveChoice, openLiveOptions, searchLive, signIn } from './helpers'
 
 test('one Live TV destination shares filters and selection without a hidden preview player', async ({ page }) => {
   await page.addInitScript(() => {
@@ -22,7 +22,7 @@ test('one Live TV destination shares filters and selection without a hidden prev
   await page.getByRole('dialog', { name: 'Source', exact: true }).getByRole('button', { name: 'IPTV Provider', exact: true }).click()
   await closeLiveOptions(page)
   const groups = page.getByRole('group', { name: 'Channel groups', exact: true })
-  await groups.getByRole('button', { name: 'Sports', exact: true }).click()
+  await chooseLiveGroup(page, 'Sports')
   await searchLive(page, 'Metro')
   await expect(page.getByTestId('channel-row')).toHaveCount(1)
   await page.getByTestId('channel-row').hover()

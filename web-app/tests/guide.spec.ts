@@ -269,7 +269,7 @@ test.describe('on a 1600 by 830 window', () => {
     await expect(page.getByText('1 channels', { exact: true })).toBeVisible()
     await page.getByTestId('guide').getByRole('button', { name: '2 Metro Sports 1', exact: true }).hover()
     await expect(page.getByLabel('Search channels or number')).toHaveValue('Metro')
-    const clear = page.getByRole('button', { name: 'Clear filters', exact: true })
+    const clear = page.getByRole('button', { name: 'Clear search', exact: true })
     expect((await clear.boundingBox())!.width).toBeLessThan(60)
     await clear.click()
     await expect(page.getByText('22 channels', { exact: true })).toBeVisible()
@@ -359,7 +359,7 @@ test.describe('on a phone', () => {
     await page.getByLabel('Search channels or number').fill('Metro')
     await expect(page.getByTestId('guide').getByRole('button', { name: '2 Metro Sports 1', exact: true })).toBeVisible()
     expect(await fits(page)).toBe(true)
-    await page.getByRole('button', { name: 'Clear filters', exact: true }).tap()
+    await page.getByRole('button', { name: 'Clear search', exact: true }).tap()
     await expect(page.getByLabel('Search channels or number')).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Options', exact: true }).tap()

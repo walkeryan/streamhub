@@ -78,3 +78,9 @@ export async function searchLive(page: Page, text: string) {
 }
 /** A choice made in Options that is not the usual one is named beside the Options button. */
 export const liveChoice = (page: Page, text: string) => page.getByTestId('live-choice').filter({ hasText: text })
+/** A Live TV group that has children is one chip: it opens a menu of "All <group>" and each child, and choosing there filters. */
+export async function chooseLiveGroup(page: Page, group: string, choice = `All ${group}`) {
+  await page.getByRole('group', { name: 'Channel groups', exact: true }).getByRole('button', { name: new RegExp(`^${group}( · |$)`) }).click()
+  await page.getByRole('menu', { name: group, exact: true }).getByRole('menuitemradio', { name: new RegExp(`^${choice} \\(`) }).click()
+  await expect(page.getByRole('menu')).toHaveCount(0)
+}

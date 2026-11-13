@@ -46,14 +46,16 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
   await dialog.getByRole('button', { name: /Category 803/ }).click()
   await expect(page.getByTestId('channel-row').first()).toContainText('Unknown Channel 804')
   expect(await page.getByTestId('channel-row').count()).toBeLessThanOrEqual(80)
-  await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  // A group is left by choosing All; the one × is the search field's.
+  await expect(page.getByRole('button', { name: /clear/i })).toHaveCount(0)
+  await page.getByRole('group', { name: 'Channel groups', exact: true }).getByRole('button', { name: 'All', exact: true }).click()
   await searchLive(page, '52366')
   await expect(page.getByTestId('channel-row')).toHaveCount(1)
   await expect(page.getByTestId('channel-row')).toContainText('Channel 52366')
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.setViewportSize({ width: 1280, height: 720 })
-  await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await page.getByRole('button', { name: 'Clear search', exact: true }).click()
   await chooseLiveOption(page, 'My languages')
   await page.getByRole('button', { name: 'Guide', exact: true }).click()
   // The guide has no pages: it draws the rows near the view and loads the next forty as its end comes near.

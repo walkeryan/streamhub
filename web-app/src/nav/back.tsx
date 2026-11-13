@@ -100,7 +100,7 @@ export function useRestoreFocus(ready: boolean, fallback: string): void {
       // The viewer got ahead of the screen while it was loading: a field already tapped keeps the caret,
       // an open dialog keeps focus inside it.
       const active = document.activeElement
-      if (!saved && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || document.querySelector('.scrim'))) return
+      if (!saved && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || document.querySelector('.scrim, .chip-menu-scrim'))) return
       const target = saved && doesFocusableExist(saved) ? saved : fallback
       void setFocus(target)
     }, 30)
