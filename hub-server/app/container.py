@@ -323,6 +323,11 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
         logging.getLogger("streamhub.bootstrap").warning(
             "Admin profile created. Generated admin password (shown once): %s", generated
         )
+    if "*" in [part.strip() for part in c.settings.forwarded_allow_ips.split(",")]:
+        log.warning(
+            "FORWARDED_ALLOW_IPS is '*': forwarding headers are believed from anyone, so the client "
+            "address is a guess. Name the reverse proxy's address or subnet instead."
+        )
     await c.sync.reset_stuck()
     if start_background:
         c.proxy.start()

@@ -8,6 +8,7 @@ proxy named in ``FORWARDED_ALLOW_IPS``, what the proxy says it forwarded for.
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Mapping
 from functools import lru_cache
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -82,9 +83,15 @@ def client_address(peer: str | None, forwarded_for: str | None, trusted_proxies:
     if not hops or not (everyone or (direct is not None and _within(direct, proxies))):
         return str(direct) if direct is not None else None
     if everyone:
-        # Nothing tells a proxy from a client here; like uvicorn, take the first name on the list.
-        first = parse_address(hops[0])
-        return str(first) if first is not None else None
+        # Nothing tells a proxy from a client here. The left-most name is the client's own claim,
+        # so never that one: the last hop is at least what the nearest proxy saw.
+        last = parse_address(hops[-1])
+        return str(last) if last is not None else None
+    return _vouched(hops, proxies)
+
+
+def _vouched(hops: list[str], proxies: tuple[Network, ...]) -> str | None:
+    """The hop a chain of trusted proxies vouches for: right to left, the first that is not one of them."""
     for hop in reversed(hops):
         address = parse_address(hop)
         if address is None:
@@ -92,6 +99,53 @@ def client_address(peer: str | None, forwarded_for: str | None, trusted_proxies:
         if not _within(address, proxies):
             return str(address)
     return str(parse_address(hops[0]))
+
+
+# What a proxy adds to say whom it forwards for. A device on the home network sends none of them.
+FORWARDING_HEADERS = ("x-forwarded-for", "forwarded", "cf-connecting-ip", "x-real-ip", "true-client-ip")
+
+
+def is_trusted_proxy(peer: str | None, trusted_proxies: str) -> bool:
+    """Is the connection itself from a proxy named in ``FORWARDED_ALLOW_IPS``?"""
+    everyone, proxies = _trusted(trusted_proxies or "")
+    direct = parse_address(peer)
+    return everyone or (direct is not None and _within(direct, proxies))
+
+
+def vouched_for(port: int | None) -> bool:
+    """Has the ASGI server already put a trusted proxy's client in the peer's place?
+
+    ``uvicorn --proxy-headers`` does, for a connection from a proxy in ``FORWARDED_ALLOW_IPS``
+    and for no other, and the address it writes carries port 0, which no real connection has.
+    """
+    return port == 0
+
+
+def from_home(
+    peer: str | None, headers: Mapping[str, str], trusted_proxies: str, home_networks: str, *, vouched: bool = False
+) -> bool:
+    """Does this request come from the household's own network? Any doubt is no.
+
+    The trap this closes: a tunnel or reverse proxy on the same machine connects from a private
+    address, which the default home networks contain. Unless that proxy is trusted, its
+    forwarding headers cannot be read, the real client is unknown, and unknown is not home.
+
+    ``vouched``: ``peer`` is already the hop a trusted proxy vouched for (see ``vouched_for``).
+    """
+    everyone, proxies = _trusted(trusted_proxies or "")
+    forwarding = {name: headers.get(name) or "" for name in FORWARDING_HEADERS if headers.get(name)}
+    hops = [hop.strip() for hop in forwarding.pop("x-forwarded-for", "").split(",") if hop.strip()]
+    if not forwarding and not hops:
+        return is_home(peer, home_networks)
+    if everyone:
+        # Everyone is "trusted", so nothing is: home only if no address anywhere in sight is from elsewhere.
+        return not forwarding and all(is_home(address, home_networks) for address in (peer, *hops))
+    if vouched:
+        return is_home(peer, home_networks)
+    if not hops or not is_trusted_proxy(peer, trusted_proxies):
+        # A proxy is in the way that is not trusted, or that names the client in a header nobody here can walk.
+        return False
+    return is_home(_vouched(hops, proxies), home_networks)
 
 
 def is_home(address: str | None, home_networks: str) -> bool:
