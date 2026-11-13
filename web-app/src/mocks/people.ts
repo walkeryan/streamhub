@@ -185,6 +185,13 @@ export function adultUnlocked(request: Request): boolean {
   return !!user && permissionsOf(db, user).includes('watch.adult') && (db.adult[user.id] ?? 0) > Date.now()
 }
 
+/** The 403 a caller without `needs` gets from the other fakes (rooms); null when they hold it. */
+export function refusedWithout(request: Request, needs: Permission): Response | null {
+  const db = load()
+  const me = callerOf(db, request)
+  return me && !permissionsOf(db, me).includes(needs) ? error(403, 'forbidden', `Missing permission: ${needs}`, { missing: [needs] }) : null
+}
+
 type Resolver = (ctx: { db: Db; me: StoredUser; request: Request; params: Record<string, string | readonly string[] | undefined>; body: Record<string, unknown> }) => Response | Promise<Response>
 /** A signed-in caller holding `needs` (when given); the handler works on one loaded copy and saves it. */
 const as = (needs: Permission | null, run: Resolver) => async ({ request, params }: { request: Request; params: Record<string, string | readonly string[] | undefined> }) => {

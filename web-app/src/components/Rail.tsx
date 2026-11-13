@@ -104,9 +104,9 @@ export function Rail() {
           </Focusable>
         ))}
         {/* watch rooms */}
-        <Focusable focusKey="more:join-room" className="menu-item fx-flat" label="Join a room" data-testid="nav-join-room" onEnter={() => { setPinned(false); setMenu(false); setJoinRoom(true) }}>
+        {can(access, 'rooms.join') && <Focusable focusKey="more:join-room" className="menu-item fx-flat" label="Join a room" data-testid="nav-join-room" onEnter={() => { setPinned(false); setMenu(false); setJoinRoom(true) }}>
           <Icon name="people" />Join a room
-        </Focusable>
+        </Focusable>}
         {phone && <Focusable focusKey="more:profile" className="menu-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`}
           data-testid="nav-profile" onEnter={openProfile}>
           <Avatar name={profile?.name} />{profile?.name ?? 'Profile'}

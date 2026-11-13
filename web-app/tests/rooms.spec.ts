@@ -16,8 +16,8 @@ const server = (page: Page, code: string, change: Record<string, unknown>) =>
   page.evaluate(([c, ch]) => (window as unknown as MockWindow).__mockRoomIn?.(JSON.stringify({ code: c, change: ch })), [code, change] as const)
 
 /** A signed-in browser of its own (a second person), with the first-run notice already accepted. */
-async function person(browser: Browser, id: 'p2' | 'p3', name: string): Promise<Page> {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } })
+async function person(browser: Browser, id: 'p2' | 'p3', name: string, phone = false): Promise<Page> {
+  const context = await browser.newContext(phone ? { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } : { viewport: { width: 1280, height: 720 } })
   await context.addInitScript(([profileId, profileName]) => {
     const profile = { id: profileId, name: profileName, avatar: null, is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: false, disclaimer_accepted_version: '1.0' }
     sessionStorage.setItem('mock.accepted', JSON.stringify(['p1', 'p2', 'p3']))
@@ -398,6 +398,120 @@ test('the room explains a wait, asks before Back leaves, and says why it ended',
   await expect(page.getByRole('button', { name: 'Back to Ember Road' })).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('title-detail')).toBeVisible()
+})
+
+test('Watch together needs rooms.create and Join a room needs rooms.join', async ({ browser }) => {
+  // The Kid role may join rooms, not start them.
+  const kid = await person(browser, 'p3', 'Kids')
+  await kid.goto(FILM_PATH)
+  await expect(kid.getByTestId('title-play')).toBeVisible()
+  await expect(kid.getByTestId('title-together')).toHaveCount(0)
+  await kid.getByTestId('title-play').click()
+  await expect(kid.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await kid.keyboard.press('m')
+  await expect(kid.getByTestId('player-menu')).toBeVisible()
+  await expect(kid.getByTestId('player-together')).toHaveCount(0)
+  await kid.goto('/search')
+  await expect(kid.getByTestId('search-join-room')).toBeVisible()
+  await kid.getByTestId('nav-more').click()
+  await expect(kid.getByTestId('nav-join-room')).toBeVisible()
+
+  // Someone else's room, and a role that loses rooms.join: nothing offers a room, and a link says why.
+  const host = await person(browser, 'p2', 'Guest')
+  await link(host, kid)
+  const code = await startRoom(host)
+  await kid.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('mock.people.v1')!) as { roles: Array<{ id: string; permissions: string[] }> }
+    const role = db.roles.find((r) => r.id === 'kid')!
+    role.permissions = role.permissions.filter((p) => p !== 'rooms.join')
+    localStorage.setItem('mock.people.v1', JSON.stringify(db))
+  })
+  await kid.goto('/search')
+  await expect(kid.getByTestId('search-controls')).toBeVisible()
+  await expect(kid.getByTestId('search-join-room')).toHaveCount(0)
+  await kid.getByTestId('nav-more').click()
+  await expect(kid.getByTestId('more-menu')).toBeVisible()
+  await expect(kid.getByTestId('nav-join-room')).toHaveCount(0)
+  await kid.goto(`/room/${code}`)
+  await expect(kid.getByTestId('room-refusal')).toContainText('not allowed to join watch rooms')
+  await expect(kid.getByTestId('room-join-go')).toHaveCount(0)
+  await expect(kid.getByTestId('room-other')).toHaveCount(0)
+  await expect(kid.getByRole('button', { name: 'Not now' })).toHaveAttribute('data-focused', 'true')
+})
+
+test('the host ends the room for everyone, after being asked', async ({ browser }) => {
+  const host = await person(browser, 'p2', 'Guest')
+  const guest = await person(browser, 'p3', 'Kids')
+  await link(host, guest)
+  const code = await startRoom(host)
+  await host.getByTestId('room-start').click()
+  await expect(host.getByTestId('player')).toBeVisible()
+  await joinByCode(guest, code)
+  await guest.getByTestId('room-join-go').click()
+  await expect(host.getByTestId('room-member')).toHaveCount(2)
+  await together(host, guest, false, 0)
+
+  // Only the host is offered it, from the same place as leaving.
+  await guest.keyboard.press('Escape')
+  await expect(guest.getByTestId('room-leave-confirm')).toBeVisible()
+  await expect(guest.getByTestId('room-end')).toHaveCount(0)
+  await guest.keyboard.press('Enter')
+  await expect(guest.getByTestId('room-leave-confirm')).toHaveCount(0)
+
+  // By remote: Back, across to End room for everyone, and the question starts on the safe answer.
+  await host.keyboard.press('Escape')
+  await expect(host.getByRole('button', { name: 'Stay' })).toHaveAttribute('data-focused', 'true')
+  await host.keyboard.press('ArrowRight')
+  await host.keyboard.press('ArrowRight')
+  await expect(host.getByTestId('room-end')).toHaveAttribute('data-focused', 'true')
+  await host.keyboard.press('Enter')
+  await expect(host.getByTestId('room-end-confirm')).toContainText('Playback stops for all 2 of you.')
+  await expect(host.getByRole('button', { name: 'Keep the room' })).toHaveAttribute('data-focused', 'true')
+  await host.keyboard.press('Enter')
+  await expect(host.getByTestId('room-end-confirm')).toHaveCount(0)
+  await expect(guest.getByTestId('room-closed')).toHaveCount(0)
+
+  await host.keyboard.press('Escape')
+  await host.getByTestId('room-end').click()
+  await expect(host.getByRole('button', { name: 'Keep the room' })).toHaveAttribute('data-focused', 'true')
+  await host.keyboard.press('ArrowRight')
+  await expect(host.getByTestId('room-end-go')).toHaveAttribute('data-focused', 'true')
+  await host.keyboard.press('Enter')
+  // The host is back on the title, without being told their own room closed; the guest is told.
+  await expect(host).toHaveURL(new RegExp(`${encodeURIComponent(FILM)}$`))
+  await expect(host.getByTestId('title-detail')).toBeVisible()
+  await expect(host.getByTestId('room-closed')).toHaveCount(0)
+  await expect(guest.getByTestId('room-closed')).toContainText('The host closed the room.')
+  await host.goto(`/room/${code}`)
+  await expect(host.getByTestId('room-title')).toHaveText('Room not found')
+})
+
+test('on a phone the room player keeps back and title on one row; the members are a count that opens their list', async ({ browser }) => {
+  const page = await person(browser, 'p2', 'Guest', true)
+  const code = await startRoom(page)
+  await page.getByTestId('room-start').click()
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'paused')
+  const names = ['Marisol', 'Viewer Two', 'Tomasz the Third', 'Aiko', 'Benedikt']
+  for (const [i, name] of names.entries()) await server(page, code, { op: 'join', member: { id: `m${i}`, profile_id: `x${i}`, name, host: false, buffering: i === 1, seen_ms: Date.now() + 120_000 } })
+  const count = page.getByTestId('room-count')
+  await expect(count).toHaveText('6')
+  await expect(count).toHaveAttribute('aria-label', /^6 in the room: Guest, Marisol, /)
+  // One row: the bar is no taller than its back button and padding, and nothing runs off the side.
+  const top = await page.locator('.player-ui .top').boundingBox()
+  expect(top!.height).toBeLessThan(110)
+  const title = await page.getByTestId('player-title').boundingBox()
+  const chip = await count.boundingBox()
+  expect(Math.abs((title!.y + title!.height / 2) - (chip!.y + chip!.height / 2))).toBeLessThan(24)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await expect(page.getByTestId('room-members')).toHaveCount(0)
+
+  await count.tap()
+  const list = page.getByTestId('room-member-list')
+  await expect(list.getByTestId('room-member')).toHaveText(['GuestHostYou', 'Marisol', 'Viewer Twobuffering', 'Tomasz the Third', 'Aiko', 'Benedikt'])
+  await expect(list.getByRole('button', { name: 'Done' })).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Escape')
+  await expect(list).toHaveCount(0)
+  await expect(page.getByTestId('player')).toBeVisible()
 })
 
 test('a room that is gone or full says so on the join screen', async ({ page }) => {

@@ -1,6 +1,7 @@
 import { bypass, http, HttpResponse, ws } from 'msw'
 import type { PlaybackDescriptor, Room } from '../api/types'
 import { channels, profiles, seedFor, tileOf } from './fixtures'
+import { refusedWithout } from './people'
 
 /**
  * A small fake of the watch-room server: the REST calls and the room socket. It applies play, pause,
@@ -190,6 +191,8 @@ const roomSocket = ws.link(/\/api\/v1\/rooms\/[A-Za-z0-9]+\/ws(\?|$)/)
 export const roomHandlers = [
   clipHandler,
   http.post(`${B}/rooms`, async ({ request }) => {
+    const barred = refusedWithout(request, 'rooms.create')
+    if (barred) return barred
     const me = profileOf(request)
     const body = (await request.json()) as { id: string; variant_id?: string | null; audio_track?: number | null }
     const found = titleOf(body.id)
@@ -219,6 +222,8 @@ export const roomHandlers = [
     return new HttpResponse(null, { status: 204 })
   }),
   http.post(`${B}/rooms/:code/join`, async ({ params, request }) => {
+    const barred = refusedWithout(request, 'rooms.join')
+    if (barred) return barred
     const me = profileOf(request)
     const room = roomOf(String(params.code))
     if (!room) return error(404, 'room_not_found', 'This room does not exist or has ended.')

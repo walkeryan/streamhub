@@ -25,9 +25,10 @@ export interface Access {
 
 /**
  * May this user use an area of the app, or do what a permission names? Navigation and screens ask
- * here and nowhere else. The answer comes from the permissions /auth/me reports; only against a
- * server without /auth/me does it fall back to the profile's admin flag. This decides what is
- * offered; the server still authorizes every request.
+ * here and nowhere else: an area by its name, anything narrower by the permission itself (Watch
+ * together is `rooms.create`, Join a room `rooms.join`). The answer comes from the permissions
+ * /auth/me reports; only against a server without /auth/me does it fall back to the profile's admin
+ * flag. This decides what is offered; the server still authorizes every request.
  */
 export function can(access: Access, capability: Capability): boolean {
   if (!access.profile) return false
@@ -36,5 +37,7 @@ export function can(access: Access, capability: Capability): boolean {
   if (access.permissions !== null) return access.permissions.includes(permission)
   // The Users screen is built on the same server calls as /auth/me: without one there is no other.
   if (capability === 'users') return false
+  // Watch rooms arrived after permissions did: a server that cannot say who may use them has none to offer.
+  if (permission === 'rooms.create' || permission === 'rooms.join') return false
   return ADMIN_ONLY.has(permission) ? !!access.profile.is_admin && !access.profile.content_restricted : true
 }
