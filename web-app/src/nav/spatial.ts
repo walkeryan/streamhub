@@ -17,8 +17,17 @@ function tabStops(): HTMLElement[] {
   // An open dialog keeps Tab to itself, the last one opened on top.
   const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"]')
   const scope: ParentNode = dialogs.length ? dialogs[dialogs.length - 1]! : document
-  return [...scope.querySelectorAll<HTMLElement>('[data-focus-key]')]
+  const stops = [...scope.querySelectorAll<HTMLElement>('[data-focus-key]')]
     .filter((el) => el.getAttribute('aria-disabled') !== 'true' && el.getClientRects().length > 0)
+  // A grid of cells (the guide) is one stop, or Tab would take hundreds of presses to cross it. Its cells
+  // share a data-tab-group: the stop is the focused one, else the one marked data-tab-current, else the first.
+  const rank = (el: HTMLElement) => (el.dataset.focused === 'true' ? 2 : el.dataset.tabCurrent === 'true' ? 1 : 0)
+  const kept = new Map<string, HTMLElement>()
+  for (const el of stops) {
+    const group = el.dataset.tabGroup, held = group ? kept.get(group) : undefined
+    if (group && (!held || rank(el) > rank(held))) kept.set(group, el)
+  }
+  return stops.filter((el) => !el.dataset.tabGroup || kept.get(el.dataset.tabGroup) === el)
 }
 
 /**
