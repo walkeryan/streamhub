@@ -36,6 +36,7 @@ export ADMIN_PASSWORD=change-me     # optional; otherwise generated and logged O
 | `TRANSCODE_DIR` | `/transcode` if present, else `CONFIG_DIR/transcode` | ffmpeg HLS output |
 | `CORS_ORIGINS` | none | comma separated origins, other than the server's own, allowed to call the API with credentials |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | reverse proxies (addresses or CIDRs) whose `X-Forwarded-For` names the real client; the variable uvicorn reads too |
+| `API_DOCS_ENABLED` | `false` | serve `/api/docs` and `/api/openapi.json`; off unless set, so a public host does not describe its API to whoever asks |
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | `text` for dev |
 | `ENABLE_SCHEDULER` | `true` | catalog refresh (5 min tick) + EPG refresh (30 min tick) |
 | `FFMPEG_PATH`, `VAAPI_DEVICE` | `ffmpeg`, `/dev/dri/renderD128` | remux / transcode |
