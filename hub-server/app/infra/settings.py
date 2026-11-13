@@ -25,6 +25,9 @@ class AppSettings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "https://streamhub.ryan-walker.dev/api/v1/auth/google/callback"
+    # The address that may claim the Owner user on its first Google sign-in.
+    google_owner_email: str = ""
+    # Retired allowlist. Read only as a fallback for the bootstrap address (its first entry).
     google_allowed_emails: str = ""
     google_owner_profile_id: str = ""
     google_auth_required: bool = False

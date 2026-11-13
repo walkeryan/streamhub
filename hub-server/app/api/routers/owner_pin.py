@@ -22,9 +22,8 @@ async def pin_principal(c: C, creds: Annotated[HTTPAuthorizationCredentials | No
     except Unauthorized:
         # Accept an existing session for restricted exits, or pre-activation
         # owner enrollment; never turn a pending login into general API access.
-        p = c.auth.principal_from_access(creds.credentials)
-        await c.auth.session_valid(p.profile_id, p.token_version, p.session_id)
-        return p
+        # Fully validated, minus the owner-PIN entry check this very flow exists to satisfy.
+        return await c.auth.resolve_principal(creds.credentials, owner_entry=False)
 
 
 PP = Annotated[Principal, Depends(pin_principal)]
@@ -82,7 +81,9 @@ async def verify(body: Verify, c: C, p: PP, response: Response) -> dict[str, Any
         }
     await c.auth.consume_session(p.profile_id, p.token_version, p.session_id)
     return await tokens_out(
-        c, target, c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject)
+        c,
+        target,
+        await c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject),
     )
 
 
@@ -104,7 +105,9 @@ async def setup(body: Setup, c: C, p: PP, response: Response) -> dict[str, Any]:
     proof = await c.owner_pin.setup(p, body.grant_id, body.grant_secret, body.pin, p.google_subject)
     target = await c.auth.get_profile(proof.target_profile_id)
     return await tokens_out(
-        c, target, c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject)
+        c,
+        target,
+        await c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject),
     )
 
 
@@ -120,5 +123,7 @@ async def recover(body: Setup, c: C, p: PP, response: Response) -> dict[str, Any
     proof = await c.owner_pin.recover(p, body.grant_id, body.grant_secret, body.pin, p.google_subject)
     target = await c.auth.get_profile(proof.target_profile_id)
     return await tokens_out(
-        c, target, c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject)
+        c,
+        target,
+        await c.auth.issue(target, owner_pin_version=proof.credential_version, google_subject=p.google_subject),
     )

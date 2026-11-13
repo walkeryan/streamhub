@@ -19,7 +19,8 @@ TEST_PIN = "73918462"
 
 async def principal(api: Api) -> Any:
     profile = await api.c.auth.get_profile(api.profile_id)
-    p = api.c.auth.principal_from_access(api.c.auth.issue(profile)["access_token"])
+    tokens = await api.c.auth.issue(profile)
+    p = await api.c.auth.resolve_principal(tokens["access_token"], owner_entry=False)
     return SimpleNamespace(**{**asdict(p), "google_subject": "synthetic-google-subject"})
 
 

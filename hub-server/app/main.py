@@ -14,12 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api.routers import auth, catalog, owner_pin, playback, requests, sources, system
+from app.api.routers import auth, catalog, owner_pin, playback, requests, sources, system, users
 from app.container import Container, build_container, shutdown, startup
 from app.infra.logging import configure_logging
 from app.infra.settings import APP_VERSION, AppSettings
 from app.services.context import is_https, public_base
-from app.services.errors import ServiceError
+from app.services.errors import PermissionDenied, ServiceError
 
 log = logging.getLogger(__name__)
 API_PREFIX = "/api/v1"
@@ -86,7 +86,12 @@ def create_app(
         headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
         if exc.status == 429 and hasattr(exc, "retry_after"):
             headers = {"Retry-After": str(exc.retry_after)}
-        return _err(exc.status, exc.code, exc.message, headers)
+        response = _err(exc.status, exc.code, exc.message, headers)
+        if isinstance(exc, PermissionDenied):
+            response = JSONResponse(
+                {"code": exc.code, "message": exc.message, "missing": exc.missing}, status_code=exc.status
+            )
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_req: Request, exc: RequestValidationError) -> JSONResponse:
@@ -111,6 +116,7 @@ def create_app(
         playback.router,
         system.router,
         requests.router,
+        users.router,
     ):
         app.include_router(r, prefix=API_PREFIX)
 

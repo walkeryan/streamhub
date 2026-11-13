@@ -24,6 +24,14 @@ class Forbidden(ServiceError):
     code = "forbidden"
 
 
+class PermissionDenied(Forbidden):
+    """The caller lacks one or more permissions; ``missing`` names them in the response body."""
+
+    def __init__(self, missing: list[str]) -> None:
+        super().__init__("You do not have permission to do this")
+        self.missing = sorted(missing)
+
+
 class Unauthorized(ServiceError):
     status = 401
     code = "unauthorized"

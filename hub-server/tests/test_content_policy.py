@@ -15,7 +15,9 @@ async def activate(api):
 
     version = await enroll(api)
     owner = await api.c.auth.get_profile(api.profile_id)
-    api.headers = {"Authorization": "Bearer " + api.c.auth.issue(owner, owner_pin_version=version)["access_token"]}
+    api.headers = {
+        "Authorization": "Bearer " + (await api.c.auth.issue(owner, owner_pin_version=version))["access_token"]
+    }
 
 
 def evidence(key, code="PG", scope="movie"):
@@ -163,7 +165,7 @@ async def test_grant_checks_session_source_and_current_policy(api):
     p = await seed(api)
     await activate(api)
     profile = await p.profile("child")
-    token = api.c.auth.issue(profile)
+    token = await api.c.auth.issue(profile)
     principal = await api.c.auth.resolve_principal(token["access_token"])
     grant = SimpleNamespace(
         content_ref="lib:fixture:1",
@@ -184,7 +186,7 @@ async def test_grant_checks_session_source_and_current_policy(api):
 async def test_http_listing_search_direct_ids_and_policy_admin_guard(api):
     p = await seed(api)
     await activate(api)
-    tokens = api.c.auth.issue(await p.profile("child"))
+    tokens = await api.c.auth.issue(await p.profile("child"))
     headers = {"Authorization": "Bearer " + tokens["access_token"]}
     response = await api.client.get("/api/v1/browse/movies?all_languages=true", headers=headers)
     assert response.status_code == 200, response.text
@@ -226,7 +228,7 @@ async def test_segment_timestamp_gate_and_unknown_expiry(api, tmp_path):
             )
         )
         await s.commit()
-    tokens = api.c.auth.issue(await p.profile("child"))
+    tokens = await api.c.auth.issue(await p.profile("child"))
     principal = await api.c.auth.resolve_principal(tokens["access_token"])
     grant = SimpleNamespace(
         content_ref="ch:fixture:live",

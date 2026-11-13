@@ -120,7 +120,7 @@ async def test_restricted_catalog_guide_session_cache_scale(api):
     event.listen(Session, "loaded_as_persistent", loaded)
 
     async def headers():
-        token = api.c.auth.issue(await policy.profile("scale-child"))
+        token = await api.c.auth.issue(await policy.profile("scale-child"))
         return {"Authorization": "Bearer " + token["access_token"]}
 
     async def request(label, path, auth, **params):

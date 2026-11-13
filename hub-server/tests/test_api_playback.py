@@ -440,6 +440,8 @@ async def test_settings(api: Api) -> None:
         "epg_refresh_hours": 12,
         "transcode_hw": "none",
         "proxy_mode": "auto",
+        "signup_mode": "approval",
+        "notify_webhook_set": False,
     }
     s = (await api.patch("/settings", json={"region": "gb", "sleep_timer_min": 60, "transcode_hw": "vaapi"})).json()
     assert s["region"] == "GB" and s["sleep_timer_min"] == 60 and s["transcode_hw"] == "vaapi"

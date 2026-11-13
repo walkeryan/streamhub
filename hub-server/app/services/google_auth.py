@@ -1,6 +1,10 @@
-"""Owner-only Google sign-in. Ephemeral transactions require one server worker.
+"""Google sign-in for every user. Ephemeral transactions require one server worker.
 
-OAuth credentials remain server-side. Neither Google nor StreamHub tokens enter URLs.
+Anyone with a verified Google address can sign in; what they get depends on the users
+service: a known subject is that user, the bootstrap address claims the Owner user, an
+invite activates at once, and otherwise the sign-in waits for approval (or is refused
+in invite-only mode). OAuth credentials remain server-side. Neither Google nor
+StreamHub tokens enter URLs, and an invite token rides the server-side transaction.
 """
 
 from __future__ import annotations
@@ -23,14 +27,17 @@ from app.infra.models import Profile
 from app.infra.settings import AppSettings
 from app.services.auth import AuthService
 from app.services.errors import Forbidden, Unauthorized
+from app.services.invites import TOKEN_RE, InvitesService
 
 
 class GoogleAuthService:
-    def __init__(self, settings: AppSettings, auth: AuthService) -> None:
+    def __init__(self, settings: AppSettings, auth: AuthService, signup_mode: Any = None) -> None:
         secret_registry.add(settings.google_client_secret)
         self.settings = settings
         self.auth = auth
-        self.transactions: dict[str, tuple[float, str, str, str, str, float, bool]] = {}
+        self._signup_mode = signup_mode or (lambda: "approval")
+        # state -> (expires, browser, nonce, verifier, destination, created, fresh_required, invite)
+        self.transactions: dict[str, tuple[float, str, str, str, str, float, bool, str]] = {}
         self.owner_transactions: dict[str, tuple[float, str, str, str, str, float]] = {}
         self.handoffs: dict[str, tuple[float, str, str, float | None, str]] = {}
 
@@ -41,7 +48,6 @@ class GoogleAuthService:
         return bool(
             s.google_client_id
             and s.google_client_secret
-            and self.allowed_emails
             and parts.scheme == "https"
             and parts.netloc
             and not parts.query
@@ -51,8 +57,12 @@ class GoogleAuthService:
         )
 
     @property
-    def allowed_emails(self) -> set[str]:
-        return {e.strip().lower() for e in self.settings.google_allowed_emails.split(",") if e.strip()}
+    def bootstrap_email(self) -> str:
+        """The address that may claim the Owner user: GOOGLE_OWNER_EMAIL, or the first entry of
+        the retired allowlist. Nothing else about that list is honoured any more."""
+        configured = self.settings.google_owner_email.strip().lower()
+        legacy = [e.strip().lower() for e in self.settings.google_allowed_emails.split(",") if e.strip()]
+        return configured or (legacy[0] if legacy else "")
 
     @property
     def origin(self) -> str:
@@ -67,7 +77,7 @@ class GoogleAuthService:
         if len(self.transactions) + len(self.handoffs) + len(self.owner_transactions) >= 1000:
             raise Unauthorized("Sign-in temporarily busy; try again later")
 
-    def start(self, return_to: str) -> tuple[str, str]:
+    def start(self, return_to: str, invite: str = "") -> tuple[str, str]:
         if not self.enabled:
             raise Forbidden("Google sign-in is not configured")
         self._prune()
@@ -76,14 +86,25 @@ class GoogleAuthService:
         destination = return_to if re.fullmatch(r"/pair(?:\?code=[A-Z0-9]{6})?", return_to) else "/"
         created = time.time()
         fresh_required = False  # Google does not support forced reauthentication; owner PIN is separate.
-        self.transactions[state] = (created + 600, browser, nonce, verifier, destination, created, fresh_required)
+        # Kept server-side with the state; never set in a cookie or echoed to Google.
+        invite = invite if TOKEN_RE.fullmatch(invite or "") else ""
+        self.transactions[state] = (
+            created + 600,
+            browser,
+            nonce,
+            verifier,
+            destination,
+            created,
+            fresh_required,
+            invite,
+        )
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         query = urlencode(
             {
                 "client_id": self.settings.google_client_id,
                 "redirect_uri": self.settings.google_redirect_uri,
                 "response_type": "code",
-                "scope": "openid email",
+                "scope": "openid email profile",
                 "state": state,
                 "nonce": nonce,
                 "code_challenge": challenge,
@@ -143,16 +164,26 @@ class GoogleAuthService:
         self._fresh_auth_time(claims, tx[5])
         return tx[4]
 
-    async def _owner(self, claims: dict[str, Any]) -> Profile:
-        if claims.get("email_verified") is not True or str(claims.get("email", "")).lower() not in self.allowed_emails:
+    async def _sign_in(self, claims: dict[str, Any], invite: str = "", *, create: bool = True) -> Profile:
+        if claims.get("email_verified") is not True or not str(claims.get("email") or "").strip():
             raise Forbidden("This Google account is not authorized")
-        profiles = [p for p in await self.auth.list_profiles() if p.is_admin]
-        selected = self.settings.google_owner_profile_id
-        if selected:
-            profiles = [p for p in profiles if p.id == selected]
-        if len(profiles) != 1:
-            raise Forbidden("A unique owner profile must be configured")
-        return profiles[0]
+        result = await self.auth.users.google_sign_in(
+            claims,
+            bootstrap_email=self.bootstrap_email,
+            owner_profile_id=self.settings.google_owner_profile_id,
+            signup_mode=str(self._signup_mode() or "approval") if create else "closed",
+            invite_token=invite if create else "",
+            redeem=InvitesService.redeem_in,
+        )
+        return result.profile
+
+    async def _owner(self, claims: dict[str, Any]) -> Profile:
+        """Owner re-authentication: an existing owner only. Never creates or activates anyone."""
+        profile = await self._sign_in(claims, create=False)
+        identity = await self.auth.users.identity(profile.id)
+        if identity is None or "system.manage" not in identity.permissions:
+            raise Forbidden("This Google account is not authorized")
+        return profile
 
     async def _claims(self, code: str, verifier: str, nonce: str) -> dict[str, Any]:
         try:
@@ -201,11 +232,11 @@ class GoogleAuthService:
         if tx is None or tx[0] <= time.time() or not secrets.compare_digest(tx[1], browser) or not code:
             raise Unauthorized("Sign-in expired or invalid; please start again")
         claims = await self._claims(code, tx[3], tx[2])
-        owner = await self._owner(claims)
+        profile = await self._sign_in(claims, tx[7])
         fresh_required = False
         auth_time = self._fresh_auth_time(claims, tx[5]) if fresh_required else None
         handoff = secrets.token_urlsafe(32)
-        self.handoffs[handoff] = (time.time() + 60, owner.id, tx[4], auth_time, str(claims["sub"]))
+        self.handoffs[handoff] = (time.time() + 60, profile.id, tx[4], auth_time, str(claims["sub"]))
         return handoff, tx[4]
 
     async def consume(self, handoff: str, origin: str) -> Profile:
@@ -215,8 +246,6 @@ class GoogleAuthService:
         if item is None or item[0] <= time.time():
             raise Unauthorized("Sign-in completion expired; please start again")
         profile = await self.auth.get_profile(item[1])
-        if not profile.is_admin:
-            raise Forbidden("Owner profile is no longer authorized")
         profile.__dict__["_google_subject"] = item[4]
         # Transient ORM instance metadata only; never saved to the profile row.
         if item[3] is not None:

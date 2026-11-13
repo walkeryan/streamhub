@@ -4,6 +4,44 @@
  */
 
 export interface paths {
+    "/auth/google/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Begin Google sign-in (any Google account) */
+        get: {
+            parameters: {
+                query?: {
+                    return_to?: string;
+                    /** @description Invite token from /invite/<token>; held server-side for the sign-in */
+                    invite?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Redirect to Google */
+                303: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/google/complete": {
         parameters: {
             query?: never;
@@ -13,6 +51,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Active user: tokens, with status "active". Unknown user in approval mode: status "pending" and a token good only for GET /auth/me. Owner PIN regime: PendingOwnerLogin. */
         post: {
             parameters: {
                 query?: never;
@@ -22,14 +61,248 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Google identity handoff; owner PIN required before owner tokens when enabled */
+                /** @description Google identity handoff */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["AuthTokens"] | components["schemas"]["PendingOwnerLogin"];
+                        "application/json": (components["schemas"]["AuthTokens"] & {
+                            /** @enum {string} */
+                            status?: "active";
+                        }) | components["schemas"]["PendingApproval"] | components["schemas"]["PendingOwnerLogin"];
                     };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's user, role, effective permissions and limits
+         * @description The one call a user waiting for approval may make (every other answers 403 approval_pending). Once approved, the response carries full tokens, once, and the pending token stops working.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Me"];
+                    };
+                };
+                /** @description session_revoked | session_stale (refresh) | user_suspended | token_expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's signed-in devices */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Another user's sessions; needs users.manage */
+                    user_id?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description live sessions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthSession"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/sessions/{sid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Sign a device out (one's own; anyone's with users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description revoked; its next request answers 401 */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/adult-unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open the adult category on this session for four hours
+         * @description Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        pin: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description unlocked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: date-time */
+                            adult_unlocked_until: string;
+                        };
+                    };
+                };
+                /** @description forbidden (missing watch.adult) | pin_invalid */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description pin_setup_required */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Attempt limit; respect Retry-After */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/adult-lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close the adult category on this session again */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -399,7 +672,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Admin-only content policy */
+                /** @description Content policy (users.manage) */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -2378,7 +2651,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Admin-only Streamhub-owned playback status */
+        /** Streamhub-owned playback status (system.manage) */
         get: {
             parameters: {
                 query?: never;
@@ -2423,7 +2696,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Admin-only stop owned sessions and pause new playback until resumed */
+        /** Stop owned sessions and pause new playback until resumed (system.manage) */
         post: {
             parameters: {
                 query?: never;
@@ -2470,7 +2743,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Admin-only allow new playback; old stream tokens remain revoked */
+        /** Allow new playback; old stream tokens remain revoked (system.manage) */
         post: {
             parameters: {
                 query?: never;
@@ -3011,6 +3284,685 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Everyone (users.manage) */
+        get: {
+            parameters: {
+                query?: {
+                    status?: "pending" | "active" | "suspended";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserListItem"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Add a managed user, one without a Google identity (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        name: string;
+                        avatar?: string | null;
+                        /** @default family */
+                        role_id?: string;
+                        pin?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["User"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One user with effective access, devices and recent history (users.manage) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Remove a user and their viewer state (users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description last_owner */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Change a user (users.manage)
+         * @description Nobody changes their own role, grants, denials or limits (403 self_edit). Only an owner assigns the Owner role, grants users.manage / sources.manage / system.manage, or changes an owner (403 owner_required). The last active owner cannot be demoted (409 last_owner).
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        avatar?: string | null;
+                        role_id?: string;
+                        grants?: components["schemas"]["Permission"][];
+                        denials?: components["schemas"]["Permission"][];
+                        limits?: components["schemas"]["LimitsInput"];
+                        /** @description null follows the role */
+                        on_shared_devices?: boolean | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/users/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a waiting user with a role (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        role_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description active */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+                /** @description not_pending */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refuse and remove a waiting user (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not_pending */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Suspend an active user; their sessions answer 401 user_suspended (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description suspended */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+                /** @description last_owner | not_active */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/reinstate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reinstate a suspended user (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description active */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UserDetail"];
+                    };
+                };
+                /** @description not_suspended */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{id}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set or clear a user's PIN (one's own; anyone's with users.manage) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description 4 to 8 digits; null clears */
+                        pin?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description ok */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Roles with their permissions and limits (users.manage) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description built-ins first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Role"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a custom role (users.manage) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": WithRequired<components["schemas"]["RoleInput"], "name">;
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Role"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a custom role nobody holds (users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description removed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description role_builtin | role_in_use */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Edit a role; every member gets the change on their next request (users.manage) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RoleInput"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Role"];
+                    };
+                };
+                /** @description role_fixed (the Owner role) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Invites: one's own; all with users.manage (users.invite) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description newest first; never includes a token */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Invite"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create an invite link for a role (users.invite)
+         * @description The role may be no wider than the inviter's own access, and is never the Owner role (403 invite_role_too_wide).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        role_id: string;
+                        /** @default 72 */
+                        expires_in_hours?: number;
+                        /** @default 1 */
+                        max_uses?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InviteCreated"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an invite (its creator; anyone's with users.manage) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who changed what about whom, newest first (users.manage) */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Entries about or by this user */
+                    user_id?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuditEntry"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/themes": {
         parameters: {
             query?: never;
@@ -3169,7 +4121,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Admin only. The API key is write-only */
+        /** The API key is write-only (system.manage) */
         get: {
             parameters: {
                 query?: never;
@@ -3191,7 +4143,7 @@ export interface paths {
             };
         };
         /**
-         * Admin only. Seerr-compatible request manager (Overseerr / Jellyseerr / Seerr)
+         * Seerr-compatible request manager, Overseerr / Jellyseerr / Seerr (system.manage)
          * @description Omit api_key to keep the stored key for the same server; a different server or a null url drops it.
          */
         put: {
@@ -3237,7 +4189,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Admin only. Checks the stored URL and API key */
+        /** Checks the stored URL and API key (system.manage) */
         post: {
             parameters: {
                 query?: never;
@@ -3642,6 +4594,177 @@ export interface components {
         Error: {
             code: string;
             message: string;
+            /** @description 403 forbidden only: the permissions the caller lacks */
+            missing?: components["schemas"]["Permission"][];
+        };
+        /** @enum {string} */
+        Permission: "watch.library" | "watch.vod" | "watch.live" | "watch.adult" | "rooms.join" | "rooms.create" | "recordings.view" | "recordings.schedule" | "requests.create" | "requests.auto_approve" | "requests.approve" | "remote.access" | "users.invite" | "users.manage" | "sources.manage" | "system.manage";
+        Limits: {
+            /** @description Concurrent streams; null = no limit */
+            max_streams: number | null;
+            /** @enum {string|null} */
+            rating_ceiling_movie: "G" | "PG" | "PG-13" | "R" | "NC-17" | null;
+            /** @enum {string|null} */
+            rating_ceiling_tv: "TV-Y" | "TV-Y7" | "TV-G" | "TV-PG" | "TV-14" | "TV-MA" | null;
+            allow_unrated: boolean;
+        };
+        /** @description Only the fields present are set. Null lifts that limit; on a user an empty object clears every override. */
+        LimitsInput: {
+            max_streams?: number | null;
+            rating_ceiling_movie?: string | null;
+            rating_ceiling_tv?: string | null;
+            allow_unrated?: boolean;
+        };
+        RoleRef: {
+            id: string;
+            name: string;
+            builtin: boolean;
+        };
+        Role: {
+            id: string;
+            name: string;
+            builtin: boolean;
+            /** @description False for the Owner role */
+            editable: boolean;
+            permissions: components["schemas"]["Permission"][];
+            limits: components["schemas"]["Limits"];
+            /** @description Users with this role appear in the picker on shared household devices */
+            on_shared_devices: boolean;
+            user_count: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RoleInput: {
+            name?: string;
+            permissions?: components["schemas"]["Permission"][];
+            limits?: components["schemas"]["LimitsInput"];
+            on_shared_devices?: boolean;
+        };
+        User: {
+            id: string;
+            /** @enum {string} */
+            kind: "google" | "managed";
+            display_name: string;
+            email?: string | null;
+            picture?: string | null;
+            avatar?: string | null;
+            /** @enum {string} */
+            status: "pending" | "active" | "suspended";
+            /** @description Null while pending */
+            role_id?: string | null;
+            role_name?: string | null;
+            /** @description The profile holding this user's viewer state */
+            profile_id?: string | null;
+            has_pin?: boolean;
+            on_shared_devices?: boolean;
+            plex_account_linked?: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            approved_at?: string | null;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+        };
+        NowPlaying: {
+            id: string;
+            title?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        UserListItem: components["schemas"]["User"] & {
+            now_playing: components["schemas"]["NowPlaying"][];
+        };
+        AuthSession: {
+            sid: string;
+            user_id: string;
+            /** @enum {string} */
+            kind: "browser" | "tv" | "api";
+            label?: string | null;
+            user_agent?: string | null;
+            ip?: string | null;
+            shared_device: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            /** @description The session making this request */
+            current: boolean;
+        };
+        UserDetail: components["schemas"]["UserListItem"] & {
+            grants: components["schemas"]["Permission"][];
+            denials: components["schemas"]["Permission"][];
+            limit_overrides: {
+                [key: string]: unknown;
+            };
+            on_shared_devices_override?: boolean | null;
+            /** @description Effective set */
+            permissions: components["schemas"]["Permission"][];
+            limits: components["schemas"]["Limits"];
+            sessions: components["schemas"]["AuthSession"][];
+            history: {
+                ref_id: string;
+                kind?: string | null;
+                position_ms: number;
+                duration_ms?: number | null;
+                completed: boolean;
+                /** Format: date-time */
+                updated_at: string;
+            }[];
+        };
+        Me: {
+            /** @enum {string} */
+            status: "pending" | "active" | "suspended";
+            user: components["schemas"]["User"];
+            role: components["schemas"]["RoleRef"] | null;
+            permissions: components["schemas"]["Permission"][];
+            limits: components["schemas"]["Limits"];
+            shared_device: boolean;
+            adult_unlocked: boolean;
+            /** @description Set once: when a user who was waiting for approval has been approved */
+            tokens: components["schemas"]["AuthTokens"] | null;
+        };
+        PendingApproval: {
+            /** @enum {string} */
+            status: "pending";
+            /** @description Authorizes GET /auth/me and nothing else */
+            pending_token: string;
+            user: {
+                display_name?: string;
+                email?: string | null;
+            };
+        };
+        Invite: {
+            id: string;
+            role_id: string;
+            role_name?: string | null;
+            created_by_user_id?: string | null;
+            created_by_name?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            max_uses: number;
+            uses: number;
+            /** @enum {string} */
+            state: "open" | "used" | "expired" | "revoked";
+        };
+        InviteCreated: components["schemas"]["Invite"] & {
+            /** @description /invite/<token>. The token is shown this once and stored only as a hash. */
+            url: string;
+        };
+        AuditEntry: {
+            id: number;
+            /** Format: date-time */
+            at: string;
+            /** @description user.approve, user.role_change, user.suspend, role.update, invite.create, session.revoke, ... */
+            action: string;
+            actor_user_id?: string | null;
+            actor_name?: string | null;
+            target_user_id?: string | null;
+            target_name?: string | null;
+            detail: {
+                [key: string]: unknown;
+            };
         };
         AuthTokens: {
             access_token: string;
@@ -4130,6 +5253,15 @@ export interface components {
             transcode_hw?: "none" | "vaapi" | "nvenc" | "qsv";
             /** @enum {string} */
             proxy_mode?: "auto" | "always" | "never";
+            /**
+             * @description Who may sign in with Google unasked: anyone (then waits for approval) or invitees only
+             * @enum {string}
+             */
+            signup_mode?: "approval" | "invite_only";
+            /** @description A notification webhook is stored. The address is never returned. */
+            readonly notify_webhook_set?: boolean;
+            /** @description PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it */
+            notify_webhook?: string | null;
         };
         Disclaimer: {
             version: string;
@@ -4285,4 +5417,7 @@ export interface components {
     pathItems: never;
 }
 export type $defs = Record<string, never>;
+type WithRequired<T, K extends keyof T> = T & {
+    [P in K]-?: T[P];
+};
 export type operations = Record<string, never>;

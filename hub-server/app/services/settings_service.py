@@ -18,10 +18,14 @@ DEFAULTS: dict[str, Any] = {
     "epg_refresh_hours": 12,
     "transcode_hw": "none",
     "proxy_mode": "auto",
+    # Who may sign in with Google unasked: anyone (then waits for approval) or invitees only.
+    "signup_mode": "approval",
+    "notify_webhook": None,
 }
 ALLOWED = {
     "transcode_hw": {"none", "vaapi", "nvenc", "qsv"},
     "proxy_mode": {"auto", "always", "never"},
+    "signup_mode": {"approval", "invite_only"},
 }
 TMDB_KEY = "tmdb_api_key_enc"
 REQUEST_MANAGER_URL = "request_manager_url"
@@ -42,6 +46,21 @@ def clean_request_manager_url(url: str | None) -> str | None:
         valid = False
     if not valid or parts.username or parts.password or parts.query or parts.fragment or len(url) > 512:
         raise ValueError("invalid request manager url")
+    return url
+
+
+def clean_webhook_url(url: Any) -> str | None:
+    """An http(s) address to notify, or None to clear it."""
+    url = str(url or "").strip()
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url)
+        valid = parts.scheme in ("http", "https") and bool(parts.hostname) and parts.port != 0
+    except ValueError:
+        valid = False
+    if not valid or parts.fragment or len(url) > 1024:
+        raise ValueError("invalid notify_webhook")
     return url
 
 
@@ -66,6 +85,7 @@ class SettingsService:
         async with self._db.session() as s:
             rows = (await s.execute(select(Setting))).scalars().all()
         self._cache = {r.key: r.value for r in rows}
+        secret_registry.add(self._cache.get("notify_webhook"))
         enc = self._cache.get(TMDB_KEY)
         if isinstance(enc, str):
             val = self._crypto.try_decrypt_json(enc)
@@ -92,6 +112,9 @@ class SettingsService:
             "epg_refresh_hours": int(self.get("epg_refresh_hours") or 12),
             "transcode_hw": self.get("transcode_hw"),
             "proxy_mode": self.get("proxy_mode"),
+            "signup_mode": self.get("signup_mode"),
+            # The address may embed a secret path; only whether one is set is public.
+            "notify_webhook_set": bool(self.get("notify_webhook")),
         }
 
     async def _put(self, key: str, value: Any) -> None:
@@ -114,6 +137,11 @@ class SettingsService:
                 v = str(v).upper()[:2]
             if k == "epg_refresh_hours" and v is not None:
                 v = max(1, min(int(v), 168))
+            if k == "signup_mode" and v is None:
+                continue
+            if k == "notify_webhook":
+                v = clean_webhook_url(v)
+                secret_registry.add(v)
             await self._put(k, v)
         return self.public()
 
