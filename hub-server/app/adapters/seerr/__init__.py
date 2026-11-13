@@ -1,5 +1,5 @@
 """Request manager adapter (Overseerr / Jellyseerr / Seerr REST API)."""
 
-from app.adapters.seerr.client import ManagerStatus, SeerrClient, SeerrConnection, SeerrError
+from app.adapters.seerr.client import ManagerSnapshot, QueueItem, SeerrClient, SeerrConnection, SeerrError
 
-__all__ = ["ManagerStatus", "SeerrClient", "SeerrConnection", "SeerrError"]
+__all__ = ["ManagerSnapshot", "QueueItem", "SeerrClient", "SeerrConnection", "SeerrError"]

@@ -188,7 +188,9 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     recorder.content_policy = content_policy
     sync.after_epg_refresh = recorder.apply_rules
     classifier = ClassificationJob(db, tmdb, app_settings)
-    scheduler = SyncScheduler(sync, requests.reconcile, recorder.run_tick, classifier.run_batch)
+    scheduler = SyncScheduler(
+        sync, requests.reconcile, recorder.run_tick, classifier.run_batch, poll_requests=requests.poll_due
+    )
     home = HomeService(catalog, channels, progress, layout, sources, availability, tmdb)
     active = ActiveStreams()
     tokens = StreamTokens(crypto, settings.stream_token_ttl_s)

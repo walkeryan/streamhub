@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.adapters.seerr import SeerrError
+from app.adapters.seerr import ManagerSnapshot, SeerrError
 from app.domain.entities import MetaTitle
 from app.infra.models import MediaRequest, Notice, Profile, Source, Title
 from app.services import request_policy
@@ -18,6 +18,8 @@ from app.services.requests import RequestService
 from tests.conftest import Api
 
 TITLES = {("movie", 603): ("The Matrix", 1999), ("tv", 1399): ("Game of Thrones", 2011)}
+# (request status, media status) the manager answers with for each outcome.
+ANSWERS = {"approved": (2, 3), "available": (2, 5), "declined": (3, 3), "failed": (4, 3)}
 
 
 class FakeManager:
@@ -45,11 +47,14 @@ class FakeManager:
         self.next_id += 1
         return self.next_id
 
-    async def request_status(self, request_id: int) -> str:
+    async def request_snapshot(self, request_id: int) -> ManagerSnapshot:
         status = self.statuses.get(request_id, "approved")
         if isinstance(status, Exception):
             raise status
-        return status
+        return ManagerSnapshot(*ANSWERS[status], tracked=True)
+
+    async def title_snapshot(self, media_type: str, tmdb_id: int) -> ManagerSnapshot:
+        return ManagerSnapshot()
 
 
 class Env:
@@ -291,11 +296,11 @@ async def test_reconcile_stops_asking_an_unreachable_manager(env: Env) -> None:
     await env.service.create(env.admin, "tv", 1399, None)
     asked: list[int] = []
 
-    async def unreachable(request_id: int) -> str:
+    async def unreachable(request_id: int) -> ManagerSnapshot:
         asked.append(request_id)
         raise SeerrError("Could not reach the request manager (ConnectError).")
 
-    env.manager.request_status = unreachable  # type: ignore[method-assign]
+    env.manager.request_snapshot = unreachable  # type: ignore[method-assign]
     assert await env.service.reconcile() == 0
     assert asked == [101]
 
