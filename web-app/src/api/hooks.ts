@@ -57,7 +57,7 @@ export const useBrowse = (section: string, f: BrowseFilters, page = 1, enabled =
   })
 
 /** Every shelf of a section with its first titles: what Movies and Shows open on. */
-export const useBrowseShelves = (section: string, f: { language?: string; limit_rows?: number; limit_items?: number }, enabled = true) =>
+export const useBrowseShelves = (section: string, f: { language?: string; limit_rows?: number; limit_items?: number; include_adult?: boolean }, enabled = true) =>
   useQuery({
     queryKey: ['browse-shelves', useProfileId(), section, f],
     enabled,

@@ -687,3 +687,135 @@ test.describe("who's watching", () => {
     })
   })
 })
+
+/** Record what the app sends, before the mock answers: [method, path with query, JSON body]. */
+async function record(page: Page) {
+  await page.addInitScript(() => {
+    const sent: Array<[string, string, unknown]> = []
+    ;(window as unknown as { sent: typeof sent }).sent = sent
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      const text = request.method === 'GET' ? '' : await request.clone().text()
+      sent.push([request.method, url.pathname.replace('/api/v1', '') + url.search, text ? JSON.parse(text) : null])
+      return original(request)
+    }
+  })
+  return (path: string) => page.evaluate((path) => (window as unknown as { sent: Array<[string, string, unknown]> }).sent.filter((s) => s[1].startsWith(path)), path)
+}
+
+test.describe('devices', () => {
+  const device = (page: Page, name: string) => page.getByTestId('device-row').filter({ hasText: name })
+
+  test('Settings lists your own devices: rename, revoke, and revoking this one signs out', async ({ page }) => {
+    await enter(page, '/settings?tab=devices', { who: 'guest' })
+    await expect(page.getByTestId('tab-devices')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('device-row')).toHaveCount(2)
+    await expect(device(page, 'Browser on Windows')).toContainText('This device')
+    await expect(device(page, 'Browser on Windows')).toContainText('Browser · Last seen just now')
+    await expect(device(page, 'Kitchen tablet')).toContainText('Last seen 3 h ago')
+    // Marking a device as shared is for those who manage users.
+    await expect(page.getByTestId('device-shared')).toHaveCount(0)
+
+    await device(page, 'Kitchen tablet').getByTestId('device-rename').click()
+    const name = page.getByLabel('Device name', { exact: true })
+    await expect(name).toHaveValue('Kitchen tablet')
+    await name.fill('Hall tablet')
+    await page.keyboard.press('Enter')
+    await expect(device(page, 'Hall tablet')).toBeVisible()
+    await device(page, 'Hall tablet').getByTestId('device-revoke').click()
+    await expect(page.getByTestId('device-row')).toHaveCount(1)
+    await device(page, 'Browser on Windows').getByTestId('device-revoke').click()
+    await expect(page.getByTestId('profile-picker')).toBeVisible()
+    expect(await page.evaluate(() => localStorage.getItem('sh.session.v1'))).toBeNull()
+  })
+
+  test('an owner marks this browser as a shared household device; it then opens on the picker', async ({ page }) => {
+    await enter(page, '/settings?tab=devices')
+    await expect(device(page, 'Living room TV')).toContainText('TV · Last seen 35 min ago')
+    await expect(device(page, 'Living room TV').getByTestId('device-shared')).toHaveAttribute('aria-pressed', 'true')
+    const here = device(page, 'This device')
+    await expect(here.getByTestId('device-shared')).toHaveAttribute('aria-pressed', 'false')
+    await here.getByTestId('device-shared').click()
+    await expect(here.getByTestId('device-shared')).toHaveAttribute('aria-pressed', 'true')
+    await expect(here).toContainText('Shared')
+    await page.reload()
+    await expect(page.getByTestId('who-is-watching')).toHaveAttribute('data-mandatory', 'true')
+  })
+
+  test('older servers: no rename or shared switch once the call answers 404, no Devices tab without users', async ({ page, context }) => {
+    await enter(page, '/settings?tab=devices', { who: 'owner', mode: 'no-switch' })
+    await device(page, 'Living room TV').getByTestId('device-rename').click()
+    await page.getByLabel('Device name', { exact: true }).fill('Den TV')
+    await page.getByTestId('device-rename-save').click()
+    await expect(page.locator('.toast').last()).toHaveText('This server cannot rename devices yet.')
+    await expect(page.getByTestId('device-rename')).toHaveCount(0)
+    await expect(page.getByTestId('device-shared')).toHaveCount(0)
+    await expect(page.getByTestId('device-revoke')).toHaveCount(3)
+
+    const legacy = await second(context)
+    await enter(legacy, '/settings', { who: 'owner', mode: 'legacy' })
+    await expect(legacy.getByTestId('tab-about')).toBeVisible()
+    await expect(legacy.getByTestId('tab-devices')).toHaveCount(0)
+  })
+})
+
+test.describe('adult titles', () => {
+  const shelf = (page: Page) => page.locator('[data-row="shelf:After Dark"]')
+  const filters = async (page: Page) => {
+    await page.getByTestId('browse-filter').click()
+    await expect(page.getByTestId('browse-filters')).toBeVisible()
+  }
+
+  test('someone without the permission is never offered them', async ({ page }) => {
+    const sent = await record(page)
+    await enter(page, '/browse/movies', { who: 'guest' })
+    await expect(page.getByTestId('row').first()).toBeVisible()
+    await filters(page)
+    await expect(page.getByTestId('adult-titles')).toHaveCount(0)
+    await expect(page.getByText(/adult/i)).toHaveCount(0)
+    expect((await sent('/browse/movies/shelves')).every((s) => !s[1].includes('include_adult'))).toBe(true)
+  })
+
+  test('the holder unlocks with their own PIN, choosing one first if they have none, and can lock again', async ({ page }) => {
+    const sent = await record(page)
+    await enter(page, '/browse/movies')
+    await expect(page.getByTestId('row').first()).toBeVisible()
+    await expect(shelf(page)).toHaveCount(0)
+    await filters(page)
+    await page.getByTestId('adult-unlock').click()
+    const pin = page.getByTestId('pin-dialog')
+    // No PIN yet: choose one (twice), which also unlocks.
+    await expect(pin.getByRole('heading', { name: 'Choose a PIN first' })).toBeVisible()
+    for (const entry of ['2468', '2468']) { await page.keyboard.type(entry); await page.keyboard.press('Enter') }
+    await expect(pin).toHaveCount(0)
+    await expect(shelf(page)).toBeVisible()
+    expect(await sent('/users/u1/pin')).toEqual([['PUT', '/users/u1/pin', { pin: '2468' }]])
+    expect(await sent('/auth/adult-unlock')).toEqual([['POST', '/auth/adult-unlock', { pin: '2468' }]])
+    expect((await sent('/browse/movies/shelves')).at(-1)![1]).toContain('include_adult=true')
+
+    // Lock is always in reach while they show.
+    await expect(page.getByTestId('adult-unlocked')).toContainText('Adult titles are shown on this device.')
+    await page.getByTestId('adult-lock').click()
+    await expect(shelf(page)).toHaveCount(0)
+    await expect(page.getByTestId('adult-unlocked')).toHaveCount(0)
+
+    // Now there is a PIN: it is asked for, a wrong one is refused, the right one unlocks.
+    await filters(page)
+    await page.getByTestId('adult-unlock').click()
+    await expect(pin.getByRole('heading', { name: 'Your PIN' })).toBeVisible()
+    await page.keyboard.type('1111')
+    await page.keyboard.press('Enter')
+    await expect(pin.getByTestId('pin-error')).toHaveText('That PIN is not right. Try again.')
+    await page.keyboard.type('2468')
+    await page.keyboard.press('Enter')
+    await expect(shelf(page)).toBeVisible()
+    // Unlocked for the session: still so after a reload, and the panel offers Lock instead.
+    await page.reload()
+    await expect(shelf(page)).toBeVisible()
+    await filters(page)
+    await expect(page.getByTestId('adult-titles').getByRole('button', { name: 'Lock adult titles', exact: true })).toBeVisible()
+    await expect(page.getByTestId('adult-unlock')).toHaveCount(0)
+  })
+})

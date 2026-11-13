@@ -6,6 +6,7 @@ import { useParams, useSearchParams } from 'react-router'
 import { useBrowse, useBrowseCategories, useBrowseLanguages, useBrowseShelves, useSources, type BrowseFilters } from '../api/hooks'
 import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { CatalogPicker } from '../components/CatalogPicker'
+import { useAdultUnlock } from '../components/AdultUnlock'
 import { Icon } from '../components/Icon'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
 import { MediaTile, TileRow } from '../components/Tile'
@@ -64,7 +65,9 @@ export function Browse() {
   if (pageKey !== filterKey) { setPageKey(filterKey); setPage(1) }
   // Shelves are the way in. Asking for anything narrower (a filter, a search, one shelf) shows the grid.
   const filtered = !!(source || category || genre || term || sort !== defaults.sort || lang !== defaults.language)
-  const shelves = useBrowseShelves(section, { language, ...SHELVES }, saved.ready && !filtered)
+  // Adult titles are asked for only on a session their holder has unlocked; the server ignores the flag otherwise.
+  const adult = useAdultUnlock()
+  const shelves = useBrowseShelves(section, { language, ...SHELVES, ...(adult.unlocked ? { include_adult: true } : {}) }, saved.ready && !filtered)
   const onShelves = !filtered && !shelves.error && (!shelves.data || shelves.data.shelves.length > 0)
   const filters = { source_id: source || undefined, language, q: term || undefined }
   const categories = useBrowseCategories(section, filters)
@@ -113,6 +116,10 @@ export function Browse() {
         {active.map((f) => <Chip key={f.id} focusKey={`browse:active:${f.id}`} label={`Remove filter ${f.text}`} testId="active-filter" onEnter={() => drop(f.id, f.clear)}>{f.text}<Icon name="x" size={14} /></Chip>)}
         <Button focusKey="browse:clear" ghost onEnter={reset}>Clear filters</Button>
       </FocusGroup>}
+      {adult.unlocked && <FocusGroup focusKey="browse:adult" className="flex items-center gap-3 flex-wrap" data-testid="adult-unlocked">
+        <span className="label">Adult titles are shown on this device.</span>
+        <Button focusKey="browse:adult-lock" ghost icon="lock" onEnter={adult.lock} testId="adult-lock">Lock</Button>
+      </FocusGroup>}
       {!onShelves && <p className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} titles`}</p>}
       {saved.error && <p className="label" role="alert">{saved.error}</p>}
     </div>
@@ -143,11 +150,18 @@ export function Browse() {
       {languageOffered && <section className="flex flex-col gap-2"><h3 className="label">Language</h3>
         <LanguageFilter scope="browse" value={lang} onChange={setLang} languages={languages.data} />
       </section>}
+      {/* only ever rendered for a holder of watch.adult */}
+      {adult.offered && <section className="flex flex-col gap-2" data-testid="adult-titles"><h3 className="label">Adult titles</h3>
+        {adult.unlocked
+          ? <><p className="label">Shown on this device until you lock them, four hours at most.</p><div><Button focusKey="browse:adult-relock" icon="lock" onEnter={adult.lock}>Lock adult titles</Button></div></>
+          : <><p className="label">Hidden. Your PIN shows them on this device for four hours.</p><div><Button focusKey="browse:adult-unlock" icon="lock" onEnter={() => { setSheet(null); adult.ask() }} testId="adult-unlock">Unlock adult titles</Button></div></>}
+      </section>}
       <p className="label" role="status">{saved.error ?? (saved.saving ? 'Saving filters…' : 'Filters are saved for this profile.')}</p>
       <FocusGroup focusKey="browse:sheet-actions" className="flex gap-2 flex-wrap">
         <Button focusKey="browse:done" primary onEnter={() => setSheet(null)}>Done</Button>
         {filtered && <Button focusKey="browse:sheet-clear" ghost onEnter={() => { setSheet(null); reset() }}>Clear filters</Button>}
       </FocusGroup>
     </Modal>
+    {adult.dialog}
   </div>
 }

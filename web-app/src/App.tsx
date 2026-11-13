@@ -61,6 +61,10 @@ export function App() {
   const switchable = useSwitchable(shared)
   const who = useWho()
   const asks = shared && !who.picked && switchable.data !== null
+  // "At the start" means just that: a device made shared while it is in use keeps going until its next start.
+  const pickNow = who.pick
+  const personal = me.data ? !me.data.shared_device : me.data === null
+  useEffect(() => { if (personal) pickNow() }, [personal, pickNow])
   useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')

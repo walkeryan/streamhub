@@ -65,7 +65,7 @@ export function WhoIsWatching({ users, mandatory, error, onRetry }: { users: Swi
   }
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Who's watching?" className="who" data-testid="who-is-watching" data-mandatory={!!mandatory}>
+    <div role="dialog" aria-modal="true" aria-label="Who's watching?" className="who-screen" data-testid="who-is-watching" data-mandatory={!!mandatory}>
       <FocusGroup focusKey="who" boundary className="flex flex-col items-center gap-8" style={{ width: 'min(60rem, 100%)' }}>
         <h1 className="display" style={{ textAlign: 'center' }}>Who's watching?</h1>
         {error ? <ErrorState error={error} onRetry={onRetry} /> : !users ? <p className="muted">Loading…</p> : (
