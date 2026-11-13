@@ -31,7 +31,8 @@ from typing import Any
 from sqlalchemy import select
 
 from app.infra.models import Profile, utcnow
-from app.services.errors import Conflict, Unauthorized
+from app.proxy.stream_proxy import UpstreamRefused
+from app.services.errors import BadGateway, Conflict, ServiceError, Unauthorized
 
 RECENT_S = 30.0
 # A record nobody touched for this long is dropped; its grant re-creates it if it comes back.
@@ -39,6 +40,10 @@ FORGET_S = 600.0
 VALID_TTL_S = 3.0
 GUARD_INTERVAL_S = 1.0
 MAX_VALID = 4096
+
+# How a source turns away one connection too many: forbidden, throttled, unavailable, or it just
+# hangs up (None). ffmpeg names 429 and 5xx only by their class on some versions.
+LIMIT_REFUSALS = {None, "403", "429", "503", "4XX", "5XX"}
 
 Key = tuple[str, str, str]  # user id, auth session id, content ref
 
@@ -56,6 +61,56 @@ def panes(count: int) -> Iterator[None]:
         yield
     finally:
         _slots.reset(token)
+
+
+async def source_busy(
+    c: Any, source_id: str, profile_id: str, message: str = "Source connection limit is occupied."
+) -> Conflict:
+    """``source_busy`` for the profile that was turned away, naming who holds the source's connections.
+
+    ``active`` lists the streams this server is running on the source: the profile's name, what it
+    is watching and since when. A title the refused profile may not open itself is left unnamed.
+    ``c`` is the container, or anything with its ``db``, ``proxy``, ``sources`` and ``content_policy``.
+    """
+    source = await c.sources.get(source_id)
+    viewers = c.proxy.active_viewers(source_id)
+    names: dict[str, str] = {}
+    if viewers:
+        async with c.db.session() as session:
+            wanted = {v.profile_id for v in viewers}
+            rows = (await session.execute(select(Profile).where(Profile.id.in_(wanted)))).scalars()
+            names = {row.id: row.name for row in rows}
+    active = []
+    for viewer in viewers:
+        named = viewer.title is not None
+        if named and viewer.ref and viewer.profile_id != profile_id:
+            try:
+                await c.content_policy.require(profile_id, viewer.ref)
+            except ServiceError:
+                named = False
+        active.append(
+            {
+                "profile_name": names.get(viewer.profile_id),
+                "title": viewer.title if named else None,
+                "kind": viewer.kind if named else None,
+                "since": viewer.since.isoformat(),
+            }
+        )
+    limit = c.sources.max_connections(source)
+    return Conflict(message, code="source_busy", extra={"active": active, "limit": limit})
+
+
+async def open_failed(
+    c: Any, source_id: str, profile_id: str, exc: Exception, maximum: int | None, message: str
+) -> ServiceError:
+    """The error for an upstream that did not open: ``source_busy`` when the source's limit explains it."""
+    if (
+        isinstance(exc, UpstreamRefused)
+        and exc.status in LIMIT_REFUSALS
+        and c.proxy.refused_at_limit(source_id, maximum)
+    ):
+        return await source_busy(c, source_id, profile_id, "The source refused another connection.")
+    return BadGateway(message)
 
 
 @dataclass(slots=True)

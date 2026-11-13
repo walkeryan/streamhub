@@ -502,6 +502,8 @@ class StreamProxy:
         self._probes: dict[object, str] = {}  # media probes in flight -> source id
         self._pins: dict[str, tuple[str, float]] = {}  # playback -> (upstream URL to keep using, expiry)
         self._pinning: dict[str, asyncio.Future[str]] = {}
+        # HLS sessions someone answers for while nobody polls them (a watch room's): never reaped as idle.
+        self._kept: set[str] = set()
 
     def ensure_running(self, generation: int | None = None) -> None:
         if self.paused or (generation is not None and generation != self.generation):
@@ -644,6 +646,7 @@ class StreamProxy:
                             await self._stop_hls(key, expected=sess)
                             continue
                     abandoned = buffered and self.dvr.ever_leased and not held
+                    held = held or key in self._kept
                     idle = VOD_DONE_IDLE_S if sess.complete else HLS_IDLE_S
                     if (
                         abandoned
@@ -757,9 +760,11 @@ class StreamProxy:
         """Whose streams hold this source's connections right now, longest-running first."""
         now = self._clock()
         found: list[Viewer] = []
-        for hls in self._hls.values():
+        for key, hls in self._hls.items():
             if hls.source_id == source_id and not hls.complete:
-                found += [viewer for viewer, seen in hls.viewers.values() if now - seen <= HLS_IDLE_S]
+                # A kept session holds its connection whether or not anyone polled it lately.
+                kept = key in self._kept
+                found += [viewer for viewer, seen in hls.viewers.values() if kept or now - seen <= HLS_IDLE_S]
         found += [s.viewer for s in self._http if s.source_id == source_id and s.viewer is not None]
         for up in self._shared.values():
             if up.source_id == source_id:
@@ -811,7 +816,7 @@ class StreamProxy:
                         with contextlib.suppress(ValueError):
                             grace = max(grace, float(line.split(":", 1)[1]) + 2)
                         break
-            reserved = any(peer_key in lease.members for lease in self._pairs.values())
+            reserved = peer_key in self._kept or any(peer_key in lease.members for lease in self._pairs.values())
             if not reserved and not self.dvr.held(peer_key) and now - peer.last_access >= grace:
                 await self._stop_hls(peer_key, expected=peer)
                 self._forget_pin(peer)
@@ -1163,7 +1168,14 @@ class StreamProxy:
         vod: VodPlan | None = None,
         viewer: Viewer | None = None,
         pin_key: str | None = None,
+        sid: str | None = None,
     ) -> HlsSession:
+        """The running session for ``key``, started if there is none.
+
+        ``sid`` names the session's directory and segment URLs when the key alone must not: a
+        session that is stopped and started again under one key (a watch room after a seek) gets
+        a new one each time, so no client mistakes the new segments for the old.
+        """
         self.ensure_running(generation)
         generation = self.generation
         # ffmpeg asks for its input again on every seek inside the file (a Matroska index sits at
@@ -1224,20 +1236,20 @@ class StreamProxy:
                 if full:
                     full = await self._evict_idle_hls(source_id, capacity, now)
                 if not full:
-                    sid = self.session_id(key)
+                    name = sid or self.session_id(key)
                     if buffered:
                         if not live or transcode != "none":
                             raise Conflict(
                                 "DVR requires an existing live codec-copy HLS grant.", code="buffer_unsupported"
                             )
-                        workdir = self.dvr.reserve(key, sid)
+                        workdir = self.dvr.reserve(key, name)
                     else:
-                        workdir = self.transcode_dir / sid
+                        workdir = self.transcode_dir / name
                         shutil.rmtree(workdir, ignore_errors=True)
                         workdir.mkdir(parents=True, exist_ok=True)
                     sess = await self._spawn_hls(
                         key,
-                        sid,
+                        name,
                         workdir,
                         attempts_for(url, workdir),
                         source_id=source_id,
@@ -1337,6 +1349,25 @@ class StreamProxy:
                 s.last_access = self._clock()
                 return s
         return None
+
+    def keep(self, key: str) -> None:
+        """Do not reap ``key``'s session for idleness, nor give its connection to another viewer."""
+        self._kept.add(key)
+
+    async def stop_hls(self, key: str, *, forget: bool = False) -> None:
+        """Stop one session by key. ``forget`` also ends its keep and drops the upstream session it pinned."""
+        async with self._hls_lock:
+            sess = self._hls.get(key)
+            await self._stop_hls(key)
+            if forget:
+                self._kept.discard(key)
+                if sess is not None:
+                    self._forget_pin(sess)
+
+    def hls_running(self, key: str) -> HlsSession | None:
+        """``key``'s session while it is usable: ffmpeg running, or done with the whole file."""
+        sess = self._hls.get(key)
+        return sess if sess is not None and (sess.proc.returncode is None or sess.complete) else None
 
     async def _stop_hls(self, key: str, *, expected: HlsSession | None = None) -> None:
         """Caller holds _hls_lock, including throughout process termination."""

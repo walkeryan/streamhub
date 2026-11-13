@@ -4686,7 +4686,7 @@ export interface paths {
         put?: never;
         /**
          * Take a seat in the room
-         * @description Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged. A room has at most 8 members and expires after 30 minutes with none.
+         * @description Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). A room has at most 8 members and expires after 30 minutes with none.
          */
         post: {
             parameters: {
@@ -4726,7 +4726,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description room_full | room_unsupported | audio_selection_required */
+                /** @description room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -5186,7 +5186,7 @@ export interface components {
         /** @description One stream holding a source connection, named to the profile a busy source turned away; or one of a user's own streams, on user_stream_limit. */
         ActiveStream: {
             profile_name?: string | null;
-            /** @description Channel or title being watched; null for adult titles and for content the refused profile may not open. */
+            /** @description Channel or title being watched; null for adult titles and for content the refused profile may not open. A watch room's shared stream is named "Watch room: <title>" (profile_name is the host), a recording on a connection of its own "Recording: <title>". */
             title?: string | null;
             /** @description channel, movie, episode, …; null whenever title is. */
             kind?: string | null;
@@ -5792,6 +5792,8 @@ export interface components {
             audio_track?: number | null;
             /** @description Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms. */
             start_position_ms?: number | null;
+            /** @description Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. Null for every other descriptor. */
+            stream_epoch?: number | null;
             id: string;
             /** @enum {string} */
             mode: "direct" | "proxy" | "hls" | "handoff";
@@ -6096,6 +6098,8 @@ export interface components {
          *     - `state {playing, position_ms, as_of_ms, by, controls_locked}`: the room clock (see RoomState).
          *       `by` is the member who caused it, or null when the room did. A member more than 1000 ms from
          *       the room position seeks to it. Any `state` clears a `waiting` notice.
+         *       In a room that plays one shared stream, every `state` also carries `stream_epoch` and
+         *       `stream_start_ms` (see below); in other rooms the two fields are absent.
          *     - `members {members: RoomMember[]}`: sent whenever someone joins, leaves or starts or stops buffering.
          *     - `waiting {name}`: the room is paused for this member. It resumes when they recover or after 15 s.
          *     - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
@@ -6107,6 +6111,22 @@ export interface components {
          *     On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
          *     Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
          *     connection keeps the seat until the 20 s silence rule applies.
+         *
+         *     One shared stream. A title from a source that limits its connections (or is always proxied)
+         *     is played to the whole room from a single upstream: every member's `descriptor` is an HLS
+         *     URL of their own onto the same stream, whatever their client, with `start_position_ms`
+         *     (media time zero of the stream) and `stream_epoch` set. The stream uses one of the source's
+         *     connections however many members watch, and is released when the last member leaves or the
+         *     room closes. A seek restarts it at the new position before the seek's `state` is sent. That
+         *     `state` carries the new `stream_epoch` and `stream_start_ms`: a client whose epoch differs
+         *     reloads the same playlist URL (the descriptor's `url` does not change) and treats
+         *     `stream_start_ms` as its new time zero; segments of the previous epoch answer 403. A seek to
+         *     a position the running stream already starts at (positions are floored to 5 s) keeps the
+         *     epoch, and the client seeks within what it is playing. The stream's audio is the room's
+         *     `audio_track`, else the first member's preferred or default track; `audio_track` in the
+         *     descriptor says which. Titles from other sources are resolved per member, and live channels
+         *     share the proxy's upstream as any two viewers of a channel do: for both, `stream_epoch` is
+         *     null and `state` carries neither field.
          */
         RoomJoined: {
             /** @description valid 2 h, for this room and member only */

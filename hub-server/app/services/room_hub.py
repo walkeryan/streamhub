@@ -3,6 +3,10 @@
 ``app.services.rooms`` decides what happens; this module delivers it. Every member socket
 has an ordered outbox, filled synchronously as events are produced, so each member sees
 the room's events in the order the room applied them however slow another member is.
+
+A room that plays one shared upstream has work to do before a seek is announced (the session is
+restarted at the new position). The seek's events, and whatever the room says after them, then
+wait their turn in a per-room queue, so the order members see is still the order of the room.
 """
 
 from __future__ import annotations
@@ -11,7 +15,8 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -137,6 +142,15 @@ class RoomHub:
         self._conns: dict[str, dict[str, Connection]] = {}
         self._ticker: asyncio.Task[None] | None = None
         self._running = False
+        # Hooks of the room's shared playback (``RoomPlayback``); a hub without them only relays.
+        # Work to finish before a seek is announced, or None when the room has none to do.
+        self.before_seek: Callable[[Room], Awaitable[None] | None] | None = None
+        # Fields added to every ``state`` message as it is sent.
+        self.state_extra: Callable[[Room], dict[str, Any]] | None = None
+        # Told whenever a room's members or lifetime may have changed.
+        self.on_change: Callable[[Room], None] | None = None
+        self._queued: dict[str, deque[tuple[list[Event], Awaitable[None] | None]]] = {}
+        self._drains: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -150,6 +164,9 @@ class RoomHub:
         if ticker is not None:
             ticker.cancel()
             await asyncio.gather(ticker, return_exceptions=True)
+        for drain in list(self._drains):
+            drain.cancel()
+        await asyncio.gather(*self._drains, return_exceptions=True)
         for room in self.registry.rooms():
             self.close(room.code, "shutdown")
 
@@ -220,7 +237,7 @@ class RoomHub:
         conn = conns[member.id] = Connection(room, member)
         room.touch(member, self.clock())
         for event in room.snapshot(member):
-            conn.send(event.message())
+            conn.send(self._message(room, event))
         return conn
 
     def detach(self, conn: Connection, *, left: bool) -> None:
@@ -233,7 +250,44 @@ class RoomHub:
         if left:
             self.deliver(conn.room, conn.room.leave(conn.member.id, self.clock()))
 
-    def deliver(self, room: Room, events: list[Event]) -> None:
+    def _message(self, room: Room, event: Event) -> dict[str, Any]:
+        message = event.message()
+        if event.kind == "state" and self.state_extra is not None:
+            message.update(self.state_extra(room))
+        return message
+
+    def deliver(self, room: Room, events: list[Event], before: Awaitable[None] | None = None) -> None:
+        """Send ``events`` to the room's sockets, after ``before`` and after anything already waiting."""
+        if self.on_change is not None:
+            self.on_change(room)
+        queue = self._queued.get(room.code)
+        if queue is None:
+            if before is None:
+                self._send(room, events)
+                return
+            queue = self._queued[room.code] = deque()
+            drain = asyncio.create_task(self._drain(room, queue))
+            self._drains.add(drain)
+            drain.add_done_callback(self._drains.discard)
+        queue.append((events, before))
+
+    async def _drain(self, room: Room, queue: deque[tuple[list[Event], Awaitable[None] | None]]) -> None:
+        try:
+            while queue:
+                events, before = queue[0]
+                if before is not None:
+                    try:
+                        await before
+                    except Exception:
+                        # The members are told of the seek all the same; the stream is retried on demand.
+                        log.exception("room seek preparation failed", extra={"room": room.code})
+                queue.popleft()
+                self._send(room, events)
+        finally:
+            # No await since the queue was last seen empty: nothing can have been added behind it.
+            self._queued.pop(room.code, None)
+
+    def _send(self, room: Room, events: list[Event]) -> None:
         for event in events:
             conns = self._conns.get(room.code, {})
             for conn in [c for c in conns.values() if event.to in (None, c.member.id)]:
@@ -241,7 +295,7 @@ class RoomHub:
                     conn.close(str(event.data["reason"]))
                     del conns[conn.member.id]
                 else:
-                    conn.send(event.message())
+                    conn.send(self._message(room, event))
             if not conns:
                 self._conns.pop(room.code, None)
 
@@ -267,6 +321,10 @@ class RoomHub:
                 events = room.member_buffering(member, message["on"], now)
             elif kind == "seek":
                 events = room.apply(Command("seek", position_ms=message["position_ms"]), member, now)
+                # A room on one shared upstream restarts it at the new position before anyone is told.
+                before = self.before_seek(room) if self.before_seek is not None else None
+                self.deliver(room, events, before)
+                return
             elif kind == "lock":
                 events = room.apply(Command("lock", on=message["on"]), member, now)
             else:

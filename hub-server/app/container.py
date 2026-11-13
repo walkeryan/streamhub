@@ -217,6 +217,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     playback.probe_slot = proxy.probe_slot
     playback.pin = proxy.pin
     google_auth = GoogleAuthService(settings, auth, lambda: app_settings.get("signup_mode"))
+    rooms = RoomHub(RoomRegistry(), RoomTokens(crypto))
     return Container(
         settings=settings,
         db=db,
@@ -261,8 +262,10 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         image_cache=ImageCache(settings.image_cache_dir, settings.image_cache_max_mb * 1024 * 1024),
         requests=requests,
         notices=NoticeService(db),
-        rooms=RoomHub(RoomRegistry(), RoomTokens(crypto)),
-        room_playback=RoomPlayback(playback, proxy),
+        rooms=rooms,
+        room_playback=RoomPlayback(
+            playback, proxy, db=db, sources=sources, content_policy=content_policy, settings=app_settings, hub=rooms
+        ),
         recorder=recorder,
         http_factory=http_factory,
     )
@@ -290,6 +293,7 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
 async def shutdown(c: Container) -> None:
     c.scheduler.shutdown()
     await c.rooms.shutdown()
+    await c.room_playback.shutdown()
     await c.recorder.shutdown()
     await c.sync.wait_idle()
     await c.proxy.shutdown()
