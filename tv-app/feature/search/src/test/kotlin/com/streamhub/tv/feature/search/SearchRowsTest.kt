@@ -8,6 +8,7 @@ import com.streamhub.tv.core.data.model.SearchResponse
 import com.streamhub.tv.core.data.model.SourceBadge
 import com.streamhub.tv.core.data.model.SourceType
 import com.streamhub.tv.core.data.model.Tile
+import com.streamhub.tv.core.data.model.TileRequestProgress
 import com.streamhub.tv.core.data.model.searchParameters
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,19 +30,23 @@ class SearchRowsTest {
 
     @Test fun aTitleThatPlaysHereCarriesATick() {
         assertEquals(TitleMark.PlaysHere, titleMark(tile(inApp = true)))
-        assertEquals("✓", titleMarkText(titleMark(tile(inApp = true))))
+        assertEquals("✓", titleTick(tile(inApp = true)))
         // Fulfilled and playing: the tick, not the request.
         assertEquals(TitleMark.PlaysHere, titleMark(tile(inApp = true, state = "available")))
     }
 
     @Test fun aTitleThatDoesNotPlayHereCarriesNothingUnlessARequestIsInProgress() {
         assertEquals(TitleMark.None, titleMark(tile()))
-        assertNull(titleMarkText(titleMark(tile())))
+        assertNull(titleTick(tile()))
         // A hand-off source is not something this app plays, and it is not a request either.
         assertEquals(TitleMark.None, titleMark(tile(inApp = false)))
-        for (closed in listOf("declined", "failed", "available")) assertEquals(closed, TitleMark.None, titleMark(tile(state = closed)))
-        for (open in listOf("pending_approval", "approved", "sent")) assertTrue(open, titleMark(tile(state = open)) is TitleMark.Requested)
-        assertEquals("Requested", titleMarkText(titleMark(tile(state = "pending_approval"))))
+        for (refused in listOf("declined", "failed")) assertEquals(refused, TitleMark.None, titleMark(tile(state = refused)))
+        for (open in listOf("pending_approval", "approved", "sent")) {
+            assertTrue(open, titleMark(tile(state = open)) is TitleMark.Requested)
+            assertNull("a request is said by its chip, not by a tick", titleTick(tile(state = open)))
+        }
+        assertEquals("Requested", (titleMark(tile(state = "pending_approval")) as TitleMark.Requested).status.label)
+        assertEquals("Downloading 42%", (titleMark(tile(state = "sent").copy(requestProgress = TileRequestProgress("downloading", 42))) as TitleMark.Requested).status.label)
         assertEquals(TitleMark.None, titleMark(tile(kind = MediaKind.CHANNEL)))
     }
 

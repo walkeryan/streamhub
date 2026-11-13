@@ -15,6 +15,51 @@ object RequestStates {
     const val FAILED = "failed"
 }
 
+/**
+ * RequestPhase values, as text: what is happening to a requested title, as the request manager last
+ * reported it. A phase this build does not know still decodes and is shown by its own name.
+ */
+object RequestPhases {
+    /** Waiting for approval here. */
+    const val REQUESTED = "requested"
+    /** Approved here; the request manager has not taken it yet. */
+    const val APPROVED = "approved"
+    /** The request manager has it and nothing is in its download queue. */
+    const val SEARCHING = "searching"
+    const val DOWNLOADING = "downloading"
+    /** Every queue item has finished and the title is not available yet. */
+    const val IMPORTING = "importing"
+    /** Series only: some of the requested seasons can be watched. */
+    const val PARTIALLY_AVAILABLE = "partially_available"
+    const val AVAILABLE = "available"
+    const val DECLINED = "declined"
+    const val FAILED = "failed"
+    /** Every unfinished download reports a problem, or nothing has moved for 30 minutes. */
+    const val STALLED = "stalled"
+    /** The request manager did not answer; [RequestProgress.lastPhase] has the phase before. */
+    const val UNKNOWN = "unknown"
+}
+
+/** What a request is doing right now (MediaRequest.progress). */
+@Serializable
+data class RequestProgress(
+    val phase: String = RequestPhases.UNKNOWN,
+    /** Only with phase unknown: the last phase that was known. */
+    @SerialName("last_phase") val lastPhase: String? = null,
+    /** Only while downloading: 0 to 100. Null when a size is missing: the bar is indeterminate. */
+    val percent: Int? = null,
+    /** Only while downloading: when the last queue item is due. */
+    val eta: String? = null,
+    /** Short plain text for beside the phase: "2 of 8 episodes", "Queued", why it stalled, the decline note. */
+    val detail: String? = null,
+    /** When the request manager last answered for this request. */
+    @SerialName("checked_at") val checkedAt: String? = null,
+)
+
+/** The part of [RequestProgress] a poster needs (Tile.request_progress). */
+@Serializable
+data class TileRequestProgress(val phase: String = RequestPhases.UNKNOWN, val percent: Int? = null)
+
 @Serializable
 data class MediaRequest(
     val id: String,
@@ -33,6 +78,8 @@ data class MediaRequest(
     val state: String = RequestStates.PENDING_APPROVAL,
     /** Decline reason, or why an approved request has not reached the request manager yet. */
     val note: String? = null,
+    /** What it is doing right now. Null only from a server older than request progress. */
+    val progress: RequestProgress? = null,
 )
 
 @Serializable

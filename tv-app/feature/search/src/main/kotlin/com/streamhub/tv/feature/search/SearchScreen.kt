@@ -167,7 +167,7 @@ fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
                                 SearchSectionName.TITLES -> ResultRow(name, view.titles.map { RowEntry.Item(it, it.id) }, more, ui.growing, grown, grownFocus, { grown = null }, { grown = name to view.titles.size; vm.showMore(name) },
                                     Tokens.Tile.PosterW, Tokens.Tile.PosterH) { tile, modifier ->
                                     // A tick on what plays here; where a request is in progress, how it stands; otherwise nothing.
-                                    PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) }, modifier = modifier, badge = titleMarkText(titleMark(tile)), showSources = false)
+                                    PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) }, modifier = modifier, badge = titleTick(tile), showSources = false)
                                 }
                             }
                         }

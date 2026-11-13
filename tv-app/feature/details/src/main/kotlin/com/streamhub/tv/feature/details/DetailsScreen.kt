@@ -38,8 +38,8 @@ import com.streamhub.tv.core.ui.components.WatchTogetherDialog
 import com.streamhub.tv.core.data.model.RequestStates
 import com.streamhub.tv.core.ui.components.ErrorDialog
 import com.streamhub.tv.core.data.repo.isOpenRequest
-import com.streamhub.tv.core.data.repo.requestStateLabel
-import com.streamhub.tv.core.data.repo.requestStateText
+import com.streamhub.tv.core.data.repo.requestPollMs
+import com.streamhub.tv.core.data.repo.requestStatus
 import com.streamhub.tv.core.data.repo.requestTarget
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,6 +64,8 @@ import com.streamhub.tv.core.ui.components.HeroIcons
 import com.streamhub.tv.core.ui.components.LandscapeTile
 import com.streamhub.tv.core.ui.components.LoadingView
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
+import com.streamhub.tv.core.ui.components.RequestStatus
+import com.streamhub.tv.core.ui.components.WhileVisible
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.metaLine
@@ -113,6 +115,13 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
     // Request: offered for a title the server marks requestable, and kept in place (showing where the
     // request stands) once one is open, so the button under the viewer's focus does not vanish.
     val requestOpen = isOpenRequest(s.requestState)
+    // One status for the request, in place of a sentence: the chip of its phase and, while it downloads, the bar.
+    val requestStatus = s.requestProgress?.takeIf { s.requestState != null }?.let { progress -> requestStatus(progress) }
+    // Followed only while this page is in front: every 15 s while it downloads or imports, else every 3 min.
+    val pollMs = requestPollMs(listOf(s.requestProgress?.phase))
+    if (s.requestState != null && (requestOpen || (s.requestState == RequestStates.AVAILABLE && inApp.isEmpty()))) {
+        WhileVisible(pollMs to d.id) { while (true) { delay(pollMs); vm.pollRequest() } }
+    }
     val showRequest = s.canRequest && requestTarget(d.id) != null && (d.requestable || requestOpen)
     // With nothing to play here, Request is the first thing this screen is for.
     val requestFirst = showRequest && inApp.isEmpty()
@@ -166,8 +175,9 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                     ) {
                         if (showRequest) item("request") {
                             ShButton(
-                                when { s.requesting -> "Requesting…"; requestOpen -> requestStateLabel(s.requestState) ?: "Requested"; else -> "Request" },
-                                onClick = { if (requestOpen) vm.say(requestStateText(s.requestState).orEmpty()) else vm.request() },
+                                // While a request is open the button names its phase; Select then asks how it stands now.
+                                when { s.requesting -> "Requesting…"; requestOpen -> requestStatus?.label ?: "Requested"; else -> "Request" },
+                                onClick = { if (requestOpen) vm.checkRequest() else vm.request() },
                                 icon = if (requestOpen) Icons.Filled.Check else Icons.Filled.Add,
                                 style = if (requestFirst && !requestOpen) ButtonStyle.Primary else ButtonStyle.Secondary,
                                 modifier = if (requestFirst) Modifier.focusRequester(playFocus).leftOpensRail(rail) else Modifier,
@@ -202,7 +212,9 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                     }
                     // Where the request stands, while that is news: once the title is simply available it is not.
                     // The toast line is for passing messages.
-                    requestStateText(s.requestState.takeIf { it != RequestStates.AVAILABLE })?.let { Text(it, color = t.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = 4.dp)) }
+                    requestStatus?.takeIf { s.requestState != RequestStates.AVAILABLE || inApp.isEmpty() }?.let {
+                        RequestStatus(it, Modifier.padding(start = Tokens.Canvas.SafeMarginX, end = Tokens.Canvas.SafeMarginX, top = 6.dp))
+                    }
                     s.toast?.let { Text(it, color = t.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = 4.dp)) }
                 }
                 if (d.seasons.isNotEmpty()) item("seasons") {

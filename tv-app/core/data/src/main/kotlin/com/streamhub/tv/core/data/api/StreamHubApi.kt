@@ -373,6 +373,10 @@ class StreamHubApi @Inject constructor(
     suspend fun requests(all: Boolean = false): RequestsResponse = get("/requests") { parameter("scope", if (all) "all" else "mine") }
     /** 201 created, or 200 when an open request for this title already exists: both answer with the request. */
     suspend fun createRequest(req: RequestCreate): MediaRequest = client.post(url("/requests")) { setBody(req) }.ok()
+    /** One request, for its requester or whoever may approve; its stored progress, refreshed first when stale. */
+    suspend fun request(requestId: String): MediaRequest = get("/requests/${id(requestId)}")
+    /** Asks the request manager about this request now (at most every 5 s; sooner calls answer the stored progress). */
+    suspend fun refreshRequest(requestId: String): MediaRequest = client.post(url("/requests/${id(requestId)}/refresh")).ok()
     suspend fun approveRequest(requestId: String, note: String? = null): MediaRequest =
         client.post(url("/requests/${id(requestId)}/approve")) { setBody(RequestDecision(note)) }.ok()
     suspend fun declineRequest(requestId: String, note: String? = null): MediaRequest =

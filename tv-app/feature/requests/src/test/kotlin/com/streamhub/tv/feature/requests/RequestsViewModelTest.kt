@@ -3,6 +3,7 @@ package com.streamhub.tv.feature.requests
 import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.model.ApiError
 import com.streamhub.tv.core.data.model.MediaRequest
+import com.streamhub.tv.core.data.model.RequestProgress
 import com.streamhub.tv.core.data.model.Notice
 import com.streamhub.tv.core.data.repo.RequestList
 import com.streamhub.tv.core.data.repo.RequestTarget
@@ -40,6 +41,8 @@ class RequestsViewModelTest {
         override suspend fun request(target: RequestTarget, seasons: List<Int>?): MediaRequest = error("not used")
         override suspend fun approve(requestId: String): MediaRequest { failDecision?.let { throw it }; calls += "approve:$requestId"; return everyone.first { it.id == requestId }.copy(state = "sent") }
         override suspend fun decline(requestId: String): MediaRequest { failDecision?.let { throw it }; calls += "decline:$requestId"; return everyone.first { it.id == requestId }.copy(state = "declined") }
+        override suspend fun one(requestId: String): MediaRequest { calls += "one:$requestId"; return (everyone + mine).first { it.id == requestId } }
+        override suspend fun refresh(requestId: String): MediaRequest { failDecision?.let { throw it }; calls += "refresh:$requestId"; return (everyone + mine).first { it.id == requestId }.copy(progress = RequestProgress("downloading", percent = 40)) }
         override suspend fun unreadNotices(): List<Notice> = emptyList()
         override suspend fun markRead(noticeId: String) = Unit
     }
@@ -65,7 +68,48 @@ class RequestsViewModelTest {
         assertTrue(vm.state.value.canApprove)
         assertEquals(2, vm.state.value.waiting)
         vm.show(RequestsTab.All)
-        assertEquals(listOf("a", "b", "c", "d"), vm.state.value.shown.map { it.id })
+        // What is waiting comes before what is over; within each, the server's order.
+        assertEquals(listOf("a", "c", "b", "d"), vm.state.value.shown.map { it.id })
+    }
+
+    @Test fun thePeriodicReadReplacesTheListsAndTheOpenRequestWithoutBlankingTheScreen() = runTest {
+        val fake = Fake(canApprove = true, mine = mine, everyone = everyone)
+        val vm = RequestsViewModel(fake)
+        vm.open(everyone.first { it.id == "c" })
+        assertEquals(180_000L, vm.state.value.pollMs)
+        fake.everyone = everyone.map { if (it.id == "c") it.copy(state = "sent", progress = RequestProgress("downloading", percent = 10)) else it }
+        vm.poll()
+        val s = vm.state.value
+        assertFalse(s.loading)
+        assertEquals("downloading", s.selected?.progress?.phase)
+        assertEquals("c", s.shown.also { vm.show(RequestsTab.All) }.let { vm.state.value.shown.first().id })
+        // Something is downloading now: the screen asks again sooner.
+        assertEquals(15_000L, vm.state.value.pollMs)
+    }
+
+    @Test fun aFailedPeriodicReadLeavesWhatIsShown() = runTest {
+        val fake = Fake(canApprove = false, mine = mine)
+        val vm = RequestsViewModel(fake)
+        fake.failMine = IOException("Connection refused")
+        vm.poll()
+        assertNull(vm.state.value.error)
+        assertFalse(vm.state.value.loading)
+        assertEquals(2, vm.state.value.mine.size)
+    }
+
+    @Test fun checkAgainAsksTheRequestManagerNowAndUpdatesTheOpenRequest() = runTest {
+        val fake = Fake(canApprove = false, mine = listOf(request("a", "sent")))
+        val vm = RequestsViewModel(fake)
+        vm.open(vm.state.value.mine.first())
+        vm.checkSelected()
+        assertTrue("refresh:a" in fake.calls)
+        assertEquals(RequestProgress("downloading", percent = 40), vm.state.value.selected?.progress)
+        assertEquals(40, vm.state.value.mine.first().progress?.percent)
+        assertFalse(vm.state.value.busy)
+        fake.failDecision = IOException("Connection refused")
+        vm.checkSelected()
+        assertEquals("Can't reach the server", vm.state.value.actionError?.title)
+        assertEquals("a", vm.state.value.selected?.id)
     }
 
     @Test fun approvingSendsTheRequestOnAndUpdatesBothLists() = runTest {

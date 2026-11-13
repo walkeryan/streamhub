@@ -12,6 +12,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.streamhub.tv.core.data.model.Notice
+import com.streamhub.tv.core.data.repo.requestPollMs
+import com.streamhub.tv.core.data.repo.tileRequest
+import com.streamhub.tv.core.ui.components.WhileVisible
 import com.streamhub.tv.core.ui.components.FocusRow
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
@@ -67,14 +70,21 @@ fun HomeScreen(vm: HomeViewModel = hiltViewModel()) {
         is HomeUi.Ready -> if (u.rows.isEmpty() && u.hero.isEmpty()) {
             CenterMessage("Nothing here yet", "Add a source in Sources to fill your Home screen.")
         } else {
-            HomeContent(u, notices, vm::dismissNotice)
+            HomeContent(u, notices, vm::dismissNotice, vm::pollRequests)
         }
     }
 }
 
 @Composable
-private fun HomeContent(u: HomeUi.Ready, notices: List<Notice>, onDismissNotice: (Notice) -> Unit) {
+private fun HomeContent(u: HomeUi.Ready, notices: List<Notice>, onDismissNotice: (Notice) -> Unit, onPollRequests: suspend () -> Unit) {
     val now by produceState(Instant.now()) { while (true) { delay(30_000); value = Instant.now() } }
+    // Posters that show a request are kept current while Home is in front: every 15 s while one of
+    // them downloads or imports, else every 3 min. A Home with no such poster asks nothing.
+    val requestPhases = remember(u) { (u.hero + u.rows.flatMap { it.tiles }).mapNotNull { tileRequest(it)?.phase } }
+    if (requestPhases.isNotEmpty()) {
+        val pollMs = requestPollMs(requestPhases)
+        WhileVisible(pollMs) { while (true) { delay(pollMs); onPollRequests() } }
+    }
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
     var heroIndex by rememberSaveable { mutableStateOf(0) }

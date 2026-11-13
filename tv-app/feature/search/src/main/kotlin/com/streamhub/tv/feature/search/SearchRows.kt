@@ -3,8 +3,9 @@ package com.streamhub.tv.feature.search
 import com.streamhub.tv.core.data.model.MediaKind
 import com.streamhub.tv.core.data.model.SearchProgramme
 import com.streamhub.tv.core.data.model.Tile
-import com.streamhub.tv.core.data.repo.isOpenRequest
-import com.streamhub.tv.core.data.repo.requestStateLabel
+import com.streamhub.tv.core.data.repo.RequestStatusModel
+import com.streamhub.tv.core.data.repo.requestStatus
+import com.streamhub.tv.core.data.repo.tileRequest
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -15,8 +16,8 @@ import java.util.Locale
 internal sealed interface TitleMark {
     /** A source of the hub plays it: a small tick. */
     data object PlaysHere : TitleMark
-    /** It does not play here and a request for it is in progress: where that stands. */
-    data class Requested(val label: String) : TitleMark
+    /** It does not play here and a request for it is in progress: the chip of its phase. */
+    data class Requested(val status: RequestStatusModel) : TitleMark
     /** It does not play here and nothing is in progress: the poster carries nothing. */
     data object None : TitleMark
 }
@@ -24,16 +25,11 @@ internal sealed interface TitleMark {
 internal fun titleMark(tile: Tile): TitleMark = when {
     tile.kind == MediaKind.CHANNEL -> TitleMark.None
     tile.playableInApp -> TitleMark.PlaysHere
-    isOpenRequest(tile.requestState) -> TitleMark.Requested(requestStateLabel(tile.requestState) ?: "Requested")
-    else -> TitleMark.None
+    else -> tileRequest(tile)?.let { TitleMark.Requested(requestStatus(it)) } ?: TitleMark.None
 }
 
-/** The text of the mark; null for none. */
-internal fun titleMarkText(mark: TitleMark): String? = when (mark) {
-    TitleMark.PlaysHere -> "✓"
-    is TitleMark.Requested -> mark.label
-    TitleMark.None -> null
-}
+/** The tick, as the poster's badge. A request draws its own chip (and bar) on the poster; nothing else is said. */
+internal fun titleTick(tile: Tile): String? = if (titleMark(tile) == TitleMark.PlaysHere) "✓" else null
 
 private fun instant(iso: String): Instant? = runCatching { Instant.parse(iso) }.getOrNull()
     ?: runCatching { java.time.OffsetDateTime.parse(iso).toInstant() }.getOrNull()

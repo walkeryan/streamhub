@@ -5,6 +5,9 @@ import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.StreamHubJson
 import com.streamhub.tv.core.data.model.ApiError
 import com.streamhub.tv.core.data.model.MediaKind
+import com.streamhub.tv.core.data.model.MediaRequest
+import com.streamhub.tv.core.data.model.RequestProgress
+import com.streamhub.tv.core.data.model.TileRequestProgress
 import com.streamhub.tv.core.data.model.NoticesResponse
 import com.streamhub.tv.core.data.model.RequestCreate
 import com.streamhub.tv.core.data.model.RequestsResponse
@@ -35,33 +38,129 @@ class RequestRulesTest {
         }
     }
 
-    @Test fun anOpenRequestIsOneStillOnItsWay() {
+    @Test fun anOpenRequestIsOneNotYetClosed() {
         for (state in listOf("pending_approval", "approved", "sent")) assertTrue(state, isOpenRequest(state))
         for (state in listOf("available", "declined", "failed", null, "something_new")) assertFalse("$state", isOpenRequest(state))
     }
 
-    @Test fun everyStateHasALabelAndASentence() {
-        for (state in listOf("pending_approval", "approved", "sent", "available", "declined", "failed")) {
-            assertTrue(state, requestStateLabel(state)!!.isNotBlank())
-            assertTrue(state, requestStateText(state)!!.endsWith("."))
-        }
-        assertEquals("Requested", requestStateLabel("pending_approval"))
-        assertEquals("Requested. Waiting for approval.", requestStateText("pending_approval"))
-        assertNull(requestStateLabel(null))
-        assertNull(requestStateText(null))
-        assertEquals("On hold", requestStateLabel("on_hold"))
+    @Test fun everyPhaseHasItsOwnChip() {
+        val chips = mapOf(
+            "requested" to "Requested", "approved" to "Approved", "searching" to "Searching", "downloading" to "Downloading", "importing" to "Importing",
+            "partially_available" to "Partly available", "available" to "Available", "declined" to "Declined", "failed" to "Failed", "stalled" to "Stalled", "unknown" to "Status unknown",
+        )
+        for ((phase, label) in chips) assertEquals(label, requestStatus(RequestProgress(phase)).label)
+        assertEquals(chips.size, chips.values.toSet().size)
+        // "On its way" said nothing about what was happening: no phase reads that way any more.
+        assertFalse(chips.values.any { it.contains("way", ignoreCase = true) })
+        assertNull(requestPhaseLabel(null))
+        // A phase from a newer server is shown by its own name rather than hidden.
+        assertEquals("On hold", requestPhaseLabel("on_hold"))
     }
 
-    @Test fun searchTilesWithNoInAppSourceSayWhereTheyStand() {
-        assertNull(availabilityBadge(tile(inApp = true)))
-        assertEquals("Not available", availabilityBadge(tile(inApp = null)))
-        // A hand-off source is still not something this app can play.
-        assertEquals("Not available", availabilityBadge(tile(inApp = false)))
-        assertEquals("Requested", availabilityBadge(tile(inApp = null, state = "pending_approval")))
-        assertEquals("Declined", availabilityBadge(tile(inApp = false, state = "declined")))
-        // A request that was fulfilled and now plays here needs no badge.
-        assertNull(availabilityBadge(tile(inApp = true, state = "available")))
-        assertNull(availabilityBadge(tile(kind = MediaKind.CHANNEL)))
+    @Test fun aServerWithoutProgressIsReadFromTheRequestsState() {
+        assertEquals("requested", phaseOfState("pending_approval"))
+        assertEquals("searching", phaseOfState("sent"))
+        assertEquals("approved", phaseOfState("approved"))
+        assertNull(phaseOfState(null))
+        assertEquals("Searching", requestStateLabel("sent"))
+        assertEquals("Requested", requestStateLabel("pending_approval"))
+        val old = MediaRequest(id = "q", state = "declined", note = "Too long")
+        assertEquals(RequestProgress("declined", detail = "Too long"), old.progressOrState())
+        assertEquals(RequestProgress("searching"), MediaRequest(id = "q", state = "sent", note = "queued upstream").progressOrState())
+        val reported = MediaRequest(id = "q", state = "sent", progress = RequestProgress("downloading", percent = 12))
+        assertEquals(reported.progress, reported.progressOrState())
+    }
+
+    @Test fun goodNewsAndTroubleAreToldApart() {
+        assertEquals(RequestTone.Ok, requestTone("available"))
+        for (phase in listOf("failed", "declined", "stalled")) assertEquals(phase, RequestTone.Warn, requestTone(phase))
+        for (phase in listOf("requested", "approved", "searching", "downloading", "importing", "partially_available", "unknown")) assertEquals(phase, RequestTone.Plain, requestTone(phase))
+    }
+
+    @Test fun aDownloadShowsABarWithThePercentAndTheTimeLeft() {
+        val status = requestStatus(RequestProgress("downloading", percent = 42, eta = "2026-11-13T20:12:00Z", checkedAt = "2026-11-13T20:00:00Z", detail = "2 of 8 episodes"))
+        assertEquals("Downloading", status.label)
+        assertEquals(RequestBar(42), status.bar)
+        assertEquals(0.42f, status.bar!!.fraction!!, 0.0001f)
+        assertEquals("42% · about 12 min left", status.caption)
+        assertEquals("2 of 8 episodes", status.secondary)
+    }
+
+    @Test fun aDownloadWithoutSizesHasAnIndeterminateBar() {
+        val status = requestStatus(RequestProgress("downloading", percent = null))
+        assertEquals(RequestBar(null), status.bar)
+        assertNull(status.bar!!.fraction)
+        assertNull(status.caption)
+        assertEquals("about 3 min left", requestStatus(RequestProgress("downloading", eta = "2026-11-13T20:03:00Z", checkedAt = "2026-11-13T20:00:00Z")).caption)
+    }
+
+    @Test fun onlyADownloadHasABar() {
+        for (phase in listOf("requested", "approved", "searching", "importing", "partially_available", "available", "declined", "failed", "stalled", "unknown")) {
+            val status = requestStatus(RequestProgress(phase, percent = 50, eta = "2026-11-13T20:12:00Z", checkedAt = "2026-11-13T20:00:00Z"))
+            assertNull(phase, status.bar)
+            assertNull(phase, status.caption)
+        }
+        assertEquals(100, requestStatus(RequestProgress("downloading", percent = 140)).bar!!.percent)
+    }
+
+    @Test fun theTimeLeftIsCountedFromTheServersOwnCheck() {
+        assertEquals("less than a minute left", requestEtaText("2026-11-13T20:00:20Z", "2026-11-13T20:00:00Z"))
+        assertEquals("about 59 min left", requestEtaText("2026-11-13T20:59:00Z", "2026-11-13T20:00:00Z"))
+        assertEquals("about 1 hr left", requestEtaText("2026-11-13T21:00:00Z", "2026-11-13T20:00:00Z"))
+        assertEquals("about 2 hr 5 min left", requestEtaText("2026-11-13T22:05:00+00:00", "2026-11-13T20:00:00Z"))
+        assertNull("a time that has passed", requestEtaText("2026-11-13T19:00:00Z", "2026-11-13T20:00:00Z"))
+        assertNull(requestEtaText(null, "2026-11-13T20:00:00Z"))
+        assertNull(requestEtaText("2026-11-13T21:00:00Z", null))
+        assertNull(requestEtaText("soon", "now"))
+    }
+
+    @Test fun anUnknownStatusSaysWhatWasLastKnown() {
+        val status = requestStatus(RequestProgress("unknown", lastPhase = "downloading", detail = "No answer"))
+        assertEquals("Status unknown", status.label)
+        assertEquals("No answer Last known: downloading.", status.secondary)
+        assertNull(requestStatus(RequestProgress("searching", lastPhase = "downloading")).secondary)
+    }
+
+    @Test fun aPosterShowsARequestInProgressAndNothingForOldRefusals() {
+        assertNull(tileRequest(tile(inApp = true)))
+        assertNull(tileRequest(tile(inApp = null)))
+        // A hand-off source is still not something this app can play, and it is not a request either.
+        assertNull(tileRequest(tile(inApp = false)))
+        assertEquals(TileRequestProgress("requested"), tileRequest(tile(inApp = null, state = "pending_approval")))
+        assertEquals(TileRequestProgress("searching"), tileRequest(tile(inApp = false, state = "sent")))
+        assertNull(tileRequest(tile(inApp = false, state = "declined")))
+        assertNull(tileRequest(tile(inApp = null, state = "failed")))
+        // Arrived, but the library does not have the title yet: said. Once it plays here, nothing.
+        assertEquals(TileRequestProgress("available"), tileRequest(tile(inApp = null, state = "available")))
+        assertNull(tileRequest(tile(inApp = true, state = "available")))
+        assertNull(tileRequest(tile(kind = MediaKind.CHANNEL, state = "sent")))
+        val downloading = tile(state = "sent").copy(requestProgress = TileRequestProgress("downloading", 42))
+        assertEquals("Downloading 42%", requestStatus(tileRequest(downloading)!!).label)
+        assertEquals(RequestBar(42), requestStatus(tileRequest(downloading)!!).bar)
+        assertEquals("Downloading", requestStatus(TileRequestProgress("downloading")).label)
+        // The declined request is still told on the title's own page.
+        assertEquals(TileRequestProgress("declined"), requestOf(tile(state = "declined")))
+    }
+
+    @Test fun aScreenAsksAgainEvery15SecondsWhileSomethingMovesAndEvery3MinutesOtherwise() {
+        assertEquals(15_000L, requestPollMs(listOf("searching", "downloading")))
+        assertEquals(15_000L, requestPollMs(listOf("importing")))
+        assertEquals(180_000L, requestPollMs(listOf("requested", "approved", "searching", "stalled", "unknown", "available", null)))
+        assertEquals(180_000L, requestPollMs(emptyList()))
+    }
+
+    @Test fun requestsAreListedByActivityAndCheckedAgainOnlyWhereItCanHelp() {
+        fun request(id: String, state: String, phase: String? = null) = MediaRequest(id = id, state = state, progress = phase?.let { RequestProgress(it) })
+        val listed = byActivity(listOf(
+            request("declined", "declined"), request("waiting", "pending_approval"), request("stalled", "sent", "stalled"),
+            request("down", "sent", "downloading"), request("searching", "sent", "searching"), request("import", "sent", "importing"), request("done", "available", "available"),
+        ))
+        assertEquals(listOf("down", "import", "stalled", "waiting", "searching", "declined", "done"), listed.map { it.id })
+        assertTrue(canCheckAgain(request("a", "sent", "downloading")))
+        assertTrue(canCheckAgain(request("a", "approved")))
+        assertTrue(canCheckAgain(request("a", "available", "unknown")))
+        assertFalse(canCheckAgain(request("a", "pending_approval")))
+        assertFalse(canCheckAgain(request("a", "declined", "declined")))
     }
 
     @Test fun seasonsCanBePickedOnlyForASeriesThatListsThem() {
@@ -84,11 +183,18 @@ class RequestRulesTest {
     }
 
     @Test fun requestFieldsDecodeFromTheWire() {
-        val t = StreamHubJson.decodeFromString(Tile.serializer(), """{"id":"tmdb:movie:603","kind":"movie","title":"x","sources":[],"request_state":"sent","requestable":true}""")
+        val t = StreamHubJson.decodeFromString(Tile.serializer(), """{"id":"tmdb:movie:603","kind":"movie","title":"x","sources":[],"request_state":"sent","request_progress":{"phase":"downloading","percent":42},"requestable":true}""")
         assertEquals("sent", t.requestState)
+        assertEquals(TileRequestProgress("downloading", 42), t.requestProgress)
         assertTrue(t.requestable)
+        val full = StreamHubJson.decodeFromString(MediaRequest.serializer(), """{"id":"q1","profile_id":"p1","media_type":"movie","tmdb_id":603,"title_id":"tmdb:movie:603","title":"x","state":"sent",
+            "progress":{"phase":"unknown","last_phase":"downloading","percent":null,"eta":null,"detail":"No answer","checked_at":"2026-11-13T20:00:00Z"},"created_at":"x","updated_at":"y"}""")
+        assertEquals(RequestProgress("unknown", lastPhase = "downloading", detail = "No answer", checkedAt = "2026-11-13T20:00:00Z"), full.progress)
+        val newer = StreamHubJson.decodeFromString(MediaRequest.serializer(), """{"id":"q1","state":"sent","progress":{"phase":"verifying"}}""")
+        assertEquals("Verifying", requestStatus(newer.progressOrState()).label)
         val old = StreamHubJson.decodeFromString(Tile.serializer(), """{"id":"tmdb:movie:603","kind":"movie","title":"x","sources":[],"request_state":null}""")
         assertNull(old.requestState)
+        assertNull(old.requestProgress)
         assertFalse(old.requestable)
         val d = StreamHubJson.decodeFromString(TitleDetail.serializer(), """{"id":"tmdb:tv:1399","kind":"show","title":"x","sources":[],"requestable":true,"request_seasons":[1,2,3]}""")
         assertEquals(listOf(1, 2, 3), d.requestSeasons)

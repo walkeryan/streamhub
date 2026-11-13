@@ -202,6 +202,8 @@ data class Tile(
     @SerialName("request_state") val requestState: String? = null,
     /** No in-app source, a request manager is configured and the profile may request. */
     val requestable: Boolean = false,
+    /** What that same request is doing right now; set exactly when [requestState] is (by servers that report progress). */
+    @SerialName("request_progress") val requestProgress: TileRequestProgress? = null,
 ) {
     val playableInApp: Boolean get() = sources.any { it.playableInApp }
 }
@@ -255,8 +257,9 @@ data class TitleDetail(
     val requestable: Boolean = false,
     /** Requestable series only: season numbers a request may pick from (empty = whole series only). */
     @SerialName("request_seasons") val requestSeasons: List<Int> = emptyList(),
+    @SerialName("request_progress") val requestProgress: TileRequestProgress? = null,
 ) {
-    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable)
+    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable, requestProgress)
 }
 
 /**

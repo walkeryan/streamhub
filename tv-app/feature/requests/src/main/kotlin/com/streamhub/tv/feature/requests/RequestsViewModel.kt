@@ -7,6 +7,9 @@ import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.model.MediaRequest
 import com.streamhub.tv.core.data.model.RequestStates
 import com.streamhub.tv.core.data.repo.RequestsRepository
+import com.streamhub.tv.core.data.repo.byActivity
+import com.streamhub.tv.core.data.repo.progressOrState
+import com.streamhub.tv.core.data.repo.requestPollMs
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -33,7 +36,10 @@ data class RequestsState(
     /** Approve or Decline failed; shown in the dialog. */
     val actionError: UserError? = null,
 ) {
-    val shown: List<MediaRequest> get() = if (tab == RequestsTab.All) all else mine
+    /** The tab's requests: what is moving first, then what is waiting, then what is over. */
+    val shown: List<MediaRequest> get() = byActivity(if (tab == RequestsTab.All) all else mine)
+    /** How long until the lists are read again: 15 s while anything listed is downloading or importing, else 3 min. */
+    val pollMs: Long get() = requestPollMs((mine + all).map { it.progressOrState().phase })
     /** Requests waiting for a decision, for the "All requests" chip. */
     val waiting: Int get() = all.count { it.state == RequestStates.PENDING_APPROVAL }
 }
@@ -67,6 +73,43 @@ class RequestsViewModel @Inject constructor(private val repo: RequestsRepository
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { _state.update { it.copy(loading = false, error = ApiErrors.describe(e)) } }
+        }
+    }
+
+    /**
+     * The periodic read while the screen is in front. Unlike [load] it never blanks the screen or
+     * reports a failure: what is shown stays until a newer answer replaces it, the open dialog included.
+     */
+    fun poll() {
+        if (loadJob?.isActive == true || _state.value.busy) return
+        loadJob = viewModelScope.launch {
+            try {
+                val mine = repo.mine()
+                val all = if (mine.canApprove && _state.value.canApprove) {
+                    try { repo.all() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+                } else null
+                _state.update { state ->
+                    val everyone = all ?: state.all
+                    state.copy(mine = mine.requests, all = everyone, selected = state.selected?.let { open -> (everyone + mine.requests).firstOrNull { it.id == open.id } ?: open })
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
+        }
+    }
+
+    /** "Check again": the request manager is asked about the open request now. */
+    fun checkSelected() {
+        val s = _state.value
+        val request = s.selected ?: return
+        if (s.busy) return
+        _state.update { it.copy(busy = true, actionError = null) }
+        viewModelScope.launch {
+            try {
+                val now = repo.refresh(request.id)
+                fun List<MediaRequest>.updated() = map { if (it.id == now.id) now else it }
+                _state.update { it.copy(busy = false, selected = if (it.selected?.id == now.id) now else it.selected, mine = it.mine.updated(), all = it.all.updated()) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(busy = false, actionError = ApiErrors.describe(e)) } }
         }
     }
 

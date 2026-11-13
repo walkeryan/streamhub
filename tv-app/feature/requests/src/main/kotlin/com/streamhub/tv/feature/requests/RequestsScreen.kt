@@ -37,12 +37,18 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.MediaRequest
 import com.streamhub.tv.core.data.model.RequestStates
-import com.streamhub.tv.core.data.repo.requestStateLabel
-import com.streamhub.tv.core.data.repo.requestStateText
+import com.streamhub.tv.core.data.repo.canCheckAgain
+import com.streamhub.tv.core.data.repo.progressOrState
+import com.streamhub.tv.core.data.repo.requestStatus
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.CenterMessage
 import com.streamhub.tv.core.ui.components.LoadingView
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
+import com.streamhub.tv.core.ui.components.RequestChip
+import com.streamhub.tv.core.ui.components.RequestProgressBar
+import com.streamhub.tv.core.ui.components.RequestStatus
+import com.streamhub.tv.core.ui.components.WhileVisible
+import kotlinx.coroutines.delay
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.focus.FocusSurface
@@ -84,6 +90,8 @@ fun RequestsScreen(vm: RequestsViewModel = hiltViewModel()) {
         }
     }
     InitialFocusOnce(initial = first, restore = screen)
+    // Follow what is listed while this screen is in front: every 15 s while something downloads or imports, else every 3 min.
+    WhileVisible(s.pollMs) { while (true) { delay(s.pollMs); vm.poll() } }
     Column(Modifier.fillMaxSize().padding(vertical = Tokens.Canvas.SafeMarginY).focusRequester(screen).focusRestorer()) {
         Text("Requests", style = MaterialTheme.typography.displaySmall, color = t.text, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX))
         // Always something to hold focus, even when a list is empty.
@@ -114,7 +122,7 @@ fun RequestsScreen(vm: RequestsViewModel = hiltViewModel()) {
         RequestDialog(
             request, s,
             onOpenTitle = { vm.dismiss(); if (request.titleId.isNotBlank()) launcher.openDetails(request.titleId) },
-            onApprove = vm::approveSelected, onDecline = vm::declineSelected, onDismiss = vm::dismiss,
+            onApprove = vm::approveSelected, onDecline = vm::declineSelected, onCheck = vm::checkSelected, onDismiss = vm::dismiss,
         )
     }
 }
@@ -134,16 +142,21 @@ private fun RequestRow(r: MediaRequest, showWho: Boolean, onClick: () -> Unit, m
                     style = MaterialTheme.typography.labelMedium, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                requestStateLabel(r.state).orEmpty(), style = MaterialTheme.typography.labelLarge, maxLines = 1,
-                color = if (r.state == RequestStates.DECLINED || r.state == RequestStates.FAILED) t.danger else t.accent,
-            )
+            // Its phase as a chip and, while it downloads, the bar with the percentage and the time left.
+            val status = requestStatus(r.progressOrState())
+            Column(Modifier.width(250.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                RequestChip(status)
+                status.bar?.let { bar ->
+                    RequestProgressBar(bar)
+                    status.caption?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1) }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun RequestDialog(r: MediaRequest, s: RequestsState, onOpenTitle: () -> Unit, onApprove: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit) {
+private fun RequestDialog(r: MediaRequest, s: RequestsState, onOpenTitle: () -> Unit, onApprove: () -> Unit, onDecline: () -> Unit, onCheck: () -> Unit, onDismiss: () -> Unit) {
     val t = LocalThemeTokens.current
     val focus = remember { FocusRequester() }
     val decidable = canDecide(s, r)
@@ -154,11 +167,9 @@ private fun RequestDialog(r: MediaRequest, s: RequestsState, onOpenTitle: () -> 
                 listOfNotNull(r.profileName?.takeIf(String::isNotBlank)?.let { "Asked by $it" }, seasonsLabel(r)).joinToString("  ·  "),
                 style = MaterialTheme.typography.bodyMedium, color = t.textMuted,
             )
+            RequestStatus(requestStatus(r.progressOrState()))
             // For the approver the sentence is about the decision to make, not about "your request".
-            Text(
-                if (decidable) "Waiting for a decision. Approving sends it on to be fetched." else requestStateText(r.state).orEmpty(),
-                style = MaterialTheme.typography.bodyLarge, color = t.text,
-            )
+            if (decidable) Text("Waiting for a decision. Approving sends it on to be fetched.", style = MaterialTheme.typography.bodyLarge, color = t.text)
             r.note?.takeIf(String::isNotBlank)?.let { Text("Note: $it", style = MaterialTheme.typography.bodyMedium, color = t.textMuted) }
             s.actionError?.let { Text("${it.title}. ${it.body}", style = MaterialTheme.typography.bodyMedium, color = t.danger) }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -167,6 +178,8 @@ private fun RequestDialog(r: MediaRequest, s: RequestsState, onOpenTitle: () -> 
                     ShButton("Decline", onDecline, style = ButtonStyle.Danger)
                 }
                 ShButton("Open title", onOpenTitle, if (decidable) Modifier else Modifier.focusRequester(focus))
+                // Never disabled while it works (focus would be stranded on it): a press is ignored then.
+                if (canCheckAgain(r)) ShButton(if (s.busy && !decidable) "Checking…" else "Check again", onCheck)
                 ShButton("Close", onDismiss)
             }
         }
