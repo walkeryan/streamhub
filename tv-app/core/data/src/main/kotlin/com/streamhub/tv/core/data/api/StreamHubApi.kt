@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import kotlinx.coroutines.CancellationException
 import com.streamhub.tv.core.data.repo.boundProgressRequest
 import com.streamhub.tv.core.data.repo.bindProgressSession
+import com.streamhub.tv.core.data.auth.AccessTokenSource
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.*
 import io.ktor.client.HttpClient
@@ -47,6 +48,7 @@ sealed interface PollResult<out T> {
 class StreamHubApi @Inject constructor(
     private val client: HttpClient,
     private val session: SessionStore,
+    private val webTokens: AccessTokenSource,
 ) {
     private suspend fun url(path: String): String {
         val base = session.current().apiBase ?: throw ApiException(0, null, "Server URL not set")
@@ -327,9 +329,19 @@ class StreamHubApi @Inject constructor(
 
     suspend fun reportProgress(report: ProgressReport, owner:Session):Boolean {
         val request=boundProgressRequest(owner,session.current(),report) ?: return false
-        client.post(request.url) {
+        val response=client.post(request.url) {
             bindProgressSession(request)
-        }.unit()
+        }
+        // A report carries its token outside the bearer plugin, so an access token that aged out during
+        // a long film is renewed here: the web app is asked for a current one and the report sent once more,
+        // still bound to the same owner (a token for another person is not sent).
+        if(response.status==HttpStatusCode.Unauthorized && session.current().webOwned) {
+            webTokens.currentAccessToken(request.accessToken) ?: response.unit()
+            val again=boundProgressRequest(owner,session.current(),report) ?: return false
+            client.post(again.url) { bindProgressSession(again) }.unit()
+            return true
+        }
+        response.unit()
         return true
     }
 

@@ -1,5 +1,6 @@
 package com.streamhub.tv.core.data.api
 
+import com.streamhub.tv.core.data.auth.AccessTokenSource
 import com.streamhub.tv.core.data.auth.SessionTokens
 import com.streamhub.tv.core.data.auth.rotatedSince
 import com.streamhub.tv.core.data.model.ApiError
@@ -71,6 +72,10 @@ private val KEEPS_PAIRING = setOf("user_suspended", "approval_pending")
  *    suspended user keeps the pairing and [onUserSuspended] fires instead; any other refresh
  *    failure keeps the session without a word (see [shouldClearSession]).
  *  - Base URL resolved per request from the session (server URL can change at runtime).
+ *  - Once the web app owns the session ([webTokens], and the stored session says so), there is no
+ *    refresh here at all: the stored access token is sent, and on a 401 the web app is asked for a
+ *    current one (it refreshes when the refused token is still the one it holds). Tokens are not
+ *    cached by the client then, so a token the web app hands over reaches the next request at once.
  */
 fun createStreamHubHttpClient(
     sessionStore: SessionTokens,
@@ -80,6 +85,8 @@ fun createStreamHubHttpClient(
     onUserSuspended: () -> Unit = {},
     /** Tests pass a mock engine; the app uses CIO. */
     engine: HttpClientEngine? = null,
+    /** The web app, for a session it owns; null keeps the TV's own refresh (and the token cache). */
+    webTokens: AccessTokenSource? = null,
 ): HttpClient = HttpClient(engine ?: CIO.create()) {
     expectSuccess = false
     install(ContentNegotiation) { json(StreamHubJson) }
@@ -103,11 +110,21 @@ fun createStreamHubHttpClient(
     }
     install(Auth) {
         bearer {
+            if (webTokens != null) cacheTokens = false
             loadTokens {
                 val s = sessionStore.current()
-                if (s.accessToken != null && s.refreshToken != null) BearerTokens(s.accessToken, s.refreshToken) else null
+                when {
+                    s.accessToken != null && s.refreshToken != null -> BearerTokens(s.accessToken, s.refreshToken)
+                    webTokens != null && s.webOwned -> (s.accessToken ?: webTokens.currentAccessToken(null))?.let { BearerTokens(it, null) }
+                    else -> null
+                }
             }
             refreshTokens {
+                // The web app owns the session: ask it, never POST /auth/refresh from here (its refresh
+                // token rotates, and a second refreshing copy would end the session on the first replay).
+                if (webTokens != null && sessionStore.current().webOwned) {
+                    return@refreshTokens webTokens.currentAccessToken(oldTokens?.accessToken)?.let { BearerTokens(it, null) }
+                }
                 val original=sessionStore.current()
                 val refresh = original.refreshToken
                 // Refresh tokens rotate. If the pair this request used has been exchanged meanwhile (another

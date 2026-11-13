@@ -4,10 +4,16 @@ package com.streamhub.tv.core.data.auth
 fun switchSessionGeneration(session: Session): String? = session.generation ?: session.refreshToken?.takeIf {it.isNotBlank()}?.let {
     java.util.UUID.nameUUIDFromBytes(it.toByteArray(Charsets.UTF_8)).toString()
 }
-fun sameSwitchSession(expected: Session, current: Session): Boolean =
-    expected.serverUrl==current.serverUrl && expected.profile?.id==current.profile?.id &&
-        expected.refreshToken!=null && current.refreshToken!=null &&
-        switchSessionGeneration(expected)==switchSessionGeneration(current)
+/**
+ * Whether [current] is still the session [expected] was taken from: same server, same person, same
+ * generation. A session the web app owns has no refresh token on the TV (see SessionStore.handOverToWeb);
+ * its generation, set when it was handed over, is what identifies it.
+ */
+fun sameSwitchSession(expected: Session, current: Session): Boolean {
+    val generation = switchSessionGeneration(expected) ?: return false
+    return expected.serverUrl==current.serverUrl && expected.profile?.id==current.profile?.id &&
+        generation==switchSessionGeneration(current)
+}
 
 /** A competing refresh response may not overwrite the latest rotation or another session. */
 fun canApplyRefresh(expected: Session,current: Session,targetProfileId: String?): Boolean =

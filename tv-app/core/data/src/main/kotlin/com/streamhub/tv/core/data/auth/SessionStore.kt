@@ -24,6 +24,12 @@ data class Session(
     val refreshToken: String?,
     val profile: Profile?,
     val generation: String? = null,
+    /**
+     * The web app shown by the shell holds this TV's session (its refresh token lives in the web
+     * app's storage, nowhere else). The TV keeps the server address, the person and the last access
+     * token the web app handed over; it asks the web app for a current one and never refreshes.
+     */
+    val webOwned: Boolean = false,
 ) {
     val isPaired: Boolean get() = !serverUrl.isNullOrBlank() && !refreshToken.isNullOrBlank()
 
@@ -60,6 +66,7 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
         val access = stringPreferencesKey("access_token")
         val refresh = stringPreferencesKey("refresh_token")
         val profile = stringPreferencesKey("profile_json")
+        val webOwned = stringPreferencesKey("web_session")
     }
 
     val session: Flow<Session> = context.sessionStore.data.map { p ->
@@ -69,6 +76,7 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
             accessToken = p[K.access],
             refreshToken = p[K.refresh],
             profile = p[K.profile]?.let { runCatching { json.decodeFromString(Profile.serializer(), it) }.getOrNull() },
+            webOwned = p[K.webOwned] == "1",
         )
     }
 
@@ -82,8 +90,10 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
         }
     }
 
+    /** A new pairing: the TV holds the pair until it is handed over to the web app ([handOverToWeb]). */
     suspend fun saveTokens(tokens: AuthTokens) {
         context.sessionStore.edit {
+            it.remove(K.webOwned)
             it[K.generation]=java.util.UUID.randomUUID().toString()
             it[K.access] = tokens.accessToken
             it[K.refresh] = tokens.refreshToken
@@ -160,6 +170,46 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
             it.remove(K.access)
             it.remove(K.refresh)
             it.remove(K.profile)
+            it.remove(K.webOwned)
         }
     }
+
+    // ---- The web app owns the session ----------------------------------------------------------
+
+    /**
+     * The pair [expected] held has been written into the web app's storage: from now on the web app
+     * refreshes and rotates it. The refresh token is dropped here (one owner, never two refreshing
+     * copies); the server address, the person, the access token and the session's identity stay.
+     * False when the stored session is no longer the one that was seeded.
+     */
+    suspend fun handOverToWeb(expected: Session): Boolean {
+        var done=false
+        context.sessionStore.edit { values ->
+            val next=handedOverSession(expected,readSession(values)) ?: return@edit
+            values[K.generation]=next.generation!!
+            values.remove(K.refresh)
+            values[K.webOwned]="1"
+            done=true
+        }
+        return done
+    }
+
+    /** Stores the access token (and the person) the web app answered with; see [adoptedWebSession]. */
+    suspend fun adoptWebToken(token: WebToken): Boolean {
+        var done=false
+        context.sessionStore.edit { values ->
+            val next=adoptedWebSession(readSession(values),token) { java.util.UUID.randomUUID().toString() } ?: return@edit
+            values[K.generation]=next.generation!!
+            values[K.access]=token.access
+            values[K.profile]=json.encodeToString(Profile.serializer(),token.profile)
+            done=true
+        }
+        return done
+    }
+
+    private fun readSession(values: Preferences) = Session(
+        values[K.server], values[K.access], values[K.refresh],
+        values[K.profile]?.let { runCatching { json.decodeFromString(Profile.serializer(), it) }.getOrNull() },
+        values[K.generation], values[K.webOwned] == "1",
+    )
 }
