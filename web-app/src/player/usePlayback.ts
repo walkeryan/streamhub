@@ -310,13 +310,15 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         if (refused) { showBusy(refused); return }
         // Re-resolving cannot repair missing content or denied access. Keep
         // transient network/server failures on the bounded reconnect path.
-        if (e instanceof ApiError && ([400, 401, 403, 404, 410, 422].includes(e.status) || e.code === 'audio_selection_required')) {
+        // A recording that cannot be played is refused for a reason only the server knows: say it, do not knock again.
+        const recording = req.id.startsWith('rec:')
+        if (e instanceof ApiError && ([400, 401, 403, 404, 410, 422].includes(e.status) || e.code === 'audio_selection_required' || (recording && e.status >= 400 && e.status < 500))) {
           terminal.current = true
           clearWaiting()
           clearRetry()
           setState('error')
           // A room's refusals (the room ended, it is full) are the server's own words.
-          setError(descriptorSource.current && e.code?.startsWith('room_') ? e.message : e.code === 'audio_selection_required' ? 'Choose an audio language and source from title details before playing.' : e.code === 'playback_paused' || e.code === 'playback_stopped'
+          setError((descriptorSource.current && e.code?.startsWith('room_')) || (recording && e.message) ? e.message : e.code === 'audio_selection_required' ? 'Choose an audio language and source from title details before playing.' : e.code === 'playback_paused' || e.code === 'playback_stopped'
             ? 'Playback was stopped by an administrator. Once playback is resumed, choose Try again to start a new stream.'
             : e.code === 'playback_reload_required'
             ? 'Playback controls have been updated. Reload Streamhub before trying again.'

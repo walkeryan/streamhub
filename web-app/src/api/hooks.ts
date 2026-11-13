@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 import { api, ok, unwrap } from './client'
 import { useSession } from '../store/session'
-import type { Recording, RecordingList, RecordingRule, RecordingRuleList, RecordingState, Room, RoomJoin, RoomJoined } from './types'
+import type { Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomJoin, RoomJoined } from './types'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
   Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
@@ -290,14 +290,15 @@ export const useRoomInfo = (code: string | undefined, poll = true) =>
 const RECORDING_VIEWS = [['recordings'], ['recording-rules'], ['epg'], ['channels']] as const
 const refreshRecordings = (qc: ReturnType<typeof useQueryClient>) => { for (const queryKey of RECORDING_VIEWS) void qc.invalidateQueries({ queryKey }) }
 
-// The recorder starts, finishes and fails recordings on its own clock, so the list polls.
-export const useRecordings = (enabled = true, state?: RecordingState) =>
+// The recorder starts, finishes and fails recordings on its own clock, so the Recordings screen polls;
+// places that only ask whether recording is on (navigation, the guide) take what is cached.
+export const useRecordings = (enabled = true, poll = true) =>
   useQuery({
-    queryKey: ['recordings', useProfileId(), state ?? 'all'],
+    queryKey: ['recordings', useProfileId()],
     enabled,
-    staleTime: 0,
-    refetchInterval: 60_000,
-    queryFn: () => unwrap<RecordingList>(api.GET('/recordings', { params: { query: state ? { state } : {} } })),
+    staleTime: poll ? 0 : 60_000,
+    refetchInterval: poll ? 60_000 : false,
+    queryFn: () => unwrap<RecordingList>(api.GET('/recordings')),
   })
 
 export const useRecordingRules = (enabled = true) =>

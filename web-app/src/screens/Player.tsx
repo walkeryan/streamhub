@@ -52,6 +52,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   }
   const videoRef = useRef<HTMLVideoElement>(null)
   const isChannel = id.startsWith('ch:')
+  // A finished recording (rec:<id>) plays like a title, but has no title page to choose a source on.
+  const isRecording = id.startsWith('rec:')
   // Router URL updates can precede the next React commit. Remote events in
   // that gap must use the selected channel, not the previous render's id.
   const activeId = useRef(id)
@@ -387,7 +389,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
               <p>{pb.error ?? 'The stream could not be played.'}</p>
             </>}
             <div className="flex gap-3">
-              {!pb.busy && !room && <Button focusKey="perr:source" onEnter={() => { if (audio.enabled) { setManualChoice(selectionKey); void audio.query.refetch() } else navigate(`/title/${encodeURIComponent(id)}?choose=1`) }}>Choose audio / source</Button>}
+              {!pb.busy && !room && !isRecording && <Button focusKey="perr:source" onEnter={() => { if (audio.enabled) { setManualChoice(selectionKey); void audio.query.refetch() } else navigate(`/title/${encodeURIComponent(id)}?choose=1`) }}>Choose audio / source</Button>}
               <Button focusKey="perr:retry" primary icon="refresh" onEnter={pb.retryNow}>Try again</Button>
               <Button focusKey="perr:back" onEnter={leaveOrExit}>{room ? 'Leave room' : 'Back'}</Button>
             </div>
@@ -498,7 +500,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
             <MenuSection title="Aspect ratio">
               {ASPECTS.map((a) => <Chip key={a.id} focusKey={`pm:asp:${a.id}`} pressed={aspect === a.id} onEnter={() => setAspect(a.id)}>{a.label}</Chip>)}
             </MenuSection>
-            {!room && !catchup && !rewindAt && (
+            {!room && !catchup && !rewindAt && !isRecording && (
               <MenuSection title="Watch together">
                 <Button focusKey="pm:together" icon="people" disabled={startingRoom} onEnter={() => void startTogether()} testId="player-together">{startingRoom ? 'Starting a room…' : 'Watch together'}</Button>
                 <span className="muted label" style={{ flexBasis: '100%' }}>Start a room for this {isChannel ? 'channel' : 'title'} and invite others with a link or code.</span>

@@ -28,8 +28,9 @@ import { Pair } from './screens/Pair'
 const Player = lazy(() => import('./screens/Player').then((m) => ({ default: m.Player })))
 const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })))
-// watch rooms
+// watch rooms and recordings
 const RoomScreen = lazy(() => import('./screens/Room').then((m) => ({ default: m.RoomScreen })))
+const Recordings = lazy(() => import('./screens/Recordings').then((m) => ({ default: m.Recordings })))
 
 bootTheme()
 
@@ -98,6 +99,7 @@ export function App() {
             <Route path="sources" element={<Sources />} />
             <Route path="settings" element={<Settings />} />
             <Route path="pair" element={<Pair />} />
+            <Route path="recordings" element={<Recordings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

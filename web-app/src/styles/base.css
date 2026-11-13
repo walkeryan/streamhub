@@ -442,3 +442,18 @@ h1, h2, h3, p { margin: 0; }
   .player-ui .top { flex-wrap: wrap; }
   .room-strip { max-width: 100%; flex-basis: 100%; justify-content: flex-start; margin-left: 0; }
 }
+
+/* ---------- recordings ---------- */
+.rec-badge { gap: 0.25rem; flex: none; }
+.rec-badge i { width: 0.4375rem; height: 0.4375rem; border-radius: 999px; background: currentColor; }
+.rec-badge[data-state='recording'] { background: var(--t-danger); color: #fff; }
+.rec-badge[data-state='failed'], .rec-badge[data-state='missed'] { box-shadow: inset 0 0 0 1px var(--t-danger); }
+.rec-badge[data-state='scheduled'] i { background: var(--t-danger); }
+.rec-row { display: flex; align-items: center; gap: 0.75rem 1rem; flex-wrap: wrap; }
+/* On a phone the text keeps the row and the actions go under it. */
+.rec-row > :first-child { flex-basis: 16rem; }
+/* A choice with a line of explanation under its name. */
+.rec-choice { justify-content: flex-start; height: auto; padding-block: 0.5rem; text-align: left; white-space: normal; }
+/* A choice in the Record dialog that needs a word from the viewer. */
+.rec-option { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border-radius: var(--radius-md); background: color-mix(in srgb, var(--t-text) 5%, transparent); }
+.epg-label .rec-badge { align-self: flex-start; }

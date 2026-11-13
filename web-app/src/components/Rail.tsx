@@ -10,6 +10,7 @@ import { usePhone } from '../lib/layout'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { JoinRoomDialog } from '../room/JoinRoomDialog'
+import { useRecordings } from '../api/hooks'
 
 interface Destination { to: string; label: string; icon: string; /** path prefixes that also count as being here */ at?: string[]; needs?: Capability }
 
@@ -31,6 +32,7 @@ const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: '
 const MORE: Destination[] = [
   { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' },
   { to: '/requests', label: 'Requests', icon: 'list', needs: 'requests' },
+  { to: '/recordings', label: 'Recordings', icon: 'record', needs: 'recordings' },
   { to: '/sources', label: 'Sources', icon: 'source', needs: 'sources' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
@@ -54,7 +56,10 @@ export function Rail() {
     void setFocus('MAIN')
   }, hasFocus || pinned)
   const here = (d: Destination) => (d.to === '/' ? loc.pathname === '/' : [d.to, ...(d.at ?? [])].some((p) => loc.pathname.startsWith(p)))
-  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => !d.needs || can(profile, d.needs))]
+  // Recordings: offered once the server says recording is on; an admin also sees it while it is off, to learn why.
+  const recordings = useRecordings(can(profile, 'recordings'), false)
+  const recordingsOffered = !!recordings.data?.enabled || (!!recordings.data && !!profile?.is_admin)
+  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (!d.needs || can(profile, d.needs)) && (d.to !== '/recordings' || recordingsOffered))]
   const open = (to: string) => { setPinned(false); setMenu(false); go(to) }
   return <>
     <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember onFocusChange={setHasFocus}
