@@ -21,7 +21,7 @@ async def list_requests(
     scope: Literal["mine", "all"] = "mine",
     state: str | None = Query(None, max_length=24),
 ) -> dict[str, Any]:
-    rows = await c.requests.list(p, scope=scope, state=state)
+    rows = await c.requests.refreshed(await c.requests.list(p, scope=scope, state=state))
     return {"requests": await c.requests.to_api(rows), "can_approve": request_policy.can_approve(p)}
 
 
@@ -37,6 +37,17 @@ async def create_request(body: S.MediaRequestCreate, response: Response, c: C, p
     if not created:
         response.status_code = 200
     return (await c.requests.to_api([row]))[0]
+
+
+@router.get("/requests/{id}", response_model=S.MediaRequest, tags=["requests"])
+async def get_request(id: str, c: C, p: P) -> dict[str, Any]:
+    rows = await c.requests.refreshed([await c.requests.get(p, id)])
+    return (await c.requests.to_api(rows))[0]
+
+
+@router.post("/requests/{id}/refresh", response_model=S.MediaRequest, tags=["requests"])
+async def refresh_request(id: str, c: C, p: P) -> dict[str, Any]:
+    return (await c.requests.to_api([await c.requests.refresh(p, id)]))[0]
 
 
 @router.post("/requests/{id}/approve", response_model=S.MediaRequest, tags=["requests"])

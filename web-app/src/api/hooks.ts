@@ -1,8 +1,10 @@
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { z } from 'zod'
 import { api, ok, tokenless, unwrap } from './client'
+import { useCan } from './me'
 import { useSession } from '../store/session'
 import { mergeProgrammes } from '../lib/guideWindow'
+import { isOpenRequest, refetchMsFor, tileRequest, tilesRefetchMs } from '../lib/requests'
 import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined } from './types'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult,
@@ -32,7 +34,13 @@ export const useProfiles = () =>
 export const useDisclaimer = () =>
   useQuery({ queryKey: qk.disclaimer, queryFn: () => unwrap<Disclaimer>(api.GET('/disclaimer')), staleTime: Infinity })
 
-export const useHome = () => useQuery({ queryKey: [...qk.home, useProfileId()], queryFn: () => unwrap<HomeData>(api.GET('/home')), staleTime: 30_000 })
+export const useHome = () => useQuery({
+  queryKey: [...qk.home, useProfileId()],
+  queryFn: () => unwrap<HomeData>(api.GET('/home')),
+  staleTime: 30_000,
+  // Only while one of its posters shows a request on its way, so that chip and bar keep up.
+  refetchInterval: (query) => tilesRefetchMs([...(query.state.data?.hero ?? []), ...(query.state.data?.rows ?? []).flatMap((row) => row.tiles)]),
+})
 
 export const useSearch = (q: string, filters: { language?: string; source_id?: string } = {}) =>
   useQuery({
@@ -46,6 +54,11 @@ export const useTitle = (id: string | undefined) =>
   useQuery({
     queryKey: ['title', useProfileId(), id],
     enabled: !!id,
+    // While a request for it is on its way the page follows it, at the pace of its phase; otherwise it is read once.
+    refetchInterval: (query) => {
+      const request = query.state.data ? tileRequest(query.state.data) : null
+      return request ? refetchMsFor([request.phase]) : false
+    },
     queryFn: () => unwrap<TitleDetail>(api.GET('/titles/{id}', { params: { path: { id: id! } } })),
   })
 
@@ -263,15 +276,29 @@ export const usePlaybackOptions = (id?: string) => useQuery({
 /* ---------- requests & notices ---------- */
 const REQUEST_VIEWS = [['requests'], ['title'], ['search'], ['discover'], qk.home] as const
 
-// Approval and arrival happen elsewhere (another profile, the server job), so these lists poll.
+// Approval, downloading and arrival happen elsewhere (another profile, the request manager), so these
+// lists poll: as often as the busiest request in them needs, and (react-query's default, said here
+// because it is relied on) not at all while the tab is hidden.
 export const useRequests = (scope: 'mine' | 'all', enabled = true) =>
   useQuery({
     queryKey: ['requests', useProfileId(), scope],
     enabled,
     staleTime: 0,
-    refetchInterval: 60_000,
+    refetchInterval: (query) => refetchMsFor((query.state.data?.requests ?? []).map((r) => r.progress.phase)),
+    refetchIntervalInBackground: false,
     queryFn: () => unwrap<RequestList>(api.GET('/requests', { params: { query: { scope } } })),
   })
+
+/**
+ * The open request for a title, with everything the server knows about it (the title itself carries only
+ * the phase and the percentage). Found among the requests this profile may list; undefined when it is
+ * somebody else's and this profile may not see those.
+ */
+export function useOpenRequestFor(titleId: string | undefined, enabled: boolean): MediaRequest | undefined {
+  const all = useCan('requests.approve')
+  const { data } = useRequests(all ? 'all' : 'mine', enabled && !!titleId)
+  return enabled ? data?.requests.find((r) => r.title_id === titleId && isOpenRequest(r.state)) : undefined
+}
 
 export const useNotices = () =>
   useQuery({
@@ -286,6 +313,15 @@ export function useCreateRequest() {
   return useMutation({
     mutationFn: (body: { media_type: 'movie' | 'tv'; tmdb_id: number; seasons?: number[] | null }) =>
       unwrap<MediaRequest>(api.POST('/requests', { body })),
+    onSuccess: () => { for (const queryKey of REQUEST_VIEWS) void qc.invalidateQueries({ queryKey }) },
+  })
+}
+
+/** "Check again": the server asks the request manager about this request now, or sends an unsent one again. */
+export function useRefreshRequest() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => unwrap<MediaRequest>(api.POST('/requests/{id}/refresh', { params: { path: { id } } })),
     onSuccess: () => { for (const queryKey of REQUEST_VIEWS) void qc.invalidateQueries({ queryKey }) },
   })
 }

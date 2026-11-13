@@ -18,6 +18,19 @@ from pydantic import (
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
 RequestStateL = Literal["pending_approval", "approved", "sent", "available", "declined", "failed"]
+RequestPhaseL = Literal[
+    "requested",
+    "approved",
+    "searching",
+    "downloading",
+    "importing",
+    "partially_available",
+    "available",
+    "declined",
+    "failed",
+    "stalled",
+    "unknown",
+]
 RecordingStateL = Literal["scheduled", "recording", "done", "failed", "missed", "cancelled"]
 
 
@@ -250,6 +263,13 @@ class Programme(_M):
     recording_state: RecordingStateL | None = None
 
 
+class TileRequestProgress(_M):
+    """What the title's request is doing, for a chip and a bar; ``MediaRequest.progress`` has the rest."""
+
+    phase: RequestPhaseL
+    percent: int | None = Field(default=None, ge=0, le=100)
+
+
 class Tile(_M):
     id: str
     kind: MediaKindL
@@ -265,6 +285,7 @@ class Tile(_M):
     sources: list[SourceBadge]
     now_playing: Programme | None = None
     request_state: RequestStateL | None = None
+    request_progress: TileRequestProgress | None = None
     requestable: bool = False
 
 
@@ -796,6 +817,15 @@ class ProfileSwitch(_M):
     password: str | None = None
 
 
+class RequestProgress(_M):
+    phase: RequestPhaseL
+    last_phase: RequestPhaseL | None = None
+    percent: int | None = Field(default=None, ge=0, le=100)
+    eta: datetime | None = None
+    detail: str | None = None
+    checked_at: datetime | None = None
+
+
 class MediaRequest(_M):
     id: str
     profile_id: str
@@ -808,6 +838,7 @@ class MediaRequest(_M):
     poster: str | None = None
     seasons: list[int] | None = None
     state: RequestStateL
+    progress: RequestProgress
     note: str | None = None
     decided_by_profile_id: str | None = None
     created_at: datetime

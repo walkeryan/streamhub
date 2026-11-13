@@ -36,6 +36,7 @@ const P: Record<string, string> = {
   tmdb: 'M4 8h16M12 8v10',
   info: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v6M12 7.5h.01',
   upload: 'M12 16V4M7 9l5-5 5 5M4 20h16',
+  download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
   eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 100 6 3 3 0 000-6z',
   tv2: 'M3 7h18v10H3z',
   trophy: 'M7 4h10v5a5 5 0 01-10 0zM7 6H4v1a3 3 0 003 3M17 6h3v1a3 3 0 01-3 3M12 14v4M8 20h8',

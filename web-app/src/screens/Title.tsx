@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router'
-import { createRoom, useCreateRequest, usePlaybackOptions, useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
+import { createRoom, useCreateRequest, useOpenRequestFor, usePlaybackOptions, useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
 import { api, ok } from '../api/client'
 import type { PlaybackOption, Room, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Meta, Modal, Skeleton } from '../components/ui'
@@ -19,7 +19,8 @@ import { audioDescription } from '../player/channelAudio'
 import { initialTrack, trackLabel } from '../player/audioTracks'
 import { usePhone } from '../lib/layout'
 import { languageName } from '../lib/util'
-import { isOpenRequest, requestStateLabel, tmdbRef } from '../lib/requests'
+import { isOpenRequest, requestOf, tmdbRef } from '../lib/requests'
+import { RequestStatus } from '../components/RequestStatus'
 import { useUi } from '../store/ui'
 import { ShareSheet } from '../room/ShareSheet'
 import { useCan } from '../api/me'
@@ -72,6 +73,14 @@ function TitleDetails({ id }: { id: string }) {
   const [startingRoom, setStartingRoom] = useState(false)
   const mayStartRoom = useCan('rooms.create')
   const requestOpen = isOpenRequest(t?.request_state)
+  // The open request itself, when this profile may list it: it has the time left and the detail the title does not carry.
+  const request = useOpenRequestFor(t?.id, requestOpen)
+  const followed = useRef(false)
+  useEffect(() => {
+    // It was open and no longer is (it arrived, failed or was declined): what this page shows of the title is out of date.
+    if (followed.current && !request) void qc.invalidateQueries({ queryKey: ['title'] })
+    followed.current = !!request
+  }, [request, qc])
   const canRequest = !!t?.requestable && !requestOpen && !!tmdbRef(t.id)
   useRestoreFocus(!!t, t?.sources.length ? 'title:play' : canRequest ? 'title:request' : 'title:watchlist')
   // The Request button leaves once a request is open (also when another profile asked first); do not strand focus on it.
@@ -91,6 +100,7 @@ function TitleDetails({ id }: { id: string }) {
   const onWatchlist = (watchlist.data ?? []).some((w) => w.id === t.id)
   const left = t.progress_pct && t.runtime_min ? Math.max(1, Math.round(t.runtime_min * (1 - t.progress_pct / 100))) : null
   const canPlay = inApp.length > 0
+  const requestShown = requestOf(t)
   const playLabel = canPlay ? (left ? `Resume · ${left} min left` : 'Play') : 'Open in app'
   const episodes = season ? seasonQ.data?.episodes ?? [] : t.episodes ?? []
   const seasons = t.seasons ?? []
@@ -189,8 +199,10 @@ function TitleDetails({ id }: { id: string }) {
           </div>
           <div className="title-body flex flex-col gap-4 min-w-0">
             {t.overview && <p style={{ lineHeight: 1.55 }}>{t.overview}</p>}
-            {t.request_state && t.request_state !== 'available' && !canPlay && (
-              <p role="status" data-testid="title-request-state"><span className="badge">{requestStateLabel(t.request_state)}</span></p>
+            {requestShown && (
+              <RequestStatus testId="title-request-state" progress={request?.progress ?? requestShown}>
+                {requestShown.phase === 'available' ? 'Not in your library yet: it appears after the next library sync.' : null}
+              </RequestStatus>
             )}
             <FocusGroup focusKey="title:actions" className={phone ? 'title-actions' : 'flex gap-3 flex-wrap items-center'} preferred="title:play" data={{ together: canPlay && mayStartRoom }}>
               {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id && pickedTrack === null ? 'Choose audio / source' : playLabel}</Button>}

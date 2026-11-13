@@ -505,6 +505,12 @@ class MediaRequest(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    # What the request manager last said about a sent request; see services/request_progress.py.
+    progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    progress_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # its last answer
+    progress_changed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # the stall clock
+    poll_after: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # not asked again before
+    poll_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # unanswered in a row
 
 
 # One open request per title for the whole household; closed ones stay as history.

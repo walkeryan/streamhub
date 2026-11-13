@@ -17,10 +17,15 @@ async function elsewhere(page: Page, profile: string, method: string, path: stri
   }, { profile, method, path, body })
 }
 
-/** An admin has connected a request manager; the mock starts without one. */
+/**
+ * An admin has connected a request manager; the mock starts without one. Its clock is stopped at 0, so a request
+ * it takes stays where a request starts (searching) until a library sync brings the title in: these specs are
+ * about asking and approving. What the manager reports afterwards is request-progress.spec.ts.
+ */
 async function connectManager(page: Page) {
   const saved = await elsewhere(page, 'p1', 'PUT', '/settings/request_manager', { url: MANAGER, api_key: 'fixture-manager-key' })
   expect(saved.json).toEqual({ url: MANAGER, api_key_set: true })
+  await page.evaluate(() => sessionStorage.setItem('mock.requests', JSON.stringify({ ...JSON.parse(sessionStorage.getItem('mock.requests') ?? '{}'), clock: 0 })))
 }
 
 /** Reach the top bar with Up, walk it with Left/Right to a destination and open it. */
@@ -39,6 +44,8 @@ async function more(page: Page, testId: string) {
 }
 
 const focused = (page: Page) => page.locator('.fx[data-focused="true"]').last()
+/** The phase chip of the title page's request status. */
+const titlePhase = (page: Page) => page.getByTestId('title-request-state').getByTestId('request-phase')
 
 test('keyboard only: request a movie, see it approved, open the notice when it arrives', async ({ page }) => {
   await signIn(page)
@@ -64,7 +71,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await expect(request).toHaveClass(/btn-primary/)
   await expect(page.getByTestId('title-play')).toHaveCount(0)
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('title-request-state')).toHaveText('Requested · waiting for approval')
+  await expect(titlePhase(page)).toHaveText('Requested')
   await expect(request).toHaveCount(0)
   await expect(focused(page)).toHaveText('Watchlist')
 
@@ -85,12 +92,14 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   expect((await elsewhere(page, 'p1', 'POST', `/requests/${all.requests[0]!.id}/approve`, {})).status).toBe(200)
   await page.reload()
   await expect(row).toHaveAttribute('data-state', 'sent')
-  await expect(row).toContainText('Approved · downloading')
+  // Approved and with the request manager, which has not found anything yet: it does not say downloading.
+  await expect(row.getByTestId('request-phase')).toHaveText('Searching')
+  await expect(row.getByTestId('request-bar')).toHaveCount(0)
   await expect(page.getByTestId('requests-tab-mine')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowDown')
   await expect(focused(page)).toHaveText('Details')
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('title-request-state')).toHaveText('Approved · downloading')
+  await expect(titlePhase(page)).toHaveText('Searching')
   await expect(page.getByTestId('title-request')).toHaveCount(0)
 
   // The next library sync brings the title in; Home tells the requester.
@@ -182,7 +191,8 @@ test.describe('as an admin', () => {
     await page.keyboard.press('Enter')
     await expect(dialog).toHaveCount(0)
     await expect(row).toHaveAttribute('data-state', 'declined')
-    await expect(row).toContainText('Already on a service')
+    await expect(row.getByTestId('request-phase')).toHaveText('Declined')
+    await expect(row.getByTestId('request-detail')).toHaveText('Already on a service')
     await expect(page.getByTestId('request-approve')).toHaveCount(0)
     // The decided row's buttons are gone; focus lands on what is left of it.
     await expect(focused(page)).toHaveText('Details')
@@ -209,7 +219,7 @@ test.describe('as an admin', () => {
     await page.keyboard.press('ArrowDown')
     await expect(focused(page)).toHaveText('Request selected seasons')
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('title-request-state')).toHaveText('Approved · downloading')
+    await expect(titlePhase(page)).toHaveText('Searching')
     const mine = (await elsewhere(page, 'p1', 'GET', '/requests')).json as { requests: Array<{ seasons: number[]; state: string }> }
     expect(mine.requests.map((r) => [r.seasons, r.state])).toEqual([[[2], 'sent']])
   })

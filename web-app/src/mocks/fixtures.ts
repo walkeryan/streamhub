@@ -80,6 +80,12 @@ const unavailableSeeds: Seed[] = [
   { n: 302, title: 'The Tollgate Tapes', year: 2024, kind: 'show', overview: 'A toll collector keeps every dashcam tape handed in at her booth. One of them is evidence.', genres: ['Crime'], runtime: 45, sources: [], rating: 8.1 },
 ]
 export const unavailable = unavailableSeeds.map(tileOf)
+// Requestable too, but found only by their id: the mock request manager fails the first and lets the second
+// stall (see mocks/requests.ts). Kept out of search and discovery so those fixtures stay what they were.
+const troubledSeeds: Seed[] = [
+  { n: 303, title: 'Harbour of Paper Boats', year: 2023, kind: 'movie', overview: 'Two sisters fold the letters their father never sent into a fleet, and launch it on the tide.', genres: ['Drama'], runtime: 101, sources: [], rating: 7.2 },
+  { n: 304, title: 'The Quiet Meridian', year: 2022, kind: 'movie', overview: 'A surveyor sent to redraw a border finds the line already walked, every night, by someone else.', genres: ['Mystery'], runtime: 109, sources: [], rating: 6.9 },
+]
 
 // Enough further titles to fill shelves the way a provider catalog does. Like the titles above they are
 // invented; they stay out of `titles` so the grid, search and discovery fixtures keep their small, known set.
@@ -101,7 +107,7 @@ const shelfSeeds: Seed[] = [
   ...shelved('show', 521, 'Kids', 2022, ['Tiny Tugboats', 'Professor Pickle']),
 ]
 const shelfCatalog = [...seeds, ...shelfSeeds]
-export const seedFor = (id: string) => [...shelfCatalog, ...unavailableSeeds].find((s) => idOf(s) === id)
+export const seedFor = (id: string) => [...shelfCatalog, ...unavailableSeeds, ...troubledSeeds].find((s) => idOf(s) === id)
 
 /** Every title of one shelf, newest first: what "See all" lists. */
 export const shelfTiles = (kind: Seed['kind'], shelf: string): Tile[] =>

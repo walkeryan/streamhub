@@ -182,6 +182,53 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
 - **Progress**: `stopped` with `position_ms >= duration_ms` (or ≥95%) marks watched; forwarded to Plex `/:/timeline`
   and Jellyfin `/Sessions/Playing/*`.
 
+## Requests and their progress
+
+A title no source has can be requested. StreamHub owns the request and its approval (`state`: `pending_approval` →
+`approved` → `sent` → `available`, or `declined` / `failed`); a request manager (Overseerr, Jellyseerr or Seerr, set
+under Settings) does the fetching. `state` says where the request stands in that flow. What is happening to the title
+is `progress.phase`, and it only ever says what an answer of the request manager showed
+(`app/services/request_progress.py` has the rules, `app/adapters/seerr/client.py` reads the answer):
+
+| Phase | Means | Comes from |
+|---|---|---|
+| `requested` | Waiting for approval here. | `state` `pending_approval`; the request manager has not been told. |
+| `approved` | Approved here, not taken by the request manager yet. | `state` `approved` (the hand-over failed and is retried; `detail` says why), or the manager's request `status` 1: it holds the request for an approval of its own. |
+| `searching` | The request manager has it; nothing is downloading. | Request `status` 2 with media `status` 1–4 or no media record, and an empty or absent `downloadStatus`. Also what a request says between being sent and first being asked about. |
+| `downloading` | Its download queue has an unfinished item for the title. | At least one object in the media's `downloadStatus` (`downloadStatus4k` for a 4K request). `percent` is bytes done over bytes total (`size`, `sizeLeft`) across all items, rounded down, and null when any item has no size. `eta` is the latest `estimatedCompletionTime` (else now + `timeLeft`) of the unfinished items, and null unless each gives a time still ahead. `detail`: `Queued` / `Paused` when every unfinished item is waiting, `2 of 8 episodes` for a series (of the episodes in the queue), `1 of 3 downloads has a problem`. |
+| `importing` | Downloaded, not in the library yet. | Every queue item is `completed` or has `sizeLeft` 0, and the media is not available. |
+| `partially_available` | Series: some of what was asked for can be watched. | Some, not all, of the requested seasons have media season `status` 5 (or the one requested season has 4); with no seasons to count, media `status` 4. While more is downloading the phase is `downloading` and `detail` keeps the count. |
+| `available` | Done. | Media `status` 5, request `status` 5, or every requested season at 5; `state` becomes `available` and the requester gets a notice. Also set, without asking the manager, when a catalog sync finds the title in an in-app source. |
+| `declined` | Refused. | Declined here (`detail` is the decider's note), or request `status` 3. |
+| `failed` | The request manager gave up, or no longer has the request. | Request `status` 4, or `404` for the request. |
+| `stalled` | A download is not getting anywhere. | Every unfinished queue item reports `warning`, `failed`, `error`, `stalled` or `downloadClientUnavailable`; or a download that says it is running has not gained a byte for 30 minutes; or finished downloads have not been imported for 30 minutes. Queued and paused items never count as stalled, and neither does a search: a title may rightly be searched for until it is released. |
+| `unknown` | Not known right now. | The request manager did not answer (unreachable, timeout, 5xx, rejected key, unreadable body), none is configured, or its answer had nothing these rules know. `last_phase` keeps the phase before. |
+
+A field that is missing or malformed is read as absent, never as progress: a request is `downloading` only while a queue
+item exists, and the first answer for a new request is `requested`, `approved` or `searching`. `detail` is built here or
+is the manager's own error message, which is dropped when it names a host, an address or a path; a queue item's title
+(a release name) is never read. A request the manager already had and gave no id for is followed through the
+`mediaInfo` of `/movie/{tmdbId}` or `/tv/{tmdbId}` instead; with no request to read, media `status` 2 is `approved` and
+3 is `searching`.
+
+**How often the request manager is asked.** One request at a time is one `GET /api/v1/request/{id}`:
+
+- every 15 s while it is `downloading` or `importing`; every 3 minutes otherwise, and every 30 s during a request's
+  first 10 minutes with the manager, so the start of a download is noticed. A job runs every 15 s and asks only about
+  the requests that are due, at most 20 a pass. `requested` and `approved` requests are not polled: they change when
+  somebody acts on them (an approved request that did not reach the manager is sent again every 5 minutes);
+- every 5 minutes, and after each catalog sync, a sweep asks about every sent request and closes those whose title an
+  in-app source now has;
+- `GET /requests` and `GET /requests/{id}` serve what is stored and first refresh the stale requests among those they
+  return: at most 8 per call, waiting at most 4 s. Tiles (`Tile.request_progress`) only ever serve what is stored;
+- `POST /requests/{id}/refresh` asks about one request now (at most every 5 s), or sends an unsent one again;
+- never more than 4 calls at once. A request the manager fails to answer for is asked about again after 30 s, then 60,
+  120, 240 and from then on every 5 minutes. When the manager cannot be reached at all, the first failure costs one
+  timeout, the sent requests become `unknown`, and the job and readers ask nothing until that same back-off has passed.
+
+A request closes as `available` when the manager says so, or when a catalog sync finds the title in an in-app source,
+whichever comes first. For a series the second usually wins: the first imported episode puts the show in the library.
+
 ## Deploying behind a reverse proxy or tunnel
 
 `remote.access` is only enforceable when the server can tell where a request really comes from. Behind a reverse

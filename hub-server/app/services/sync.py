@@ -323,9 +323,11 @@ class SyncScheduler:
         reconcile_requests: Callable[[], Awaitable[Any]] | None = None,
         recorder_tick: Callable[[], Awaitable[Any]] | None = None,
         classify: Callable[[], Awaitable[Any]] | None = None,
+        poll_requests: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         self._sync = sync
         self._reconcile_requests = reconcile_requests
+        self._poll_requests = poll_requests
         self._recorder_tick = recorder_tick
         self._classify = classify
         self._sched: Any = None
@@ -361,6 +363,20 @@ class SyncScheduler:
                 max_instances=1,
                 coalesce=True,
                 next_run_time=datetime.now(UTC) + timedelta(minutes=1),
+            )
+        if self._poll_requests is not None:
+            from app.services.request_progress import FAST_S
+
+            # Asks the request manager only about requests that are due (a download every pass, a
+            # search every few minutes), so most passes are one query and no call.
+            sched.add_job(
+                self._poll_requests,
+                "interval",
+                seconds=FAST_S,
+                id="request-progress",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(seconds=45),
             )
         if self._recorder_tick is not None:
             # Starts and stops captures, so it runs far more often than the other jobs.
