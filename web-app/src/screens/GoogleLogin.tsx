@@ -175,7 +175,7 @@ export function LoginGate() {
         ? 'Google sign-in is not configured yet. Contact the server owner.'
         : 'No way of signing in from here is switched on. Ask the person who runs this StreamHub.'}</p>}
       {error && <p role="alert" data-testid="signin-error">{error}</p>}
-      {profiles && <ProfilePicker />}
+      {profiles && <ProfilePicker embedded />}
     </FocusGroup>
   </main>
 }
