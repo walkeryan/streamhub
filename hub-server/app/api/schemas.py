@@ -201,6 +201,8 @@ class Row(_M):
     title: str
     layout: Literal["poster", "landscape", "hero", "channel"] = "poster"
     tiles: list[Tile]
+    # Client route for the row's "See all"; absent when the row has no fuller listing.
+    browse_path: str | None = None
 
 
 class Home(_M):
@@ -231,6 +233,17 @@ class BrowsePage(_M):
     total: int
     has_more: bool = False
     page_size: int = 60
+
+
+class Shelf(_M):
+    name: str
+    count: int
+    items: list[Tile]
+    browse_path: str
+
+
+class ShelfList(_M):
+    shelves: list[Shelf]
 
 
 class DiscoveryPage(_M):

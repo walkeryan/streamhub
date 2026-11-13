@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { activeFilter, closeFilters, openFilters, signIn } from './helpers'
 
 test('Alt arrows leave focus alone; browser history restores filters and plain Left opens the rail', async ({ page }) => {
   const errors: string[] = []
@@ -9,13 +9,13 @@ test('Alt arrows leave focus alone; browser history restores filters and plain L
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
-  await page.getByRole('button', { name: 'My library', exact: true }).click()
+  await openFilters(page)
   await page.getByRole('button', { name: 'Year', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Year', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await page.getByRole('link', { name: 'Series', exact: true }).click()
-  await expect(page).toHaveURL(/\/discover\/shows$/)
-  const search = page.getByLabel('Release year')
+  await closeFilters(page)
+  await page.getByRole('link', { name: 'Shows', exact: true }).click()
+  await expect(page).toHaveURL(/\/browse\/shows$/)
+  const search = page.getByLabel('Search this library')
   await search.click()
   await expect(search).toBeFocused()
   await page.keyboard.press('Alt+ArrowLeft')
@@ -25,10 +25,10 @@ test('Alt arrows leave focus alone; browser history restores filters and plain L
   // history separately; the companion test proves our handler leaves defaults intact.
   await page.goBack()
   await expect(page).toHaveURL(/\/browse\/movies$/)
-  await expect(page.getByRole('button', { name: 'Year', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(activeFilter(page, 'Sort: Year')).toBeVisible()
   await page.keyboard.press('Alt+ArrowRight')
   await page.goForward()
-  await expect(page).toHaveURL(/\/discover\/shows$/)
+  await expect(page).toHaveURL(/\/browse\/shows$/)
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
   expect(errors).toEqual([])
   await page.screenshot({ path: '/tmp/streamhub-browser-history-shortcuts.png' })

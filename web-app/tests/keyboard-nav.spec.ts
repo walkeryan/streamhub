@@ -57,7 +57,7 @@ test('live TV: zap with digits and Backspace in the player', async ({ page }) =>
   await signIn(page)
   await page.goto('/live')
   await expect(page.getByTestId('channel-row').first()).toBeVisible()
-  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
   await page.getByTestId('channel-row').first().click()
   await expect(page).toHaveURL(/\/play\/ch/)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing', { timeout: 15_000 })
@@ -97,7 +97,7 @@ for (const key of ['Backspace', 'Escape', 'BrowserBack'] as const) {
       await expect(page.getByTestId('player-menu')).toHaveCount(0)
       expect(new URL(page.url()).pathname).toBe(first)
     } else {
-      await expect(page.getByLabel('Search channels or number')).toBeFocused()
+      await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
     }
   })
 }

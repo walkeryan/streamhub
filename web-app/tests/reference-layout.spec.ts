@@ -1,21 +1,23 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { openMore, signIn } from './helpers'
 
-test('Home wide cards retain metadata and remote focus on desktop and mobile', async ({ page }) => {
+test('Home rows retain titles and remote focus on desktop and mobile', async ({ page }) => {
   await signIn(page)
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowDown')
-  const focused = page.locator('.feature-card[data-focused="true"]')
+  // Continue Watching: wide artwork, always captioned with the title.
+  const focused = page.locator('[data-row="continue"] [data-testid="tile"][data-focused="true"]')
   await expect(focused).toHaveCount(1)
-  await expect(focused.locator('.feature-copy h3')).not.toBeEmpty()
-  const art = await focused.locator('.feature-art').boundingBox()
+  await expect(focused.locator('.cap')).not.toBeEmpty()
+  await expect(focused.locator('.cap')).toHaveCSS('opacity', '1')
+  const art = await focused.boundingBox()
   expect(art!.width / art!.height).toBeCloseTo(16 / 9, 1)
   await page.waitForTimeout(250) // allow focus/rail transitions to finish for visual evidence
   await page.screenshot({ path: '/tmp/streamhub-reference-home-desktop.png' })
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: '/tmp/streamhub-reference-home-mobile.png' })
-  await page.getByRole('button', { name: 'Sports', exact: true }).click()
+  await openMore(page, 'Sports')
   await expect(page).toHaveURL(/\/sports$/)
 })
 
@@ -30,7 +32,7 @@ test('Sports cards show supplied titles without inventing scores or live-game cl
       return Response.json({ as_of: new Date(now).toISOString(), date: new Date(now).toISOString().slice(0, 10), timezone: 'America/New_York', truncated: false, events: Array.from({ length: 6 }, (_, i) => ({ id: `fixture-${i}`, sport: 'Basketball', programme_id: `prog:${i}`, title: i === 0 ? 'Basketball highlights and analysis' : `Fixture programme ${i}`, start: new Date(now - 60000).toISOString(), stop: new Date(now + 600000).toISOString(), channel_id: `ch:fixture:${i}`, channel_name: `Fixture channel ${i}`, channel_number: i, source_name: 'Test feed' })).map((item) => ({ ...item, status: 'current', replay: false, live_evidence: false, grouping_evidence: 'same_source_programme', feeds: [{ ...item, source_id: 'fixture', language: 'eng', language_verified: false }] })), total: 6, offset: 0, limit: 40, sports: [{ name: 'Basketball', count: 6 }], coverage: { eligible_channels: 10, channels_with_sports_schedule: 6 } })
     }
   })
-  await page.getByRole('link', { name: 'Sports', exact: true }).click()
+  await openMore(page, 'Sports')
   await expect(page.getByTestId('sports-listing')).toHaveCount(6)
   await page.getByRole('button', { name: 'View feeds for Basketball highlights and analysis', exact: true }).hover()
   await expect(page.locator('.sports-event-card[data-focused="true"]')).toContainText('Basketball highlights and analysis')

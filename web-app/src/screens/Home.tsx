@@ -1,4 +1,3 @@
-import { AndroidDownload } from '../components/AndroidDownload'
 import { HomeNotices } from '../components/Notices'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
@@ -63,17 +62,10 @@ export function Home() {
   return (
     <div data-testid="home" className="home-discovery">
       <HomeNotices />
-      <FocusGroup focusKey="home:destinations" className="home-destinations" label="Browse content">
-        <Button focusKey="home:live" onEnter={() => go('/live?view=guide')}>Live TV</Button>
-        <Button focusKey="home:movies" onEnter={() => go('/browse/movies')}>Movies</Button>
-        <Button focusKey="home:shows" onEnter={() => go('/browse/shows')}>Shows</Button>
-        <Button focusKey="home:sports" onEnter={() => go('/sports')}>Sports</Button>
-        <AndroidDownload focusKey="home:android" />
-      </FocusGroup>
       <section className="hero" aria-label="Featured" data-testid="hero" data-art={noArt ? 'none' : undefined}>
         <Crossfade src={active.backdrop ?? active.poster} />
         <div className="hero-body">
-          <h1 className="display" data-testid="hero-title"><SafeImg key={active.id} src={active.logo} alt={active.title} style={{ maxHeight: '5rem' }} fallback={active.title} /></h1>
+          <h1 className="display" data-testid="hero-title"><SafeImg key={active.id} src={active.logo} alt={active.title} style={{ maxHeight: '3.5rem' }} fallback={active.title} /></h1>
           <Meta items={[active.year, active.subtitle, active.rating ? `★ ${active.rating.toFixed(1)}` : null]} />
           <div className="flex gap-2 flex-wrap"><SourceChips sources={active.sources} max={3} /></div>
           <FocusGroup focusKey="hero" className="flex gap-3 flex-wrap items-center" onFocusChange={setHeroFocused} remember={false} preferred="hero:play">
@@ -95,7 +87,7 @@ export function Home() {
       </section>
       <div className={cn('pb-16')} style={{ marginTop: '-0.5rem', position: 'relative', zIndex: 3 }}>
         {rows.map((r) => (
-          <TileRow key={r.id} id={r.id} title={r.title} tiles={r.tiles} layout={r.layout} presentation="wide" onFocusTile={setDriver} />
+          <TileRow key={r.id} id={r.id} title={r.title} tiles={r.tiles} layout={r.layout} seeAll={r.browse_path} onFocusTile={setDriver} />
         ))}
       </div>
       <HomeFocusSentinel onClear={() => setDriver(null)} />

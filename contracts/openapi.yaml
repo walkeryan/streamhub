@@ -356,6 +356,20 @@ components:
         title: {type: string}
         layout: {type: string, enum: [poster, landscape, hero, channel], default: poster}
         tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+        browse_path: {type: string, nullable: true, description: "Client route for the row's \"See all\" (a shelf row: /browse/{section}?category=...). Null when the row has no fuller listing."}
+    Shelf:
+      type: object
+      required: [name, count, items, browse_path]
+      properties:
+        name: {type: string, description: "Category name computed at sync, e.g. New Releases."}
+        count: {type: integer, description: "Distinct titles on the shelf for this profile, language and adult scope."}
+        items: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+        browse_path: {type: string, description: "Client route listing the whole shelf."}
+    ShelfList:
+      type: object
+      required: [shelves]
+      properties:
+        shelves: { type: array, items: { $ref: '#/components/schemas/Shelf' } }
     TitleDetail:
       allOf:
         - $ref: '#/components/schemas/Tile'
@@ -1199,6 +1213,18 @@ paths:
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: {type: object, required: [name, count], properties: {name: {type: string}, count: {type: integer}}} } } } } }
+  /browse/{section}/shelves:
+    get:
+      summary: Shelves of a section with their first titles, in one call
+      description: New Releases first, then by size (a shelf with nothing new in 30 days counts half). Items put titles with a poster first, then newest. Same language, profile policy and adult scope as /browse/{section}.
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string} }
+        - { name: limit_rows, in: query, schema: {type: integer, minimum: 1, maximum: 40, default: 12} }
+        - { name: limit_items, in: query, schema: {type: integer, minimum: 1, maximum: 40, default: 20} }
+        - { name: include_adult, in: query, schema: {type: boolean, default: false, description: "Admin profile only: also list titles marked adult. Ignored for other profiles."} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/ShelfList' } } } } }
   /browse/{section}/genres:
     get:
       summary: Actual metadata genres with scoped distinct title counts

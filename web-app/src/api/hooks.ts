@@ -4,7 +4,7 @@ import { api, ok, unwrap } from './client'
 import { useSession } from '../store/session'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
-  Settings, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
+  Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
 } from './types'
 
 const useProfileId = () => useSession((s) => s.profile?.id ?? null)
@@ -48,11 +48,20 @@ export const useTitle = (id: string | undefined) =>
   })
 
 export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
-export const useBrowse = (section: string, f: BrowseFilters, page = 1) =>
+export const useBrowse = (section: string, f: BrowseFilters, page = 1, enabled = true) =>
   useQuery({
     queryKey: ['browse', useProfileId(), section, f, page],
+    enabled,
     placeholderData: useProfilePlaceholder<BrowsePage>(),
     queryFn: () => unwrap<BrowsePage>(api.GET('/browse/{section}', { params: { path: { section }, query: { ...f, page } } })),
+  })
+
+/** Every shelf of a section with its first titles: what Movies and Shows open on. */
+export const useBrowseShelves = (section: string, f: { language?: string; limit_rows?: number; limit_items?: number }, enabled = true) =>
+  useQuery({
+    queryKey: ['browse-shelves', useProfileId(), section, f],
+    enabled,
+    queryFn: () => unwrap<ShelfList>(api.GET('/browse/{section}/shelves', { params: { path: { section }, query: f } })),
   })
 
 export const useBrowseCategories = (section: string, f: BrowseFilters) =>
@@ -100,6 +109,9 @@ export const useWatchlist = () =>
       return (await r.json()) as Tile[]
     },
   })
+
+export const useHistory = () =>
+  useQuery({ queryKey: ['history', useProfileId()], queryFn: () => unwrap<Tile[]>(api.GET('/history')) })
 
 function authHeader(): Record<string, string> {
   const raw = localStorage.getItem('sh.session.v1')
@@ -149,7 +161,7 @@ export function useToggleFavorite() {
       else await ok(api.DELETE('/favorites', { params: { query: { kind: v.kind, id: v.id } } }))
     },
     onSuccess: () => {
-      for (const k of [qk.favorites, qk.home, ['channels'], ['title'], ['search'], ['browse']]) void qc.invalidateQueries({ queryKey: k })
+      for (const k of [qk.favorites, qk.home, ['channels'], ['title'], ['search'], ['browse'], ['browse-shelves'], ['history']]) void qc.invalidateQueries({ queryKey: k })
     },
   })
 }

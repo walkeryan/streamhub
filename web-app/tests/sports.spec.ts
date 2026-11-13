@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { openMore, signIn } from './helpers'
 
 for (const empty of [false, true]) {
   test(empty ? 'missing sports guide shows honest empty state' : 'sports filters and bounded pages watch the matching channel', async ({ page }) => {
@@ -23,7 +23,7 @@ for (const empty of [false, true]) {
         return new Response(JSON.stringify({ as_of: new Date(now).toISOString(), timezone: 'America/New_York', date: url.searchParams.get('date'), truncated: false, events: items.slice(offset, offset + limit).map((item) => ({ ...item, status: 'current', replay: false, live_evidence: false, grouping_evidence: 'same_source_programme', feeds: [{ ...item, source_id: 'fixture', language: 'eng', language_verified: false }] })), total: items.length, offset, limit, sports, coverage: { eligible_channels: 52366, channels_with_sports_schedule: empty ? 0 : 7572 } }), { headers: { 'content-type': 'application/json' } })
       }
     }, empty)
-    await page.getByRole('link', { name: 'Sports', exact: true }).click()
+    await openMore(page, 'Sports')
     await expect(page).toHaveURL(/\/sports$/)
     if (empty) {
       await expect(page.getByText('No matching sports listings', { exact: true })).toBeVisible()

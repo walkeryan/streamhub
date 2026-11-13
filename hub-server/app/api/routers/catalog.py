@@ -224,6 +224,37 @@ async def browse_categories(
         return await c.catalog.browse_categories(section, p.profile_id, source_id=source_id, language=language, q=q)
 
 
+@router.get("/browse/{section}/shelves", response_model=S.ShelfList, tags=["catalog"])
+async def browse_shelves(
+    section: str,
+    c: C,
+    p: P,
+    response: Response,
+    source_id: str | None = None,
+    language: str | None = None,
+    limit_rows: int = Query(12, ge=1, le=40),
+    limit_items: int = Query(20, ge=1, le=40),
+    include_adult: IncludeAdult = False,
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
+    with listing_scope(p, include_adult):
+        return await listing_cached(
+            c.db,
+            p.profile_id,
+            "shelves",
+            (section, source_id, language, limit_rows, limit_items),
+            lambda: c.catalog.shelves(
+                section,
+                p.profile_id,
+                source_id=source_id,
+                language=language,
+                limit_rows=limit_rows,
+                limit_items=limit_items,
+            ),
+            ttl=60,
+        )
+
+
 @router.get("/browse/{section}/languages", response_model=list[S.LanguageCount], tags=["catalog"])
 async def browse_languages(
     section: str, c: C, p: P, source_id: str | None = None, include_adult: IncludeAdult = False

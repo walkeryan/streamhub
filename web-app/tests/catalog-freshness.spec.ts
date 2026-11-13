@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { openFilters, signIn } from './helpers'
 
 test('source changes refresh genre facets with bounded polling and stable snapshots do not refetch catalog', async ({ page }) => {
   await page.addInitScript(() => {
@@ -23,8 +23,7 @@ test('source changes refresh genre facets with bounded polling and stable snapsh
   await page.clock.install()
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
-  await page.getByRole('button', { name: 'My library', exact: true }).click()
+  await openFilters(page)
   await expect(page.getByRole('button', { name: 'Genre: All genres', exact: true })).toBeVisible()
   const baseline = await page.evaluate(() => (window as unknown as { genreReads: number }).genreReads)
   await page.evaluate(() => { (window as unknown as { sourceSnapshot: object }).sourceSnapshot = { status: 'syncing', last_sync: '2026-10-31T18:00:00Z', count: 2 } })

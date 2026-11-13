@@ -25,7 +25,7 @@ export function HomeNotices() {
   const dismiss = (n: Notice) => {
     // Move focus before the row unmounts, so the remote never points at nothing.
     const next = unread.find((x) => x.id !== n.id)
-    void setFocus(next ? `notice:${next.id}` : 'home:live')
+    void setFocus(next ? `notice:${next.id}` : 'hero:play')
     read.mutate(n.id)
   }
   return (

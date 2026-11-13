@@ -58,7 +58,7 @@ test('unknown direct channel starts no media before explicit remote confirmation
   expect(await bodies(page)).toHaveLength(1)
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(/\/live$/)
-  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
 })
 
 test('pending zap stops the old media and ignores repeat zap keys; Back cancels without a new resolve', async ({ page }) => {

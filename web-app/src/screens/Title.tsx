@@ -5,6 +5,7 @@ import { useCreateRequest, usePlaybackOptions, useTitle, useToggleFavorite, useT
 import { api, ok } from '../api/client'
 import type { PlaybackOption, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Meta, Modal, Skeleton } from '../components/ui'
+import { Icon } from '../components/Icon'
 import { SafeImg } from '../components/SafeImg'
 import { MediaTile } from '../components/Tile'
 import { FocusGroup, Focusable } from '../nav/Focusable'
@@ -15,6 +16,7 @@ import { useAdaptiveAccent } from '../lib/theme'
 import { useSession } from '../store/session'
 import { audioDescription } from '../player/channelAudio'
 import { initialTrack, trackLabel } from '../player/audioTracks'
+import { usePhone } from '../lib/layout'
 import { LANG_NAMES } from '../lib/util'
 import { isOpenRequest, requestStateLabel, tmdbRef } from '../lib/requests'
 import { useUi } from '../store/ui'
@@ -42,6 +44,9 @@ function TitleDetails({ id }: { id: string }) {
   const toast = useUi((s) => s.toast)
   const [season, setSeason] = useState<string | null>(null)
   const [picker, setPicker] = useState<null | 'play'>(params.get('choose') ? 'play' : null)
+  // A phone keeps one row of primary actions; the rest wait in a menu.
+  const phone = usePhone()
+  const [more, setMore] = useState(false)
   useEffect(() => {
     if (!picker) return
     const frame = requestAnimationFrame(() => setFocus(confirmation ? 'audio:cancel' : 'pick:cancel'))
@@ -111,6 +116,22 @@ function TitleDetails({ id }: { id: string }) {
     })
   }
   const startRequest = () => { if (t.kind === 'show' && (t.request_seasons?.length ?? 0) > 1) setSeasonPick([]); else sendRequest() }
+  const toggleFavorite = () => toggleFav.mutate({ kind: t.kind, id: t.id, on: !t.is_favorite })
+  const openTrailer = () => window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(`${t.title} ${t.year ?? ''} trailer`)}`, '_blank', 'noopener')
+  const choosable = t.kind !== 'channel' && inApp.length > 0
+  // What Play will use, for the one control that stands in for the audio and version pickers.
+  const playing = tracks.find((track) => track.index === shownTrack)
+  const choice = [playing ? trackLabel(playing) : null, trackOption?.source_name].filter(Boolean).join(' · ') || 'Choose what to play'
+  const audioChips = tracks.length > 0 && (
+    <section className="flex flex-col gap-2" aria-label="Audio" data-testid="title-audio-tracks">
+      <h2 className="label">Audio</h2>
+      <FocusGroup focusKey="title:audio" className="flex gap-2 flex-wrap">
+        {tracks.map((track) => (
+          <Chip key={track.index} focusKey={`title:audio:${track.index}`} pressed={track.index === shownTrack} onEnter={() => setPickedTrack(track.index)}>{trackLabel(track)}</Chip>
+        ))}
+      </FocusGroup>
+    </section>
+  )
   const markWatched = async () => {
     const dur = (t.runtime_min ?? 0) * 60_000
     try {
@@ -126,41 +147,41 @@ function TitleDetails({ id }: { id: string }) {
         <Crossfade src={t.backdrop ?? t.poster} />
         <div style={{ position: 'absolute', inset: 0, zIndex: 1, background: 'linear-gradient(to top, var(--t-bg) 6%, transparent 70%), linear-gradient(to right, var(--t-bg) 4%, transparent 70%)' }} />
       </div>
-      <div className="page-pad" style={{ position: 'relative', zIndex: 2, paddingTop: 'max(var(--safe-y), 4rem)' }}>
-        <div className="flex gap-8 flex-wrap md:flex-nowrap">
-          <div className="tile tile-poster" style={{ flex: 'none', width: 'calc(var(--tile-poster-w) * 1.4)', height: 'calc(var(--tile-poster-h) * 1.4)', position: 'relative' }}>
+      <div className="page-pad title-page" style={{ position: 'relative', zIndex: 2 }}>
+        <div className="title-top">
+          <div className="tile tile-poster title-poster">
             <SafeImg className="art" src={t.poster} alt="" fallback={<div className="grid place-items-center h-full p-4 text-center heading">{t.title}</div>} />
           </div>
-          <div className="flex flex-col gap-4 min-w-0" style={{ maxWidth: '44rem' }}>
+          <div className="title-head flex flex-col gap-4 min-w-0">
             <h1 className="display">{t.title}</h1>
             <Meta items={[KIND_LABEL[t.kind], t.year, t.runtime_min ? `${t.runtime_min} min` : null, t.genres?.join(', '), t.rating ? `★ ${t.rating.toFixed(1)}` : null]} />
+          </div>
+          <div className="title-body flex flex-col gap-4 min-w-0">
             {t.overview && <p style={{ lineHeight: 1.55 }}>{t.overview}</p>}
             {t.request_state && t.request_state !== 'available' && !canPlay && (
               <p role="status" data-testid="title-request-state"><span className="badge">{requestStateLabel(t.request_state)}</span></p>
             )}
-            <FocusGroup focusKey="title:actions" className="flex gap-3 flex-wrap items-center" preferred="title:play">
+            <FocusGroup focusKey="title:actions" className={phone ? 'title-actions' : 'flex gap-3 flex-wrap items-center'} preferred="title:play">
               {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id && pickedTrack === null ? 'Choose audio / source' : playLabel}</Button>}
-              {t.kind !== 'channel' && inApp.length > 0 && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
+              {!phone && choosable && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
               {canRequest && <Button focusKey="title:request" primary={!handoff.length} icon="plus" onEnter={startRequest} testId="title-request">{t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'}</Button>}
               <Button focusKey="title:watchlist" icon={onWatchlist ? 'check' : 'bookmark'} pressed={onWatchlist} onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })}>
-                {onWatchlist ? 'On watchlist' : 'Watchlist'}
+                {phone ? 'My List' : onWatchlist ? 'On watchlist' : 'Watchlist'}
               </Button>
-              <Button focusKey="title:fav" icon="heart" pressed={!!t.is_favorite} onEnter={() => toggleFav.mutate({ kind: t.kind, id: t.id, on: !t.is_favorite })}>
-                {t.is_favorite ? 'Favorited' : 'Favorite'}
-              </Button>
-              <Button focusKey="title:trailer" icon="external" onEnter={() => window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(`${t.title} ${t.year ?? ''} trailer`)}`, '_blank', 'noopener')}>Trailer</Button>
-              {canPlay && <Button focusKey="title:watched" icon="eye" onEnter={markWatched}>Mark watched</Button>}
+              {phone ? <Button focusKey="title:more" icon="menu" iconOnly label="More actions" testId="title-more" onEnter={() => setMore(true)} /> : <>
+                <Button focusKey="title:fav" icon="heart" pressed={!!t.is_favorite} onEnter={toggleFavorite}>
+                  {t.is_favorite ? 'Favorited' : 'Favorite'}
+                </Button>
+                <Button focusKey="title:trailer" icon="external" onEnter={openTrailer}>Trailer</Button>
+                {canPlay && <Button focusKey="title:watched" icon="eye" onEnter={markWatched}>Mark watched</Button>}
+              </>}
             </FocusGroup>
-            {tracks.length > 0 && (
-              <section className="flex flex-col gap-2" aria-label="Audio" data-testid="title-audio-tracks">
-                <h2 className="label">Audio</h2>
-                <FocusGroup focusKey="title:audio" className="flex gap-2 flex-wrap">
-                  {tracks.map((track) => (
-                    <Chip key={track.index} focusKey={`title:audio:${track.index}`} pressed={track.index === shownTrack} onEnter={() => setPickedTrack(track.index)}>{trackLabel(track)}</Chip>
-                  ))}
-                </FocusGroup>
-              </section>
-            )}
+            {phone ? choosable && (
+              <Button focusKey="title:source" className="title-choice" label={`Audio and version: ${choice}`} onEnter={() => setPicker('play')} testId="title-source">
+                <span className="flex flex-col min-w-0"><span className="label">Audio &amp; version</span><span className="truncate">{choice}</span></span>
+                <Icon name="chevR" size={20} />
+              </Button>
+            ) : audioChips}
             {t.cast && t.cast.length > 0 && <p className="label">Cast: {t.cast.map((c) => c.name).join(', ')}</p>}
           </div>
         </div>
@@ -196,7 +217,7 @@ function TitleDetails({ id }: { id: string }) {
         </section>
       </div>
 
-      <Modal open={picker !== null} onClose={() => { setPicker(null); setConfirmation(null) }} title={confirmation ? 'Confirm audio choice' : canPlay ? 'Choose audio and source' : 'Open in'} firstFocusKey="pick:cancel">
+      <Modal open={picker !== null} onClose={() => { setPicker(null); setConfirmation(null) }} title={confirmation ? 'Confirm audio choice' : canPlay ? (phone ? 'Audio & version' : 'Choose audio and source') : 'Open in'} firstFocusKey="pick:cancel" variant="sheet">
         <div className="flex flex-col gap-2">
           {confirmation ? <>
             <p>{confirmation.audio_verified ? audioDescription(confirmation) : 'Audio language is unverified.'} This source is not automatically selected for your language preferences.</p>
@@ -204,6 +225,8 @@ function TitleDetails({ id }: { id: string }) {
             <Button focusKey="audio:cancel" onEnter={() => setConfirmation(null)}>Back to sources</Button>
             <Button focusKey="audio:confirm" onEnter={() => { const selected = confirmation; setConfirmation(null); setPicker(null); void play(t, null, { variantId: selected.variant_id, allowUnverifiedAudio: true, audioTrack: selected.variant_id === trackOption?.variant_id ? pickedTrack : null }) }}>Play this source anyway</Button>
           </> : canPlay ? <>
+            {phone && audioChips}
+            {phone && tracks.length > 0 && <h2 className="label">Version</h2>}
             <p className="label">Provider title labels are hints, not proof of spoken audio. Unverified or other-language sources require confirmation.</p>
             {audio.isPending && <p role="status">Checking available sources…</p>}
             {audio.error && <ErrorState error={audio.error} onRetry={() => void audio.refetch()} />}
@@ -214,6 +237,15 @@ function TitleDetails({ id }: { id: string }) {
           </> : handoff.map((s, i) => <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>{s.name}</Button>)}
           <Button focusKey="pick:cancel" ghost onEnter={() => { setPicker(null); setConfirmation(null) }}>Cancel</Button>
         </div>
+      </Modal>
+
+      <Modal open={more} onClose={() => setMore(false)} title={t.title} firstFocusKey="title:fav" variant="sheet" testId="title-more-menu">
+        <FocusGroup focusKey="title:more-list" className="flex flex-col gap-2">
+          <Focusable focusKey="title:fav" className="menu-item fx-flat" aria-pressed={!!t.is_favorite} onEnter={toggleFavorite}><Icon name="heart" filled={!!t.is_favorite} />{t.is_favorite ? 'Remove from favorites' : 'Add to favorites'}</Focusable>
+          <Focusable focusKey="title:trailer" className="menu-item fx-flat" onEnter={() => { setMore(false); openTrailer() }}><Icon name="external" />Trailer</Focusable>
+          {canPlay && <Focusable focusKey="title:watched" className="menu-item fx-flat" onEnter={() => { setMore(false); void markWatched() }}><Icon name="eye" />Mark watched</Focusable>}
+          <Button focusKey="title:more-close" ghost onEnter={() => setMore(false)}>Close</Button>
+        </FocusGroup>
       </Modal>
 
       <Modal open={seasonPick !== null} onClose={() => setSeasonPick(null)} title={`Request ${t.title}`} firstFocusKey="reqpick:all">

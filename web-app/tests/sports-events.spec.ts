@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { openMore, signIn } from './helpers'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -146,7 +146,7 @@ test('event-first layout fits the first card and Filters is remote accessible', 
 test('finishing the initial event request does not steal focus from an opened filter panel', async ({ page }) => {
   await signIn(page)
   await page.evaluate(() => { (window as unknown as { holdSports: boolean }).holdSports = true })
-  await page.getByRole('link', { name: 'Sports', exact: true }).click()
+  await openMore(page, 'Sports')
   await expect.poll(() => page.evaluate(() => (window as unknown as { sportsPending?: boolean }).sportsPending)).toBe(true)
   await page.getByTestId('sports-filters').click()
   const search = page.getByLabel('Search sports programmes or channels')

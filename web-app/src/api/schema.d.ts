@@ -2131,6 +2131,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/browse/{section}/shelves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Shelves of a section with their first titles, in one call
+         * @description New Releases first, then by size (a shelf with nothing new in 30 days counts half). Items put titles with a poster first, then newest. Same language, profile policy and adult scope as /browse/{section}.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    source_id?: string;
+                    language?: string;
+                    limit_rows?: number;
+                    limit_items?: number;
+                    include_adult?: boolean;
+                };
+                header?: never;
+                path: {
+                    section: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShelfList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/browse/{section}/genres": {
         parameters: {
             query?: never;
@@ -5500,6 +5547,20 @@ export interface components {
              */
             layout: "poster" | "landscape" | "hero" | "channel";
             tiles: components["schemas"]["Tile"][];
+            /** @description Client route for the row's "See all" (a shelf row: /browse/{section}?category=...). Null when the row has no fuller listing. */
+            browse_path?: string | null;
+        };
+        Shelf: {
+            /** @description Category name computed at sync, e.g. New Releases. */
+            name: string;
+            /** @description Distinct titles on the shelf for this profile, language and adult scope. */
+            count: number;
+            items: components["schemas"]["Tile"][];
+            /** @description Client route listing the whole shelf. */
+            browse_path: string;
+        };
+        ShelfList: {
+            shelves: components["schemas"]["Shelf"][];
         };
         TitleDetail: components["schemas"]["Tile"] & {
             overview?: string;

@@ -117,24 +117,41 @@ function FeatureTile({ tile, scope, onFocusTile, now }: { tile: TileT; scope: st
   </FeatureCard>
 }
 
+/** Last tile of a row: opens the row's full listing. Shaped like its neighbours so the row keeps one rhythm. */
+function SeeAllTile({ scope, title, to, count, layout }: { scope: string; title: string; to: string; count?: number; layout: TileLayout }) {
+  const go = useGo()
+  return (
+    <Focusable focusKey={`${scope}::see-all`} className={cn('tile tile-more', `tile-${layout}`)} role="link" label={`See all ${title}`}
+      data-testid="see-all" scroll onEnter={() => go(to)}>
+      <Icon name="chevR" size={28} />
+      <span>See all</span>
+      {count !== undefined && <span className="label">{count.toLocaleString()} titles</span>}
+    </Focusable>
+  )
+}
+
 export function TileRow(p: {
   id: string; title: string; tiles: TileT[]; layout?: 'poster' | 'landscape' | 'hero' | 'channel'
   onFocusTile?: (t: TileT) => void; empty?: string; presentation?: 'wide'
+  /** route of the full listing; adds a "See all" tile after the last one */
+  seeAll?: string | null; count?: number
 }) {
   const layout = p.layout ?? 'poster'
   const now = useNow(30_000) // one clock per row, not per media card
   if (!p.tiles.length) return null
   return (
-    <section aria-label={p.title} data-testid="row" data-row={p.id} style={{ marginBottom: '0.5rem' }}>
+    <section aria-label={p.title} data-testid="row" data-row={p.id} className="tile-row">
       <h2 className="row-title">{p.title}</h2>
       <FocusGroup focusKey={`row:${p.id}`} className={cn('row-scroll', p.presentation === 'wide' && 'feature-row')} remember>
         {p.tiles.map((t) =>
           p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
             <ChannelTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
           ) : (
-            <MediaTile key={t.id} tile={t} scope={p.id} layout={layout === 'landscape' ? 'landscape' : 'poster'} onFocusTile={p.onFocusTile} />
+            // artwork cut for a wide tile rarely carries the title, so it is always captioned
+            <MediaTile key={t.id} tile={t} scope={p.id} layout={layout === 'landscape' ? 'landscape' : 'poster'} titleAlways={layout === 'landscape'} onFocusTile={p.onFocusTile} />
           ),
         )}
+        {p.seeAll && <SeeAllTile scope={p.id} title={p.title} to={p.seeAll} count={p.count} layout={layout === 'landscape' || layout === 'channel' ? layout : 'poster'} />}
       </FocusGroup>
     </section>
   )
