@@ -51,6 +51,15 @@ const paceOf = (phase: RequestPhase): number =>
 export const refetchMsFor = (phases: Array<RequestPhase | null | undefined>): number =>
   phases.reduce((ms, phase) => (phase ? Math.min(ms, paceOf(phase)) : ms), IDLE_MS)
 
+/**
+ * The same for a page of posters (Home), which is a heavier thing to ask for: no faster than every 15 s, and
+ * not at all unless one of its posters shows a request.
+ */
+export function tilesRefetchMs(tiles: Requested[]): number | false {
+  const phases = tiles.map((t) => tileRequest(t)?.phase).filter((phase) => phase && phase !== 'available')
+  return phases.length ? Math.max(WAITING_MS, refetchMsFor(phases)) : false
+}
+
 /** Requests screen order: what is moving first, then what is waiting, then what is over. Ties keep the server's order. */
 const RANK: Record<RequestPhase, number> = {
   downloading: 0, importing: 0, stalled: 1,

@@ -124,6 +124,7 @@ test('the Requests screen shows each phase and keeps what is moving on top', asy
   const series = rowOf(page, 'The Tollgate Tapes')
   await expect(series.getByTestId('request-phase')).toHaveText('Downloading')
   await expect(series.getByTestId('request-bar')).toHaveAttribute('aria-valuenow', '66')
+  await expect(series.getByTestId('request-bar')).toHaveAttribute('aria-label', 'Download progress: The Tollgate Tapes')
   await expect(series.getByTestId('request-detail')).toHaveText('4 of 6 episodes')
   await expect(series.getByTestId('request-progress-text')).toHaveText('66% · about 10 min left')
   const stalled = rowOf(page, 'The Quiet Meridian')

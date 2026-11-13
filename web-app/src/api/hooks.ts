@@ -4,7 +4,7 @@ import { api, ok, tokenless, unwrap } from './client'
 import { useCan } from './me'
 import { useSession } from '../store/session'
 import { mergeProgrammes } from '../lib/guideWindow'
-import { isOpenRequest, refetchMsFor, tileRequest } from '../lib/requests'
+import { isOpenRequest, refetchMsFor, tileRequest, tilesRefetchMs } from '../lib/requests'
 import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined } from './types'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult,
@@ -34,7 +34,13 @@ export const useProfiles = () =>
 export const useDisclaimer = () =>
   useQuery({ queryKey: qk.disclaimer, queryFn: () => unwrap<Disclaimer>(api.GET('/disclaimer')), staleTime: Infinity })
 
-export const useHome = () => useQuery({ queryKey: [...qk.home, useProfileId()], queryFn: () => unwrap<HomeData>(api.GET('/home')), staleTime: 30_000 })
+export const useHome = () => useQuery({
+  queryKey: [...qk.home, useProfileId()],
+  queryFn: () => unwrap<HomeData>(api.GET('/home')),
+  staleTime: 30_000,
+  // Only while one of its posters shows a request on its way, so that chip and bar keep up.
+  refetchInterval: (query) => tilesRefetchMs([...(query.state.data?.hero ?? []), ...(query.state.data?.rows ?? []).flatMap((row) => row.tiles)]),
+})
 
 export const useSearch = (q: string, filters: { language?: string; source_id?: string } = {}) =>
   useQuery({

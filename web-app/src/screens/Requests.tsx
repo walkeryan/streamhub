@@ -98,7 +98,7 @@ export function Requests() {
               </div>
               <div className="min-w-0 flex flex-col gap-2" style={{ flex: '1 1 14rem' }}>
                 <span className="truncate" style={{ fontWeight: 600 }}>{r.title}{r.year ? ` (${r.year})` : ''}</span>
-                <RequestStatus progress={r.progress} />
+                <RequestStatus progress={r.progress} of={r.title} />
                 <span className="label">{[seasonsLabel(r), scope === 'all' && r.profile_name ? `Requested by ${r.profile_name}` : null, new Date(r.created_at).toLocaleDateString()].filter(Boolean).join(' · ')}</span>
                 {/* The status already says a note that is its detail (a decline reason, why it is not sent yet). */}
                 {r.note && r.note !== r.progress.detail && <span className="muted">{r.note}</span>}
