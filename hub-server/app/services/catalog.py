@@ -35,7 +35,15 @@ from app.services.search import (
 )
 from app.services.search_match import CANDIDATE_LIMIT, anchors, search_tokens, token_match_rank
 from app.services.sources import LAZY_GEN, SourceService, item_row, upsert_titles
-from app.services.tiles import TileContext, badge_for_source, hub_id_for_title, meta_tile, row_to_item, sort_badges
+from app.services.tiles import (
+    LIBRARY_TYPES,
+    TileContext,
+    badge_for_source,
+    hub_id_for_title,
+    meta_tile,
+    row_to_item,
+    sort_badges,
+)
 
 log = logging.getLogger(__name__)
 
@@ -550,7 +558,14 @@ class CatalogService:
     def _filter_title_languages(query: Select[Any], languages: list[str]) -> Select[Any]:
         # Title.language is fixed at sync (explicit tag, source default, category hint).
         # It is a provider hint, not verified audio metadata; unknown stays "und".
-        return query.where(Title.language.in_(languages)) if languages else query
+        if not languages:
+            return query
+        # A library server does not say at sync what language a file speaks, so every row of the
+        # household's own library is "und". Those files are there because the household put them
+        # there: a language choice narrows what providers offer, never the library, or choosing
+        # English would empty it.
+        owned = select(Source.id).where(Source.type.in_(LIBRARY_TYPES))
+        return query.where(or_(Title.language.in_(languages), Title.source_id.in_(owned)))
 
     async def browse_categories(
         self,

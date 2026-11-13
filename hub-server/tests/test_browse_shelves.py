@@ -106,6 +106,27 @@ async def test_shelves_respect_language_and_adult_scope(api: Api) -> None:
     assert (await api.client.get("/api/v1/browse/movies/shelves")).status_code == 401
 
 
+async def test_the_household_library_is_not_hidden_by_a_language_choice(api: Api) -> None:
+    """A library server does not say what language its files speak, and the household chose to own them:
+    choosing English must not empty the library, while a provider's foreign shelf stays filtered."""
+    french = [{**row, "language": "fra"} for row in rows_for("Cinema", 2)]
+    await seed(api, rows_for("Drama", 2) + french)
+    owned = [
+        {**row, "source_id": "library", "language": language, "kind": "movie"}
+        for row, language in zip(rows_for("Home Videos", 2), ("und", "por"), strict=True)
+    ]
+    async with api.c.db.session() as s:
+        s.add(Source(id="library", name="Library", type="plex", config_enc="unused", counts={"movie": len(owned)}))
+        await s.flush()
+        await s.execute(insert(Title), owned)
+        await s.commit()
+
+    assert sorted(s["name"] for s in await shelves(api)) == ["Drama", "Home Videos"]
+    assert sorted(s["name"] for s in await shelves(api, language="eng")) == ["Drama", "Home Videos"]
+    # Asking for one language by name still narrows a provider's catalog, not the library.
+    assert sorted(s["name"] for s in await shelves(api, language="fra")) == ["Cinema", "Home Videos"]
+
+
 async def test_shelves_follow_the_profile_content_policy(api: Api) -> None:
     from tests.test_content_policy import activate
     from tests.test_content_policy import seed as seed_policy
