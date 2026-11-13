@@ -52,3 +52,29 @@ export async function focusBarEntry(page: Page, testId: string) {
 }
 
 export const focusedLabel = (page: Page) => page.locator('.fx[data-focused="true"]').last().getAttribute('aria-label')
+
+/** Live TV keeps what is rarely changed (the guide's schedules choice, language, region, source) behind one Options button. */
+export async function openLiveOptions(page: Page) {
+  await page.getByTestId('live-options').click()
+  const sheet = page.getByTestId('live-options-sheet')
+  await expect(sheet).toBeVisible()
+  return sheet
+}
+export async function closeLiveOptions(page: Page) {
+  await page.getByTestId('live-options-sheet').getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(page.getByTestId('live-options-sheet')).toHaveCount(0)
+}
+/** One choice in Live TV's Options, by the name on its chip. */
+export async function chooseLiveOption(page: Page, ...names: string[]) {
+  const sheet = await openLiveOptions(page)
+  for (const name of names) await sheet.getByRole('button', { name, exact: true }).click()
+  await closeLiveOptions(page)
+}
+/** Live TV's search is an icon until it is asked for, and a field for as long as it holds text. */
+export async function searchLive(page: Page, text: string) {
+  const field = page.getByLabel('Search channels or number')
+  if (!(await field.count())) await page.getByTestId('live-search-open').click()
+  await field.fill(text)
+}
+/** A choice made in Options that is not the usual one is named beside the Options button. */
+export const liveChoice = (page: Page, text: string) => page.getByTestId('live-choice').filter({ hasText: text })

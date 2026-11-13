@@ -1,164 +1,279 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useChannels, useEpg, useRecordings, type ChannelFilters } from '../api/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useChannelPages, useEpgChunks, useRecordings, type ChannelFilters, type EpgRequest } from '../api/hooks'
 import type { Channel, Programme } from '../api/types'
-import { Button, Chip, Empty, ErrorState, LogoBlock, Modal, Skeleton } from '../components/ui'
+import { Button, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { FocusGroup, Focusable } from '../nav/Focusable'
+import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useUi } from '../store/ui'
 import { useHistoryState } from '../nav/historyState'
 import { fmtTime, useNow } from '../lib/util'
 import { useCan } from '../api/me'
 import { recordingOf, recordingStateLabel } from '../lib/recordings'
+import { SLOT_MS, extendedEnd, nearEnd, openingSpan, programmeAt, rowsToDraw, spanChunks, type TimeSpan } from '../lib/guideWindow'
 import { RecordDialog } from '../recordings/RecordDialog'
-import { RecordingBadge } from '../recordings/RecordingBadge'
+import { GuideDetailsLine, GuideDetailsPanel, type GuideDetailsProps } from './GuideDetails'
+import { COL_REM, GuideRow, HEAD_REM, REM_PER_MIN, ROW_REM, cellKey, channelKey } from './GuideRow'
+import { VIEW_BUFFER, remPx, startOfSlot, useGuideView, type GuideView } from './useGuideView'
 
-const COL_REM = 13 // 30-minute column width, see .epg --col
-const REM_PER_MIN = COL_REM / 30
+const HOUR_MS = 3600_000
 const BACK_H = 3
 const FWD_H = 9
-const MAX_CH = 40
+// Later hours are asked for as the viewer nears the end of what is loaded, up to a day ahead.
+const EXTEND_H = 4
+const HORIZON_H = 24
+const PAGE = 40
+const NEAR = 8 // rows from the end at which the next page of channels is asked for
 
-export function Guide({ filters, selectedChannelId, onSelectChannel }: {
-  filters: ChannelFilters; selectedChannelId: string | null; onSelectChannel: (id: string) => void
+
+export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, onSelectChannel, wide, detailsSlot, upKey, onTotal }: {
+  filters: ChannelFilters; scheduledOnly: boolean; onShowAll: () => void
+  selectedChannelId: string | null; onSelectChannel: (id: string) => void
+  /** Wide screens describe the focused programme in `detailsSlot`, beside the header; others in a line above the grid. */
+  wide: boolean; detailsSlot: HTMLElement | null
+  /** Where Up from the first row goes on a wide screen: the header's row of groups. */
+  upKey: string
+  onTotal: (total: number | null) => void
 }) {
   const now = useNow(30_000)
-  const [page, setPage] = useHistoryState('guide:page', 0)
-  const [scheduledOnly, setScheduledOnly] = useHistoryState('guide:scheduled', true)
   const [sel, setSel] = useHistoryState<Programme | null>('guide:selected-programme', null)
-  const key = JSON.stringify(filters)
+  const [span, setSpan] = useHistoryState<TimeSpan>('guide:time', openingSpan(Date.now(), BACK_H, FWD_H))
+  const [view, setView] = useHistoryState<GuideView | null>('guide:view', null)
+  const key = JSON.stringify([filters, scheduledOnly])
   const [filterKey, setFilterKey] = useHistoryState('guide:filters', key)
-  if (filterKey !== key) { setFilterKey(key); setPage(0); setSel(null) }
-  const ch = useChannels({ ...filters, has_epg: scheduledOnly || undefined, limit: MAX_CH, offset: page * MAX_CH })
-  const channels = useMemo(() => ch.data?.channels ?? [], [ch.data])
-  const total = ch.data?.total ?? channels.length
-  const pages = Math.max(1, Math.ceil(total / MAX_CH))
+  // Other filters start at the first channel; the hour on screen stays.
+  if (filterKey !== key) { setFilterKey(key); setSel(null); setView((v) => v && { ...v, row: 0 }) }
+
+  const ch = useChannelPages({ ...filters, has_epg: scheduledOnly || undefined }, PAGE)
+  const pages = ch.data?.pages
+  // A list that changed between two requests can repeat a channel: it keeps one row.
+  const channels = useMemo(() => { const seen = new Set<string>(); return (pages ?? []).flatMap((p) => p.channels ?? []).filter((c) => !seen.has(c.id) && seen.add(c.id)) }, [pages])
+  const count = channels.length
+  const total = pages?.[0]?.total ?? count
+  const rowOf = useMemo(() => new Map(channels.map((c, i) => [c.id, i])), [channels])
+  const focusRow = (selectedChannelId !== null ? rowOf.get(selectedChannelId) : undefined) ?? null
+  const { scroller, gridRef, onScroll, win, placed, jumpTo } = useGuideView({ filterKey: key, count, span, view, setView, morePages: !!ch.hasNextPage })
+  const first = Math.min(win.first, Math.max(0, count - 1)), end = Math.min(Math.max(win.end, first + 1), count)
+  const drawn = useMemo(() => rowsToDraw({ first, end }, focusRow, count), [first, end, focusRow, count])
+
+  // Programmes: one request per page of channels and span of hours, made when its rows and hours come near the view.
+  const requests = useMemo(() => {
+    const out: EpgRequest[] = []
+    let offset = 0
+    for (const page of pages ?? []) {
+      const ids = (page.channels ?? []).map((c) => c.id)
+      const rowsDue = drawn.some((i) => i >= offset && i < offset + ids.length)
+      for (const c of spanChunks(span, BACK_H + FWD_H, EXTEND_H)) out.push({ ids, ...c, enabled: rowsDue && (!view || (c.to > view.from - HOUR_MS && c.from < view.to + HOUR_MS)) })
+      offset += ids.length
+    }
+    return out
+  }, [pages, drawn, span, view])
+  const epg = useEpgChunks(requests)
+  const loadingIds = useMemo(() => new Set(requests.flatMap((r, i) => (epg.loading[i] ? r.ids : []))), [requests, epg.loading])
+
   const setChannelList = useUi((s) => s.setChannelList)
   const toast = useUi((s) => s.toast)
   const go = useGo()
-  const slot = 30 * 60_000
-  const [t0, setT0] = useHistoryState('guide:time', Math.floor((Date.now() - BACK_H * 3600_000) / slot) * slot)
-  const t1 = t0 + (BACK_H + FWD_H) * 3600_000
-  const epg = useEpg(channels.map((c) => c.id), new Date(t0).toISOString(), new Date(t1).toISOString())
   const [catchup, setCatchup] = useState<{ ch: Channel; p: Programme } | null>(null)
-  const scroller = useRef<HTMLDivElement>(null)
   // Recording: where the server has it on and this profile may schedule, OK on a programme that is on or still to come opens Record.
   const recordings = useRecordings(useCan('recordings'), false)
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
   const [recording, setRecording] = useState<{ ch: Channel; id: string } | null>(null)
-  const recordingProgramme = recording && epg.data?.[recording.ch.id]?.find((x) => x.id === recording.id)
+  const recordingProgramme = recording && epg.byChannel[recording.ch.id]?.find((x) => x.id === recording.id)
 
-  useEffect(() => { if (ch.data) setChannelList(ch.data.list_id ?? null, ch.data.channels ?? []) }, [ch.data, setChannelList])
+  useEffect(() => { if (pages) setChannelList(pages[0]?.list_id ?? null, channels) }, [pages, channels, setChannelList])
+  useEffect(() => { onTotal(pages ? total : null) }, [pages, total, onTotal])
+
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = ch
+  const ready = placed && count > 0
+
+  /* ---------- loading as you go ---------- */
+  const reachedRow = Math.max(end - 1 - VIEW_BUFFER, focusRow ?? 0)
+  const restoring = !placed && !!view && view.row >= count
   useEffect(() => {
-    if (!epg.data || !scroller.current) return
-    scroller.current.scrollLeft = Math.max(0, ((Date.now() - 30 * 60_000 - t0) / 60_000) * REM_PER_MIN * parseFloat(getComputedStyle(document.documentElement).fontSize))
-  }, [epg.data, t0])
+    if (!pages || !hasNextPage || isFetchingNextPage || isFetchNextPageError) return
+    if (restoring || (ready && nearEnd(reachedRow, count, NEAR))) void fetchNextPage()
+  }, [pages, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, restoring, ready, reachedRow, count])
+  const horizon = span.from + (BACK_H + HORIZON_H) * HOUR_MS
+  const reachedTime = Math.max(view?.to ?? 0, sel ? Date.parse(sel.stop) : 0)
+  useEffect(() => {
+    const to = extendedEnd(span, reachedTime, EXTEND_H, horizon)
+    if (ready && to !== span.to) setSpan({ from: span.from, to })
+  }, [ready, span, reachedTime, horizon, setSpan])
 
-  const firstNow = useMemo(() => {
-    const c = channels.find((c) => c.id === selectedChannelId) ?? channels[0]
-    const p = c && epg.data?.[c.id]?.find((x) => Date.parse(x.start) <= Date.now() && Date.parse(x.stop) > Date.now())
-    return c && p ? `epg::${c.id}::${p.id}` : c ? `guide:ch:${c.id}` : 'live:search'
-  }, [channels, epg.data, selectedChannelId])
-  useRestoreFocus(!!epg.data && channels.length > 0, firstNow)
+  /* ---------- focus: arrows by programme and by time ---------- */
+  const drawnOf = (c: Channel) => (epg.byChannel[c.id] ?? []).filter((p) => Date.parse(p.stop) > span.from && Date.parse(p.start) < span.to)
+  const onNow = (p: Programme) => Date.parse(p.start) <= now && Date.parse(p.stop) > now
+  const leftEdge = () => span.from + ((scroller.current?.scrollLeft ?? 0) / (REM_PER_MIN * remPx())) * 60_000
+  const anchor = useRef<number | null>(null) // the time Up and Down keep to, however long the programmes they cross
+  const keepAnchor = useRef(false)
+  const pointer = useRef(false)
+  // An Up or Down whose target is still loading: it is made when the target arrives, if focus has not moved since.
+  const pending = useRef<{ key: string; row: number; id: string | null; dir: string } | null>(null)
+  useEffect(() => {
+    const byKey = () => { pointer.current = false }
+    window.addEventListener('keydown', byKey, true)
+    return () => window.removeEventListener('keydown', byKey, true)
+  }, [])
+  const across = useRef(false) // the focus now arriving was moved by Left or Right
+  /**
+   * Bring a cell focused by the keyboard out from under the sticky header and channel column. Sideways
+   * the view moves only for Left and Right, and then by whole programmes: back to the start of the one
+   * before, on so that the next one starts at the channel column. Up and Down land on what is on at the
+   * hour in view, which needs no move (a long programme's start may be hours to the left).
+   */
+  const reveal = (node: HTMLElement, programme: boolean) => {
+    const el = scroller.current
+    if (!el) return
+    const px = remPx(), box = el.getBoundingClientRect(), r = node.getBoundingClientRect()
+    // The grid runs to the bottom edge; on a TV the focused row still stops short of the overscan margin.
+    const margin = window.matchMedia('(min-width: 1800px)').matches ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-y')) * px : 0
+    const top = box.top + HEAD_REM * px, bottom = Math.min(box.top + el.clientHeight, window.innerHeight - margin)
+    if (r.top < top) el.scrollTop -= top - r.top
+    else if (r.bottom > bottom) el.scrollTop += r.bottom - bottom
+    if (!programme) return
+    const left = box.left + parseFloat(getComputedStyle(el).getPropertyValue('--epg-ch')) * px, right = box.left + el.clientWidth
+    const hidden = r.right <= left + 1 || r.left >= right - 1
+    // Less than a column of it showing at the right edge is not enough to read.
+    if (hidden || (across.current && (r.left < left || r.left + Math.min(r.width, COL_REM * px) > right))) el.scrollLeft += r.left - left
+  }
+  const above = wide ? upKey : 'guide:details'
+  const actions = {
+    focusCell: (c: Channel, p: Programme | null, node: HTMLElement) => {
+      if (!pointer.current) reveal(node, !!p)
+      across.current = false
+      // What is on now is watched from now, a later programme from its start; neither from before the edge of the view.
+      if (p && !keepAnchor.current) anchor.current = Math.max(onNow(p) ? Date.now() : Date.parse(p.start), leftEdge())
+      keepAnchor.current = false
+      setSel(p)
+      onSelectChannel(c.id)
+    },
+    move: (row: number, id: string | null, dir: string): boolean => {
+      const c = channels[row]
+      if (!c) return true
+      if (dir === 'left' || dir === 'right') {
+        const list = drawnOf(c)
+        const next = id === null ? (dir === 'right' ? programmeAt(list, leftEdge()) : null) : list[list.findIndex((p) => p.id === id) + (dir === 'right' ? 1 : -1)]
+        if (next) { across.current = id !== null; void setFocus(cellKey(c.id, next.id)) }
+        else if (id !== null && dir === 'left') void setFocus(channelKey(c.id))
+        // The last programme loaded: ask for later hours; focus stays put for the next press.
+        else if (id !== null && span.to < horizon) setSpan({ from: span.from, to: Math.min(horizon, span.to + EXTEND_H * HOUR_MS) })
+        return false
+      }
+      const to = row + (dir === 'down' ? 1 : -1), n = channels[to]
+      const wait = () => { pending.current = { key: id === null ? channelKey(c.id) : cellKey(c.id, id), row, id, dir } }
+      if (to < 0) void setFocus(id === null ? 'guide:now' : above)
+      else if (!n) {
+        // Past the last row loaded: focus stays while the next page comes, then moves on to it.
+        if (hasNextPage) { wait(); if (!isFetchingNextPage) void fetchNextPage() }
+      } else if (id !== null && !epg.byChannel[n.id] && loadingIds.has(n.id)) wait() // rather than drop to the channel column
+      else {
+        const p = id === null ? null : programmeAt(drawnOf(n), anchor.current ?? leftEdge())
+        const target = p ? cellKey(n.id, p.id) : channelKey(n.id)
+        // The row above and below the focused one are always drawn (rowsToDraw); a press that beats their render waits for the next.
+        if (doesFocusableExist(target)) { keepAnchor.current = true; void setFocus(target) }
+      }
+      return false
+    },
+    open: (c: Channel, p: Programme) => {
+      const start = Date.parse(p.start), stop = Date.parse(p.stop)
+      if (stop <= Date.now()) {
+        if (p.catchup_available) setCatchup({ ch: c, p })
+        else toast('Catch-up is not available for this programme.')
+      } else if (recordable) setRecording({ ch: c, id: p.id })
+      else if (start <= Date.now()) go(`/play/${encodeURIComponent(c.id)}`)
+      else toast(`${p.title} starts at ${fmtTime(p.start)}.`)
+    },
+    play: (c: Channel) => go(`/play/${encodeURIComponent(c.id)}`),
+  }
+  // Rows are memoised: they get handlers that never change and that call what this render defined.
+  const live = useRef(actions)
+  useEffect(() => { live.current = actions })
+  const onFocusCell = useCallback((c: Channel, p: Programme | null, node: HTMLElement) => live.current.focusCell(c, p, node), [])
+  const onMove = useCallback((row: number, id: string | null, dir: string) => live.current.move(row, id, dir), [])
+  const onOpen = useCallback((c: Channel, p: Programme) => live.current.open(c, p), [])
+  const onPlay = useCallback((c: Channel) => live.current.play(c), [])
+  useEffect(() => {
+    const want = pending.current
+    pending.current = null
+    if (want && getCurrentFocusKey() === want.key) live.current.move(want.row, want.id, want.dir)
+  }, [channels, epg.byChannel])
 
-  // The focused programme as the guide has it now: its recording state changes while it stays selected.
-  const selState = (sel && epg.data?.[sel.channel_id]?.find((x) => x.id === sel.id)?.recording_state) ?? null
-  const totalMin = (BACK_H + FWD_H) * 60
-  const nowLeft = ((now - t0) / 60_000) * REM_PER_MIN
-  const ticks = Array.from({ length: totalMin / 30 }, (_, i) => t0 + i * slot)
+  // The guide's one tab stop, and where focus arrives: the chosen programme, else what is on at the hour in view.
+  const homeRow = focusRow ?? Math.min(view?.row ?? 0, count - 1)
+  const home = useMemo(() => {
+    const c = channels[homeRow]
+    if (!c) return upKey
+    const list = epg.byChannel[c.id] ?? []
+    const at = view && (now < view.from || now >= view.to) ? view.from : now
+    const p = (sel?.channel_id === c.id && list.find((x) => x.id === sel.id)) || list.find((x) => Date.parse(x.start) <= at && Date.parse(x.stop) > at)
+    return p ? cellKey(c.id, p.id) : channelKey(c.id)
+  }, [channels, homeRow, epg.byChannel, sel, view, now, upKey])
+  useRestoreFocus(ready && !epg.loading.includes(true), home)
 
-  const open = (c: Channel, p: Programme) => {
-    const start = Date.parse(p.start), stop = Date.parse(p.stop)
-    if (stop <= Date.now()) {
-      if (p.catchup_available) setCatchup({ ch: c, p })
-      else toast('Catch-up is not available for this programme.')
-    } else if (recordable) setRecording({ ch: c, id: p.id })
-    else if (start <= Date.now()) go(`/play/${encodeURIComponent(c.id)}`)
-    else toast(`${p.title} starts at ${fmtTime(p.start)}.`)
+  const goNow = () => {
+    const t = Date.now()
+    // A guide left open for hours has a window that no longer holds the present: open a new one.
+    if (t - SLOT_MS < span.from || t + 2 * HOUR_MS > span.to) setSpan(openingSpan(t, BACK_H, FWD_H))
+    anchor.current = t
+    jumpTo(startOfSlot(t - SLOT_MS))
   }
 
-  if (ch.error || epg.error) return <div className="page-pad"><ErrorState error={ch.error ?? epg.error} onRetry={() => { void ch.refetch(); void epg.refetch() }} /></div>
+  /* ---------- the programme described beside (or under) the header ---------- */
+  const focused = focusRow !== null ? channels[focusRow] ?? null : null
+  // The focused programme as the guide has it now: its recording state changes while it stays selected.
+  const chosen = sel && focused?.id === sel.channel_id ? epg.byChannel[sel.channel_id]?.find((x) => x.id === sel.id) ?? sel : null
+  const described = chosen ?? (focused ? epg.byChannel[focused.id]?.find(onNow) ?? focused.now ?? null : null)
+  const state = described?.recording_state ?? null
+  const details: GuideDetailsProps = {
+    channel: focused, programme: described, now, recordable,
+    recording: state && described ? `${recordingStateLabel(state)}${state === 'failed' || state === 'missed' ? `: ${recordingOf(recordings.data?.recordings, described)?.error ?? 'no reason was given.'}` : ''}` : null,
+    hint: `Move over a programme for details. Press OK on a past programme to watch it again where catch-up is offered${recordable ? ', or on a later one to record it' : ''}.`,
+    onWatch: actions.play, onRecord: (c, p) => setRecording({ ch: c, id: p.id }),
+    onCatchup: (c, p) => go(`/play/${encodeURIComponent(c.id)}?catchup=${encodeURIComponent(p.id)}`),
+  }
+
+  const failed = ch.error && !pages ? ch.error : epg.error && !Object.keys(epg.byChannel).length ? epg.error : null
+  const minutes = (span.to - span.from) / 60_000
+  const ticks = Array.from({ length: minutes / 30 }, (_, i) => span.from + i * SLOT_MS)
+  // Hours of another day say which: scrolled to tomorrow morning, "6:00 AM" alone would read as today's.
+  const today = new Date(now).toDateString()
+  const dayOf = (t: number) => { const d = new Date(t); return d.getMinutes() === 0 && d.toDateString() !== today ? `${d.toLocaleDateString([], { weekday: 'short' })} ` : '' }
   return (
-    <div data-testid="guide" aria-label="Programme guide">
-      <FocusGroup focusKey="guide:filters" className="flex flex-col gap-3 mb-3">
-        <div className="flex gap-2 flex-wrap items-center">
-          <Chip focusKey="guide:scheduled" pressed={scheduledOnly} onEnter={() => { setScheduledOnly(true); setPage(0) }}>With schedules</Chip>
-          <Chip focusKey="guide:all-channels" pressed={!scheduledOnly} onEnter={() => { setScheduledOnly(false); setPage(0) }}>All channels</Chip>
-          <Button focusKey="guide:now" onEnter={() => {
-            const start = Math.floor((Date.now() - BACK_H * 3600_000) / slot) * slot
-            setT0(start)
-            if (scroller.current) scroller.current.scrollLeft = Math.max(0, ((Date.now() - 30 * 60_000 - start) / 60_000) * REM_PER_MIN * parseFloat(getComputedStyle(document.documentElement).fontSize))
-          }}>Now</Button>
-        </div>
-        <div className="flex gap-3 flex-wrap items-center" aria-label="Guide pages">
-          {pages > 1 && <Button focusKey="guide:previous" disabled={page === 0 || ch.isFetching} onEnter={() => { setPage((p) => Math.max(0, p - 1)); setSel(null) }}>Previous channels</Button>}
-          <span className="label" role="status">{ch.isFetching ? 'Loading channels…' : pages > 1 ? `${total.toLocaleString()} channels · Page ${page + 1} of ${pages}` : `${total.toLocaleString()} channels`}</span>
-          {pages > 1 && <Button focusKey="guide:next" disabled={page + 1 >= pages || ch.isFetching} onEnter={() => { setPage((p) => p + 1); setSel(null) }}>Next channels</Button>}
-        </div>
-      </FocusGroup>
-      {ch.isLoading || ch.isPlaceholderData || epg.isLoading ? <Skeleton style={{ height: '24rem' }} /> : channels.length === 0 ? (
+    <div data-testid="guide" className="epg-view" aria-label="Programme guide">
+      {wide ? detailsSlot && createPortal(<GuideDetailsPanel {...details} />, detailsSlot) : <GuideDetailsLine {...details} />}
+      {failed ? <ErrorState error={failed} onRetry={() => void ch.refetch()} /> : ch.isLoading ? <Skeleton className="epg-skel" /> : count === 0 ? (
         <Empty title="No channels match" hint={scheduledOnly ? 'No current schedules match these filters. Try All channels, another language, or a different search.' : 'Try another language or a different channel name.'}>
-          {scheduledOnly && <Button focusKey="guide:show-all" onEnter={() => { setScheduledOnly(false); setPage(0) }}>Show channels without schedules</Button>}
+          {scheduledOnly && <Button focusKey="guide:show-all" onEnter={onShowAll}>Show channels without schedules</Button>}
         </Empty>
       ) : (
-        <>
-          <div ref={scroller} className="epg" style={{ overflow: 'auto', maxHeight: 'calc(100dvh - 24rem - var(--bar-h))', minHeight: '14rem', borderRadius: 'var(--radius-md)', background: 'var(--t-surface)' }}>
-            <div style={{ width: `calc(${totalMin * REM_PER_MIN}rem + var(--epg-ch))`, position: 'relative' }}>
-              <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, background: 'var(--t-surface)', height: '2rem' }}>
-                <div style={{ width: 'var(--epg-ch)', flex: 'none', position: 'sticky', left: 0, zIndex: 21, background: 'var(--t-surface)' }} />
-                {ticks.map((t) => <div key={t} className="label" style={{ width: `${COL_REM}rem`, flex: 'none', paddingLeft: '0.5rem', borderLeft: '1px solid color-mix(in srgb, var(--t-text) 12%, transparent)', lineHeight: '2rem' }}>{fmtTime(t)}</div>)}
+        <div ref={gridRef} className="epg" data-testid="guide-grid" onScroll={onScroll} onPointerMoveCapture={() => { pointer.current = true }}>
+          <FocusGroup focusKey="guide:grid" className="epg-canvas" remember preferred={home} style={{ width: `calc(${minutes * REM_PER_MIN}rem + var(--epg-ch))`, height: `${HEAD_REM + count * ROW_REM + 2}rem` }}>
+            <div className="epg-head">
+              <div className="epg-corner">
+                <Focusable focusKey="guide:now" className="epg-now fx-flat" scroll={false} label="Now" title="Back to the current time" onEnter={goNow}
+                  onArrow={(d) => { const c = channels[homeRow]; if (d === 'up') void setFocus(above); else if (d === 'down' && c) void setFocus(channelKey(c.id)); else if (d === 'right' && c) void setFocus(home); return false }}>
+                  <i aria-hidden="true" />Now
+                </Focusable>
               </div>
-              <FocusGroup focusKey="guide:grid" remember>
-                {channels.map((c) => (
-                  <FocusGroup key={c.id} focusKey={`guide:row:${c.id}`} className="" remember>
-                    <div style={{ display: 'flex', height: '3.5rem' }}>
-                      <div style={{ width: 'var(--epg-ch)', flex: 'none', position: 'sticky', left: 0, zIndex: 10, background: 'var(--t-surface)', padding: '0.25rem' }}>
-                        <Focusable focusKey={`guide:ch:${c.id}`} className="flex items-center gap-2 h-full px-2 rounded-md fx-flat" label={`${c.number} ${c.name}`} onFocus={() => onSelectChannel(c.id)} onEnter={() => go(`/play/${encodeURIComponent(c.id)}`)}>
-                          <span className="label" style={{ width: '1.75rem', textAlign: 'right' }}>{c.number}</span>
-                          <LogoBlock name={c.name} logo={c.logo} />
-                          <span className="truncate epg-name" style={{ fontSize: 'var(--text-label)', fontWeight: 600 }}>{c.name}</span>
-                        </Focusable>
-                      </div>
-                      <div style={{ position: 'relative', flex: 1, borderTop: '1px solid color-mix(in srgb, var(--t-text) 8%, transparent)' }}>
-                        {(epg.data?.[c.id] ?? []).length === 0 && (
-                          <span className="label muted" style={{ position: 'sticky', left: 'calc(var(--epg-ch) + 0.5rem)', display: 'inline-block', padding: '1rem 0.5rem' }}>
-                            {c.epg_id ? 'No schedule supplied for this time' : 'No guide mapping supplied'}
-                          </span>
-                        )}
-                        {(epg.data?.[c.id] ?? []).map((p) => {
-                          const s = Math.max(Date.parse(p.start), t0), e = Math.min(Date.parse(p.stop), t1)
-                          if (e <= s) return null
-                          const isNow = Date.parse(p.start) <= now && Date.parse(p.stop) > now
-                          const past = Date.parse(p.stop) <= now
-                          return (
-                            <Focusable key={p.id} focusKey={`epg::${c.id}::${p.id}`} className="epg-cell fx-flat" label={`${c.name}: ${p.title}, ${fmtTime(p.start)}${recordingStateLabel(p.recording_state) ? `, ${recordingStateLabel(p.recording_state)}` : ''}`}
-                              data={{ now: isNow, past }} onEnter={() => open(c, p)} onFocus={() => { setSel(p); onSelectChannel(c.id) }}
-                              style={{ left: `${((s - t0) / 60_000) * REM_PER_MIN}rem`, width: `calc(${((e - s) / 60_000) * REM_PER_MIN}rem - 0.25rem)`, position: 'absolute' }}>
-                              <span className="epg-label">
-                                <span className="truncate" style={{ fontWeight: 600 }}>{p.title}</span>
-                                <span className="flex items-center gap-2 min-w-0"><span className="label truncate">{fmtTime(p.start)}{p.catchup_available && past ? ' · Catch-up' : ''}{isNow ? ' · On now' : ''}</span><RecordingBadge state={p.recording_state} short /></span>
-                              </span>
-                            </Focusable>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  </FocusGroup>
-                ))}
-              </FocusGroup>
-              <div aria-hidden="true" data-testid="now-line" style={{ position: 'absolute', top: 0, bottom: 0, left: `calc(var(--epg-ch) + ${nowLeft}rem)`, width: 2, background: 'var(--t-danger)', zIndex: 15, pointerEvents: 'none' }} />
+              {ticks.map((t) => <div key={t} className="label epg-tick" style={{ width: `${COL_REM}rem` }}>{dayOf(t)}{fmtTime(t)}</div>)}
             </div>
-          </div>
-          <div className="mt-3" style={{ minHeight: '4.5rem' }} aria-live="polite" data-testid="guide-info">
-            {sel ? (
-              <>
-                <h2 className="heading">{sel.title}</h2>
-                <p className="muted">{fmtTime(sel.start)} to {fmtTime(sel.stop)}{sel.category ? ` · ${sel.category}` : ''}</p>
-                {selState && <p className="label" data-testid="guide-recording">{recordingStateLabel(selState)}{selState === 'failed' || selState === 'missed' ? `: ${recordingOf(recordings.data?.recordings, sel)?.error ?? 'no reason was given.'}` : ''}</p>}
-                {sel.description && <p className="label clamp2">{sel.description}</p>}
-              </>
-            ) : <p className="muted">Move over a programme for details. Press OK on a past programme to watch it again where catch-up is offered{recordable ? ', or on a later one to record it' : ''}.</p>}
-          </div>
-        </>
+            <div className="epg-rows">
+              {drawn.map((i) => {
+                const c = channels[i]!
+                const tabKey = i === homeRow ? home : null
+                return <GuideRow key={c.id} index={i} channel={c} programmes={epg.byChannel[c.id] ?? NONE} loading={loadingIds.has(c.id)} span={span} now={now} tabKey={tabKey}
+                  onFocusCell={onFocusCell} onMove={onMove} onOpen={onOpen} onPlay={onPlay} />
+              })}
+            </div>
+            <div className="epg-foot label" style={{ top: `${HEAD_REM + count * ROW_REM}rem` }} role="status" data-testid="guide-end">
+              <span>{isFetchNextPageError ? <>More channels could not be loaded. <Button focusKey="guide:more" className="btn-chip" onEnter={() => void fetchNextPage()}>Try again</Button></>
+                : hasNextPage ? 'Loading more channels…' : `End of the list · ${total.toLocaleString()} channels`}</span>
+            </div>
+            <div aria-hidden="true" data-testid="now-line" className="epg-nowline" style={{ left: `calc(var(--epg-ch) + ${((now - span.from) / 60_000) * REM_PER_MIN}rem)` }} />
+          </FocusGroup>
+        </div>
       )}
       <RecordDialog target={recording && recordingProgramme ? { channel: recording.ch, programmes: [recordingProgramme] } : null} onClose={() => setRecording(null)}
         onWatch={() => recording && go(`/play/${encodeURIComponent(recording.ch.id)}`)} />
@@ -176,3 +291,4 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
     </div>
   )
 }
+const NONE: readonly Programme[] = []

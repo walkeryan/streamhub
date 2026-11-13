@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { chooseLiveOption, closeLiveOptions, liveChoice, openLiveOptions, searchLive, signIn } from './helpers'
 
 // Match the order of magnitude of the user's imported catalog without touching real providers.
 test('52k channels stay bounded, searchable and explicitly language-selectable', async ({ page }) => {
@@ -17,10 +17,15 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
   })
   await page.getByRole('link', { name: 'Live TV', exact: true }).click()
   await expect(page.getByTestId('channel-row')).toHaveCount(80)
-  await page.getByRole('button', { name: 'English', exact: true }).click()
+  // Language is one of the choices behind Options; the list under the sheet follows it.
+  const options = await openLiveOptions(page)
+  await options.getByRole('button', { name: 'English', exact: true }).click()
   await expect(page.getByTestId('channel-row').first()).toContainText('English Channel 1')
   await expect(page.getByTestId('channel-row').filter({ hasText: 'Spanish Channel' })).toHaveCount(0)
-  await expect(page.getByRole('group', { name: 'Language', exact: true }).getByRole('button')).toHaveCount(4)
+  await expect(options.getByRole('group', { name: 'Language', exact: true }).getByRole('button')).toHaveCount(4)
+  await closeLiveOptions(page)
+  // Not this profile's usual choice, so the header names it.
+  await expect(liveChoice(page, 'English')).toBeVisible()
   await page.getByRole('button', { name: 'Next page', exact: true }).click()
   await expect(page.getByTestId('channel-row').first()).toContainText('English Channel 241')
   await page.getByTestId('channel-row').first().click()
@@ -29,9 +34,9 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
   await expect(page.getByTestId('live')).toBeVisible()
   await expect(page.getByTestId('channel-row').first()).toContainText('English Channel 241')
   await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
-  await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(liveChoice(page, 'English')).toBeVisible()
   await expect(page.getByTestId('channel-row')).toHaveCount(80)
-  await page.getByRole('button', { name: 'All languages', exact: true }).click()
+  await chooseLiveOption(page, 'All languages')
   // 804 groups: the first few are chips, the rest stay behind one searchable picker.
   expect(await page.getByRole('group', { name: 'Channel groups', exact: true }).getByRole('button').count()).toBeLessThanOrEqual(27)
   await page.getByRole('button', { name: 'More groups: All groups', exact: true }).click()
@@ -42,21 +47,29 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
   await expect(page.getByTestId('channel-row').first()).toContainText('Unknown Channel 804')
   expect(await page.getByTestId('channel-row').count()).toBeLessThanOrEqual(80)
   await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
-  await page.getByLabel('Search channels or number').fill('52366')
+  await searchLive(page, '52366')
   await expect(page.getByTestId('channel-row')).toHaveCount(1)
   await expect(page.getByTestId('channel-row')).toContainText('Channel 52366')
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.setViewportSize({ width: 1280, height: 720 })
   await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
-  await page.getByRole('button', { name: 'My languages', exact: true }).click()
+  await chooseLiveOption(page, 'My languages')
   await page.getByRole('button', { name: 'Guide', exact: true }).click()
-  const guide = page.getByTestId('guide')
-  await expect(guide.getByRole('button', { name: /^\d+ (English|Spanish|Unknown) Channel/ })).toHaveCount(40)
-  await guide.getByRole('button', { name: 'Next channels', exact: true }).click()
+  // The guide has no pages: it draws the rows near the view and loads the next forty as its end comes near.
+  const guide = page.getByTestId('guide'), grid = guide.getByTestId('guide-grid')
+  const channelCells = guide.getByRole('button', { name: /^\d+ (English|Spanish|Unknown) Channel/ })
+  await expect(guide.getByRole('button', { name: '1 English Channel 1', exact: true })).toBeVisible()
+  await expect(page.getByText('34,911 channels', { exact: true })).toBeVisible()
+  expect(await channelCells.count()).toBeLessThanOrEqual(30)
+  await expect(guide.getByRole('button', { name: /Next channels|Previous channels/ })).toHaveCount(0)
+  // The forty-first channel of this profile's languages is on the second page.
+  await grid.evaluate((el) => { el.scrollTop = el.scrollHeight })
   await expect(guide.getByRole('button', { name: '61 English Channel 61', exact: true })).toBeVisible()
-  await page.getByLabel('Search channels or number').fill('52366')
-  await expect(guide.getByRole('button', { name: /^\d+ (English|Spanish|Unknown) Channel/ })).toHaveCount(1)
+  expect(await channelCells.count()).toBeLessThanOrEqual(30)
+  await searchLive(page, '52366')
+  await expect(channelCells).toHaveCount(1)
+  expect(await grid.evaluate((el) => el.scrollTop)).toBe(0)
 })
 
 test('profile accepted on another device replaces the stale cached notice gate', async ({ page }) => {

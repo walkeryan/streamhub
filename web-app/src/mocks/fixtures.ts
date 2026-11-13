@@ -176,24 +176,30 @@ export function teamsOf(title: string): string[] {
   const sides = /^(.+?)\s+(?:vs\.?|v|versus|at|@)\s+(.+)$/i.exec(plain)
   return sides ? [sides[1]!.trim(), sides[2]!.trim()] : []
 }
+/** A channel's schedule is the same whatever span is asked for, as a server's is: the guide asks for a few hours at a time. */
 export function programmesFor(ch: Channel, fromMs: number, toMs: number): Programme[] {
   const out: Programme[] = []
   const slot = 30 * 60_000
   const seed = ch.number * 7
-  let t = Math.floor(fromMs / slot) * slot - ((seed % 3) * slot)
-  let i = 0
-  while (t < toMs) {
-    const len = (1 + ((seed + i) % 3)) * slot
-    const start = Math.max(t, t)
-    const sport = topGroup(ch.group) === 'Sports'
-    const title = `${(sport ? games : showNames)[(seed + i) % (sport ? games : showNames).length]}${i % 4 === 0 ? ' (Live)' : ''}`
-    out.push({
-      id: `${ch.id}@${start}`, channel_id: ch.id, start: new Date(start).toISOString(), stop: new Date(start + len).toISOString(),
-      title, description: 'Fixture programme. In mock mode every channel plays the same test pattern.',
-      category: topGroup(ch.group), icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(), is_sport: sport, teams: sport ? teamsOf(title) : [],
-    })
-    t += len
-    i++
+  const sport = topGroup(ch.group) === 'Sports'
+  const names = sport ? games : showNames
+  // Programmes of one, two and three slots, in an order the channel sets, repeat every three hours from a fixed origin.
+  const cycle = 6 * slot, shift = (seed % 3) * slot
+  for (let k = Math.floor((fromMs + shift) / cycle); k * cycle - shift < toMs; k++) {
+    let start = k * cycle - shift
+    for (let j = 0; j < 3; j++) {
+      const i = k * 3 + j
+      const len = (1 + ((seed + i) % 3)) * slot
+      if (start + len > fromMs && start < toMs) {
+        const title = `${names[(seed + i) % names.length]}${i % 4 === 0 ? ' (Live)' : ''}`
+        out.push({
+          id: `${ch.id}@${start}`, channel_id: ch.id, start: new Date(start).toISOString(), stop: new Date(start + len).toISOString(),
+          title, description: 'Fixture programme. In mock mode every channel plays the same test pattern.',
+          category: topGroup(ch.group), icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(), is_sport: sport, teams: sport ? teamsOf(title) : [],
+        })
+      }
+      start += len
+    }
   }
   return out
 }
