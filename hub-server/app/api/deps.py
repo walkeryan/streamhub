@@ -50,9 +50,9 @@ def device_label(kind: str, agent: str) -> str | None:
     return f"{browser} on {system}" if system else browser
 
 
-def client_ip(request: Request) -> str | None:
+def client_ip(request: Request, settings: Any = None) -> str | None:
     """Where this request comes from: the peer, or what a trusted proxy says it forwarded for."""
-    settings = request.app.state.container.settings
+    settings = settings or request.app.state.container.settings
     forwarded = ",".join(request.headers.getlist("x-forwarded-for"))
     return client_address(request.client.host if request.client else None, forwarded, settings.forwarded_allow_ips)
 
@@ -69,11 +69,15 @@ def session_meta(request: Request, kind: str | None = None) -> SessionMeta:
     )
 
 
-def require_reachable(request: Request, c: Container, principal: Principal) -> None:
-    """Without ``remote.access`` a user is served on the home network and nowhere else."""
-    if "remote.access" in principal.permissions:
+def require_reachable(request: Request, c: Container, remote: bool) -> None:
+    """Without ``remote.access`` (``remote``) a user is served on the home network and nowhere else.
+
+    Asked for a bearer token's principal and, on the signed stream and image URLs, for the
+    user the URL was signed for.
+    """
+    if remote:
         return
-    if not is_home(client_ip(request), str(c.app_settings.get("home_networks") or "")):
+    if not is_home(client_ip(request, c.settings), str(c.app_settings.get("home_networks") or "")):
         raise Forbidden("This account can only be used on the home network", code="remote_access_denied")
 
 
@@ -88,7 +92,7 @@ async def resolve(request: Request, c: Container, token: str, *, owner_entry: bo
         principal: Principal = cached[1]
         return principal
     principal = await c.auth.resolve_principal(token, owner_entry=owner_entry)
-    require_reachable(request, c, principal)
+    require_reachable(request, c, "remote.access" in principal.permissions)
     request.state.resolved = (token, principal)
     return principal
 

@@ -20,11 +20,14 @@ def _owned_by(ref: Any, source_id: str) -> bool:
 
 def image_payload(source_id: str, url: str, ref: str | None, policy: Any) -> dict[str, Any] | None:
     """What an artwork URL is signed over. Bound to the caller's session and the exact title
-    whenever the content policy applies to them, so the fetch can be checked against it."""
+    whenever the content policy applies to them, so the fetch can be checked against it; and
+    to the home network for a caller without ``remote.access``, whose session is too."""
     payload: dict[str, Any] = {"s": source_id, "u": url}
     from app.services.content_policy import active_principal
 
     principal = active_principal.get()
+    if principal is not None and "remote.access" not in principal.permissions:
+        payload["home"] = True
     if policy is None or not policy.applies_to(principal):
         return payload
     if principal is None or not principal.session_id or not _owned_by(ref, source_id):

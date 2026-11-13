@@ -15,7 +15,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api import schemas as S
-from app.api.deps import Admin, C, P
+from app.api.deps import Admin, C, P, require_reachable
 from app.api.streaming import OwnedStreamingResponse, byte_range, file_range
 from app.domain.ports import ImageAuthProvider
 from app.proxy.stream_proxy import HlsSourceBusy, Viewer, VodPlan
@@ -304,13 +304,17 @@ def _pair_identity(grant: StreamGrant) -> tuple[int, str, str]:
     return grant.profile_version, grant.session_id, grant.content_ref
 
 
-async def _grant(c: C, token: str) -> Any:
+async def _grant(c: C, token: str, request: Request | None = None) -> Any:
+    """The grant behind a stream token, checked. ``request`` is a media request that carries no
+    bearer: it is held to the grant's user's ``remote.access`` here, as the API holds a session."""
     c.proxy.ensure_running()
     g = c.tokens.verify(token)
     if g is None:
         raise Unauthorized("invalid or expired stream token")
     try:
-        await c.guard.require_grant(g)
+        viewer = await c.guard.require_grant(g)
+        if request is not None:
+            require_reachable(request, c, viewer.remote)
         if g.pair_lease_id:
             version, session_id, content_ref = _pair_identity(g)
             await c.auth.session_valid(g.profile_id, version, session_id)
@@ -375,7 +379,7 @@ def _proxy_url(token: str, upstream: str, c: C) -> str:
 
 @router.get("/stream/{token}", tags=["playback"], response_class=StreamingResponse)
 async def stream(token: str, request: Request, c: C) -> Response:
-    g = await _grant(c, token)
+    g = await _grant(c, token, request)
     if g.mode == "hls":
         return Response(status_code=307, headers={"Location": f"/api/v1/stream/{token}/index.m3u8"})
     if is_recording(g):
@@ -437,7 +441,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
 
 @router.get("/stream/{token}/seg/{sub}", tags=["playback"], include_in_schema=False)
 async def stream_segment(token: str, sub: str, request: Request, c: C) -> Response:
-    g = await _grant(c, token)
+    g = await _grant(c, token, request)
     d = c.crypto.try_decrypt_json(sub, ttl=c.tokens.ttl_s)
     if (
         not isinstance(d, dict)
@@ -516,8 +520,10 @@ async def _start_hls(c: C, g: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 @router.get("/stream/{token}/index.m3u8", tags=["playback"])
-async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str | None = None) -> Response:
-    g = await _grant(c, token)
+async def stream_hls(
+    token: str, request: Request, c: C, at: datetime | None = None, lease_id: str | None = None
+) -> Response:
+    g = await _grant(c, token, request)
     if at is not None and g.content_ref:
         await c.content_policy.require(g.profile_id, g.content_ref, at=at)
     # A watch room's member reads the room's session; the room decides its key, start and audio.
@@ -583,8 +589,8 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
 
 
 @router.get("/stream/{token}/hls/{sid}/{name}", tags=["playback"], include_in_schema=False)
-async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
-    g = await _grant(c, token)
+async def stream_hls_segment(token: str, sid: str, name: str, request: Request, c: C) -> Response:
+    g = await _grant(c, token, request)
     # After a room seek the room's session has a new id: segments of the old one are not served.
     expected = c.room_playback.sid(g) if g.room else c.proxy.session_id(_hls_session_key(c, g)[0])
     if sid != expected:
@@ -606,7 +612,7 @@ async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
 
 
 @router.get("/images/{token}", tags=["catalog"], include_in_schema=False)
-async def image_proxy(token: str, c: C) -> Response:
+async def image_proxy(token: str, request: Request, c: C) -> Response:
     """Artwork clients cannot fetch themselves, behind a signed grant.
 
     Either the server needs a credential the client must never see (Plex), or the
@@ -617,6 +623,8 @@ async def image_proxy(token: str, c: C) -> Response:
         raise NotFound("image not found")
     from app.services.image_grants import WEB_SCHEMES, validate_image_grant
 
+    # Signed for a user without ``remote.access``: served where their session is, at home.
+    require_reachable(request, c, not d.get("home"))
     await validate_image_grant(d, c.content_policy, c.auth)
     source_id = str(d.get("s"))
     try:
@@ -650,12 +658,12 @@ async def image_proxy(token: str, c: C) -> Response:
         await validate_image_grant(d, c.content_policy, c.auth)
         if cache is not None and media_type.lower().startswith("image/"):
             await cache.put(source_id, url, body, media_type)
-    private = c.content_policy.enabled or "profile" in d
+    private = c.content_policy.enabled or "profile" in d or bool(d.get("home"))
     return Response(
         body,
         media_type=media_type,
         headers={
-            # Bound to one viewer by the content policy: theirs alone.
+            # Bound to one viewer (a rating ceiling, or the home network): theirs alone.
             "Cache-Control": "private, no-store" if private else "public, max-age=86400",
             # Never let a browser reinterpret or run what a provider called an image (SVG included).
             "X-Content-Type-Options": "nosniff",

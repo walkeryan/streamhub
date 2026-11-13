@@ -33,7 +33,9 @@ async def listing_cached(
         revision = db.catalog_revisions.version(profile)
         # An include_adult listing must never be replayed for a general request, nor a
         # listing computed under one set of watch permissions or rating limits for another.
-        scope = (adult_included(), watch_key(), rating_key(principal))
+        # Nor one whose artwork URLs were signed for the home network for a user served anywhere.
+        home_only = principal is not None and "remote.access" not in principal.permissions
+        scope = (adult_included(), watch_key(), rating_key(principal), home_only)
         key = (operation, profile, image_session, revision, public_base.get(), scope, params)
         valid = lambda revision=revision: revision == db.catalog_revisions.version(profile)  # noqa: E731
         result = await db.result_cache.get(

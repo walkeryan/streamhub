@@ -14,8 +14,8 @@ and the replaced stream's grant stops being served. Two panes of a multiview are
 ``GrantGuard`` re-validates the viewer behind a grant: session not revoked, user active, user
 version current (``AuthService.validate``). A positive answer is reused for ``VALID_TTL_S``, so a
 revocation or suspension cuts a running stream within that time plus one segment or one second of
-passthrough. What the routes need to know about that viewer (are they under a rating ceiling)
-is remembered with the answer, so no request asks twice.
+passthrough. What the routes need to know about that viewer (may they be served away from home,
+are they under a rating ceiling) is remembered with the answer, so no request asks twice.
 """
 
 from __future__ import annotations
@@ -289,6 +289,7 @@ class Validated:
     at: float
     user_id: str
     max_streams: int | None
+    remote: bool  # holds ``remote.access``: served away from the home network too
     rated: bool  # under a rating ceiling: every segment is checked, and nothing sent is cacheable
 
 
@@ -325,6 +326,7 @@ class GrantGuard:
                 now,
                 str(user.id),
                 identity.limits.max_streams,
+                "remote.access" in identity.permissions,
                 restricts(identity.limits),
             )
         blocking = self._streams.touch(held.user_id, grant, held.max_streams)
