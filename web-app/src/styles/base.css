@@ -227,8 +227,12 @@ h1, h2, h3, p { margin: 0; }
 }
 .hero-body { position: absolute; z-index: 2; left: var(--safe-x); bottom: 2rem; max-width: min(38rem, 80%); display: flex; flex-direction: column; gap: 0.75rem; }
 @media (max-width: 720px) { .hero-body { left: 1rem; right: 1rem; max-width: none; } .hero { height: 52dvh; } }
-.display { font-size: var(--text-display); line-height: 1.08; font-weight: 700; letter-spacing: -0.015em; text-wrap: balance; }
-.title-xl { font-size: var(--text-title); line-height: 1.2; font-weight: 600; }
+/* Headings keep room under the baseline. Fonts with deep descenders (the system font on Windows among
+   them) draw g, j, p, y below a tight line box, and anything that clips or sits right under the heading
+   (a two-line clamp, a row of chips) cut them off. Clipping happens at the padding edge, so the padding
+   is what saves them. */
+.display { font-size: var(--text-display); line-height: 1.16; padding-bottom: 0.12em; font-weight: 700; letter-spacing: -0.015em; text-wrap: balance; }
+.title-xl { font-size: var(--text-title); line-height: 1.25; padding-bottom: 0.1em; font-weight: 600; }
 .heading { font-size: var(--text-heading); font-weight: 600; line-height: 1.3; }
 @media (max-width: 720px) { .display { font-size: 2rem; } }
 
