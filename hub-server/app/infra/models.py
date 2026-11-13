@@ -538,6 +538,8 @@ class Recording(Base):
     season: Mapped[int | None] = mapped_column(Integer, nullable=True)
     episode: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_sport: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The guide's rating evidence for the programme, as it stood when this was scheduled.
+    age_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
     starts_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
     ends_at: Mapped[datetime] = mapped_column(UTCDateTime)
     pad_before_s: Mapped[int] = mapped_column(Integer, default=0)

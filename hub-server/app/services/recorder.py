@@ -212,6 +212,7 @@ class _Candidate:
     category: str | None
     start: datetime
     stop: datetime
+    evidence: dict[str, Any]
     details: ProgrammeDetails
     key: str
     episode: tuple[Any, ...] | None
@@ -323,17 +324,33 @@ class RecorderService:
         if not self.enabled:
             raise Conflict("Recording is not configured.", code="recording_unavailable")
 
+    async def _ceiling(self, p: Principal) -> Any:
+        """What a rating-limited caller's recordings must pass; ``None`` for a caller nothing is kept from.
+
+        A recording is judged by the evidence it kept of its programme, the way the guide judges
+        the programme itself. The padding around it is not judged.
+        """
+        policy = self.content_policy
+        if policy is None or not policy.applies_to(p):
+            return None
+        profile = await policy.profile(p.profile_id, p.limits)
+        return policy.programme_clause(Recording.age_evidence, profile) if policy.restricts(profile) else None
+
     async def _owned(self, p: Principal, recording_id: str) -> Recording:
+        query = select(Recording).where(Recording.id == recording_id)
+        ceiling = await self._ceiling(p)
+        if ceiling is not None:
+            query = query.where(ceiling)
         async with self._db.session() as s:
-            row = await s.get(Recording, recording_id)
-        if row is None or not (p.is_admin or row.profile_id == p.profile_id):
+            row = (await s.execute(query)).scalar_one_or_none()
+        if row is None or not (recording_policy.sees_all(p) or row.profile_id == p.profile_id):
             raise NotFound("recording not found")
         return row
 
     async def _owned_rule(self, p: Principal, rule_id: str) -> RecordingRule:
         async with self._db.session() as s:
             row = await s.get(RecordingRule, rule_id)
-        if row is None or not (p.is_admin or row.profile_id == p.profile_id):
+        if row is None or not (recording_policy.sees_all(p) or row.profile_id == p.profile_id):
             raise NotFound("rule not found")
         return row
 
@@ -372,7 +389,8 @@ class RecorderService:
 
     # ------------------------------------------------------------------ reads
     async def list(self, p: Principal, *, state: str | None) -> builtins.list[Recording]:
-        """The caller's recordings (everyone's for an admin), earliest first. Cancelled ones only on request."""
+        """The caller's recordings (everyone's for whoever manages users), earliest first, within the
+        caller's rating ceiling. Cancelled ones only on request."""
         self._require_view(p)
         if state is not None and state not in STATES:
             raise ServiceError("unknown state", code="invalid_request")
@@ -381,8 +399,11 @@ class RecorderService:
         # The newest LIST_LIMIT, so a long history never hides what is coming up.
         query = select(Recording).order_by(Recording.starts_at.desc(), Recording.id.desc()).limit(LIST_LIMIT)
         query = query.where(Recording.state == state if state is not None else Recording.state != "cancelled")
-        if not p.is_admin:
+        if not recording_policy.sees_all(p):
             query = query.where(Recording.profile_id == p.profile_id)
+        ceiling = await self._ceiling(p)
+        if ceiling is not None:
+            query = query.where(ceiling)
         async with self._db.session() as s:
             return list((await s.execute(query)).scalars())[::-1]
 
@@ -391,7 +412,7 @@ class RecorderService:
         if not self.enabled:
             return []
         query = select(RecordingRule).order_by(RecordingRule.created_at, RecordingRule.id)
-        if not p.is_admin:
+        if not recording_policy.sees_all(p):
             query = query.where(RecordingRule.profile_id == p.profile_id)
         async with self._db.session() as s:
             return list((await s.execute(query)).scalars())
@@ -548,6 +569,7 @@ class RecorderService:
         category: str | None,
         start: datetime,
         stop: datetime,
+        evidence: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Everything a recording keeps of its guide entry; nothing is read from the guide again."""
         d = programme_details(title, category)
@@ -562,6 +584,7 @@ class RecorderService:
             "season": d.season,
             "episode": d.episode,
             "is_sport": d.is_sport,
+            "age_evidence": dict(evidence or {}),
             "starts_at": start,
             "ends_at": stop,
             "pad_before_s": PAD_BEFORE_S,
@@ -644,7 +667,7 @@ class RecorderService:
         self._require_schedule(p)
         programme, ch = await self._resolve(programme_id, channel_id, start)
         # Checked before anything about the programme is echoed back, including an existing recording.
-        if self.content_policy is not None and self.content_policy.enabled:
+        if self.content_policy is not None and self.content_policy.applies_to(p):
             await self.content_policy.require(p.profile_id, ids.prog_id(programme.id))
         if programme.stop <= self.clock():
             raise Conflict("That programme has already ended.", code="programme_ended")
@@ -657,6 +680,7 @@ class RecorderService:
             category=programme.category,
             start=programme.start,
             stop=programme.stop,
+            evidence=programme.age_evidence,
         )
         for _ in range(2):
             async with self._db.session() as s:
@@ -673,7 +697,7 @@ class RecorderService:
                     continue  # lost a race for the key: look again
                 return row, True
             if existing.state not in DEAD_STATES:
-                if not (p.is_admin or existing.profile_id == p.profile_id):
+                if not (recording_policy.sees_all(p) or existing.profile_id == p.profile_id):
                     raise Conflict("This programme is already being recorded.", code="already_scheduled")
                 return existing, False
             # A cancelled, failed or missed attempt is taken over by whoever asks again.
@@ -814,9 +838,8 @@ class RecorderService:
         out: dict[str, builtins.list[_Candidate]] = {rule.id: [] for rule in rules}
         matched: dict[tuple[str, str, str | None], bool] = {}
         policy = self.content_policy
-        # Rules run outside any request, so the owner's content policy is applied here.
-        scope = (policy, await policy.profile(profile_id)) if policy is not None and policy.enabled else None
-        reset = active_policy.set(scope)
+        # Rules run outside any request, so the profile's content policy is applied here.
+        reset = active_policy.set(await policy.scope(profile_id) if policy is not None else None)
         try:
             eligible, _ = await self._channels._channel_query(profile_id, all_languages=True)
             ch = eligible.subquery()
@@ -831,6 +854,7 @@ class RecorderService:
                     Programme.category,
                     Programme.start,
                     Programme.stop,
+                    Programme.age_evidence,
                 )
                 .join(Programme, (Programme.feed == ch.c.source_id) & (Programme.epg_channel == ch.c.epg_id))
                 .where(Programme.start > now)
@@ -839,7 +863,7 @@ class RecorderService:
             async with self._db.session() as s:
                 # One streamed pass over the guide for all of the profile's rules.
                 rows = await s.stream(query.execution_options(yield_per=500))
-                async for pk, source_id, ext_id, name, number, title, category, start, stop in rows:
+                async for pk, source_id, ext_id, name, number, title, category, start, stop, evidence in rows:
                     channel_id = ids.channel_id(source_id, ext_id)
                     for rule in rules:
                         if rule.channel_id is not None and rule.channel_id != channel_id:
@@ -859,6 +883,7 @@ class RecorderService:
                                     category=category,
                                     start=start,
                                     stop=stop,
+                                    evidence=evidence,
                                     details=details,
                                     key=key,
                                     episode=_episode_id(key, details.season, details.episode, details.subtitle),
@@ -909,6 +934,7 @@ class RecorderService:
                         category=pick.category,
                         start=pick.start,
                         stop=pick.stop,
+                        evidence=pick.evidence,
                     ),
                 )
                 try:

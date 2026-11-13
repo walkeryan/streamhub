@@ -1661,7 +1661,8 @@ paths:
         '409': { description: "room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them)" }
   /recordings:
     get:
-      summary: The current profile's recordings (everyone's for an admin), earliest first
+      summary: The current profile's recordings (everyone's for a holder of users.manage), earliest first
+      description: A user under a rating ceiling sees, plays and manages only recordings whose programme was rated within it when it was scheduled.
       parameters:
         - { name: state, in: query, schema: { $ref: '#/components/schemas/RecordingState' }, description: "omitted = every state except cancelled" }
       responses: { '200': { description: "enabled is false, and the list empty, until the server has a recordings directory", content: { application/json: { schema: { type: object, required: [enabled, recordings], properties: { enabled: {type: boolean}, can_schedule: {type: boolean, description: "The current profile may schedule, cancel and delete."}, recordings: { type: array, items: { $ref: '#/components/schemas/Recording' } } } } } } } }
@@ -1677,7 +1678,7 @@ paths:
   /recordings/{id}:
     delete: { summary: Cancel an upcoming or running recording; delete a finished one and its file, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
   /recording-rules:
-    get: { summary: The current profile's rules (everyone's for an admin), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }
+    get: { summary: The current profile's rules (everyone's for a holder of users.manage), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }
     post:
       summary: Record every matching programme, now and after each guide refresh
       requestBody: { content: { application/json: { schema: { type: object, required: [kind, match], properties: { kind: {type: string, enum: [series, team, keyword]}, match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean, default: false}, keep: {type: integer, nullable: true} } } } } }

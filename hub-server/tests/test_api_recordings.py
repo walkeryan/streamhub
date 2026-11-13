@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.domain.entities import EpgSourceSpec, ProgrammeInfo
 from app.infra.models import Channel, Programme, Recording
 from app.infra.settings import AppSettings
 from app.services import ids, recording_policy
+from app.services.classification import classification_record, summarize
 from tests.conftest import Api
 from tests.people import member
 from tests.test_epg_integrity import add_source
@@ -360,3 +361,137 @@ async def test_recordings_and_rules_survive_a_real_guide_refresh(api: Api, monke
     assert r.status_code == 200 and r.json()["id"] == quiz["id"]
     r = await api.post("/recordings", json={"programme_id": after["Evening Quiz"]["id"], "start": soon(9).isoformat()})
     assert r.status_code == 409 and r.json()["code"] == "guide_changed"
+
+
+# ---------------------------------------------------------------- who sees whose, and under which ceiling
+def tv_rating(code: str) -> dict[str, Any]:
+    return summarize("xmltv", "programme", [classification_record("US", "US-TVPG", code)])
+
+
+async def rated(api: Api, ch: Channel, title: str, start: datetime, code: str) -> str:
+    pid = await programme(api, ch, title, start)
+    async with api.c.db.session() as s:
+        row = await s.get(Programme, int(pid.removeprefix("prog:")))
+        assert row is not None
+        row.age_evidence = tv_rating(code)
+        await s.commit()
+    return pid
+
+
+async def test_whoever_manages_users_sees_everyones_recordings(api: Api) -> None:
+    bbc = await channel(api, await add_source(api))
+    family = await member(api, "family", "Parent")
+    manager = await member(api, "family", "Manager", grants=["users.manage"])
+    # ``system.manage`` alone runs the server; it is not a view into what people record.
+    operator = await member(api, "family", "Operator", grants=["system.manage"])
+    quiz = await programme(api, bbc, "Quiz", soon(1))
+    theirs = await family.post("/recordings", json={"programme_id": quiz})
+    assert theirs.status_code == 201, theirs.text
+    rule = (await family.post("/recording-rules", json={"kind": "keyword", "match": "nothing"})).json()
+    mine = (await api.post("/recordings", json={"programme_id": await programme(api, bbc, "News", soon(3))})).json()
+
+    async def listed(who: Any) -> tuple[list[str], list[str]]:
+        recordings = (await who.get("/recordings")).json()["recordings"]
+        rules = (await who.get("/recording-rules")).json()["rules"]
+        return [x["id"] for x in recordings], [x["id"] for x in rules]
+
+    assert await listed(manager) == ([theirs.json()["id"], mine["id"]], [rule["id"]])
+    assert await listed(family) == ([theirs.json()["id"]], [rule["id"]])
+    assert await listed(operator) == ([], [])
+    # Seeing all is acting on all: the manager's is the same recording, the operator is turned away.
+    again = await manager.post("/recordings", json={"programme_id": quiz})
+    assert again.status_code == 200 and again.json()["id"] == theirs.json()["id"]
+    r = await operator.post("/recordings", json={"programme_id": quiz})
+    assert r.status_code == 409 and r.json()["code"] == "already_scheduled"
+    assert (await operator.req("DELETE", f"/recordings/{mine['id']}")).status_code == 404
+    assert (await operator.req("PATCH", f"/recording-rules/{rule['id']}", json={"keep": 1})).status_code == 404
+    r = await manager.req("PATCH", f"/recording-rules/{rule['id']}", json={"keep": 1})
+    assert r.status_code == 200 and r.json()["keep"] == 1
+    assert (await manager.req("DELETE", f"/recordings/{mine['id']}")).status_code == 204
+
+
+async def test_a_rating_ceiling_covers_recordings_too(api: Api) -> None:
+    bbc = await channel(api, await add_source(api))
+    await rated(api, bbc, "On Now", soon(-0.5), "TV-G")  # a channel is judged by what it carries now
+    songs = await rated(api, bbc, "Harbour Songs", soon(1), "TV-G")
+    dark = await rated(api, bbc, "Harbour After Dark", soon(3), "TV-MA")
+    kid = await member(api, "kid", "Kid", grants=["recordings.schedule"])
+
+    r = await kid.post("/recordings", json={"programme_id": dark})
+    assert r.status_code in (403, 404) and "After Dark" not in r.text, r.text
+    made = await kid.post("/recordings", json={"programme_id": songs})
+    assert made.status_code == 201, made.text
+    assert (await api.post("/recordings", json={"programme_id": dark})).status_code == 201
+    # The guide never names the programme to them, recorded or not.
+    rows = await guide(api, bbc, headers=kid.headers)
+    assert [(p["title"], p["recording_state"]) for p in rows] == [("On Now", None), ("Harbour Songs", "scheduled")]
+    assert [p["recording_state"] for p in await guide(api, bbc)] == [None, "scheduled", "scheduled"]
+
+    # A rule of theirs only ever picks what the ceiling admits.
+    await rated(api, bbc, "Harbour Tales", soon(5), "TV-G")
+    await rated(api, bbc, "Harbour Nights", soon(7), "TV-MA")
+    rule = await kid.post("/recording-rules", json={"kind": "keyword", "match": "harbour"})
+    assert rule.status_code == 201, rule.text
+    assert [x["title"] for x in (await kid.get("/recordings")).json()["recordings"]] == [
+        "Harbour Songs",
+        "Harbour Tales",
+    ]
+
+    # A recording keeps the rating its programme had: one of theirs from before the ceiling is
+    # not shown, cannot be cancelled and does not play. Raising the ceiling brings it back.
+    async with api.c.db.session() as s:
+        s.add(
+            Recording(
+                id="older",
+                profile_id=kid.profile_id,
+                channel_id=hub(bbc),
+                channel_name=bbc.name,
+                programme_key="older",
+                title="Blood Harbor",
+                starts_at=soon(-30),
+                ends_at=soon(-29),
+                state="done",
+                age_evidence=tv_rating("TV-MA"),
+            )
+        )
+        await s.commit()
+    assert "Blood Harbor" not in (await kid.get("/recordings")).text
+    assert "Blood Harbor" not in (await kid.get("/recordings", params={"state": "done"})).text
+    assert (await kid.req("DELETE", "/recordings/older")).status_code == 404
+    r = await kid.post("/playback/resolve", json={"id": "rec:older", "client": "android_tv", "recovery_generation": 0})
+    assert r.status_code == 403 and r.json()["code"] == "content_restricted", r.text
+    assert "Blood Harbor" in (await api.get("/recordings", params={"state": "done"})).text
+    assert (await api.patch(f"/users/{kid.id}", json={"limits": {"rating_ceiling_tv": "TV-MA"}})).status_code == 200
+    await kid.refresh()
+    assert "Blood Harbor" in (await kid.get("/recordings")).text
+
+
+async def test_a_recording_snapshots_its_programmes_rating(api: Api) -> None:
+    bbc = await channel(api, await add_source(api))
+    pid = await rated(api, bbc, "Harbour Songs", soon(1), "TV-PG")
+    made = (await api.post("/recordings", json={"programme_id": pid})).json()
+    async with api.c.db.session() as s:
+        await s.execute(delete(Programme))  # the next guide refresh no longer lists it
+        await s.commit()
+        row = await s.get(Recording, made["id"])
+        assert row is not None and row.age_evidence == tv_rating("TV-PG")
+    # Unknown is not "within the ceiling": a recording from before ratings were kept has none.
+    teen = await member(api, "family", "Teen", limits={"rating_ceiling_tv": "TV-14"}, grants=["users.manage"])
+    strict = await member(
+        api, "family", "Strict", limits={"rating_ceiling_tv": "TV-14", "allow_unrated": False}, grants=["users.manage"]
+    )
+    async with api.c.db.session() as s:
+        s.add(
+            Recording(
+                id="unrated",
+                profile_id=api.profile_id,
+                channel_id=hub(bbc),
+                programme_key="unrated",
+                title="Loose Reel",
+                starts_at=soon(4),
+                ends_at=soon(5),
+            )
+        )
+        await s.commit()
+    assert [x["title"] for x in (await teen.get("/recordings")).json()["recordings"]] == ["Harbour Songs", "Loose Reel"]
+    assert [x["title"] for x in (await strict.get("/recordings")).json()["recordings"]] == ["Harbour Songs"]
