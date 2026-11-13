@@ -48,6 +48,8 @@ export function RoomScreen() {
 function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; startAtMs: number | null }) {
   const go = useGo()
   const [session, setSession] = useState<RoomSession | null>(null)
+  // Each seat gets a player of its own: a rejoin starts from the new seat's stream.
+  const [seat, setSeat] = useState(0)
   const info = useRoomInfo(code, !session)
   const room = info.data
   const [joining, setJoining] = useState(false)
@@ -66,6 +68,7 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
       const { generation } = await unwrap<{ generation: string }>(api.GET('/playback/generation'))
       const joined = await joinRoom(code, { client: 'web', prefer_hls: prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio })
       setSession(new RoomSession(known, joined, { generation, allowUnverifiedAudio, startAtMs }))
+      setSeat((n) => n + 1)
     } catch (e) {
       setRefusal(refusalOf(e))
       window.setTimeout(() => void setFocus('room:join'), 30)
@@ -86,7 +89,7 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
     return () => session.release()
   }, [session])
 
-  if (session) return <Player room={session} onRejoin={() => { setSession(null); void join(session.room) }} />
+  if (session) return <Player key={seat} room={session} onRejoin={() => { setSession(null); void join(session.room) }} />
 
   const failed = info.error && !room ? refusalOf(info.error) : null
   const shown = failed ?? refusal

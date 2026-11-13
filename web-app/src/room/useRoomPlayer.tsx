@@ -32,6 +32,8 @@ const noRoom = () => () => undefined
 const SYNC_INTERVAL_MS = 500
 /** A stall this short is a seek settling, not a member the room should wait for. */
 const STALL_REPORT_MS = 500
+/** A player still paused this long after the room started playing was not allowed to start by itself. */
+const AUTOPLAY_GRACE_MS = 1500
 
 const CLOSED: Record<string, { text: string; rejoin?: boolean }> = {
   expired: { text: 'Nobody was in the room for a while, so it closed.' },
@@ -99,12 +101,11 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
       const p = link.current
       const { state, closed } = room.socket.snapshot
       if (!state || closed) return
-      const loading = p.state === 'resolving' || p.state === 'loading' || p.state === 'reconnecting'
+      // The element says whether there is something to steer; the player's own state lags it by a render.
+      const loading = p.state === 'resolving' || p.state === 'reconnecting' || video.readyState < HTMLMediaElement.HAVE_METADATA
       const stopped = p.state === 'error' || p.state === 'handoff'
       report(!stopped && (loading || video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA))
-      // A stream attached while the room is paused must not start on its own.
-      if (loading && !state.playing) p.pause()
-      if (loading || stopped || p.audioBlocked || video.seeking || video.readyState < HTMLMediaElement.HAVE_METADATA) return
+      if (loading || stopped || p.audioBlocked || video.seeking) return
       const action = decide(state, room.clock.serverNow(), (p.offsetS + video.currentTime) * 1000, !video.paused, p.durationS > 0 ? p.durationS * 1000 : null)
       if (action.type === 'pause') p.pause()
       else if (action.type === 'play') {
@@ -173,8 +174,8 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     const video = videoRef.current
     if (!room || !video) return
     const state = room.socket.snapshot.state
-    // The room is playing but this browser would not start without a tap: the tap starts it here.
-    if (state?.playing && video.paused && !video.ended) { link.current.resume(); return }
+    // The room has been playing for a while but this browser would not start without a tap: the tap starts it here.
+    if (state?.playing && video.paused && !video.ended && room.clock.serverNow() - state.as_of_ms > AUTOPLAY_GRACE_MS) { link.current.resume(); return }
     if (!allowed()) return
     if (state?.playing) room.socket.pause(); else room.socket.play()
   }, [room, videoRef, allowed])

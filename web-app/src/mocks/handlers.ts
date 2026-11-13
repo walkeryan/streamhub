@@ -6,6 +6,8 @@ import {
   sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
+import { roomHandlers } from './rooms'
+import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
@@ -32,6 +34,10 @@ const countryMatches = (value: string | null | undefined, country: string | null
 
 export const handlers = [
   ...requestHandlers,
+  // watch rooms (REST and the room socket)
+  ...roomHandlers,
+  // recordings, rules and playing a finished recording (before the general resolve handler below)
+  ...recordingHandlers,
   http.get(`${B}/sports/recordings`, ({ request }) => {
     const params = new URL(request.url).searchParams
     return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])
@@ -237,7 +243,7 @@ export const handlers = [
       .filter((c) => countryMatches(c.country, country) && !hiddenGroups.has(c.group) && (!selectedGroup || c.group === selectedGroup) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
 
     const offset = Number(u.searchParams.get('offset') ?? 0), limit = Number(u.searchParams.get('limit') ?? list.length)
-    return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list.slice(offset, offset + limit).map(withNowNext), total: list.length, limit, offset })
+    return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list.slice(offset, offset + limit).map(withNowNext).map(withRecordingStates), total: list.length, limit, offset })
   }),
   http.get(`${B}/channels/groups`, ({ request }) => {
     const u = new URL(request.url), lang = u.searchParams.get('language'), country = u.searchParams.get('country')
@@ -269,7 +275,7 @@ export const handlers = [
     const ids = (u.searchParams.get('channel_ids') ?? '').split(',').filter(Boolean)
     const from = Date.parse(u.searchParams.get('from') ?? '') || Date.now() - 3600_000
     const to = Date.parse(u.searchParams.get('to') ?? '') || Date.now() + 6 * 3600_000
-    return HttpResponse.json(Object.fromEntries(ids.map((id) => [id, programmesFor(channels.find((c) => c.id === id) ?? channels[0]!, from, to)])))
+    return HttpResponse.json(Object.fromEntries(ids.map((id) => [id, programmesFor(channels.find((c) => c.id === id) ?? channels[0]!, from, to).map(withRecordingState)])))
   }),
 
   http.get(`${B}/playback/generation`, () => HttpResponse.json({ generation: 'fixture-generation' })),
