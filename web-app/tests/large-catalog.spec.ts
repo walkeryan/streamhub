@@ -32,10 +32,12 @@ test('52k channels stay bounded, searchable and explicitly language-selectable',
   await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('channel-row')).toHaveCount(80)
   await page.getByRole('button', { name: 'All languages', exact: true }).click()
-  await page.getByRole('button', { name: 'Category: All categories', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: 'Category', exact: true })
+  // 804 groups: the first few are chips, the rest stay behind one searchable picker.
+  expect(await page.getByRole('group', { name: 'Channel groups', exact: true }).getByRole('button').count()).toBeLessThanOrEqual(27)
+  await page.getByRole('button', { name: 'More groups: All groups', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'More groups', exact: true })
   expect(await dialog.getByRole('button').count()).toBeLessThanOrEqual(43)
-  await dialog.getByLabel('Search category').fill('Category 803')
+  await dialog.getByLabel('Search more groups').fill('Category 803')
   await dialog.getByRole('button', { name: /Category 803/ }).click()
   await expect(page.getByTestId('channel-row').first()).toContainText('Unknown Channel 804')
   expect(await page.getByTestId('channel-row').count()).toBeLessThanOrEqual(80)
@@ -79,10 +81,14 @@ test('211k library titles render only one server page and remain searchable', as
     const base = titles.find((t: {kind: string}) => t.kind === 'movie')
     titles.splice(0, titles.length)
     for (let i = 1; i <= 211613; i++) titles.push({ ...base, id: `catalog:${i}`, title: `Catalog Movie ${i}` })
+    // A library whose provider supplies no categories has no shelves: Movies opens on the grid.
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      return new URL(request.url).pathname === '/api/v1/browse/movies/shelves' ? Response.json({ shelves: [] }) : original(request)
+    }
   })
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
-  await page.getByRole('button', { name: 'My library', exact: true }).click()
   const browse = page.getByTestId('browse')
   await expect(browse.getByTestId('tile')).toHaveCount(60)
   await browse.getByRole('button', { name: 'Next page', exact: true }).click()

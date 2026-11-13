@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { signIn } from './helpers'
+import { openMore, signIn } from './helpers'
 
 type Options = { partial?: boolean; failStop?: boolean; failRefresh?: boolean; delayStop?: boolean }
 
@@ -44,7 +44,7 @@ async function setup(page: Page, options: Options = {}, admin = true) {
     const s = useSession.getState()
     s.setSession(s.access, s.refresh, { ...s.profile, is_admin: true })
   })
-  await page.getByRole('link', { name: 'Settings', exact: true }).click()
+  await openMore(page, 'Settings')
   await page.getByTestId('tab-playback').click()
   if (admin) {
     await expect(page.getByTestId('stream-recovery')).toContainText('2 Streamhub-owned media sessions/connections')

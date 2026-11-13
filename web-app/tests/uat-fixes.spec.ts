@@ -8,7 +8,7 @@ async function openLiveChannel(page: Page) {
   await signIn(page)
   await page.goto('/live')
   await expect(page.getByTestId('channel-row').first()).toBeVisible()
-  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
   await page.getByTestId('channel-row').first().click()
   await expect(page).toHaveURL(/\/play\/ch/)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing', { timeout: 15_000 })
@@ -196,7 +196,7 @@ test('Back during an uncommitted zap cancels pending playback instead of startin
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   })
   await expect(page).toHaveURL(/\/live/)
-  await expect(page.getByLabel('Search channels or number')).toBeFocused()
+  await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
 })
 
 test('approved live playback retains the exact750ms double-Back behavior', async ({ page }) => {

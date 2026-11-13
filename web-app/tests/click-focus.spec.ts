@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { openDiscover, signIn } from './helpers'
 
 test('explicit activation without pointer movement restores its own dialog opener',async({page})=>{
   await signIn(page)
-  await page.getByRole('link',{name:'Movies',exact:true}).click()
+  await openDiscover(page)
   const opener=page.getByRole('button',{name:'Sort: Popular',exact:true})
   await expect(opener).toHaveAttribute('data-focused','true')
   await page.evaluate(async()=>{const path='/src/nav/spatial.ts';const {setFocus}=await import(/* @vite-ignore */path);await setFocus('rail:/')})
@@ -22,7 +22,7 @@ test('explicit activation without pointer movement restores its own dialog opene
 
 test('absolute mouse movement focuses a target even when movement deltas are zero',async({page})=>{
   await signIn(page)
-  await page.getByRole('link',{name:'Movies',exact:true}).click()
+  await openDiscover(page)
   const sort=page.getByRole('button',{name:'Sort: Popular',exact:true})
   await expect(sort).toHaveAttribute('data-focused','true')
   const target=page.getByRole('button',{name:'Search all titles',exact:true})

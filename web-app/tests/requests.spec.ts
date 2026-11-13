@@ -34,6 +34,15 @@ async function rail(page: Page, testId: string) {
   await page.keyboard.press('Enter')
 }
 
+/** Requests sits in the More menu: open it from the rail, walk down to the entry. */
+async function more(page: Page, testId: string) {
+  await rail(page, 'nav-more')
+  const item = page.getByTestId('more-menu').getByTestId(testId)
+  for (let i = 0; i < 8 && (await item.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowDown')
+  await expect(item).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Enter')
+}
+
 const focused = (page: Page) => page.locator('.fx[data-focused="true"]').last()
 
 test('keyboard only: request a movie, see it approved, open the notice when it arrives', async ({ page }) => {
@@ -46,7 +55,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await rail(page, 'nav-search')
   await expect(page.getByLabel('Search titles and channels')).toBeFocused()
   await page.keyboard.type('velvet')
-  const result = page.getByTestId('group-relevance').getByTestId('tile')
+  const result = page.getByTestId('group-missing').getByTestId('tile')
   await expect(result).toContainText('Not available', { timeout: 8000 })
   await page.keyboard.press('ArrowRight')
   await expect(result).toHaveAttribute('data-focused', 'true')
@@ -65,7 +74,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await expect(focused(page)).toHaveText('Watchlist')
 
   // My requests lists it; a viewer gets no approval controls.
-  await rail(page, 'nav-requests')
+  await more(page, 'nav-requests')
   await expect(page.getByTestId('requests')).toBeVisible()
   const row = page.getByTestId('request-row')
   await expect(row).toHaveCount(1)
@@ -131,7 +140,7 @@ test('keyboard only: a notice can be dismissed without opening it', async ({ pag
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('notices')).toHaveCount(0)
   // Focus moved on before the banner left.
-  await expect(focused(page)).toHaveText('Live TV')
+  await expect(focused(page)).toHaveText('Play')
   await expect(page).toHaveURL(/\/$/)
 })
 

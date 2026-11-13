@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { activeFilter, closeFilters, openFilters, signIn } from './helpers'
 
 test('active category and genre remain named when a search empties their facets', async ({ page }) => {
   await page.addInitScript(() => {
@@ -22,17 +22,22 @@ test('active category and genre remain named when a search empties their facets'
   })
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
-  await expect(page.getByTestId('discover')).toBeVisible()
-  await page.getByRole('button', { name: 'My library', exact: true }).click()
+  await openFilters(page)
   await page.getByRole('button', { name: 'Category: All categories', exact: true }).click()
   await page.getByRole('button', { name: 'EN-ACTION (1,024)', exact: true }).click()
   await page.getByRole('button', { name: 'Genre: All genres', exact: true }).click()
   await page.getByRole('button', { name: 'Action (1,024)', exact: true }).click()
+  await closeFilters(page)
   await page.getByLabel('Search this library').fill('zzq-no-such-title-qa')
   await expect(page.getByRole('heading', { name: 'No matching titles', exact: true })).toBeVisible()
+  await expect(activeFilter(page, 'Category: EN-ACTION')).toBeVisible()
+  await expect(activeFilter(page, 'Genre: Action')).toBeVisible()
+  await openFilters(page)
   await expect(page.getByRole('button', { name: 'Category: EN-ACTION', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Genre: Action', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Clear filters', exact: true }).first().click()
+  await page.getByTestId('browse-filters').getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(page.getByTestId('active-filter')).toHaveCount(0)
+  await openFilters(page)
   await expect(page.getByRole('button', { name: 'Category: All categories', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Genre: All genres', exact: true })).toBeVisible()
 })

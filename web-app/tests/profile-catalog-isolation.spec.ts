@@ -29,7 +29,7 @@ test('late profile results and local preferences cannot cross a profile switch',
     useUi.getState().setChannelList('guest-list', [channels[0]])
     useUi.getState().setLastChannelId(channels[0].id)
   })
-  await page.getByRole('link', { name: 'Favorites', exact: true }).click()
+  await page.getByRole('link', { name: 'My List', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as unknown as { guestPending?: boolean }).guestPending)).toBe(true)
   await page.evaluate(async () => {
     await fetch('/api/v1/disclaimer/accept', { method: 'POST', headers: { authorization: 'Bearer mock-access-p1' } })
