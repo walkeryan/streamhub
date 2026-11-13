@@ -254,7 +254,7 @@ function RoleEditor({ role, onClose, onRemove }: { role: Role | null; onClose: (
     save.mutate(undefined, { onSuccess: (saved) => { toast(`${saved.name} saved.`, 'success'); onClose() }, onError: (e) => setError(e.message) })
   }
   return (
-    <Modal open onClose={onClose} title={role ? `${role.name} role` : 'New role'} firstFocusKey={fixed ? 'role:close' : role?.builtin ? 'role:edit:watch.library' : 'role:name'} wide testId="role-editor">
+    <Modal open onClose={onClose} title={role ? `${role.name} role` : 'New role'} firstFocusKey={role?.builtin ? 'role:edit:watch.library' : 'role:name'} wide testId="role-editor">
       {fixed ? <p className="muted">Owner always has every permission and no limits. It cannot be edited or removed, and there is always at least one.</p>
         : !role?.builtin && <FocusableInput focusKey="role:name" label="Role name" placeholder="Role name" maxLength={64} value={name} onChange={setName} />}
       <PermissionSwitches scope="role:edit" held={permissions}

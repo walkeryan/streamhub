@@ -60,7 +60,11 @@ async function refreshTokens(): Promise<boolean> {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ refresh_token: refresh }),
       })
-      if (!res.ok) throw new Error('refresh failed')
+      if (!res.ok) {
+        // A suspended user's refresh is refused too; they are told why they are signed out.
+        if ((await codeOf(res)) === 'user_suspended' && useSession.getState().refresh === refresh && useSession.getState().generation === generation) useSession.getState().end(SUSPENDED)
+        throw new Error('refresh failed')
+      }
       const t = (await res.json()) as AuthTokens
       // A pending refresh must not restore a logged-out or replaced profile.
       if (useSession.getState().refresh !== refresh) return false
@@ -109,7 +113,8 @@ export const authenticatedFetch = async (input: Request): Promise<Response> => {
     return res
   }
   if (res.status === 403) {
-    if (code === 'forbidden') refreshMe()
+    // What this user may do is not what the app thought: ask again (unless that was the asking).
+    if (code === 'forbidden' && !new URL(input.url).pathname.endsWith('/auth/me')) refreshMe()
     return res
   }
   if (current() && !NOT_A_TOKEN.has(code ?? '')) {

@@ -68,6 +68,39 @@ test.describe('permissions', () => {
   })
 })
 
+test.describe('refusals read the same everywhere', () => {
+  /** Answer one API path with a refusal, before the app boots. */
+  const refuse = (page: Page, path: string, status: number, body: unknown) => page.addInitScript(({ path, status, body }) => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      return new URL(request.url).pathname === path ? Response.json(body, { status }) : original(request)
+    }
+  }, { path, status, body })
+
+  test('a missing permission', async ({ page }) => {
+    await refuse(page, '/api/v1/users', 403, { code: 'forbidden', message: 'Missing permission: users.manage', missing: ['users.manage'] })
+    await enter(page, '/users')
+    await expect(page.getByRole('alert')).toContainText("You don't have permission to do this")
+  })
+
+  test('an account that only works at home can still sign out', async ({ page }) => {
+    await refuse(page, '/api/v1/auth/me', 403, { code: 'remote_access_denied', message: 'remote access is not allowed for this user' })
+    await enter(page, '/', { who: 'guest' })
+    await expect(page.getByRole('alert')).toContainText('This account can only be used on the home network')
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+    await expect(page.getByTestId('profile-picker')).toBeVisible()
+  })
+
+  test('a stream limit names what is already playing, like a busy source', async ({ page }) => {
+    await refuse(page, '/api/v1/playback/resolve', 409, { code: 'user_stream_limit', message: 'stream limit reached', limit: 1, active: [{ profile_name: 'Guest', title: 'Neon Cartographers', kind: 'movie', since: new Date().toISOString() }] })
+    await enter(page, '/play/tmdb%3Amovie%3A101', { who: 'guest' })
+    await expect(page.getByTestId('source-busy')).toHaveText('You are already watching something')
+    await expect(page.getByTestId('player-error')).toContainText('Neon Cartographers is playing on another device')
+    await expect(page.getByTestId('player-error').getByRole('button', { name: 'Try again', exact: true })).toBeVisible()
+  })
+})
+
 test.describe('signing in', () => {
   const INVITE = 'inv-open'.padEnd(43, 'x'), SPENT = 'inv-used'.padEnd(43, 'x')
   /** Google's part of the trip: the server would redirect there and come back with ?google_complete=1. */
@@ -367,7 +400,10 @@ test.describe('the Users screen', () => {
     const editor = page.getByTestId('role-editor')
     await expect(editor).toContainText('It cannot be edited or removed')
     await expect(editor.getByTestId('role-save')).toHaveCount(0)
-    await expect(editor.locator('[data-permission] [aria-disabled="true"]')).toHaveCount(16)
+    // All sixteen, each on, none of them a control.
+    await expect(editor.locator('[data-permission] [data-readonly="true"][aria-pressed="true"]')).toHaveCount(16)
+    await editor.locator('[data-permission="watch.adult"]').getByRole('button').click()
+    await expect(editor.locator('[data-permission="watch.adult"]').getByRole('button')).toHaveAttribute('aria-pressed', 'true')
     await editor.getByRole('button', { name: 'Close', exact: true }).click()
 
     await page.getByTestId('role-edit-kid').click()

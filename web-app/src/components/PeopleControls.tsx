@@ -7,11 +7,12 @@ import { Button, Chip } from './ui'
 
 type Permission = components['schemas']['Permission']
 
-/** A switch on one line: what it is, what it means and, for a user, where its value comes from. */
+/** A switch on one line: what it is, what it means and, for a user, where its value comes from.
+ *  Without `onChange` it only shows its value, and still takes focus so a remote can read down a list of them. */
 export function Toggle(p: { focusKey: string; label: string; hint?: string; on: boolean; onChange?: (on: boolean) => void; note?: string; testId?: string }) {
   return (
-    <Focusable focusKey={p.focusKey} className="toggle fx-flat" aria-pressed={p.on} disabled={!p.onChange} data-testid={p.testId}
-      label={`${p.label}: ${p.on ? 'on' : 'off'}${p.note ? `, ${p.note.toLowerCase()}` : ''}`} onEnter={() => p.onChange?.(!p.on)}>
+    <Focusable focusKey={p.focusKey} className="toggle fx-flat" aria-pressed={p.on} data-testid={p.testId} data={{ readonly: !p.onChange }}
+      label={`${p.label}: ${p.on ? 'on' : 'off'}${p.note ? `, ${p.note.toLowerCase()}` : ''}${p.onChange ? '' : ', cannot be changed'}`} onEnter={() => p.onChange?.(!p.on)}>
       <span className="toggle-box" aria-hidden="true">{p.on && <Icon name="check" size={16} />}</span>
       <span className="flex flex-col flex-1 min-w-0">
         <span style={{ fontWeight: 600 }}>{p.label}</span>
