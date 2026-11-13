@@ -10,6 +10,7 @@ from fastapi import APIRouter, Response
 from app.api import schemas as S
 from app.api.deps import C, P, SourcesAdmin
 from app.domain.entities import SourceStatus
+from app.services.auth import Principal
 from app.services.errors import PreconditionRequired, ServiceError
 
 router = APIRouter()
@@ -45,9 +46,17 @@ def _prep_config(c: C, type_: str, config: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
+async def _out(c: C, p: Principal, row: Any) -> dict[str, Any]:
+    """A source as this caller may see it. Where it lives (a server address on the home network,
+    the account name it signs in with) is for whoever manages sources; everyone else gets what
+    labels a title and filters a list."""
+    out = await c.sources.to_api(row)
+    return out if p.can("sources.manage") else {**out, "config_summary": {}}
+
+
 @router.get("/sources", response_model=list[S.Source], tags=["sources"])
 async def list_sources(c: C, p: P) -> list[dict[str, Any]]:
-    return [await c.sources.to_api(r) for r in await c.sources.list()]
+    return [await _out(c, p, r) for r in await c.sources.list()]
 
 
 @router.post(
@@ -81,7 +90,7 @@ async def create_source(body: S.SourceCreate, c: C, p: SourcesAdmin) -> dict[str
 
 @router.get("/sources/{id}", response_model=S.Source, tags=["sources"])
 async def get_source(id: str, c: C, p: P) -> dict[str, Any]:
-    return await c.sources.to_api(await c.sources.get(id))
+    return await _out(c, p, await c.sources.get(id))
 
 
 @router.patch("/sources/{id}", response_model=S.Source, tags=["sources"])

@@ -325,7 +325,8 @@ async def test_image_grants_bind_a_restricted_user_and_leave_others_alone(seeded
         plain = image_payload("catalog", "https://art.example.test/r.jpg", "lib:catalog:r", policy)
     finally:
         active_principal.reset(token)
-    assert plain == {"s": "catalog", "u": "https://art.example.test/r.jpg"}
+    # Bound to nobody, so no profile or session in it: only where the image is, and until when it is good.
+    assert plain == {"s": "catalog", "u": "https://art.example.test/r.jpg", "x": plain["x"]}
     await validate_image_grant(plain, policy, auth)
 
 

@@ -100,6 +100,13 @@ export const handlers = [
     return HttpResponse.json(tokens(p.id))
   }),
   http.post(`${B}/auth/refresh`, () => HttpResponse.json(tokens('p1'))),
+  // What asked for a TV code, for the approval screen. "mock.pair.old" stands for a server that cannot say.
+  http.post(`${B}/auth/device/lookup`, async ({ request }) => {
+    if (sessionStorage.getItem('mock.pair.old')) return HttpResponse.json({ code: 'not_found', message: 'no such endpoint' }, { status: 404 })
+    const b = (await request.json()) as { user_code?: string }
+    if (!/^[A-Z0-9]{6}$/.test(b.user_code ?? '') || b.user_code === 'BADBAD') return HttpResponse.json({ code: 'not_found', message: 'unknown code' }, { status: 404 })
+    return HttpResponse.json({ user_code: b.user_code, ip: '203.0.113.24', user_agent: 'StreamHub TV/1.0 (Android 12)', expires_in: 540 })
+  }),
   http.post(`${B}/auth/device/approve`, async ({ request }) => {
     const b = (await request.json()) as { user_code?: string }
     if (!/^[A-Z0-9]{6}$/.test(b.user_code ?? '') || b.user_code === 'BADBAD') return HttpResponse.json({ code: 'invalid_code', message: 'That code is not valid or has expired.' }, { status: 404 })

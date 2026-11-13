@@ -9,6 +9,8 @@ import httpx
 from sqlalchemy import select
 
 from app.infra.models import AuditLog, User
+from app.services.permissions import OWNER_GRANTED
+from app.services.users import sign_in_methods
 from tests.conftest import Api
 
 
@@ -47,6 +49,12 @@ async def sign_in(api: Api, user: dict[str, Any], pin: str | None = None) -> Mem
         profile = await api.c.auth.get_profile(user["profile_id"])
         return Member(api, user["id"], user["profile_id"], await api.c.auth.issue(profile))
     r = await api.client.post("/api/v1/auth/login", json={"profile_id": user["profile_id"], "pin": pin})
+    if r.status_code != 200 and not pin:
+        # No tap lets in someone who manages the server (or who has a sign-in of their own);
+        # tests that need such a member signed in mint the session as a pairing would.
+        identity = await api.c.users.identity(user["profile_id"])
+        assert identity is not None and (identity.permissions & OWNER_GRANTED or sign_in_methods(identity.user)), r.text
+        return Member(api, user["id"], user["profile_id"], await api.c.auth.issue(identity.profile))
     assert r.status_code == 200, r.text
     return Member(api, user["id"], user["profile_id"], r.json())
 

@@ -16,12 +16,14 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.crypto import hash_secret
+from app.infra.crypto import hash_secret, verify_secret
 from app.infra.db import Database
 from app.infra.models import AuditLog, AuthSession, Profile, Progress, Role, User, utcnow
 from app.services.errors import Conflict, Forbidden, NotFound, PermissionDenied, ServiceError
@@ -42,6 +44,8 @@ from app.services.permissions import (
 log = logging.getLogger(__name__)
 
 STATUSES = ("pending", "active", "suspended")
+# How recent a sign-in still counts as proof of who is holding the device.
+FRESH_SIGN_IN_S = 10 * 60
 
 
 def audit(
@@ -74,6 +78,16 @@ def standing(user: User, role: Role) -> tuple[frozenset[str], Limits]:
         effective_permissions(role.permissions or [], user.grants or [], user.denials or []),
         effective_limits(role.limits or {}, user.limits or {}),
     )
+
+
+def sign_in_methods(user: User) -> list[str]:
+    """The ways this person can prove who they are from anywhere, in the order a screen lists them."""
+    held = (
+        ("google", user.google_subject),
+        ("plex", user.plex_account_id),
+        ("password", user.username and user.password_hash),
+    )
+    return [name for name, value in held if value]
 
 
 def mirror(profile: Profile, user: User, role: Role | None) -> None:
@@ -137,6 +151,22 @@ class GoogleSignIn:
     user: User
     profile: Profile
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalIdentity:
+    """Someone an identity provider vouches for. ``subject`` is the provider's own stable id."""
+
+    provider: str  # google | plex
+    subject: str
+    email: str = ""
+    name: str = ""
+    picture: str | None = None
+    handle: str | None = None  # the Plex username; Google has none
+
+
+# Where each provider's stable id lives on the user.
+_SUBJECT = {"google": User.google_subject, "plex": User.plex_account_id}
 
 
 def _slug(name: str) -> str:
@@ -209,6 +239,9 @@ class UsersService:
             "has_pin": bool(profile and profile.pin_hash),
             "on_shared_devices": shared,
             "plex_account_linked": user.plex_account_linked,
+            "username": user.username,
+            "plex_username": user.plex_username if user.plex_account_id else None,
+            "sign_in_methods": sign_in_methods(user),
             "created_at": user.created_at,
             "approved_at": user.approved_at,
             "last_seen_at": user.last_seen_at,
@@ -583,14 +616,59 @@ class UsersService:
         await s.execute(delete(Profile).where(Profile.user_id == user.id))
         await s.delete(user)
 
-    async def set_pin(self, actor: Any, user_id: str, pin: str | None) -> None:
-        """Set or clear a user's PIN: one's own, or anyone's with ``users.manage``."""
+    async def prove_pin_holder(
+        self,
+        s: AsyncSession,
+        actor: Any,
+        user: User,
+        profile: Profile,
+        current_pin: str | None = None,
+        current_password: str | None = None,
+    ) -> None:
+        """Before one's own PIN is changed or removed: show this is still its owner.
+
+        A signed-in device is not proof. The current PIN is, or the account's password, or a
+        sign-in made in the last few minutes (the way back in for someone who forgot it).
+        Someone else's PIN is a manager's to set, and ``guard_identity`` is what bounds that.
+        """
+        if user.id != actor.user_id or not profile.pin_hash:
+            return
+        if current_pin:
+            if self._sessions is None:
+                raise Forbidden("That is not the current PIN", code="pin_invalid")
+            try:
+                # The same budget of guesses as a hand-over to this user: five in fifteen minutes.
+                await self._sessions._check_switch_pin(user.id, current_pin, profile.pin_hash)
+            except ServiceError as exc:
+                if exc.status == 429:
+                    raise
+                raise Forbidden("That is not the current PIN", code="pin_invalid") from exc
+            return
+        if current_password is not None:
+            if not await asyncio.to_thread(verify_secret, current_password, user.password_hash):
+                raise Forbidden("That is not your password", code="wrong_password")
+            return
+        row = await s.get(AuthSession, getattr(actor, "session_id", "") or "")
+        if row is not None and utcnow() - row.created_at <= timedelta(seconds=FRESH_SIGN_IN_S):
+            return
+        raise Forbidden("Enter the current PIN to change it", code="current_pin_required")
+
+    async def set_pin(
+        self,
+        actor: Any,
+        user_id: str,
+        pin: str | None,
+        current_pin: str | None = None,
+        current_password: str | None = None,
+    ) -> None:
+        """Set or clear a user's PIN: one's own (see ``prove_pin_holder``), or anyone's with ``users.manage``."""
         if user_id != actor.user_id and "users.manage" not in actor.permissions:
             raise NotFound("user not found")
         pin_hash = await asyncio.to_thread(hash_secret, validate_pin(pin)) if pin else None
         async with self._db.session() as s:
             user, profile, _ = await self._load(s, user_id)
             await self.guard_identity(s, actor, user)
+            await self.prove_pin_holder(s, actor, user, profile, current_pin, current_password)
             profile.pin_hash = pin_hash
             # A PIN that just changed must be proven again before the adult category reopens.
             await s.execute(update(AuthSession).where(AuthSession.user_id == user.id).values(adult_unlocked_until=None))
@@ -693,7 +771,7 @@ class UsersService:
             await s.delete(role)
             await s.commit()
 
-    # ------------------------------------------------------------------ Google sign-in
+    # ------------------------------------------------------------------ Google and Plex sign-in
     async def google_sign_in(
         self,
         claims: dict[str, Any],
@@ -702,37 +780,84 @@ class UsersService:
         owner_profile_id: str,
         signup_mode: str,
         invite_token: str,
-        redeem: Callable[[AsyncSession, str], Awaitable[tuple[Role, str | None, str] | None]],
+        redeem: Callable[[AsyncSession, str], Awaitable[Any]],
     ) -> GoogleSignIn:
-        """Map a verified Google identity onto a user, creating one where the rules allow.
+        """Map a verified Google identity onto a user, creating one where the rules allow."""
+        email = str(claims.get("email") or "").strip().lower()
+        who = ExternalIdentity(
+            provider="google",
+            subject=str(claims["sub"]),
+            email=email,
+            name=str(claims.get("name") or "").strip(),
+            picture=str(claims.get("picture") or "")[:2048] or None,
+        )
+        return await self.external_sign_in(
+            who,
+            bootstrap_email=bootstrap_email,
+            owner_profile_id=owner_profile_id,
+            signup_mode=signup_mode,
+            invite_token=invite_token,
+            redeem=redeem,
+        )
+
+    @staticmethod
+    def _carry(user: User, who: ExternalIdentity) -> None:
+        """Keep what the provider says about a known user. The address and picture shown for a
+        user are Google's when they have Google, so Plex only fills them in for someone who has not."""
+        if who.provider == "google" or not user.google_subject:
+            user.email, user.picture = who.email or user.email, who.picture or user.picture
+        if who.provider == "plex":
+            user.plex_username = who.handle or user.plex_username
+
+    async def external_sign_in(
+        self,
+        who: ExternalIdentity,
+        *,
+        signup_mode: str,
+        invite_token: str,
+        redeem: Callable[[AsyncSession, str], Awaitable[Any]],
+        bootstrap_email: str = "",
+        owner_profile_id: str = "",
+        trusted_role_id: str | None = None,
+    ) -> GoogleSignIn:
+        """Map an identity a provider vouches for onto a user, creating one where the rules allow.
 
         Known subject: that user. Otherwise, in order: the bootstrap owner address claims
-        the Owner user that has no Google identity yet; a valid invite activates at once
-        with the invite's role; approval mode leaves a pending user; anything else is refused.
+        the Owner user that has no Google identity yet (Google only); a valid invite activates
+        at once with the invite's role; ``trusted_role_id`` (someone the owner's Plex server is
+        already shared with) activates at once with that role; approval mode leaves a pending
+        user; anything else is refused.
+
+        Identity is the provider's subject and nothing else. An address that matches another
+        user's is never a reason to treat two identities as one person: that is linking, and
+        linking is something a signed-in user does on purpose.
         """
-        subject = str(claims["sub"])
-        email = str(claims.get("email") or "").strip().lower()
-        picture = str(claims.get("picture") or "")[:2048] or None
-        name = (str(claims.get("name") or "").strip() or email.split("@", 1)[0] or "User")[:64]
+        subject, email, picture = who.subject, who.email, who.picture
+        column = _SUBJECT[who.provider]
+        name = (who.name or who.handle or email.split("@", 1)[0] or "User")[:64]
         pending_notice = False
         async with self._db.session() as s:
-            user = (await s.execute(select(User).where(User.google_subject == subject))).scalar_one_or_none()
+            user = (await s.execute(select(User).where(column == subject))).scalar_one_or_none()
             created = False
             if user is not None:
                 if user.status == "suspended":
                     raise Forbidden("This account is suspended", code="user_suspended")
                 profile = (await s.execute(select(Profile).where(Profile.user_id == user.id))).scalar_one()
-                user.email, user.picture = email or user.email, picture or user.picture
+                self._carry(user, who)
                 invited = await redeem(s, invite_token) if user.status == "pending" and invite_token else None
                 if invited is not None:
-                    role, inviter, invite_id = invited
+                    role = invited.role
                     user.status, user.role_id = "active", role.id
-                    user.approved_at, user.approved_by_user_id = utcnow(), inviter
+                    user.approved_at, user.approved_by_user_id = utcnow(), invited.inviter
                     profile.kids = role.id == "kid"
                     self._changed(user, profile, role)
-                    audit(s, user.id, "user.invite_accept", user.id, invite_id=invite_id, role_id=role.id)
+                    audit(s, user.id, "user.invite_accept", user.id, invite_id=invited.invite_id, role_id=role.id)
             else:
-                owner = await self._bootstrap_owner(s, email, bootstrap_email, owner_profile_id)
+                owner = (
+                    await self._bootstrap_owner(s, email, bootstrap_email, owner_profile_id)
+                    if who.provider == "google"
+                    else None
+                )
                 if owner is not None:
                     user, profile = owner
                     # Compare-and-set: of two sign-ins racing for the claim, exactly one gets it.
@@ -747,14 +872,18 @@ class UsersService:
                     audit(s, user.id, "user.google_link", user.id)
                 else:
                     invited = await redeem(s, invite_token) if invite_token else None
-                    if invited is None and signup_mode != "approval":
+                    trusted = await s.get(Role, trusted_role_id) if invited is None and trusted_role_id else None
+                    # Never the Owner role, whatever a caller names.
+                    trusted = trusted if trusted is not None and trusted.id != OWNER_ROLE else None
+                    if invited is None and trusted is None and signup_mode != "approval":
                         raise Forbidden("An invitation is required to sign in", code="invite_required")
-                    granted = invited[0] if invited else None
+                    granted = invited.role if invited else trusted
+                    if invited and invited.display_name:
+                        name = invited.display_name
                     user = User(
                         id=secrets.token_hex(8),
-                        kind="google",
-                        google_subject=subject,
-                        email=email,
+                        kind=who.provider,
+                        email=email or None,
                         display_name=name,
                         picture=picture,
                         status="active" if granted else "pending",
@@ -763,8 +892,11 @@ class UsersService:
                         denials=[],
                         limits={},
                         approved_at=utcnow() if granted else None,
-                        approved_by_user_id=invited[1] if invited else None,
+                        approved_by_user_id=invited.inviter if invited else None,
                     )
+                    setattr(user, column.key, subject)
+                    if who.provider == "plex":
+                        user.plex_username = who.handle
                     s.add(user)
                     await s.flush()
                     profile = Profile(
@@ -781,7 +913,16 @@ class UsersService:
                     s.add(profile)
                     created = True
                     if invited:
-                        audit(s, user.id, "user.invite_accept", user.id, invite_id=invited[2], role_id=invited[0].id)
+                        audit(
+                            s,
+                            user.id,
+                            "user.invite_accept",
+                            user.id,
+                            invite_id=invited.invite_id,
+                            role_id=invited.role.id,
+                        )
+                    elif trusted is not None:
+                        audit(s, user.id, "user.plex_friend_accept", user.id, role_id=trusted.id)
                     else:
                         audit(s, user.id, "user.signup", user.id, display_name=name, email=email)
                         await self._notify_managers(s, user)
@@ -790,6 +931,65 @@ class UsersService:
         if pending_notice:
             await self._webhook("user.pending", {"id": user.id, "display_name": user.display_name, "email": user.email})
         return GoogleSignIn(user, profile, created)
+
+    # ------------------------------------------------------------------ linked sign-ins
+    async def link_identity(self, user_id: str, who: ExternalIdentity) -> None:
+        """Attach a Google or Plex identity to a user who asked for it while signed in.
+
+        An identity names one user: one that already signs someone else in is refused, and so
+        is a second identity of the same provider (unlink the first).
+        """
+        column = _SUBJECT[who.provider]
+        async with self._db.session() as s:
+            user = await s.get(User, user_id)
+            if user is None or user.status != "active":
+                raise NotFound("user not found")
+            holder = (await s.execute(select(User.id).where(column == who.subject))).scalar_one_or_none()
+            if holder is not None and holder != user.id:
+                raise Conflict("That account already signs in as someone else here", code="identity_in_use")
+            mine = getattr(user, column.key)
+            if mine == who.subject:
+                return
+            if mine:
+                raise Conflict("Unlink the one that is linked first", code="already_linked")
+            setattr(user, column.key, who.subject)
+            self._carry(user, who)
+            audit(s, user.id, "user.signin_link", user.id, method=who.provider)
+            try:
+                await s.commit()
+            except IntegrityError as exc:
+                # Two users linking one identity at the same moment; the index decided.
+                raise Conflict("That account already signs in as someone else here", code="identity_in_use") from exc
+
+    async def unlink_method(self, actor: Any, user_id: str, method: str) -> dict[str, Any]:
+        """Remove one way of signing in: one's own, or anyone's with ``users.manage``.
+
+        Never the last one, for anybody: a person with no way in is suspended or removed,
+        which says so. Taken away by someone else, it also ends that person's sessions.
+        """
+        if user_id != actor.user_id and "users.manage" not in actor.permissions:
+            raise PermissionDenied(["users.manage"])
+        if user_id == actor.user_id and getattr(actor, "shared_device", False):
+            raise Forbidden("Sign-in methods cannot be changed on a shared device", code="shared_device")
+        async with self._db.session() as s:
+            user, _, _ = await self._load(s, user_id)
+            await self.guard_identity(s, actor, user)
+            held = sign_in_methods(user)
+            if method not in held:
+                raise NotFound("That sign-in method is not linked")
+            if len(held) == 1:
+                raise Conflict("The last way of signing in cannot be removed", code="last_method")
+            if method == "google":
+                user.google_subject = None
+            elif method == "plex":
+                user.plex_account_id = user.plex_username = None
+            else:
+                user.username = user.password_hash = None
+            if user.id != actor.user_id and self._sessions is not None:
+                await self._sessions.revoke_all(s, user.id)
+            audit(s, actor.user_id, "user.signin_unlink", user.id, method=method)
+            await s.commit()
+        return await self.get(user_id)
 
     @staticmethod
     async def _bootstrap_owner(

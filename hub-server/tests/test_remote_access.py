@@ -17,7 +17,14 @@ from httpx import ASGITransport, AsyncClient
 from app.infra.models import AuthSession, Recording
 from app.infra.settings import AppSettings
 from app.services.classification import classification_record, summarize
-from app.services.network import DEFAULT_HOME_NETWORKS, clean_networks, client_address, is_home
+from app.services.network import (
+    DEFAULT_HOME_NETWORKS,
+    clean_networks,
+    client_address,
+    from_home,
+    is_home,
+    vouched_for,
+)
 from app.services.streams import VALID_TTL_S
 from tests.conftest import Api
 from tests.people import Member, member
@@ -55,9 +62,11 @@ def test_forwarded_for_counts_only_from_a_trusted_proxy() -> None:
     # What cannot be known is unknown, never a guess.
     assert client_address(PROXY, f"{HOME}, not-an-address", trust) is None
     assert client_address(None, HOME, trust) is None and client_address("testclient", None, trust) is None
-    # No trusted proxies at all; and uvicorn's "trust everyone".
+    # No trusted proxies at all.
     assert client_address(PROXY, AWAY, "") == PROXY
-    assert client_address(AWAY, f"{HOME}, 198.51.100.7", "*") == HOME
+    # "Trust everyone" cannot tell a proxy from a client. The left-most name is whatever the
+    # client typed, so it is never the answer: the last hop is what the nearest proxy saw.
+    assert client_address(AWAY, f"{HOME}, 198.51.100.7", "*") == "198.51.100.7"
     assert client_address(None, HOME, "*") == HOME and client_address(AWAY, None, "*") == AWAY
     assert client_address(PROXY, AWAY, "/run/hub.sock, 127.0.0.1") == AWAY
 
@@ -146,8 +155,82 @@ async def test_an_untrusted_peer_cannot_forward_itself_home(api: Api) -> None:
     kid = await member(api, "kid", "Kid")
     for spoof in (HOME, "127.0.0.1", f"{HOME}, 127.0.0.1", "10.0.0.1"):
         assert denied(await get(api, kid, AWAY, forwarded=spoof)), spoof
-    # And a home peer is home whatever the header claims.
-    assert (await get(api, kid, HOME, forwarded=AWAY)).status_code == 200
+
+
+TUNNEL = "172.17.0.5"  # a tunnel connector's container address: private, so inside the default home networks
+
+
+async def test_a_forwarding_proxy_that_is_not_trusted_is_never_home(api: Api) -> None:
+    """Behind a tunnel nobody listed in FORWARDED_ALLOW_IPS, every client arrives from the
+    connector's private address. A forwarding header says a proxy is in the way; without
+    trust in that proxy the real client is unknown, and unknown is not home."""
+    kid = await member(api, "kid", "Kid")
+    assert (await get(api, kid, TUNNEL)).status_code == 200  # a device on that network, no proxy
+    for header in ("X-Forwarded-For", "Forwarded", "CF-Connecting-IP", "X-Real-IP", "True-Client-IP"):
+        for value in (AWAY, HOME, "for=192.168.1.20", f"{TUNNEL}, {AWAY}"):
+            async with from_address(api, TUNNEL) as client:
+                r = await client.get("/api/v1/favorites", headers={**kid.headers, header: value})
+            assert denied(r), (header, value)
+    assert denied(await get(api, kid, HOME, forwarded=AWAY))
+    # Someone with remote.access is served either way.
+    assert (await get(api, api, TUNNEL, forwarded=AWAY)).status_code == 200
+    # Behind a trusted proxy under uvicorn --proxy-headers, the peer is already the client it vouched for.
+    app = api.client._transport.app  # type: ignore[attr-defined]
+    for vouched, served in ((HOME, True), (AWAY, False)):
+        async with AsyncClient(transport=ASGITransport(app=app, client=(vouched, 0)), base_url="http://hub.test") as c:
+            r = await c.get("/api/v1/favorites", headers={**kid.headers, "X-Forwarded-For": vouched})
+        assert (r.status_code == 200) is served and denied(r) is not served
+
+
+def test_from_home_decision() -> None:
+    trust = "127.0.0.1,172.18.0.0/16"
+    home = DEFAULT_HOME_NETWORKS
+
+    def at_home(peer: str | None, trusted: str = trust, **headers: str) -> bool:
+        return from_home(peer, {k.replace("_", "-"): v for k, v in headers.items()}, trusted, home)
+
+    assert at_home(HOME) and at_home("127.0.0.1") and not at_home(AWAY) and not at_home(None)
+    # Through a trusted proxy: the hop it vouches for decides.
+    assert at_home("172.18.0.2", x_forwarded_for=HOME) and not at_home("172.18.0.2", x_forwarded_for=AWAY)
+    assert not at_home("172.18.0.2", x_forwarded_for=f"{HOME}, {AWAY}")
+    # Through anything else that forwards: never.
+    assert not at_home(TUNNEL, x_forwarded_for=HOME) and not at_home(TUNNEL, cf_connecting_ip=HOME)
+    assert not at_home(TUNNEL, x_forwarded_for=f"{TUNNEL}, {AWAY}") and not at_home(AWAY, x_forwarded_for=AWAY)
+    assert not at_home(HOME, forwarded="for=192.168.1.9") and not at_home(HOME, x_real_ip=HOME)
+    # A trusted proxy that names the client only in a header nobody can walk is not believed either.
+    assert not at_home("172.18.0.2", x_real_ip=HOME) and not at_home("172.18.0.2", cf_connecting_ip=HOME)
+    # uvicorn --proxy-headers has already put the vouched-for hop in the peer's place (with port 0)
+    # and left the headers on the request. Without that mark the same request is not believed.
+    for chain in (HOME, f"{AWAY}, {HOME}, 172.18.0.3"):
+        assert from_home(HOME, {"x-forwarded-for": chain, "cf-connecting-ip": HOME}, trust, home, vouched=True)
+        assert not at_home(HOME, x_forwarded_for=chain)
+    assert not from_home(AWAY, {"x-forwarded-for": f"{HOME}, {AWAY}"}, trust, home, vouched=True)
+    assert vouched_for(0) and not vouched_for(40000) and not vouched_for(None)
+    # "*": home only when nothing in the chain is from elsewhere.
+    assert at_home(HOME, "*") and at_home(PROXY, "*", x_forwarded_for=HOME)
+    assert not at_home(PROXY, "*", x_forwarded_for=f"{HOME}, {AWAY}")
+    assert not at_home(PROXY, "*", x_forwarded_for=f"{AWAY}, {HOME}")
+    assert not at_home(PROXY, "*", x_forwarded_for=f"{HOME}, garbage")
+    assert not at_home(PROXY, "*", x_forwarded_for=HOME, cf_connecting_ip=AWAY)
+    assert not at_home(AWAY, "*", x_forwarded_for=HOME)
+
+
+async def test_trust_everyone_is_warned_about_at_startup(
+    settings: AppSettings, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app.container import build_container
+    from app.infra.cache import MemoryCache
+    from app.main import create_app
+    from tests.conftest import http_factory
+
+    wide = settings.model_copy(update={"forwarded_allow_ips": " * ", "config_dir": settings.config_dir / "wide"})
+    app = create_app(
+        wide, container=build_container(wide, http_factory=http_factory, cache=MemoryCache()), start_background=False
+    )
+    with caplog.at_level("WARNING"):
+        async with app.router.lifespan_context(app):
+            pass
+    assert sum("FORWARDED_ALLOW_IPS" in r.getMessage() for r in caplog.records) == 1
 
 
 async def test_a_trusted_proxy_is_believed_for_the_hop_it_added(api: Api) -> None:
@@ -190,11 +273,15 @@ async def test_home_networks_is_a_setting(api: Api) -> None:
 
 
 async def test_session_rows_record_the_address_the_same_way(api: Api) -> None:
+    # Signing in with a profile is for the home network now; away from it, a username and password.
+    made = await api.put("/auth/password", json={"username": "boss", "new_password": "a long enough phrase"})
+    assert made.status_code == 204, made.text
+
     async def signed_in_from(peer: str, forwarded: str | None) -> str | None:
         headers = {"X-Forwarded-For": forwarded} if forwarded else {}
         async with from_address(api, peer) as client:
             r = await client.post(
-                "/api/v1/auth/login", json={"profile_id": api.profile_id, "password": "test-admin-pw"}, headers=headers
+                "/api/v1/auth/password", json={"username": "boss", "password": "a long enough phrase"}, headers=headers
             )
         sid = jwt.decode(r.json()["access_token"], options={"verify_signature": False})["sid"]
         async with api.c.db.session() as s:

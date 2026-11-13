@@ -42,6 +42,9 @@ function load(): Pick<SessionState, 'access' | 'refresh' | 'profile'> {
   return { access: null, refresh: null, profile: null }
 }
 
+/** The session as this browser last stored it, which another tab may have done since this one loaded. */
+export const storedSession = load
+
 const persist = (s: Pick<SessionState, 'access' | 'refresh' | 'profile'>) =>
   lsSet(KEY, s.access && s.refresh && s.profile ? JSON.stringify({ access: s.access, refresh: s.refresh, profile: s.profile }) : null)
 

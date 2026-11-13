@@ -103,7 +103,7 @@ async def test_other_sources_keep_their_artwork_urls(api: Api) -> None:
     assert (tile["poster"], detail["poster"], detail["backdrop"], channel["logo"]) == (POSTER, POSTER, BACKDROP, LOGO)
 
     # A grant minted while the source was proxied stops working once it no longer is.
-    token = api.c.crypto.sign_json({"s": sid, "u": POSTER})
+    token = api.c.crypto.sign_json(image_payload(sid, POSTER, None, None))
     assert (await api.client.get(f"/api/v1/images/{token}")).status_code == 404
 
 
@@ -123,7 +123,7 @@ async def test_proxied_artwork_only_serves_images(api: Api) -> None:
         row_tile = api.c.catalog.image_fn(await api.c.sources.rows_by_id())
         source = next(iter((await api.c.sources.rows_by_id()).values()))
         assert row_tile(source, bad, None) == bad  # not a web URL: left alone, never fetched by the hub
-        token = api.c.crypto.sign_json({"s": source.id, "u": bad})
+        token = api.c.crypto.sign_json(image_payload(source.id, bad, None, None))
         assert (await api.client.get(f"/api/v1/images/{token}")).status_code == 404
 
 

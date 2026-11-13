@@ -11,6 +11,7 @@ import builtins
 import hashlib
 import re
 import secrets
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -30,6 +31,16 @@ MAX_USES = 50
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class Redeemed:
+    """One claimed use of an invite: the role it confers, who sent it, and who it was meant for."""
+
+    role: Role
+    inviter: str | None
+    invite_id: str
+    display_name: str | None = None
 
 
 def _may_confer(role: Role, permissions: frozenset[str], limits: Any) -> bool:
@@ -66,11 +77,19 @@ class InvitesService:
             "max_uses": row.max_uses,
             "uses": row.uses,
             "state": state,
+            "display_name": row.display_name,
+            "user_id": row.user_id,
         }
 
-    async def create(self, actor: Any, role_id: str, expires_in_hours: int = 72, max_uses: int = 1) -> dict[str, Any]:
+    async def create(
+        self, actor: Any, role_id: str, expires_in_hours: int = 72, max_uses: int = 1, name: str | None = None
+    ) -> dict[str, Any]:
+        """An invite; with ``name`` it is for one person, who starts out under that name."""
         if not 1 <= expires_in_hours <= MAX_HOURS or not 1 <= max_uses <= MAX_USES:
             raise ServiceError("invalid expiry or use count", code="invalid_invite")
+        name = (name or "").strip()[:64] or None
+        if name and max_uses != 1:
+            raise ServiceError("An invite for one person is used once", code="invalid_invite")
         token = secrets.token_urlsafe(32)
         async with self._db.session() as s:
             role = await s.get(Role, role_id)
@@ -86,6 +105,7 @@ class InvitesService:
                 expires_at=utcnow() + timedelta(hours=expires_in_hours),
                 max_uses=max_uses,
                 uses=0,
+                display_name=name,
             )
             s.add(row)
             audit(
@@ -97,6 +117,7 @@ class InvitesService:
                 role_id=role.id,
                 expires_in_hours=expires_in_hours,
                 max_uses=max_uses,
+                named=bool(name),
             )
             await s.commit()
         # The only time the token is ever returned.
@@ -127,23 +148,39 @@ class InvitesService:
             await s.commit()
 
     @staticmethod
-    async def redeem_in(s: AsyncSession, token: str) -> tuple[Role, str | None, str] | None:
-        """Claim one use inside the caller's transaction: (role, inviter, invite id), or None.
-
-        The use count moves in a single guarded UPDATE, so two sign-ins racing for the last
-        use cannot both win. An invite is only as good as its creator still is.
-        """
-        if not TOKEN_RE.fullmatch(token or ""):
-            return None
-        now = utcnow()
-        row = (await s.execute(select(Invite).where(Invite.token_hash == token_hash(token)))).scalar_one_or_none()
-        if row is None:
-            return None
+    async def _confers(s: AsyncSession, row: Invite) -> Role | None:
+        """The role this invite still hands out: none once its creator may no longer invite to it."""
         role = await s.get(Role, row.role_id)
         creator = await s.get(User, row.created_by_user_id) if row.created_by_user_id else None
         creator_role = await s.get(Role, creator.role_id) if creator is not None and creator.role_id else None
         permissions, limits = access(creator, creator_role)
         if role is None or "users.invite" not in permissions or not _may_confer(role, permissions, limits):
+            return None
+        return role
+
+    @staticmethod
+    async def usable(s: AsyncSession, row: Invite) -> bool:
+        """Would this invitation admit someone right now? Claims nothing."""
+        if row.user_id is not None or row.revoked_at is not None or row.expires_at <= utcnow():
+            return False
+        return row.uses < row.max_uses and await InvitesService._confers(s, row) is not None
+
+    @staticmethod
+    async def redeem_in(s: AsyncSession, token: str) -> Redeemed | None:
+        """Claim one use inside the caller's transaction, or None.
+
+        The use count moves in a single guarded UPDATE, so two sign-ins racing for the last
+        use cannot both win. An invite is only as good as its creator still is. A password
+        setup link (one that names a user) is not an invitation and admits nobody here.
+        """
+        if not TOKEN_RE.fullmatch(token or ""):
+            return None
+        now = utcnow()
+        row = (await s.execute(select(Invite).where(Invite.token_hash == token_hash(token)))).scalar_one_or_none()
+        if row is None or row.user_id is not None:
+            return None
+        role = await InvitesService._confers(s, row)
+        if role is None:
             return None
         claimed = (
             await s.execute(
@@ -160,4 +197,4 @@ class InvitesService:
         ).scalar_one_or_none()
         if claimed is None:
             return None
-        return role, row.created_by_user_id, row.id
+        return Redeemed(role, row.created_by_user_id, row.id, row.display_name)

@@ -8,6 +8,10 @@ from typing import Any
 from app.services.errors import Forbidden
 
 IMAGE_TTL = 300
+# A grant bound to nobody in particular (an unrestricted viewer's artwork) is still a URL that
+# works without signing in, so it does not work for ever. Its expiry is the end of next week's
+# bucket: one to two weeks away, and the same value all week, so the URL stays cacheable.
+UNBOUND_TTL = 7 * 86400
 WEB_SCHEMES = ("http://", "https://")
 
 
@@ -29,6 +33,7 @@ def image_payload(source_id: str, url: str, ref: str | None, policy: Any) -> dic
     if principal is not None and "remote.access" not in principal.permissions:
         payload["home"] = True
     if policy is None or not policy.applies_to(principal):
+        payload["x"] = (int(time.time()) // UNBOUND_TTL + 2) * UNBOUND_TTL
         return payload
     if principal is None or not principal.session_id or not _owned_by(ref, source_id):
         return None
@@ -46,6 +51,13 @@ async def validate_image_grant(payload: dict[str, Any], policy: Any, auth: Any) 
     # An unbound grant was minted for a caller the policy did not apply to. Under the legacy
     # flag there is no such caller; otherwise it is an unrestricted user's artwork.
     if not policy.enabled and "profile" not in payload:
+        until = payload.get("x")
+        if (
+            isinstance(until, bool)
+            or not isinstance(until, (int, float))
+            or not time.time() < until <= time.time() + 2 * UNBOUND_TTL + 2
+        ):
+            raise Forbidden("Artwork authorization expired or missing", code="image_expired")
         return
     source, ref = payload.get("s"), payload.get("ref")
     profile, version, session = payload.get("profile"), payload.get("version"), payload.get("session")

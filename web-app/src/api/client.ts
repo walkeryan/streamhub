@@ -1,7 +1,7 @@
 import createClient from 'openapi-fetch'
 import type { paths, AuthTokens, ProgressReport } from './types'
 import { queryClient } from './queryClient'
-import { useSession } from '../store/session'
+import { storedSession, useSession } from '../store/session'
 
 export const API_BASE = '/api/v1'
 
@@ -49,8 +49,15 @@ export const refreshMe = () => void queryClient.invalidateQueries({ queryKey: ME
 const refreshes = new Map<string, Promise<boolean>>()
 
 async function refreshTokens(): Promise<boolean> {
-  const { refresh, refreshSession, clear, generation } = useSession.getState()
+  const { refreshSession, clear, generation, profile } = useSession.getState()
+  let { refresh } = useSession.getState()
   if (!refresh) return false
+  // Refresh tokens rotate. Another tab of this browser may have refreshed since this one last did:
+  // the token it was given is the current one, and presenting ours again would look like a stolen copy
+  // being replayed, which ends the session. So take up what the browser has stored first.
+  const stored = storedSession()
+  if (stored.refresh && stored.access && stored.profile && stored.refresh !== refresh && stored.profile.id === profile?.id
+    && refreshSession(stored.access, stored.refresh, stored.profile, refresh, generation)) refresh = stored.refresh
   const existing = refreshes.get(refresh)
   if (existing) return existing
   const pending = (async () => {

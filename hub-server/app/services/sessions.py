@@ -188,10 +188,16 @@ class SessionsService:
 
     async def revoke_all(self, s: AsyncSession, user_id: str) -> int:
         """Revoke every live session of one user, inside the caller's transaction."""
+        return await self.revoke_others(s, user_id, "")
+
+    async def revoke_others(self, s: AsyncSession, user_id: str, keep_sid: str) -> int:
+        """Revoke one user's live sessions except ``keep_sid`` (the device asking), in the caller's transaction."""
         sids = list(
             (
                 await s.execute(
-                    select(AuthSession.sid).where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+                    select(AuthSession.sid).where(
+                        AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None), AuthSession.sid != keep_sid
+                    )
                 )
             ).scalars()
         )

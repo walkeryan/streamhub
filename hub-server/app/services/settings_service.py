@@ -22,6 +22,11 @@ DEFAULTS: dict[str, Any] = {
     # Who may sign in with Google unasked: anyone (then waits for approval) or invitees only.
     "signup_mode": "approval",
     "notify_webhook": None,
+    # Which further ways of signing in the sign-in screen offers. Google is configured in the environment.
+    "plex_sign_in": True,
+    "password_sign_in": True,
+    # Let someone the owner's Plex server is already shared with in at once, as a Friend.
+    "plex_friends_auto_approve": False,
     # Where a user without remote.access may use the server from.
     "home_networks": DEFAULT_HOME_NETWORKS,
     # The shelves Home shows, in order ("Name", "movies:Name", "shows:Name"); empty: Home chooses.
@@ -32,6 +37,7 @@ ALLOWED = {
     "proxy_mode": {"auto", "always", "never"},
     "signup_mode": {"approval", "invite_only"},
 }
+SWITCHES = ("plex_sign_in", "password_sign_in", "plex_friends_auto_approve")
 MAX_HOME_SHELVES = 24
 TMDB_KEY = "tmdb_api_key_enc"
 REQUEST_MANAGER_URL = "request_manager_url"
@@ -131,6 +137,7 @@ class SettingsService:
             "transcode_hw": self.get("transcode_hw"),
             "proxy_mode": self.get("proxy_mode"),
             "signup_mode": self.get("signup_mode"),
+            **{key: bool(self.get(key)) for key in SWITCHES},
             # The address may embed a secret path; only whether one is set is public.
             "notify_webhook_set": bool(self.get("notify_webhook")),
             "home_networks": self.get("home_networks") or DEFAULT_HOME_NETWORKS,
@@ -159,6 +166,11 @@ class SettingsService:
                 v = max(1, min(int(v), 168))
             if k == "signup_mode" and v is None:
                 continue
+            if k in SWITCHES:
+                if v is None:
+                    continue
+                if not isinstance(v, bool):
+                    raise ValueError(f"invalid {k}")
             if k == "notify_webhook":
                 v = clean_webhook_url(v)
                 secret_registry.add(v)

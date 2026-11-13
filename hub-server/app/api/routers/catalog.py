@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, Response
 from app.api import schemas as S
 from app.api.deps import C, P, SourcesAdmin
 from app.api.policy_route import PolicyCatalogRoute
-from app.services.adult import adult_scope
+from app.services.adult import adult_scope, require_adult
 from app.services.auth import Principal
 from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
@@ -173,7 +173,10 @@ async def title(id: str, c: C, p: P) -> dict[str, Any]:
     # Opening a title is when the user linked to the library server's account picks up what
     # they watched there (see ``ProgressService.merge_account_state``); nobody else asks it.
     await c.progress.merge_account_state(p.profile_id, await _title_rows(c, id))
-    return await c.requests.annotate_detail(p, await c.catalog.detail(id, p.profile_id))
+    # The rating ceiling answers first, in its own words; then the adult lock, before anything is returned.
+    detail = await c.catalog.detail(id, p.profile_id)
+    await require_adult(c.db, p, id)
+    return await c.requests.annotate_detail(p, detail)
 
 
 @router.get("/discover/{section}", response_model=S.DiscoveryPage, tags=["catalog"])

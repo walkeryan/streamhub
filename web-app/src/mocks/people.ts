@@ -7,6 +7,7 @@ type S = components['schemas']
 type Permission = S['Permission']
 type Limits = S['Limits']
 type User = S['User']
+type Method = S['SignInMethod']
 
 const B = '/api/v1'
 const KEY = 'mock.people.v1'
@@ -22,6 +23,12 @@ const MOVIE = ['G', 'PG', 'PG-13', 'R', 'NC-17'], TV = ['TV-Y', 'TV-Y7', 'TV-G',
 interface StoredUser extends User {
   grants: Permission[]; denials: Permission[]; limit_overrides: Partial<Limits>; shared_override: boolean | null
   pin: string | null; now_playing: S['NowPlaying'][]
+  /** Username-and-password sign-in. The mock keeps the password as typed. */
+  password?: string | null
+  /** The Plex account this user signs in with (its id at plex.tv). */
+  plex_account?: string | null
+  /** Google sign-in linked or unlinked since; unset, someone who came in through Google has it. */
+  google_linked?: boolean
   /** An approved sign-in collects its tokens once. */
   handed?: boolean
 }
@@ -29,7 +36,7 @@ type StoredRole = Omit<S['Role'], 'user_count' | 'editable'>
 type StoredSession = Omit<S['AuthSession'], 'current'>
 interface Db {
   roles: StoredRole[]; users: StoredUser[]; profiles: Profile[]; sessions: StoredSession[]
-  invites: Array<Omit<S['Invite'], 'state'> & { token: string; revoked: boolean }>; audit: S['AuditEntry'][]
+  invites: Array<Omit<S['Invite'], 'state'> & { token: string; revoked: boolean; display_name?: string | null; user_id?: string | null }>; audit: S['AuditEntry'][]
   /** Profiles whose token predates a change to their access: their next call answers 401 session_stale. */
   stale: string[]
   /** Profiles whose session on this device was signed out elsewhere: every call, and the refresh, answers 401 session_revoked. */
@@ -42,7 +49,7 @@ interface Db {
 }
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
-const person = (id: string, n: number, name: string, kind: 'google' | 'managed', role: string | null, more: Partial<StoredUser> = {}): StoredUser => ({
+const person = (id: string, n: number, name: string, kind: User['kind'], role: string | null, more: Partial<StoredUser> = {}): StoredUser => ({
   id, kind, display_name: name, email: kind === 'google' ? `${name.split(' ')[0]!.toLowerCase()}@example.com` : null, picture: null, avatar: null,
   status: 'active', role_id: role, profile_id: `p${n}`, has_pin: false, on_shared_devices: false, plex_account_linked: false,
   created_at: ago(60 * 24 * 40), approved_at: ago(60 * 24 * 39), last_seen_at: ago(60 * 26), grants: [], denials: [], limit_overrides: {}, shared_override: null,
@@ -133,9 +140,11 @@ const permissionsOf = (db: Db, u: StoredUser): Permission[] => {
 const limitsOf = (db: Db, u: StoredUser): Limits => ({ ...OPEN, ...roleOf(db, u)?.limits, ...u.limit_overrides })
 const sharedOf = (db: Db, u: StoredUser) => u.shared_override ?? !!roleOf(db, u)?.on_shared_devices
 const owners = (db: Db) => db.users.filter((u) => u.role_id === 'owner' && u.status === 'active')
+const hasGoogle = (u: StoredUser) => u.google_linked ?? u.kind === 'google'
+const methodsOf = (u: StoredUser): Method[] => [hasGoogle(u) ? 'google' : null, u.plex_account ? 'plex' : null, u.username && u.password ? 'password' : null].filter((m): m is Method => !!m)
 const out = (db: Db, u: StoredUser): S['User'] => {
-  const { grants: _g, denials: _d, limit_overrides: _l, shared_override: _s, pin, now_playing: _n, handed: _h, ...user } = u
-  return { ...user, role_name: roleOf(db, u)?.name ?? null, has_pin: !!pin, on_shared_devices: sharedOf(db, u) }
+  const { grants: _g, denials: _d, limit_overrides: _l, shared_override: _s, pin, now_playing: _n, handed: _h, password: _p, plex_account: _x, google_linked: _o, ...user } = u
+  return { ...user, role_name: roleOf(db, u)?.name ?? null, has_pin: !!pin, on_shared_devices: sharedOf(db, u), username: u.username ?? null, plex_username: u.plex_account ? u.plex_username ?? null : null, sign_in_methods: methodsOf(u) }
 }
 const listed = (db: Db, u: StoredUser): S['UserListItem'] => ({ ...out(db, u), now_playing: u.now_playing })
 const local = (db: Db, u: StoredUser): S['AuthSession'] =>
@@ -149,7 +158,7 @@ const detail = (db: Db, u: StoredUser, caller: StoredUser | undefined): S['UserD
 })
 const roleOut = (db: Db, r: StoredRole): S['Role'] => ({ ...r, editable: r.id !== 'owner', user_count: db.users.filter((u) => u.role_id === r.id).length })
 const inviteOut = (db: Db, { token: _token, revoked, ...i }: Db['invites'][number]): S['Invite'] => ({
-  ...i, role_name: db.roles.find((r) => r.id === i.role_id)?.name ?? null,
+  ...i, display_name: i.display_name ?? null, user_id: i.user_id ?? null, role_name: db.roles.find((r) => r.id === i.role_id)?.name ?? null,
   state: revoked ? 'revoked' : i.uses >= i.max_uses ? 'used' : Date.parse(i.expires_at) <= Date.now() ? 'expired' : 'open',
 })
 function audit(db: Db, actor: StoredUser | undefined, action: string, target: StoredUser | null, more: Record<string, unknown> = {}) {
@@ -230,12 +239,183 @@ const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(43)), (b
 function pendingMe(db: Db, u: StoredUser, tokens: S['AuthTokens'] | null): S['Me'] {
   return { status: u.status, user: out(db, u), role: null, permissions: [], limits: OPEN, shared_device: false, adult_unlocked: false, tokens }
 }
-function addGoogleUser(db: Db, name: string, role: string | null): StoredUser {
+function addGoogleUser(db: Db, name: string, role: string | null, kind: 'google' | 'plex' | 'password' = 'google', more: Partial<StoredUser> = {}): StoredUser {
   const n = ++db.seq
-  const user = person(`u${n}`, n, name, 'google', role, { status: role ? 'active' : 'pending', created_at: ago(0), approved_at: role ? ago(0) : null, last_seen_at: role ? ago(0) : null })
+  const user = person(`u${n}`, n, name, kind, role, { ...more, status: role ? 'active' : 'pending', created_at: ago(0), approved_at: role ? ago(0) : null, last_seen_at: role ? ago(0) : null })
   db.users.push(user)
   db.profiles.push(profileFor(user))
   return user
+}
+
+/** The sign-in ways a spec switched on ("google,plex,password,remote"), or null for a server from before them. */
+const signinWays = (): string[] | null => {
+  const raw = sessionStorage.getItem('mock.signin') ?? localStorage.getItem('mock.signin')
+  return raw === null ? null : raw.split(',').map((w) => w.trim()).filter(Boolean)
+}
+const USERNAME = /^[a-z0-9._-]{3,32}$/
+const COMMON = ['password123', '1234567890', 'qwertyuiop']
+/** The server's rules for a new username and password; null when they pass. */
+function refusal(db: Db, username: string, password: string, mine?: StoredUser): Response | null {
+  if (!USERNAME.test(username)) return error(400, 'invalid_username', 'A username is 3 to 32 letters, digits, dots, dashes or underscores')
+  if (password.length < 10) return error(400, 'weak_password', 'A password needs at least 10 characters')
+  if (password.toLowerCase().includes(username)) return error(400, 'weak_password', 'A password cannot contain the username')
+  if (COMMON.includes(password.toLowerCase())) return error(400, 'weak_password', 'That password is one of the most common; choose another')
+  if (db.users.some((u) => u.username === username && u !== mine)) return error(409, 'username_taken', 'That username is taken')
+  return null
+}
+const usable = (db: Db, token: string) => db.invites.find((i) => i.token === token && inviteOut(db, i).state === 'open')
+// A fresh sign-in is a new session: one signed out earlier (a reset, an unlink) does not hold it back.
+const signedIn = (db: Db, user: StoredUser) => { user.last_seen_at = ago(0); db.revoked = (db.revoked ?? []).filter((id) => id !== user.profile_id); save(db); return HttpResponse.json({ status: 'active', ...tokensFor(profileOf(db, user.profile_id)!) }) }
+
+/** Plex sign-in, username and password, linking, and the page behind an invite: the server's answers, without a Plex to talk to. */
+function signInHandlers() {
+  return [
+    // Plex's own page is elsewhere; the mock sends the browser straight back, as Plex does when the person has signed in.
+    http.post(`${B}/auth/plex/start`, async ({ request }) => {
+      if (!signinWays()?.includes('plex')) return error(403, 'plex_disabled', 'Plex sign-in is not enabled')
+      const body = (await request.json()) as { return_to?: string; invite?: string; link?: boolean }
+      const db = load()
+      if (body.link && !callerOf(db, request)) return error(401, 'unauthorized', 'Sign in first')
+      const to = /^\/(?:pair(?:\?code=[A-Z0-9]{6})?|settings)?$/.test(body.return_to ?? '/') ? body.return_to ?? '/' : '/'
+      const state = `${body.link ? 'link' : 'signin'}.${newToken().slice(0, 30)}`
+      sessionStorage.setItem('mock.plex.state', JSON.stringify({ state, invite: body.invite ?? '', link: !!body.link }))
+      return HttpResponse.json({ auth_url: `${window.location.origin}${to}${to.includes('?') ? '&' : '?'}plex=${state}` })
+    }),
+    http.post(`${B}/auth/plex/complete`, async ({ request }) => {
+      const body = (await request.json()) as { state?: string }
+      const started = JSON.parse(sessionStorage.getItem('mock.plex.state') ?? 'null') as { state: string; invite: string; link: boolean } | null
+      sessionStorage.removeItem('mock.plex.state')
+      // Started by another browser, used already, or made up: one answer.
+      if (!started || started.state !== body.state) return error(401, 'sign_in_expired', 'Sign-in expired or invalid; please start again')
+      const db = load()
+      // Which Plex account "signed in": a spec says so as "<account id>:<username>"; the default is someone new.
+      const [account, handle] = (sessionStorage.getItem('mock.plex') ?? '501:plexpal').split(':') as [string, string]
+      const holder = db.users.find((u) => u.plex_account === account)
+      if (started.link) {
+        const me = callerOf(db, request)
+        if (!me) return error(401, 'unauthorized', 'Sign in to link a Plex account')
+        if (holder && holder !== me) return error(409, 'identity_in_use', 'That account already signs in as someone else here')
+        if (me.plex_account && me.plex_account !== account) return error(409, 'already_linked', 'Unlink the one that is linked first')
+        Object.assign(me, { plex_account: account, plex_username: handle })
+        audit(db, me, 'user.signin_link', me, { method: 'plex' })
+        save(db)
+        return HttpResponse.json({ status: 'linked' })
+      }
+      if (holder?.status === 'suspended') return error(403, 'user_suspended', 'This account is suspended')
+      const invite = started.invite ? usable(db, started.invite) : undefined
+      if (!holder && !invite && signinWays()?.includes('invite_only')) return error(403, 'invite_required', 'An invitation is required to sign in')
+      const user = holder ?? addGoogleUser(db, invite?.display_name ?? 'Plex Pal', null, 'plex', { email: null, plex_account: account, plex_username: handle })
+      if (user.status === 'pending' && invite) {
+        invite.uses += 1
+        Object.assign(user, { status: 'active', role_id: invite.role_id, approved_at: ago(0) })
+        audit(db, user, 'user.invite_accept', user, { invite_id: invite.id, role_id: invite.role_id })
+      } else if (!holder) audit(db, user, 'user.signup', user, {})
+      if (user.status === 'pending') { save(db); return HttpResponse.json({ status: 'pending', pending_token: `mock-pending-${user.id}`, user: { display_name: user.display_name, email: user.email } } satisfies S['PendingApproval']) }
+      return signedIn(db, user)
+    }),
+    http.post(`${B}/auth/password`, async ({ request }) => {
+      if (!signinWays()?.includes('password')) return error(403, 'password_disabled', 'Username and password sign-in is not enabled')
+      const body = (await request.json()) as { username?: string; password?: string }
+      const name = (body.username ?? '').trim().toLowerCase()
+      const db = load()
+      const key = `pw:${name}`
+      const fails = db.fails[key] ?? { count: 0, until: 0 }
+      if (fails.until > Date.now()) return error(429, 'rate_limited', 'Too many attempts; try again later', {}, { 'Retry-After': String(Math.max(1, Math.ceil((fails.until - Date.now()) / 1000))) })
+      const user = db.users.find((u) => !!u.username && u.username === name && !!u.password && u.password === body.password)
+      if (!user) {
+        // Five wrong attempts for a name lock it for a minute, whether or not the name exists.
+        fails.count += 1
+        if (fails.count >= 5) { fails.count = 0; fails.until = Date.now() + 60_000 }
+        db.fails[key] = fails
+        save(db)
+        return error(401, 'invalid_credentials', 'Wrong username or password')
+      }
+      delete db.fails[key]
+      if (user.status !== 'active') return error(401, 'user_suspended', 'This account is suspended')
+      const answer = signedIn(db, user)
+      return HttpResponse.json(await answer.json(), { headers: { 'Cache-Control': 'no-store' } })
+    }),
+    http.put(`${B}/auth/password`, as(null, ({ db, me, body }) => {
+      if (db.shared) return error(403, 'shared_device', 'Sign-in methods cannot be changed on a shared device')
+      const had = !!(me.username && me.password)
+      if (had && body.current_password !== me.password) return error(403, 'wrong_password', 'That is not your current password')
+      const name = me.username ?? String(body.username ?? '').trim().toLowerCase()
+      const refused = refusal(db, name, String(body.new_password ?? ''), me)
+      if (refused) return refused
+      Object.assign(me, { username: name, password: String(body.new_password) })
+      audit(db, me, had ? 'user.password_change' : 'user.password_set', me, {})
+      return none()
+    })),
+    http.delete(`${B}/auth/methods/:method`, as(null, ({ db, me, params }) => unlink(db, me, me, String(params.method)))),
+    http.post(`${B}/auth/google/link`, as(null, ({ db, me }) => {
+      if (db.shared) return error(403, 'shared_device', 'Sign-in methods cannot be changed on a shared device')
+      // Google's own page is elsewhere too: the identity is attached and the browser sent back, as the callback does.
+      Object.assign(me, { google_linked: true, email: me.email ?? `${me.display_name.split(' ')[0]!.toLowerCase()}@example.com` })
+      audit(db, me, 'user.signin_link', me, { method: 'google' })
+      return HttpResponse.json({ auth_url: `${window.location.origin}/settings?linked=google` })
+    })),
+    http.post(`${B}/auth/invite/lookup`, async ({ request }) => {
+      if (!signinWays()) return gone()
+      const { token } = (await request.json()) as { token?: string }
+      const db = load()
+      const invite = usable(db, token ?? '')
+      const nothing = { valid: false, display_name: null, username: null, setup: false }
+      if (!invite) return HttpResponse.json(nothing)
+      const user = invite.user_id ? db.users.find((u) => u.id === invite.user_id) : undefined
+      if (invite.user_id) return HttpResponse.json(user ? { valid: true, display_name: user.display_name, username: user.username ?? null, setup: true } : nothing)
+      return HttpResponse.json({ valid: true, display_name: invite.display_name ?? null, username: null, setup: false })
+    }),
+    http.post(`${B}/auth/invite/accept`, async ({ request }) => {
+      if (!signinWays()?.includes('password')) return error(403, 'password_disabled', 'Username and password sign-in is not enabled')
+      const body = (await request.json()) as { token?: string; username?: string; password?: string }
+      const db = load()
+      const invite = usable(db, body.token ?? '')
+      if (!invite) return error(403, 'invite_invalid', 'This link can no longer be used')
+      const target = invite.user_id ? db.users.find((u) => u.id === invite.user_id) : undefined
+      if (invite.user_id && !target) return error(403, 'invite_invalid', 'This link can no longer be used')
+      const name = target?.username ?? (body.username ?? '').trim().toLowerCase()
+      const refused = refusal(db, name, body.password ?? '', target)
+      if (refused) return refused
+      invite.uses += 1
+      const user = target ?? addGoogleUser(db, invite.display_name ?? name, invite.role_id, 'password', { email: null })
+      Object.assign(user, { username: name, password: body.password, status: 'active' })
+      audit(db, user, target ? 'user.password_set' : 'user.invite_accept', user, target ? { via: 'setup_link' } : { invite_id: invite.id, role_id: invite.role_id, method: 'password' })
+      const answer = signedIn(db, user)
+      const { status: _status, ...tokens } = (await answer.json()) as Record<string, unknown>
+      return HttpResponse.json(tokens)
+    }),
+    http.delete(`${B}/users/:id/methods/:method`, as('users.manage', ({ db, me, params }) => {
+      const u = target(db, params)
+      return u ? unlink(db, me, u, String(params.method)) : gone()
+    })),
+    http.post(`${B}/users/:id/password-reset`, as('users.manage', ({ db, me, params }) => {
+      const u = target(db, params)
+      if (!u) return gone()
+      if (u.status === 'pending' || !u.role_id) return error(409, 'not_active', 'Approve this user before giving them a password')
+      u.password = null
+      for (const i of db.invites) if (i.user_id === u.id) i.revoked = true
+      db.sessions = db.sessions.filter((s) => s.user_id !== u.id)
+      if (u.profile_id && u.id !== me.id) db.revoked = [...(db.revoked ?? []), u.profile_id]
+      const invite = { id: `inv-${++db.seq}`, token: newToken(), role_id: u.role_id, role_name: null, created_by_user_id: me.id, created_by_name: me.display_name, created_at: ago(0), expires_at: new Date(Date.now() + 72 * 3600_000).toISOString(), max_uses: 1, uses: 0, revoked: false, display_name: u.display_name, user_id: u.id }
+      db.invites.unshift(invite)
+      audit(db, me, 'user.password_reset', u, { invite_id: invite.id })
+      return HttpResponse.json({ url: `/invite/${invite.token}`, expires_at: invite.expires_at } satisfies S['SetupLink'])
+    })),
+  ]
+}
+/** Take one way of signing in away from `u`. Never the last; taken by someone else it signs them out. */
+function unlink(db: Db, me: StoredUser, u: StoredUser, method: string): Response {
+  if (!['google', 'plex', 'password'].includes(method)) return error(422, 'validation_error', 'method: unknown')
+  if (u === me && db.shared) return error(403, 'shared_device', 'Sign-in methods cannot be changed on a shared device')
+  const held = methodsOf(u)
+  if (!held.includes(method as Method)) return error(404, 'not_found', 'That sign-in method is not linked')
+  if (held.length === 1) return error(409, 'last_method', 'The last way of signing in cannot be removed')
+  if (method === 'google') u.google_linked = false
+  else if (method === 'plex') Object.assign(u, { plex_account: null, plex_username: null })
+  else Object.assign(u, { username: null, password: null })
+  if (u !== me) { db.sessions = db.sessions.filter((s) => s.user_id !== u.id); if (u.profile_id) db.revoked = [...(db.revoked ?? []), u.profile_id] }
+  audit(db, me, 'user.signin_unlink', u, { method })
+  return u === me ? none() : HttpResponse.json(detail(db, u, me))
 }
 
 export const peopleHandlers = [
@@ -262,7 +442,17 @@ export const peopleHandlers = [
     return HttpResponse.json(tokensFor(profileOf(db, user.profile_id)!))
   }),
   // A spec turns Google sign-in on by saying how the next sign-in ends: "pending", "owner" or "invite:<token>".
-  http.get(`${B}/auth/config`, () => (sessionStorage.getItem('mock.google') ? HttpResponse.json({ google_enabled: true, google_required: true, signup_mode: 'approval' }) : undefined)),
+  http.get(`${B}/auth/config`, () => {
+    // "mock.signin" stands in for a current server: the ways in it has switched on, and "remote" for a
+    // browser away from the home network (no profile picker). Without it this is a server from before them.
+    const ways = signinWays()
+    if (ways) return HttpResponse.json({
+      google_enabled: ways.includes('google'), google_required: false, plex_enabled: ways.includes('plex'), password_enabled: ways.includes('password'),
+      profiles_enabled: !ways.includes('remote'), signup_mode: ways.includes('invite_only') ? 'invite_only' : 'approval',
+    })
+    return sessionStorage.getItem('mock.google') ? HttpResponse.json({ google_enabled: true, google_required: true, signup_mode: 'approval' }) : undefined
+  }),
+  ...signInHandlers(),
   http.post(`${B}/auth/google/complete`, () => {
     const how = sessionStorage.getItem('mock.google') ?? ''
     const db = load()
@@ -521,7 +711,9 @@ export const peopleHandlers = [
     if (role.id === 'owner' || role.permissions.some((p) => !held.includes(p))) return error(403, 'invite_role_too_wide', 'You can only invite to a role no wider than your own')
     const hours = Number(body.expires_in_hours ?? 72), uses = Number(body.max_uses ?? 1)
     if (!(hours >= 1 && hours <= 720) || !(uses >= 1 && uses <= 50)) return error(422, 'invalid_invite', 'expiry is 1 to 720 hours, uses 1 to 50')
-    const invite = { id: `inv-${++db.seq}`, token: newToken(), role_id: role.id, role_name: role.name, created_by_user_id: me.id, created_by_name: me.display_name, created_at: ago(0), expires_at: new Date(Date.now() + hours * 3600_000).toISOString(), max_uses: uses, uses: 0, revoked: false }
+    const named = String(body.name ?? '').trim().slice(0, 64) || null
+    if (named && uses !== 1) return error(400, 'invalid_invite', 'An invite for one person is used once')
+    const invite = { id: `inv-${++db.seq}`, token: newToken(), role_id: role.id, role_name: role.name, created_by_user_id: me.id, created_by_name: me.display_name, created_at: ago(0), expires_at: new Date(Date.now() + hours * 3600_000).toISOString(), max_uses: uses, uses: 0, revoked: false, display_name: named, user_id: null }
     db.invites.unshift(invite)
     audit(db, me, 'invite.create', null, { invite_id: invite.id, role_id: role.id })
     return HttpResponse.json({ ...inviteOut(db, invite), url: `/invite/${invite.token}` } satisfies S['InviteCreated'], { status: 201 })

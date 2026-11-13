@@ -13,7 +13,7 @@ from app.infra.crypto import Crypto
 from app.services.auth import Principal
 from app.services.content_policy import active_principal
 from app.services.errors import Forbidden
-from app.services.image_grants import image_payload, validate_image_grant
+from app.services.image_grants import UNBOUND_TTL, image_payload, validate_image_grant
 
 
 @pytest.fixture
@@ -99,10 +99,41 @@ async def test_enabled_artwork_private_and_rechecked(ctx: Any) -> None:
 
 async def test_disabled_preserves_legacy_artwork(ctx: Any) -> None:
     ctx.content_policy.enabled = False
-    token = ctx.crypto.sign_json({"s": "plex", "u": "https://fixture.invalid/art"})
-    response = await image_proxy(token, request(), ctx)
+    unbound = image_payload("plex", "https://fixture.invalid/art", None, None)
+    assert unbound is not None and set(unbound) == {"s", "u", "x"}
+    response = await image_proxy(ctx.crypto.sign_json(unbound), request(), ctx)
     assert response.headers["cache-control"] == "public, max-age=86400"
     ctx.auth.session_valid.assert_not_called()
+
+
+async def test_an_unbound_grant_has_a_lifetime(ctx: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Artwork signed for nobody in particular is still not a URL that works for ever."""
+    ctx.content_policy.enabled = False
+    now = 1_900_000_000.0
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: now)
+    grant = image_payload("plex", "https://fixture.invalid/art", None, None)
+    assert grant is not None
+    # Good for one to two weeks, and the same URL all week so a browser can keep its copy.
+    assert UNBOUND_TTL <= grant["x"] - now <= 2 * UNBOUND_TTL
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: now + 3600)
+    assert image_payload("plex", "https://fixture.invalid/art", None, None) == grant
+    token = ctx.crypto.sign_json(grant)
+    assert (await image_proxy(token, request(), ctx)).status_code == 200
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: grant["x"] + 1)
+    with pytest.raises(Forbidden):
+        await image_proxy(token, request(), ctx)
+    ctx.client.get.reset_mock()
+    # One minted before grants had a lifetime, or with one made up, is refused before any fetch.
+    monkeypatch.setattr("app.services.image_grants.time.time", lambda: now)
+    for forged in (
+        {"s": "plex", "u": "https://fixture.invalid/art"},
+        {"s": "plex", "u": "https://fixture.invalid/art", "x": now + 10 * UNBOUND_TTL},
+        {"s": "plex", "u": "https://fixture.invalid/art", "x": "never"},
+        {"s": "plex", "u": "https://fixture.invalid/art", "x": True},
+    ):
+        with pytest.raises(Forbidden):
+            await image_proxy(ctx.crypto.sign_json(forged), request(), ctx)
+    ctx.client.get.assert_not_called()
 
 
 def test_enabled_mint_without_principal_or_exact_ref_omits_artwork(ctx: Any) -> None:

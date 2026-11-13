@@ -28,8 +28,11 @@ test('pairing: approve a TV code', async ({ page }) => {
   await signIn(page)
   await page.goto('/pair')
   await page.getByLabel('TV code').fill('abc12')
-  await expect(page.getByTestId('pair-approve')).toHaveAttribute('aria-disabled', 'true')
+  await expect(page.getByTestId('pair-review')).toHaveAttribute('aria-disabled', 'true')
   await page.getByLabel('TV code').fill('abc123')
+  // Entering the code approves nothing: the next screen says what is asking, and is where it is approved.
+  await page.getByTestId('pair-review').click()
+  await expect(page.getByTestId('pair-review-panel')).toContainText('ABC123')
   await page.getByTestId('pair-approve').click()
   await expect(page.getByTestId('pair-done')).toBeVisible()
 })

@@ -97,7 +97,14 @@ def test_a_room_made_from_a_show_is_on_the_creators_next_episode_for_everyone(ri
 
     for who in (behind, ahead, None):
         descriptor = rig.join(code, who)["descriptor"]
-        assert (descriptor["id"], descriptor["url"]) == (episodes[1], episode_url(2)), descriptor
+        assert descriptor["id"] == episodes[1], descriptor
+        # The owner manages the sources and is given the episode's own URL; a viewer plays the same
+        # episode through this server and never sees where it lives.
+        if who is None:
+            assert descriptor["url"] == episode_url(2), descriptor
+        else:
+            assert descriptor["mode"] == "proxy" and "/api/v1/stream/" in descriptor["url"], descriptor
+            assert episode_url(2) not in repr(descriptor)
     # The room stays on its episode when its creator's own history moves on.
     finished(rig, rig.admin_id, episodes[1])
     assert resolved(rig, show) == episodes[2]

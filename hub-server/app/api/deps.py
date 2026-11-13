@@ -12,9 +12,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.requests import HTTPConnection
 
 from app.container import Container
+from app.services.adult import require_adult
 from app.services.auth import Principal
 from app.services.errors import Forbidden, PermissionDenied, Unauthorized
-from app.services.network import client_address, is_home
+from app.services.network import FORWARDING_HEADERS, client_address, from_home, vouched_for
 from app.services.sessions import SessionMeta
 from app.services.visibility import require_watch, reset_watch, set_watch
 
@@ -71,6 +72,28 @@ def session_meta(request: Request, kind: str | None = None) -> SessionMeta:
     )
 
 
+def at_home(request: HTTPConnection, c: Container) -> bool:
+    """Does this request (or socket) come from the household's own network? See ``from_home``."""
+    # Repeated header lines are one list, as a proxy chain writes them.
+    headers = {name: ",".join(request.headers.getlist(name)) for name in FORWARDING_HEADERS}
+    return from_home(
+        request.client.host if request.client else None,
+        headers,
+        c.settings.forwarded_allow_ips,
+        str(c.app_settings.get("home_networks") or ""),
+        vouched=vouched_for(request.client.port if request.client else None),
+    )
+
+
+def limited(bucket: str) -> Any:
+    """Dependency: this route answers one client address only so often (429 with Retry-After beyond)."""
+
+    def check(request: Request, c: C) -> None:
+        c.limiter.hit(bucket, client_ip(request, c.settings))
+
+    return Depends(check)
+
+
 def require_reachable(request: HTTPConnection, c: Container, remote: bool) -> None:
     """Without ``remote.access`` (``remote``) a user is served on the home network and nowhere else.
 
@@ -79,7 +102,7 @@ def require_reachable(request: HTTPConnection, c: Container, remote: bool) -> No
     """
     if remote:
         return
-    if not is_home(client_ip(request, c.settings), str(c.app_settings.get("home_networks") or "")):
+    if not at_home(request, c):
         raise Forbidden("This account can only be used on the home network", code="remote_access_denied")
 
 
@@ -222,6 +245,8 @@ async def playback_watch_gate(request: Request, c: C) -> None:
             await require_watch(c.db, principal.permissions, ref, source)
             if rated and judged:
                 await policy.require(principal.profile_id, ref.removeprefix("trailer:"), at=moment)
+            # After the rating ceiling, which answers a restricted viewer in its own words.
+            await require_adult(c.db, principal, ref, source)
 
 
 def _moment(value: Any) -> datetime | None:

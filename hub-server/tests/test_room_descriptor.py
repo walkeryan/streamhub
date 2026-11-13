@@ -227,7 +227,10 @@ def test_every_kind_of_room_starts_a_member_at_the_room_position(rig: Rig, ffmpe
     code = room_at(2_402_000)
     for client in ("web", "android_tv"):
         d = rig.join(code, guest, client=client)["descriptor"]
-        assert (d["mode"], d["resume_position_ms"], d["stream_epoch"]) == ("direct", 2_402_000, None)
+        # Their own stream, through this server: a guest does not manage sources, so is not handed the source's URL.
+        assert (d["mode"], d["resume_position_ms"], d["stream_epoch"]) == ("proxy", 2_402_000, None)
+        mine = rig.join(code, None, client=client)["descriptor"]
+        assert (mine["mode"], mine["resume_position_ms"], mine["stream_epoch"]) == ("direct", 2_402_000, None)
     # The same title as one shared stream.
     limit(rig)
     code = room_at(2_402_000)

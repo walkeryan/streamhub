@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api import schemas as S
-from app.api.deps import C, Handover, P, UsersAdmin, resolve, session_meta
+from app.api.deps import C, Handover, P, UsersAdmin, at_home, client_ip, limited, resolve, session_meta
 from app.infra.models import Profile as ProfileRow
+from app.services.auth import Principal
+from app.services.context import is_https, public_base
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 
 router = APIRouter()
@@ -36,15 +39,29 @@ async def tokens_out(c: C, prof: ProfileRow, tokens: dict[str, str]) -> dict[str
 
 
 # ---------------------------------------------------------------- auth
-@router.post("/auth/login", response_model=S.AuthTokens, tags=["auth"])
+def household(request: Request, c: C) -> bool:
+    """May this request use the household convenience: pick a profile, type its PIN?
+
+    Only on the home network, and never when GOOGLE_AUTH_REQUIRED closes it altogether. From
+    anywhere else people sign in with Google, Plex or a username and password, and a TV pairs.
+    """
+    return not c.settings.google_auth_required and at_home(request, c)
+
+
+@router.post("/auth/login", response_model=S.AuthTokens, tags=["auth"], dependencies=[limited("login")])
 async def login(body: S.LoginRequest, request: Request, c: C) -> dict[str, Any]:
     if c.settings.google_auth_required:
         raise Forbidden("Use Google sign-in or device pairing")
-    prof, tokens = await c.auth.login(body.profile_id, body.pin, body.password, session_meta(request))
+    if not at_home(request, c):
+        # Before anything is looked up: the same answer for every profile, real or not.
+        raise Forbidden("Profile sign-in is only available on the home network", code="home_network_only")
+    prof, tokens = await c.auth.login(
+        body.profile_id, body.pin, body.password, session_meta(request), address=client_ip(request)
+    )
     return await tokens_out(c, prof, tokens)
 
 
-@router.post("/auth/refresh", response_model=S.AuthTokens, tags=["auth"])
+@router.post("/auth/refresh", response_model=S.AuthTokens, tags=["auth"], dependencies=[limited("refresh")])
 async def refresh(body: S.RefreshRequest, request: Request, c: C) -> dict[str, Any]:
     prof, tokens = await c.auth.refresh(body.refresh_token, session_meta(request))
     return await tokens_out(c, prof, tokens)
@@ -122,9 +139,18 @@ async def adult_lock(c: C, p: P) -> Response:
     return Response(status_code=204)
 
 
-@router.post("/auth/device", response_model=S.DeviceCode, tags=["auth"])
-async def device_start(c: C) -> dict[str, Any]:
-    return await c.auth.start_device()
+@router.post("/auth/device", response_model=S.DeviceCode, tags=["auth"], dependencies=[limited("device")])
+async def device_start(request: Request, c: C) -> dict[str, Any]:
+    return await c.auth.start_device(session_meta(request, "tv"))
+
+
+@router.post(
+    "/auth/device/lookup", response_model=S.DeviceLookup, tags=["auth"], dependencies=[limited("device_lookup")]
+)
+async def device_lookup(body: S.DeviceLookupRequest, response: Response, c: C, p: P) -> dict[str, Any]:
+    """What is asking to pair under this code, shown before it is approved."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return await c.auth.describe_device(body.user_code)
 
 
 @router.post(
@@ -132,6 +158,7 @@ async def device_start(c: C) -> dict[str, Any]:
     response_model=S.AuthTokens,
     responses={428: {"model": S.Error, "description": "pending"}},
     tags=["auth"],
+    dependencies=[limited("device_poll")],
 )
 async def device_poll(body: S.DevicePoll, request: Request, c: C) -> dict[str, Any]:
     prof, tokens = await c.auth.poll_device(body.device_code, session_meta(request, "tv"))
@@ -145,16 +172,24 @@ async def device_approve(body: S.DeviceApprove, c: C, p: P) -> Response:
 
 
 # ---------------------------------------------------------------- profiles
-@router.get("/profiles", response_model=list[S.Profile], tags=["profiles"])
+@router.get("/profiles", response_model=list[S.Profile], tags=["profiles"], dependencies=[limited("profiles")])
 async def list_profiles(request: Request, c: C) -> list[dict[str, Any]]:
-    if c.settings.google_auth_required:
-        scheme, _, token = request.headers.get("authorization", "").partition(" ")
-        if scheme.lower() != "bearer" or not token:
+    """The household's profiles, for the picker on the home network. Anywhere else, and under
+    GOOGLE_AUTH_REQUIRED, a signed-in caller gets their own profile and nobody else gets a list."""
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    signed_in = scheme.lower() == "bearer" and bool(token)
+    if household(request, c):
+        if signed_in:
+            await resolve(request, c, token)
+        return [await profile_out(c, p) for p in await c.auth.list_profiles()]
+    if not signed_in:
+        if c.settings.google_auth_required:
             raise Unauthorized("Sign in to list profiles")
-        # One person, one user: there is nobody else's profile to pick from here.
-        principal = await resolve(request, c, token)
-        return [await profile_out(c, await c.auth.get_profile(principal.profile_id))]
-    return [await profile_out(c, p) for p in await c.auth.list_profiles()]
+        # Not a refusal that says there is something here to be refused.
+        raise NotFound("no such endpoint")
+    # One person, one user: there is nobody else's profile to pick from here.
+    principal = await resolve(request, c, token)
+    return [await profile_out(c, await c.auth.get_profile(principal.profile_id))]
 
 
 @router.post("/profiles", response_model=S.Profile, status_code=201, tags=["profiles"])
@@ -186,7 +221,7 @@ async def delete_profile(id: str, c: C, p: P) -> Response:
 
 @router.put("/profiles/{id}/pin", status_code=204, tags=["profiles"])
 async def set_pin(id: str, body: S.PinBody, c: C, p: P) -> Response:
-    await c.auth.set_pin(p, id, body.pin)
+    await c.auth.set_pin(p, id, body.pin, body.current_pin, body.current_password)
     return Response(status_code=204)
 
 
@@ -257,18 +292,24 @@ async def accept_disclaimer(body: S.DisclaimerAccept, c: C, p: P) -> Response:
 
 # Google sign-in deliberately does not change native JWT/device-code routes.
 @router.get("/auth/config", tags=["auth"])
-async def auth_config(c: C) -> dict[str, Any]:
+async def auth_config(request: Request, c: C) -> dict[str, Any]:
+    """What a sign-in screen has to know before anyone is signed in: which ways in are on, and
+    nothing about who exists."""
     return {
         "google_enabled": c.google_auth.enabled,
         "google_required": c.settings.google_auth_required,
+        "plex_enabled": c.plex_auth.enabled,
+        "password_enabled": c.passwords.enabled,
+        # The profile picker: for this very request, which is to say on the home network.
+        "profiles_enabled": household(request, c),
+        "signup_mode": c.app_settings.get("signup_mode"),
         "content_policy_enabled": c.content_policy.enabled,
         "owner_pin_configured": await c.owner_pin.configured(),
         "owner_pin_setup_required": not await c.owner_pin.configured(),
-        "signup_mode": c.app_settings.get("signup_mode"),
     }
 
 
-@router.get("/auth/google/start", tags=["auth"])
+@router.get("/auth/google/start", tags=["auth"], dependencies=[limited("oauth")])
 async def google_start(c: C, return_to: str = "/", invite: str = Query("", max_length=64)) -> Response:
     url, browser = c.google_auth.start(return_to, invite)
     response = RedirectResponse(url, status_code=303, headers={"Cache-Control": "no-store"})
@@ -278,7 +319,7 @@ async def google_start(c: C, return_to: str = "/", invite: str = Query("", max_l
     return response
 
 
-@router.get("/auth/google/callback", tags=["auth"])
+@router.get("/auth/google/callback", tags=["auth"], dependencies=[limited("oauth")])
 async def google_callback(request: Request, c: C, state: str = "", code: str = "") -> Response:
     if c.google_auth.is_owner_reauth(state):
         try:
@@ -286,6 +327,17 @@ async def google_callback(request: Request, c: C, state: str = "", code: str = "
         except ServiceError:
             pass  # Polling initiator receives the bound denial, never an owner JWT.
         response = RedirectResponse("/api/v1/auth/owner-reauth/confirmed", status_code=303)
+        response.delete_cookie("__Host-sh-google-state", secure=True, httponly=True, samesite="lax", path="/")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+    if c.google_auth.is_link(state):
+        try:
+            await c.google_auth.finish_link(state, request.cookies.get("__Host-sh-google-state", ""), code)
+            outcome = "linked=google"
+        except ServiceError as exc:
+            outcome = "link_error=" + (exc.code if exc.code in ("identity_in_use", "already_linked") else "failed")
+        response = RedirectResponse(f"/settings?{outcome}", status_code=303)
         response.delete_cookie("__Host-sh-google-state", secure=True, httponly=True, samesite="lax", path="/")
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -311,13 +363,18 @@ async def google_callback(request: Request, c: C, state: str = "", code: str = "
     return response
 
 
-@router.post("/auth/google/complete", tags=["auth"])
+@router.post("/auth/google/complete", tags=["auth"], dependencies=[limited("oauth")])
 async def google_complete(request: Request, response: Response, c: C) -> dict[str, Any]:
     prof = await c.google_auth.consume(
         request.cookies.get("__Host-sh-google-handoff", ""), request.headers.get("origin", "")
     )
     response.delete_cookie("__Host-sh-google-handoff", secure=True, httponly=True, samesite="strict", path="/")
     response.headers["Cache-Control"] = "no-store"
+    return await _signed_in(request, c, prof, google=True)
+
+
+async def _signed_in(request: Request, c: C, prof: ProfileRow, *, google: bool = False) -> dict[str, Any]:
+    """What a finished Google or Plex sign-in answers: tokens, or the token a waiting user polls with."""
     identity = await c.users.identity(prof.id)
     if identity is None:
         raise Unauthorized("Sign-in completion expired; please start again")
@@ -330,7 +387,7 @@ async def google_complete(request: Request, response: Response, c: C) -> dict[st
         }
     if c.content_policy.enabled:
         # Legacy regime: Google proves the owner, the owner PIN completes the sign-in.
-        if "system.manage" not in identity.permissions:
+        if not google or "system.manage" not in identity.permissions:
             raise Forbidden("Only the owner signs in with Google here", code="owner_pin_required")
         return {
             "owner_pin_required": True,
@@ -340,3 +397,117 @@ async def google_complete(request: Request, response: Response, c: C) -> dict[st
         }
     tokens = await c.auth.issue(prof, meta=session_meta(request, "browser"))
     return {"status": "active", **await tokens_out(c, prof, tokens)}
+
+
+# ---------------------------------------------------------------- Plex sign-in
+def _plex_cookie() -> tuple[str, bool]:
+    """The cookie that ties a Plex sign-in to the browser that started it. ``__Host-`` needs
+    HTTPS; on a plain-HTTP home network the same cookie goes without the prefix."""
+    secure = is_https.get()
+    return ("__Host-sh-plex-state" if secure else "sh-plex-state"), secure
+
+
+def require_same_origin(request: Request, c: C) -> None:
+    """A cookie-bound completion is only ever asked for by our own page."""
+    origin = request.headers.get("origin")
+    parts = urlsplit(public_base.get())
+    ours = [f"{parts.scheme}://{parts.netloc}", *c.settings.cors_origin_list]
+    if c.google_auth.enabled:
+        # The public origin the operator configured for Google is this server's too.
+        ours.append(c.google_auth.origin)
+    if origin is not None and origin not in ours:
+        raise Forbidden("Same-origin sign-in completion required")
+
+
+@router.post("/auth/plex/start", response_model=S.PlexSignInUrl, tags=["auth"], dependencies=[limited("plex")])
+async def plex_start(body: S.PlexSignInStart, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Begin "Continue with Plex": answers Plex's sign-in page for the browser to open."""
+    require_same_origin(request, c)
+    linking = await _linker(request, c) if body.link else None
+    url, browser = await c.plex_auth.start(
+        body.return_to, "" if linking else body.invite, link_user_id=linking.user_id if linking else ""
+    )
+    name, secure = _plex_cookie()
+    response.set_cookie(name, browser, max_age=600, secure=secure, httponly=True, samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return {"auth_url": url}
+
+
+@router.post("/auth/plex/complete", tags=["auth"], dependencies=[limited("plex")])
+async def plex_complete(body: S.PlexSignInComplete, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Finish it, for the browser Plex sent back. Answers as ``/auth/google/complete`` does."""
+    require_same_origin(request, c)
+    name, secure = _plex_cookie()
+    response.delete_cookie(name, secure=secure, httponly=True, samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    token = _bearer(request) if request.headers.get("authorization") else ""
+    tx = c.plex_auth.claim(body.state, request.cookies.get(name, ""))
+    if tx.link_user_id:
+        # Started by a signed-in user to link Plex to themselves: it signs nobody in.
+        await c.plex_auth.link(tx, (await resolve(request, c, token)).user_id if token else "")
+        return {"status": "linked"}
+    account = await c.plex_auth.account(tx)
+    return await _signed_in(request, c, await c.plex_auth.sign_in(account, tx.invite))
+
+
+# ---------------------------------------------------------------- linked sign-ins
+async def _linker(request: Request, c: C) -> Principal:
+    """The signed-in user asking to change how they sign in. Never from a shared device:
+    whoever holds the household's remote must not gain a way in as that user from anywhere."""
+    principal = await resolve(request, c, _bearer(request))
+    if principal.shared_device:
+        raise Forbidden("Sign-in methods cannot be changed on a shared device", code="shared_device")
+    return principal
+
+
+@router.post("/auth/google/link", response_model=S.PlexSignInUrl, tags=["auth"])
+async def google_link(request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Begin linking a Google account to one's own user. Google sends the browser back to
+    ``/auth/google/callback``, which lands on ``/settings?linked=google`` or ``?link_error=<code>``."""
+    require_same_origin(request, c)
+    principal = await _linker(request, c)
+    url, browser = c.google_auth.start_link(principal.user_id)
+    response.set_cookie(
+        "__Host-sh-google-state", browser, max_age=600, secure=True, httponly=True, samesite="lax", path="/"
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"auth_url": url}
+
+
+@router.delete("/auth/methods/{method}", status_code=204, tags=["auth"])
+async def unlink_own_method(method: S.SignInMethodL, c: C, p: P) -> Response:
+    """Remove one of one's own ways of signing in. Never the last one (409 last_method)."""
+    await c.users.unlink_method(p, p.user_id, method)
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------- username and password
+@router.post("/auth/password", response_model=S.AuthTokens, tags=["auth"], dependencies=[limited("password")])
+async def password_sign_in(body: S.PasswordSignIn, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Sign in with a username and a password. A wrong name and a wrong password are one answer."""
+    response.headers["Cache-Control"] = "no-store"
+    prof, tokens = await c.passwords.sign_in(body.username, body.password, client_ip(request), session_meta(request))
+    return await tokens_out(c, prof, tokens)
+
+
+@router.put("/auth/password", status_code=204, tags=["auth"])
+async def password_change(body: S.PasswordChange, request: Request, c: C, p: P) -> Response:
+    """Change one's own password (the current one is needed; other devices are signed out), or set a first one."""
+    await c.passwords.change(p, body.current_password, body.new_password, body.username, client_ip(request))
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/auth/invite/lookup", response_model=S.InviteLookup, tags=["auth"], dependencies=[limited("invite")])
+async def invite_lookup(body: S.InviteLookupRequest, response: Response, c: C) -> dict[str, Any]:
+    """What the page behind an invite or setup link shows. The token travels in the body, not the URL."""
+    response.headers["Cache-Control"] = "no-store"
+    return await c.passwords.lookup(body.token)
+
+
+@router.post("/auth/invite/accept", response_model=S.AuthTokens, tags=["auth"], dependencies=[limited("invite")])
+async def invite_accept(body: S.InviteAccept, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Accept an invite, or use a setup link, by choosing a username and a password."""
+    response.headers["Cache-Control"] = "no-store"
+    prof, tokens = await c.passwords.accept(body.token, body.username, body.password, session_meta(request))
+    return await tokens_out(c, prof, tokens)

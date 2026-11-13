@@ -9,12 +9,13 @@ import type { components } from '../api/schema'
 import { Avatar, AVATARS } from '../components/Avatar'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { Icon } from '../components/Icon'
+import { LinkToCopy } from '../components/LinkToCopy'
 import { LimitsEditor, PermissionSwitches, Toggle } from '../components/PeopleControls'
 import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
-import { PERMISSION_COUNT, SIGN_IN, STATUS, ago, auditLine, limitsSummary, type Limits } from '../lib/people'
+import { PERMISSION_COUNT, STATUS, ago, auditLine, limitsSummary, signInSummary, type Limits } from '../lib/people'
 import { usePhone } from '../lib/layout'
 import { useUi } from '../store/ui'
 
@@ -66,6 +67,7 @@ function PeopleTab({ users, roles }: { users: UserListItem[]; roles: Role[] }) {
   const [choosing, setChoosing] = useState<UserListItem | null>(null)
   const [denying, setDenying] = useState<UserListItem | null>(null)
   const [adding, setAdding] = useState(false)
+  const [inviting, setInviting] = useState(false)
   const pending = users.filter((u) => u.status === 'pending')
   const others = users.filter((u) => u.status !== 'pending')
   // Family is what the server gives a managed user it is told nothing about; the owner can pick another per person.
@@ -105,6 +107,8 @@ function PeopleTab({ users, roles }: { users: UserListItem[]; roles: Role[] }) {
       <section className="flex flex-col gap-3">
         <div className="flex items-center gap-3 flex-wrap">
           <h2 className="heading flex-1">People · {others.length}</h2>
+          {/* Add person first; Up from the list lands on the button nearest the rows' end, as it always has. */}
+          <Button focusKey="users:add-person" icon="link" onEnter={() => setInviting(true)} testId="users-add-person">Add person</Button>
           <Button focusKey="users:add" icon="plus" onEnter={() => setAdding(true)} testId="users-add">Add managed user</Button>
         </div>
         <FocusGroup focusKey="users:list" className="flex flex-col gap-2">
@@ -114,7 +118,7 @@ function PeopleTab({ users, roles }: { users: UserListItem[]; roles: Role[] }) {
               <Avatar name={u.display_name} avatar={u.avatar} picture={u.picture} />
               <span className="who">
                 <span className="flex items-center gap-2 min-w-0"><strong className="truncate">{u.display_name}</strong>{u.id === me?.user.id && <span className="badge">You</span>}</span>
-                <span className="label">{[`${SIGN_IN[u.kind] ?? u.kind} sign-in`, u.role_name ?? 'No role', `Last seen ${ago(u.last_seen_at)}`].join(' · ')}</span>
+                <span className="label">{[signInSummary(u), u.role_name ?? 'No role', `Last seen ${ago(u.last_seen_at)}`].join(' · ')}</span>
                 {u.now_playing.length > 0 && <span className="label flex items-center gap-1 min-w-0" data-testid="now-playing" style={{ color: 'var(--t-text)' }}>
                   <Icon name="play" size={12} /><span className="truncate">Watching {u.now_playing.map((n) => n.title ?? 'something').join(', ')}</span>
                 </span>}
@@ -141,7 +145,52 @@ function PeopleTab({ users, roles }: { users: UserListItem[]; roles: Role[] }) {
         </div>
       </Modal>
       {adding && <AddManagedUser roles={roles} fallback={fallback} onClose={() => setAdding(false)} />}
+      {inviting && <AddPerson roles={roles} onClose={() => { setInviting(false); void setFocus('users:add-person') }} />}
     </div>
+  )
+}
+
+/**
+ * Someone who signs in for themselves, from anywhere: a name and a role now, and a one-time setup
+ * link to pass on. They accept it with Google, with Plex, or by choosing a username and password.
+ */
+function AddPerson({ roles, onClose }: { roles: Role[]; onClose: () => void }) {
+  const offered = roles.filter((r) => r.editable)
+  const create = usePeopleChange(people.invite)
+  const [name, setName] = useState('')
+  const [role, setRole] = useState(offered.find((r) => r.id === 'friend')?.id ?? offered[0]?.id ?? '')
+  const [made, setMade] = useState<InviteCreated | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const submit = () => {
+    if (!name.trim()) { setError('Give them a name.'); return }
+    setError(null)
+    create.mutate({ role_id: role, expires_in_hours: 72, max_uses: 1, name: name.trim() }, {
+      onSuccess: (invite) => { setMade(invite); window.setTimeout(() => void setFocus('person-link:copy'), 30) },
+      onError: (e) => setError(e.message),
+    })
+  }
+  return (
+    <Modal open onClose={onClose} title={made ? `Setup link for ${made.display_name ?? name}` : 'Add a person'} firstFocusKey={made ? 'person-link:copy' : 'person:name'} wide testId="add-person">
+      {made ? <>
+        <p role="status" data-testid="person-made">Send this link to {made.display_name ?? name}. It works once, for three days, and is shown only now.</p>
+        <LinkToCopy scope="person-link" url={made.url} label="Setup link" />
+        <p className="muted">They open it and choose how to sign in: Google, Plex, or a username and password. They can start watching straight away as {roles.find((r) => r.id === made.role_id)?.name ?? made.role_id}. Until then they are listed under Invites.</p>
+        <div><Button focusKey="person:done" primary onEnter={onClose} testId="add-person-done">Done</Button></div>
+      </> : <>
+        <p className="muted">For someone who signs in for themselves, at home or away. You get a setup link to send them; nobody can register without one.</p>
+        <FocusableInput focusKey="person:name" label="Name" placeholder="Name" maxLength={64} value={name} onChange={setName} onSubmit={submit} />
+        <section className="flex flex-col gap-2"><h3 className="label">Role</h3>
+          <FocusGroup focusKey="person:roles" className="flex gap-2 flex-wrap" role="group" label="Role">
+            {offered.map((r) => <Chip key={r.id} focusKey={`person:role:${r.id}`} pressed={role === r.id} onEnter={() => setRole(r.id)}>{r.name}</Chip>)}
+          </FocusGroup>
+        </section>
+        {error && <p role="alert" style={{ color: 'var(--t-danger)' }}>{error}</p>}
+        <div className="flex gap-3 flex-wrap">
+          <Button focusKey="person:ok" primary icon="link" disabled={create.isPending || !role} onEnter={submit} testId="add-person-ok">Create setup link</Button>
+          <Button focusKey="person:cancel" onEnter={onClose}>Cancel</Button>
+        </div>
+      </>}
+    </Modal>
   )
 }
 
@@ -164,7 +213,7 @@ function AddManagedUser({ roles, fallback, onClose }: { roles: Role[]; fallback:
   }
   return (
     <Modal open onClose={onClose} title="Add a managed user" firstFocusKey="add:name" wide testId="add-user">
-      <p className="muted">For someone without a Google account, a child for instance. They appear on shared household devices and nowhere else.</p>
+      <p className="muted">For someone who does not sign in for themselves, a child for instance. They appear on shared household devices and nowhere else.</p>
       <FocusableInput focusKey="add:name" label="Name" placeholder="Name" maxLength={64} value={name} onChange={setName} onSubmit={submit} />
       <section className="flex flex-col gap-2"><h3 className="label">Picture</h3>
         <FocusGroup focusKey="add:avatars" className="flex gap-2 flex-wrap" role="group" label="Picture">
@@ -297,7 +346,7 @@ function InvitesTab({ roles }: { roles: Role[] }) {
     <div className="flex flex-col gap-6">
       <section className="panel flex flex-col gap-4" data-testid="invite-form">
         <h2 className="heading">New invite link</h2>
-        <p className="muted">Whoever opens the link and signs in with Google becomes a user at once, with the role you pick. No approval step.</p>
+        <p className="muted">Whoever opens the link and signs in (with Google, with Plex, or by choosing a username and password) becomes a user at once, with the role you pick. No approval step.</p>
         <section className="flex flex-col gap-2"><h3 className="label">Role</h3>
           <FocusGroup focusKey="invite:roles" className="flex gap-2 flex-wrap" role="group" label="Role">
             {offered.map((r) => <Chip key={r.id} focusKey={`invite:role:${r.id}`} pressed={role === r.id} onEnter={() => setRole(r.id)}>{r.name}</Chip>)}
@@ -331,7 +380,7 @@ function InvitesTab({ roles }: { roles: Role[] }) {
           <FocusGroup focusKey="invite:list" className="flex flex-col gap-2">
             {invites.data.map((i) => {
               const about = <span className="who">
-                <span className="flex items-center gap-2 flex-wrap"><strong>{i.role_name ?? i.role_id}</strong><span className={`badge ${i.state === 'open' ? 'badge-ok' : ''}`}>{INVITE_STATE[i.state]}</span></span>
+                <span className="flex items-center gap-2 flex-wrap"><strong>{i.display_name ? `${i.display_name} · ${i.role_name ?? i.role_id}` : i.role_name ?? i.role_id}</strong>{i.user_id && <span className="badge">Password setup</span>}<span className={`badge ${i.state === 'open' ? 'badge-ok' : ''}`}>{INVITE_STATE[i.state]}</span></span>
                 <span className="label">{[`Used ${i.uses} of ${i.max_uses}`, `${Date.parse(i.expires_at) > Date.now() ? 'Expires' : 'Expired'} ${new Date(i.expires_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, i.created_by_name ? `By ${i.created_by_name}` : null].filter(Boolean).join(' · ')}</span>
               </span>
               // A spent invite has nothing to press, but a remote still has to be able to walk down the list.

@@ -77,6 +77,54 @@ class LoginRequest(_M):
     password: str | None = None
 
 
+class PlexSignInStart(_M):
+    return_to: str = Field(default="/", max_length=64, description="/, /pair, /pair?code=XXXXXX or /settings")
+    invite: str = Field(default="", max_length=64, repr=False)
+    link: bool = Field(default=False, description="signed in: link the Plex account to one's own user")
+
+
+class PlexSignInUrl(_M):
+    auth_url: str = Field(description="Plex's own sign-in page; the browser goes there and Plex sends it back")
+
+
+class PlexSignInComplete(_M):
+    state: str = Field(default="", max_length=64, repr=False)
+
+
+class PasswordSignIn(_M):
+    # Bounds only: what is a valid name or password is never said to someone signing in.
+    username: str = Field(default="", max_length=64)
+    password: str = Field(default="", max_length=256, repr=False)
+
+
+class PasswordChange(_M):
+    current_password: str | None = Field(default=None, max_length=256, repr=False)
+    new_password: str = Field(max_length=256, repr=False)
+    username: str | None = Field(default=None, max_length=64, description="only when setting a first password")
+
+
+class InviteLookupRequest(_M):
+    token: str = Field(default="", max_length=64, repr=False)
+
+
+class InviteLookup(_M):
+    valid: bool
+    display_name: str | None = None
+    username: str | None = Field(default=None, description="a setup link for someone who already has a username")
+    setup: bool = Field(default=False, description="a password setup link for one existing user")
+
+
+class InviteAccept(_M):
+    token: str = Field(default="", max_length=64, repr=False)
+    username: str = Field(default="", max_length=64)
+    password: str = Field(default="", max_length=256, repr=False)
+
+
+class SetupLink(_M):
+    url: str = Field(description="/invite/<token>; the token is never shown again")
+    expires_at: datetime
+
+
 class RefreshRequest(_M):
     refresh_token: str = ""
 
@@ -86,6 +134,17 @@ class DeviceCode(_M):
     user_code: str
     expires_in: int
     interval: int
+
+
+class DeviceLookupRequest(_M):
+    user_code: str = Field(default="", max_length=64)
+
+
+class DeviceLookup(_M):
+    user_code: str
+    ip: str | None = Field(default=None, description="where the device asked from, as the server saw it")
+    user_agent: str | None = None
+    expires_in: int
 
 
 class DevicePoll(_M):
@@ -100,6 +159,8 @@ class DeviceApprove(_M):
 
 class PinBody(_M):
     pin: str | None = None
+    current_pin: str | None = Field(default=None, max_length=8, repr=False)
+    current_password: str | None = Field(default=None, max_length=256, repr=False)
 
 
 class Disclaimer(_M):
@@ -533,6 +594,11 @@ class Settings(_M):
     transcode_hw: Literal["none", "vaapi", "nvenc", "qsv"] = "none"
     proxy_mode: Literal["auto", "always", "never"] = "auto"
     signup_mode: Literal["approval", "invite_only"] = "approval"
+    plex_sign_in: bool = True
+    password_sign_in: bool = True
+    plex_friends_auto_approve: bool = Field(
+        default=False, description="a first Plex sign-in by someone the owner's Plex server is shared with is a Friend"
+    )
     notify_webhook_set: bool = False
     home_networks: str | None = Field(default=None, description="system.manage only: the home networks, as CIDRs")
     home_shelves: list[str] | None = Field(default=None, description="system.manage only: Home's shelves, in order")
@@ -548,6 +614,9 @@ class SettingsPatch(_M):
     transcode_hw: Literal["none", "vaapi", "nvenc", "qsv"] | None = None
     proxy_mode: Literal["auto", "always", "never"] | None = None
     signup_mode: Literal["approval", "invite_only"] | None = None
+    plex_sign_in: StrictBool | None = None
+    password_sign_in: StrictBool | None = None
+    plex_friends_auto_approve: StrictBool | None = None
     notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
     home_networks: str | None = Field(default=None, max_length=1024, description="null restores the defaults")
     home_shelves: list[Annotated[str, Field(max_length=200)]] | None = Field(
@@ -842,9 +911,12 @@ class NowPlaying(_M):
     title: str | None = None
 
 
+SignInMethodL = Literal["google", "plex", "password"]
+
+
 class User(_M):
     id: str
-    kind: Literal["google", "managed"]
+    kind: Literal["google", "plex", "password", "managed"]
     display_name: str
     email: str | None = None
     picture: str | None = None
@@ -856,6 +928,9 @@ class User(_M):
     has_pin: bool = False
     on_shared_devices: bool = False
     plex_account_linked: bool = False
+    username: str | None = None
+    plex_username: str | None = None
+    sign_in_methods: list[SignInMethodL] = []
     created_at: datetime
     approved_at: datetime | None = None
     last_seen_at: datetime | None = None
@@ -958,6 +1033,8 @@ class UserApprove(_M):
 
 class UserPin(_M):
     pin: str | None = _pin(default=None)
+    current_pin: str | None = Field(default=None, max_length=8, repr=False, description="to change one's own")
+    current_password: str | None = Field(default=None, max_length=256, repr=False, description="in its place")
 
 
 class Me(_M):
@@ -985,6 +1062,7 @@ class InviteCreate(_M):
     role_id: str
     expires_in_hours: int = Field(default=72, ge=1, le=720)
     max_uses: int = Field(default=1, ge=1, le=50)
+    name: str | None = Field(default=None, max_length=64, description="who it is for; such an invite is used once")
 
 
 class Invite(_M):
@@ -998,6 +1076,8 @@ class Invite(_M):
     max_uses: int
     uses: int
     state: Literal["open", "used", "expired", "revoked"]
+    display_name: str | None = None
+    user_id: str | None = Field(default=None, description="set on a password setup link: the user it is for")
 
 
 class InviteCreated(Invite):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import secrets
@@ -25,18 +26,30 @@ from app.services.errors import (
     NotFound,
     PermissionDenied,
     PreconditionRequired,
-    ServiceError,
     Unauthorized,
 )
-from app.services.permissions import BUILTIN_ROLES, NO_LIMITS, OWNER_ROLE, Limits
+from app.services.permissions import BUILTIN_ROLES, NO_LIMITS, OWNER_GRANTED, OWNER_ROLE, Limits
 from app.services.sessions import SessionMeta, SessionsService, adult_unlocked
-from app.services.users import Identity, UsersService, access, audit, ensure_user, standing, validate_pin
+from app.services.throttle import LoginThrottle, Ticket
+from app.services.users import (
+    Identity,
+    UsersService,
+    access,
+    audit,
+    ensure_user,
+    sign_in_methods,
+    standing,
+    validate_pin,
+)
 
 log = logging.getLogger(__name__)
 
 ALG = "HS256"
 USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I
 DEVICE_CODE_TTL = 600
+# How long the refresh token before the current one still works: two tabs, or a retried request,
+# refreshing with the same token at the same moment.
+REFRESH_GRACE_S = 60
 DEVICE_POLL_INTERVAL = 5
 
 
@@ -126,7 +139,9 @@ class AuthService:
         self._key = crypto.jwt_key
         self.access_ttl = access_ttl
         self.refresh_ttl = refresh_ttl
-        self._fail: dict[str, list[float]] = {}
+        # One throttle for every way of proving who one is with a secret: a profile's PIN here,
+        # a username's password next door. An address is held to one allowance across both.
+        self.throttle = LoginThrottle()
         self.content_policy: Any = None
         self.owner_pin: Any = None
         self.sessions = SessionsService(db, refresh_ttl)
@@ -171,6 +186,7 @@ class AuthService:
         google_subject: str = "",
         user: User | None = None,
         generation: int = 0,
+        refresh_seq: int = 0,
     ) -> str:
         now = int(time.time())
         payload = {
@@ -193,6 +209,9 @@ class AuthService:
         if generation:
             # Which hand-over of a shared device this token belongs to; absent means the first.
             payload["sg"] = generation
+        if refresh_seq and typ == "refresh":
+            # Which rotation of the session's refresh token this is; absent means the first.
+            payload["rs"] = refresh_seq
         if owner_auth_time is not None:
             payload["oat"] = owner_auth_time
         return jwt.encode(payload, self._key, algorithm=ALG)
@@ -238,9 +257,12 @@ class AuthService:
             user = await ensure_user(s, row)
             if not (handover and user.status == "suspended"):
                 self._require_active(user)
-            generation = (await self.sessions.attach(s, session_id, user, row, meta)).generation
+            attached = await self.sessions.attach(s, session_id, user, row, meta)
+            generation, refresh_seq = attached.generation, attached.refresh_seq
             await s.commit()
-        return self._pair(profile, user, session_id, generation, owner_auth_time, owner_pin_version, google_subject)
+        return self._pair(
+            profile, user, session_id, generation, owner_auth_time, owner_pin_version, google_subject, refresh_seq
+        )
 
     def _pair(
         self,
@@ -251,8 +273,9 @@ class AuthService:
         owner_auth_time: float | None = None,
         owner_pin_version: int = 0,
         google_subject: str = "",
+        refresh_seq: int = 0,
     ) -> dict[str, str]:
-        args = (session_id, owner_auth_time, owner_pin_version, google_subject, user, generation)
+        args = (session_id, owner_auth_time, owner_pin_version, google_subject, user, generation, refresh_seq)
         return {
             "access_token": self._encode(profile, "access", self.access_ttl, *args),
             "refresh_token": self._encode(profile, "refresh", self.refresh_ttl, *args),
@@ -638,7 +661,7 @@ class AuthService:
             )
         else:
             # Nothing of the previous user's sign-in (their Google subject, their proofs) carries over.
-            tokens = self._pair(profile, user, row.sid, row.generation)
+            tokens = self._pair(profile, user, row.sid, row.generation, refresh_seq=row.refresh_seq)
         return profile, tokens, {**self.users.user_out(user, profile, role), "current": True}
 
     async def refresh(self, refresh_token: str, meta: SessionMeta | None = None) -> tuple[Profile, dict[str, str]]:
@@ -668,6 +691,8 @@ class AuthService:
         # Checks the profile version, the deny-list, the row when present, and the user's status.
         await self.session_valid(prof.id, int(p.get("ver", -1)), sid, handover=handover)
         await self.check_owner_entry(prof, int(p.get("opv", 0)))
+        if row is not None:
+            await self._rotate(sid, self._refresh_seq(p))
         return prof, await self.issue(
             prof,
             sid,
@@ -678,40 +703,119 @@ class AuthService:
             handover=handover,
         )
 
+    @staticmethod
+    def _refresh_seq(claims: dict[str, Any]) -> int:
+        """The ``rs`` claim. Absent (a token from before rotation, or a session's first) is 0; junk matches nothing."""
+        value = claims.get("rs", 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+    async def _rotate(self, sid: str, presented: int) -> None:
+        """Make the presented refresh token the previous one, or refuse it.
+
+        One guarded UPDATE moves the counter, so of several refreshes arriving together exactly
+        one rotates. The others, and a second tab a moment later, hold the token just before
+        the current one and are let through without rotating again. Anything older has been
+        superseded for longer than any honest client waits: a copy is being replayed, the
+        session ends for whoever holds it, and the owner of the device signs in again.
+        """
+        now = utcnow()
+        async with self._db.session() as s:
+            moved = (
+                await s.execute(
+                    update(AuthSession)
+                    .where(
+                        AuthSession.sid == sid, AuthSession.refresh_seq == presented, AuthSession.revoked_at.is_(None)
+                    )
+                    .values(refresh_seq=AuthSession.refresh_seq + 1, refresh_rotated_at=now)
+                    .returning(AuthSession.sid)
+                )
+            ).scalar_one_or_none()
+            if moved is not None:
+                await s.commit()
+                return
+            row = await s.get(AuthSession, sid)
+            rotated = row.refresh_rotated_at if row is not None else None
+            recent = rotated is not None and now - rotated <= timedelta(seconds=REFRESH_GRACE_S)
+            if row is not None and row.revoked_at is None and presented == row.refresh_seq - 1 and recent:
+                return
+            if row is not None and row.revoked_at is None:
+                await self.sessions.revoke_in(s, sid, self.refresh_ttl)
+                audit(s, None, "session.refresh_reuse", row.user_id, kind=row.kind, label=row.label)
+                await s.commit()
+        raise Unauthorized("Session revoked; sign in again", code="session_revoked")
+
     # ------------------------------------------------------------------ login
-    def _throttle(self, profile_id: str) -> None:
-        now = time.monotonic()
-        recent = [t for t in self._fail.get(profile_id, []) if now - t < 300]
-        self._fail[profile_id] = recent
-        if len(recent) >= 10:
-            raise ServiceError("too many attempts, try again later", code="rate_limited")
+    @staticmethod
+    def _entered_by_a_tap(user: User | None, role: Role | None) -> bool:
+        """May a profile that has no PIN and no password be entered by choosing it?
+
+        The household convenience, for a child's profile on the home network, and for nobody
+        with more to lose: not someone who signs in with Google, Plex or a password of their
+        own (the tap would walk around it), and not someone who manages users, sources or the
+        server. They set a PIN, or sign in their own way.
+        """
+        if user is None or role is None or sign_in_methods(user):
+            return False
+        return not standing(user, role)[0] & OWNER_GRANTED
+
+    async def _settle(self, ok: bool, ticket: Ticket, user_id: str | None) -> None:
+        """Close an attempt the throttle let through; a lock it caused goes in the audit log."""
+        if ok:
+            self.throttle.succeed(ticket)
+            return
+        locked = self.throttle.fail(ticket)
+        if locked:
+            async with self._db.session() as s:
+                for key, seconds in locked.items():
+                    scope = "address" if key.startswith("a:") else "profile"
+                    audit(
+                        s, None, "auth.lockout", user_id if scope == "profile" else None, scope=scope, seconds=seconds
+                    )
+                await s.commit()
 
     async def login(
-        self, profile_id: str, pin: str | None, password: str | None, meta: SessionMeta | None = None
+        self,
+        profile_id: str,
+        pin: str | None,
+        password: str | None,
+        meta: SessionMeta | None = None,
+        *,
+        address: str | None = None,
     ) -> tuple[Profile, dict[str, str]]:
+        """Sign a profile in with its PIN or password. The route in front of this answers on the
+        home network only; this is the household's convenience and never a way in from outside."""
         if self.content_policy is not None and self.content_policy.enabled:
             raise Forbidden("Use Google sign-in and owner PIN", code="owner_pin_required")
-        self._throttle(profile_id)
+        # Counted before anything is verified, by profile and by client address, so a burst sent
+        # at once is held to the same number as one sent slowly. No await before this line.
+        ticket = self.throttle.begin(f"p:{profile_id[:64]}", f"a:{address or 'unknown'}")
         async with self._db.session() as s:
             prof = await s.get(Profile, profile_id)
+            # A profile from before users existed gets its user here, by the upgrade rule, and is judged as that.
+            user = await ensure_user(s, prof) if prof is not None else None
+            role = await s.get(Role, user.role_id) if user is not None and user.role_id else None
+            await s.commit()
+        ok = False
         if prof is None:
-            raise Unauthorized("invalid credentials")
-        ok = True
-        if prof.password_hash:
+            pass
+        elif prof.password_hash:
             # admin: password, or PIN when one is set (TV convenience)
-            ok = (password is not None and verify_secret(password, prof.password_hash)) or (
-                prof.pin_hash is not None and pin is not None and verify_secret(pin, prof.pin_hash)
+            ok = (password is not None and await asyncio.to_thread(verify_secret, password, prof.password_hash)) or (
+                prof.pin_hash is not None
+                and pin is not None
+                and await asyncio.to_thread(verify_secret, pin, prof.pin_hash)
             )
         elif prof.pin_hash:
-            ok = pin is not None and verify_secret(pin, prof.pin_hash)
-        if not ok:
-            self._fail.setdefault(profile_id, []).append(time.monotonic())
+            ok = pin is not None and await asyncio.to_thread(verify_secret, pin, prof.pin_hash)
+        else:
+            ok = self._entered_by_a_tap(user, role)
+        await self._settle(ok, ticket, user.id if user is not None else None)
+        if not ok or prof is None:
             raise Unauthorized("invalid credentials")
-        self._fail.pop(profile_id, None)
         return prof, await self.issue(prof, meta=meta)
 
     # ------------------------------------------------------------------ device pairing
-    async def start_device(self) -> dict[str, Any]:
+    async def start_device(self, meta: SessionMeta | None = None) -> dict[str, Any]:
         device_code = secrets.token_urlsafe(32)
         async with self._db.session() as s:
             await s.execute(delete(DeviceCode).where(DeviceCode.expires_at < utcnow()))
@@ -727,6 +831,8 @@ class AuthService:
                     device_code=device_code,
                     user_code=user_code,
                     expires_at=utcnow() + timedelta(seconds=DEVICE_CODE_TTL),
+                    requested_ip=(meta.ip or "")[:64] or None if meta else None,
+                    requested_agent=(meta.user_agent or "")[:512] or None if meta else None,
                 )
             )
             await s.commit()
@@ -805,6 +911,33 @@ class AuthService:
         )
 
     @staticmethod
+    def _user_code(value: str) -> str:
+        return (value or "").strip().upper().replace("-", "").replace(" ", "")
+
+    async def describe_device(self, user_code: str) -> dict[str, Any]:
+        """What is asking to be paired under this code, for the person about to approve it.
+
+        A code in a link is the way an attacker's device gets signed in as someone else, so the
+        approval screen says where the request came from. Nothing here signs anything in.
+        """
+        code = self._user_code(user_code)
+        async with self._db.session() as s:
+            row = (
+                (await s.execute(select(DeviceCode).where(DeviceCode.user_code == code))).scalar_one_or_none()
+                if code
+                else None
+            )
+        now = utcnow()
+        if row is None or row.consumed or row.approved_profile_id or row.expires_at <= now:
+            raise NotFound("unknown code")
+        return {
+            "user_code": row.user_code,
+            "ip": row.requested_ip,
+            "user_agent": row.requested_agent,
+            "expires_in": max(1, int((row.expires_at - now).total_seconds())),
+        }
+
+    @staticmethod
     def _require_pairing_proof(proof: float | None, created: float) -> None:
         if proof is None or proof < created - 2 or proof > time.time() + 2:
             raise Forbidden(
@@ -814,7 +947,7 @@ class AuthService:
     async def approve_device(
         self, principal: Principal, user_code: str, profile_id: str | None, shared_device: bool = False
     ) -> None:
-        code = (user_code or "").strip().upper().replace("-", "").replace(" ", "")
+        code = self._user_code(user_code)
         target = profile_id or principal.profile_id
         if shared_device and not _can(principal, "users.manage"):
             # A shared device offers every household user at its picker: a manager's decision.
@@ -927,7 +1060,14 @@ class AuthService:
             raise NotFound("profile not found")
         await self.users.delete(principal, identity.user.id)
 
-    async def set_pin(self, principal: Principal, profile_id: str, pin: str | None) -> None:
+    async def set_pin(
+        self,
+        principal: Principal,
+        profile_id: str,
+        pin: str | None,
+        current_pin: str | None = None,
+        current_password: str | None = None,
+    ) -> None:
         manager = _can(principal, "users.manage")
         if self.content_policy is not None and self.content_policy.enabled and not manager:
             raise Forbidden("Only the owner can manage profile PINs")
@@ -937,6 +1077,9 @@ class AuthService:
             prof = await s.get(Profile, profile_id)
             if prof is None:
                 raise NotFound("profile not found")
+            await self.users.prove_pin_holder(
+                s, principal, await ensure_user(s, prof), prof, current_pin, current_password
+            )
             prof.pin_hash = hash_secret(validate_pin(pin)) if pin else None
             prof.token_version += 1
             audit(s, getattr(principal, "user_id", None), "user.pin_set" if pin else "user.pin_clear", prof.user_id)

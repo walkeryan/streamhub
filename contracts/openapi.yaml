@@ -9,6 +9,18 @@ info:
     remote_access_denied, except GET /auth/me. The signed media URLs follow the user they were
     issued to: /stream/{token}... and, for artwork the hub serves itself, /images/{token} answer
     the same 403 away from home.
+    "Home" is judged from the client address: the connection's peer, or what a reverse proxy named in
+    FORWARDED_ALLOW_IPS forwarded for. A request that carries a forwarding header (X-Forwarded-For,
+    Forwarded, CF-Connecting-IP, X-Real-IP, True-Client-IP) from a peer that is not such a proxy is
+    never home.
+    Every unauthenticated auth route is limited per client address (429 rate_limited with Retry-After
+    in whole seconds). Access and refresh tokens are read from the Authorization header and request
+    bodies only, never from a query string; the only credentials in URLs are the signed media grants
+    (/stream/{token}, /images/{token}) and a watch room's member_token.
+    Every response carries X-Content-Type-Options nosniff, Referrer-Policy same-origin (no-referrer on
+    sign-in redirects), X-Frame-Options DENY with frame-ancestors 'none', and Strict-Transport-Security
+    when a trusted proxy reports HTTPS. /api/docs and /api/openapi.json are served only when the
+    server runs with API_DOCS_ENABLED=true.
 servers:
   - url: /api/v1
 security:
@@ -84,7 +96,7 @@ components:
       required: [id, kind, display_name, status, created_at]
       properties:
         id: {type: string}
-        kind: {type: string, enum: [google, managed]}
+        kind: {type: string, enum: [google, plex, password, managed], description: "How this user came to be. What they can sign in with now is sign_in_methods."}
         display_name: {type: string}
         email: {type: string, nullable: true}
         picture: {type: string, nullable: true}
@@ -96,9 +108,13 @@ components:
         has_pin: {type: boolean}
         on_shared_devices: {type: boolean}
         plex_account_linked: {type: boolean, description: "This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state."}
+        username: {type: string, nullable: true, description: "The name of username-and-password sign-in, lower case"}
+        plex_username: {type: string, nullable: true, description: "The Plex account this user signs in with. No Plex token is kept for it."}
+        sign_in_methods: {type: array, items: {$ref: '#/components/schemas/SignInMethod'}, description: "The ways this user can sign in from anywhere. Empty for a managed user, who is entered on the household's devices."}
         created_at: {type: string, format: date-time}
         approved_at: {type: string, format: date-time, nullable: true}
         last_seen_at: {type: string, format: date-time, nullable: true}
+    SignInMethod: {type: string, enum: [google, plex, password]}
     NowPlaying:
       type: object
       required: [id]
@@ -214,6 +230,14 @@ components:
         max_uses: {type: integer}
         uses: {type: integer}
         state: {type: string, enum: [open, used, expired, revoked]}
+        display_name: {type: string, nullable: true, description: "Who the invite is for, when it was made for one person (\"Add person\"). The new user starts under this name."}
+        user_id: {type: string, nullable: true, description: "Set on a password setup link (POST /users/{id}/password-reset): the one user whose password it sets. Such a link admits nobody and is ignored by Google and Plex sign-in."}
+    SetupLink:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url: {type: string, description: "/invite/<token>. The token is shown this once and stored only as a hash."}
+        expires_at: {type: string, format: date-time}
     InviteCreated:
       allOf:
         - $ref: '#/components/schemas/Invite'
@@ -332,7 +356,7 @@ components:
         last_sync: {type: string, format: date-time, nullable: true}
         counts: { type: object, additionalProperties: {type: integer} }
         service_key: {type: string, nullable: true, description: "for streaming_service: netflix, hulu, …"}
-        config_summary: { type: object, additionalProperties: true, description: "never includes secrets" }
+        config_summary: { type: object, additionalProperties: true, description: "Never includes secrets. Where the source lives (server address, account name) is here only for a caller with sources.manage; for everyone else it is empty." }
     SourceCreate:
       type: object
       required: [type, name, config]
@@ -768,7 +792,10 @@ components:
         epg_refresh_hours: {type: integer}
         transcode_hw: {type: string, enum: [none, vaapi, nvenc, qsv]}
         proxy_mode: {type: string, enum: [auto, always, never]}
-        signup_mode: {type: string, enum: [approval, invite_only], description: "Who may sign in with Google unasked: anyone (then waits for approval) or invitees only"}
+        signup_mode: {type: string, enum: [approval, invite_only], description: "Who may sign in with Google or Plex unasked: anyone (then waits for approval) or invitees only"}
+        plex_sign_in: {type: boolean, description: "Offer \"Continue with Plex\" (system.manage to change). Default true."}
+        password_sign_in: {type: boolean, description: "Offer username and password sign-in (system.manage to change). Default true."}
+        plex_friends_auto_approve: {type: boolean, description: "Default false. When true and a Plex server is linked, a first Plex sign-in by an account that server is shared with (the linking account's friends at plex.tv, fetched with the stored token, cached for five minutes, nobody on any error) is an active user with the Friend role at once, in either signup_mode. Never the Owner role."}
         notify_webhook_set: {type: boolean, readOnly: true, description: "A notification webhook is stored. The address is never returned."}
         notify_webhook: {type: string, nullable: true, writeOnly: true, description: "PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it"}
         home_networks: {type: string, nullable: true, description: "Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges)"}
@@ -1157,10 +1184,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required]
+                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required, plex_enabled, password_enabled, profiles_enabled]
                 properties:
                   google_enabled: {type: boolean}
-                  google_required: {type: boolean, description: "Google sign-in is the only way in for people"}
+                  plex_enabled: {type: boolean, description: "\"Continue with Plex\" is offered"}
+                  password_enabled: {type: boolean, description: "Username and password sign-in is offered"}
+                  google_required: {type: boolean, description: "GOOGLE_AUTH_REQUIRED: the household profile picker (GET /profiles without a token, POST /auth/login) is closed everywhere, the home network included. People sign in with Google, Plex or a username and password; a TV pairs."}
+                  profiles_enabled: {type: boolean, description: "The profile picker is open to this request: it comes from the home network and google_required is false. Elsewhere a sign-in screen shows the other ways in instead of profile tiles."}
                   content_policy_enabled: {type: boolean}
                   owner_pin_configured: {type: boolean}
                   owner_pin_setup_required: {type: boolean}
@@ -1180,6 +1210,60 @@ paths:
         Active user: tokens, with status "active". Unknown user in approval mode: status "pending"
         and a token good only for GET /auth/me. Owner PIN regime: PendingOwnerLogin.
       responses: { '200': { description: Google identity handoff, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}, {$ref: '#/components/schemas/PendingOwnerLogin'}] } } } } }
+  /auth/plex/start:
+    post:
+      security: []
+      summary: Begin "Continue with Plex"
+      description: >-
+        The server opens a strong PIN at plex.tv and answers Plex's own sign-in page
+        (https://app.plex.tv/auth#?clientID=…&code=…&forwardUrl=…). The browser goes there; Plex sends it
+        back to return_to with ?plex=<state> added. The PIN is bound to this browser by an HttpOnly,
+        SameSite=Lax cookie that lives ten minutes, and its id never leaves the server. Nothing is
+        registered with Plex for this. 403 plex_disabled when the method is off, 502 plex_unavailable
+        when plex.tv cannot be reached.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                return_to: {type: string, default: /, maxLength: 64, description: "/, /pair, /pair?code=XXXXXX or /settings. Anything else is /."}
+                invite: {type: string, maxLength: 64, description: "Invite token from /invite/<token>; held server-side for the sign-in, never sent to Plex"}
+                link: {type: boolean, default: false, description: "Needs a bearer token: link the Plex account to the caller's own user instead of signing in. Not on a shared device (403 shared_device)."}
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [auth_url], properties: { auth_url: {type: string} } } } } }
+  /auth/plex/complete:
+    post:
+      security: []
+      summary: Finish "Continue with Plex" in the browser that started it
+      description: >-
+        Reads the PIN, asks plex.tv whose token it yields (account id, username, confirmed e-mail, avatar)
+        and discards the token: it is never stored or logged. The user is the Plex account id, never the
+        e-mail: an unknown account whose address matches another user's is a new user, not that one.
+        Answers as /auth/google/complete does: tokens with status "active", or status "pending" with a
+        token good only for GET /auth/me. 401 sign_in_expired for a state that is unknown, used, older
+        than ten minutes, started by another browser, or never completed at Plex; 403 invite_required
+        (invite-only mode, no usable invite), 403 user_suspended, 502 plex_unavailable.
+        A flow started with link true needs the same user's bearer token here and answers status
+        "linked": the Plex account is attached to that user and nobody is signed in. 409 identity_in_use
+        when it already signs in as someone else, 409 already_linked when the user has another Plex account.
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [state], properties: { state: {type: string, maxLength: 64, description: "The plex query parameter Plex's redirect came back with"} } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}, {type: object, required: [status], properties: {status: {type: string, enum: [linked]}}}] } } } } }
+  /auth/google/link:
+    post:
+      summary: Begin linking a Google account to one's own user
+      description: >-
+        Answers Google's sign-in page. Google sends the browser back to /auth/google/callback, which
+        attaches the identity and lands on /settings?linked=google, or on /settings?link_error=<code>
+        (identity_in_use, already_linked, failed). Nobody is signed in by it. Not on a shared device.
+      responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [auth_url], properties: { auth_url: {type: string} } } } } } }
+  /auth/methods/{method}:
+    delete:
+      summary: Remove one of one's own ways of signing in
+      description: 409 last_method for the last one, 404 when it is not linked, 403 shared_device. The device asking stays signed in.
+      parameters: [{name: method, in: path, required: true, schema: {$ref: '#/components/schemas/SignInMethod'}}]
+      responses: { '204': { description: removed } }
   /auth/me:
     get:
       summary: The caller's user, role, effective permissions and limits
@@ -1252,7 +1336,12 @@ paths:
   /auth/adult-unlock:
     post:
       summary: Open the adult category on this session for four hours
-      description: Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true.
+      description: >-
+        Needs watch.adult and the caller's own PIN. Listings then honour include_adult=true. The same two
+        conditions hold wherever an adult title is named by its id: GET /titles/{id}, POST /playback/resolve,
+        POST /playback/multiview, GET /playback/options and /playback/rewind, and creating, showing or joining
+        a watch room on one answer 403 with missing [watch.adult], or 403 adult_locked for a session that
+        holds the permission but is not unlocked.
       requestBody: { content: { application/json: { schema: { type: object, required: [pin], properties: { pin: {type: string, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
       responses:
         '200': { description: unlocked, content: { application/json: { schema: { type: object, required: [adult_unlocked_until], properties: { adult_unlocked_until: {type: string, format: date-time} } } } } }
@@ -1303,26 +1392,98 @@ paths:
   /auth/login:
     post:
       security: []
-      summary: Profile login (password for admin, PIN for profiles)
+      summary: Profile login on the home network (password for admin, PIN for profiles)
+      description: >-
+        A household convenience, answered only for a request from the home network and never under
+        GOOGLE_AUTH_REQUIRED. From anywhere else it is 403 home_network_only before anything is looked
+        up: the same answer for every profile id, real or not.
       requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string}, pin: {type: string, nullable: true}, password: {type: string, nullable: true} } } } } }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
+  /auth/password:
+    post:
+      security: []
+      summary: Sign in with a username and a password
+      description: >-
+        A wrong username and a wrong password are one answer: 401 invalid_credentials, the same body, and
+        the same work (an unknown name is verified against a stand-in hash). Guessing is throttled by
+        username and by client address: five attempts for a name, twenty from an address, in fifteen
+        minutes, then a lock of 60 seconds that doubles each time up to an hour, and a ceiling of 300
+        failures in five minutes for everyone. A refused attempt is 429 rate_limited with Retry-After,
+        whoever the name belongs to. 403 password_disabled when the method is off. A suspended user is
+        told so (401 user_suspended) only after the right password.
+      requestBody: { content: { application/json: { schema: { type: object, required: [username, password], properties: { username: {type: string, maxLength: 64}, password: {type: string, maxLength: 256, writeOnly: true} } } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }
+        '401': { description: "invalid_credentials | user_suspended" }
+        '429': { description: "rate_limited; Retry-After is whole seconds" }
+    put:
+      summary: Change one's own password, or set a first one
+      description: >-
+        With a password already set, current_password is required (403 wrong_password, throttled like a
+        sign-in) and every other session of the user is revoked. Without one, this links a password to the
+        account: username is required unless the user has one (409 username_taken, 400 invalid_username).
+        A username is 3 to 32 of a-z 0-9 . - _ and is stored lower case. A password has at least 10
+        characters, does not contain the username and is not one of the most common (400 weak_password).
+        Not on a shared device (403 shared_device).
+      requestBody: { content: { application/json: { schema: { type: object, required: [new_password], properties: { current_password: {type: string, nullable: true, writeOnly: true}, new_password: {type: string, maxLength: 256, writeOnly: true}, username: {type: string, nullable: true, maxLength: 64} } } } } }
+      responses: { '204': { description: ok } }
+  /auth/invite/lookup:
+    post:
+      security: []
+      summary: What the page behind an invite or setup link shows
+      description: The token travels in the body. Every link that cannot be used (unknown, used, expired, revoked) answers the same valid false.
+      requestBody: { content: { application/json: { schema: { type: object, required: [token], properties: { token: {type: string, maxLength: 64} } } } } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid, setup]
+                properties:
+                  valid: {type: boolean}
+                  display_name: {type: string, nullable: true}
+                  username: {type: string, nullable: true, description: "A setup link for someone who already has a username: it is kept"}
+                  setup: {type: boolean, description: "A password setup link for one existing user rather than an invitation"}
+  /auth/invite/accept:
+    post:
+      security: []
+      summary: Accept an invite, or use a setup link, by choosing a username and a password
+      description: >-
+        An invite makes a new active user with the invite's role and signs them in. A setup link sets the
+        password of the user it names (who keeps a username they already have). Nothing is spent unless it
+        goes through: 400 invalid_username, 400 weak_password and 409 username_taken leave the link good.
+        403 invite_invalid for any link that cannot be used.
+      requestBody: { content: { application/json: { schema: { type: object, required: [token, username, password], properties: { token: {type: string, maxLength: 64}, username: {type: string, maxLength: 64}, password: {type: string, maxLength: 256, writeOnly: true} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
   /auth/refresh:
-    post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
+    post: { security: [], summary: "Exchange a refresh token for a new pair; refresh tokens rotate", description: "Every refresh answers a new refresh token and makes the presented one the previous one. The previous one is still honoured for 60 seconds (two tabs, or a retried request, refreshing at once) and answers the current pair without rotating again. A token older than that being presented means a copy is being replayed: the session is revoked (401 session_revoked) for whoever holds it, and the device signs in again. A client stores the new refresh token before it uses the new access token.", requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
   /auth/device:
     post: { security: [], summary: TV starts pairing; shows user_code, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceCode' } } } } } }
+  /auth/device/lookup:
+    post:
+      summary: What is asking to pair under a code, shown before it is approved
+      description: >-
+        A link with a code in it is how someone else's device gets signed in as the person who approves
+        it, so the approval screen says what is asking: the address and user agent the request for the
+        code came from. Signs nothing in. 404 for a code that is unknown, expired, used or already approved.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_code], properties: { user_code: {type: string, maxLength: 64} } } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [user_code, expires_in], properties: { user_code: {type: string}, ip: {type: string, nullable: true}, user_agent: {type: string, nullable: true}, expires_in: {type: integer} } } } } }
   /auth/device/poll:
     post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { device_code: {type: string} } } } } }, responses: { '200': { description: approved, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }, '428': { description: pending } } }
   /auth/device/approve:
     post: { summary: Logged-in user approves a TV code (web), requestBody: { content: { application/json: { schema: { type: object, properties: { user_code: {type: string}, profile_id: {type: string}, shared_device: {type: boolean, default: false, description: "Pair it as a shared household device (Who's watching?). true needs users.manage"} } } } } }, responses: { '204': { description: ok }, '403': { description: forbidden (shared_device without users.manage) } } }
 
   /profiles:
-    get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } } } } }
+    get: { security: [], summary: "The household's profiles, for the picker on the home network", description: "Without a token: the list on the home network; 404 from anywhere else (which says nothing about what exists); 401 under GOOGLE_AUTH_REQUIRED. With a token: the list on the home network, otherwise the caller's own profile only.", responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } } } } }
     post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '201': { description: created } } }
   /profiles/{id}:
     patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '200': { description: ok } } }
     delete: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
   /profiles/{id}/pin:
-    put: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true} } } } } }, responses: { '204': { description: ok } } }
+    put: { summary: "Set or clear a profile's PIN (the older route; see PUT /users/{id}/pin for the rule on changing one's own)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }, responses: { '204': { description: ok } } }
 
   /profiles/{id}/home_layout:
     get: { summary: Per-profile Home row order / hidden rows, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
@@ -1702,9 +1863,31 @@ paths:
   /users/{id}/pin:
     put:
       summary: Set or clear a user's PIN (one's own; anyone's with users.manage)
+      description: >-
+        Changing or clearing one's own existing PIN needs proof that this is still its owner: current_pin
+        (403 pin_invalid when wrong; five guesses in fifteen minutes, then 429), or current_password, or a
+        sign-in made in the last ten minutes. Otherwise 403 current_pin_required. A first PIN needs nothing;
+        someone else's is a user manager's to set. PUT /profiles/{id}/pin asks the same.
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }
       responses: { '204': { description: ok } }
+  /users/{id}/methods/{method}:
+    delete:
+      summary: Remove one way a user signs in (users.manage)
+      description: Their sessions are revoked. 409 last_method for the last one (suspend or remove the user instead). Only an owner changes an owner.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}, {name: method, in: path, required: true, schema: {$ref: '#/components/schemas/SignInMethod'}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } } }
+  /users/{id}/password-reset:
+    post:
+      summary: Reset a user's password and answer a setup link (users.manage)
+      description: >-
+        The password stops working and every session of that user is revoked at once (the caller's own
+        device stays when resetting oneself). The answer is a one-time link, good for 72 hours, where that
+        person chooses a new password; an earlier setup link for them stops working. Also how someone
+        without a password gets one. Only an owner resets an owner; 409 not_active for a pending user.
+        There is no e-mail recovery and no self-registration.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SetupLink' } } } } }
   /roles:
     get: { summary: Roles with their permissions and limits (users.manage), responses: { '200': { description: built-ins first, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Role' } } } } } } }
     post: { summary: Create a custom role (users.manage), requestBody: { content: { application/json: { schema: { allOf: [{$ref: '#/components/schemas/RoleInput'}], required: [name] } } } }, responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Role' } } } } } }
@@ -1720,7 +1903,7 @@ paths:
     post:
       summary: Create an invite link for a role (users.invite)
       description: The role may be no wider than the inviter's own access, and is never the Owner role (403 invite_role_too_wide).
-      requestBody: { content: { application/json: { schema: { type: object, required: [role_id], properties: { role_id: {type: string}, expires_in_hours: {type: integer, minimum: 1, maximum: 720, default: 72}, max_uses: {type: integer, minimum: 1, maximum: 50, default: 1} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [role_id], properties: { role_id: {type: string}, expires_in_hours: {type: integer, minimum: 1, maximum: 720, default: 72}, max_uses: {type: integer, minimum: 1, maximum: 50, default: 1}, name: {type: string, maxLength: 64, nullable: true, description: "Add a person: who the invite is for. Used once (max_uses must be 1). They accept it with Google, with Plex, or by choosing a username and password."} } } } } }
       responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/InviteCreated' } } } } }
   /invites/{id}:
     delete: { summary: Revoke an invite (its creator; anyone's with users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: revoked } } }

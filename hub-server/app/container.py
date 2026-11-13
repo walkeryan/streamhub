@@ -44,7 +44,9 @@ from app.services.media_probe import MediaProbe
 from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
 from app.services.owner_reauth import OwnerReauthService
+from app.services.passwords import PasswordAuth
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
+from app.services.plex_auth import PlexAuthService
 from app.services.recorder import RecorderService
 from app.services.registry import SourceRegistry
 from app.services.requests import RequestService
@@ -58,6 +60,7 @@ from app.services.sources import SourceService
 from app.services.streams import GrantGuard, StreamRegistry
 from app.services.sync import SyncScheduler, SyncService
 from app.services.themes import ThemeService
+from app.services.throttle import RateLimiter
 from app.services.user_state import (
     ClientPrefsService,
     FavoritesService,
@@ -85,6 +88,9 @@ class Container:
     sessions: SessionsService
     invites: InvitesService
     google_auth: GoogleAuthService
+    plex_auth: PlexAuthService
+    passwords: PasswordAuth
+    limiter: RateLimiter
     language: LanguageChain
     tmdb: TmdbClient
     sources: SourceService
@@ -236,6 +242,20 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         recorder.capture = capture
         streams.external.append(capture.user_streams)
     google_auth = GoogleAuthService(settings, auth, lambda: app_settings.get("signup_mode"))
+
+    async def plex_owner_tokens() -> list[str]:
+        """The Plex account tokens behind the linked Plex servers: the owner's, by construction."""
+        rows = [r for r in await sources.list() if r.type == "plex" and r.enabled]
+        return [str(sources.decrypt_config(r).get("account_token") or "") for r in rows]
+
+    plex_auth = PlexAuthService(
+        ctx,
+        auth,
+        app_settings.get,
+        plex_owner_tokens,
+        # The legacy owner-PIN regime signs in with Google and the PIN, nothing else.
+        available=lambda: not content_policy.enabled,
+    )
     rooms = RoomHub(RoomRegistry(), RoomTokens(crypto))
     return Container(
         settings=settings,
@@ -251,6 +271,11 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         sessions=auth.sessions,
         invites=InvitesService(db),
         google_auth=google_auth,
+        plex_auth=plex_auth,
+        limiter=RateLimiter(),
+        passwords=PasswordAuth(
+            db, auth, app_settings.get, available=lambda: not content_policy.enabled, throttle=auth.throttle
+        ),
         language=language,
         tmdb=tmdb,
         sources=sources,
@@ -302,6 +327,11 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
         # Logged exactly once, at first boot. Deliberately bypasses the redaction registry.
         logging.getLogger("streamhub.bootstrap").warning(
             "Admin profile created. Generated admin password (shown once): %s", generated
+        )
+    if "*" in [part.strip() for part in c.settings.forwarded_allow_ips.split(",")]:
+        log.warning(
+            "FORWARDED_ALLOW_IPS is '*': forwarding headers are believed from anyone, so the client "
+            "address is a guess. Name the reverse proxy's address or subnet instead."
         )
     await c.sync.reset_stuck()
     if start_background:
