@@ -21,9 +21,20 @@ export async function openMore(page: Page, name: string) {
   await page.getByTestId('more-menu').getByRole('link', { name, exact: true }).click()
 }
 
-/** The metadata catalog (titles no source has) is reached from Search. */
+/** The search box: a field in the top bar of a wide screen, a field at the top of the search page on a phone. */
+export const searchBox = (page: Page) => page.getByRole('textbox', { name: 'Search', exact: true })
+/** Type a query the way a viewer does: into the box of the top bar, or on a phone after opening the Search tab. */
+export async function search(page: Page, text: string) {
+  if (!(await searchBox(page).count())) await page.getByTestId('nav-search').click()
+  await searchBox(page).fill(text)
+  await expect(page).toHaveURL(text.trim() ? /\/search\?q=/ : /\/search$/)
+}
+
+/** The metadata catalog (titles no source has) is reached from the search page before anything is typed. */
 export async function openDiscover(page: Page, section: 'movies' | 'shows' = 'movies') {
   await page.getByTestId('nav-search').click()
+  // In the top bar the box only takes the caret; Enter with nothing typed opens the page.
+  if (!(await page.getByTestId('search-idle').count())) await page.keyboard.press('Enter')
   await page.getByRole('button', { name: section === 'movies' ? 'Popular movies' : 'Popular shows', exact: true }).click()
   await expect(page.getByTestId('discover')).toBeVisible()
 }
@@ -37,7 +48,7 @@ export async function closeFilters(page: Page) {
   await page.getByTestId('browse-filters').getByRole('button', { name: 'Done', exact: true }).click()
   await expect(page.getByTestId('browse-filters')).toHaveCount(0)
 }
-/** A filter in force is named under the search field, also while the Filter panel is closed. */
+/** A filter in force is named under the title line, also while the Filter panel is closed. */
 export const activeFilter = (page: Page, text: string) => page.getByTestId('active-filter').filter({ hasText: text })
 
 /** Keyboard only: Up from the content reaches the top bar, Left/Right walk it to an entry. */

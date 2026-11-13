@@ -782,7 +782,7 @@ test.describe("who's watching", () => {
     await page.keyboard.type('1234')
     await page.keyboard.press('Enter')
     await expect(page.getByTestId('home')).toBeVisible()
-    await page.getByTestId('nav-search').click()
+    await page.getByRole('textbox', { name: 'Search', exact: true }).fill('harbor')
     await expect(page.getByTestId('search')).toBeVisible()
     await page.getByTestId('nav-profile').click()
     await expect(card(page, 'Kids')).toContainText('Watching now')

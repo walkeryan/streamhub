@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { searchBox, signIn } from './helpers'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -27,21 +27,23 @@ test.beforeEach(async ({ page }) => {
 
 test('canonical ranking, unavailable discovery and Back/refresh preserve query', async ({ page }) => {
   await signIn(page)
-  await page.goto('/search')
-  await page.getByLabel('Search titles and channels').fill('Star Wars')
-  await expect(page.getByTestId('group-relevance')).toBeVisible()
-  const results = page.getByTestId('group-relevance').getByRole('link')
+  await searchBox(page).fill('Star Wars')
+  await expect(page.getByTestId('search-titles')).toBeVisible()
+  // One ranked grid, in the server's order: what plays here and what no source has, side by side.
+  const results = page.getByTestId('search-titles').getByRole('link')
+  await expect(results).toHaveCount(3)
   await expect(results.first()).toHaveAccessibleName('Star Wars: The Force Awakens')
   await expect(page.getByText('FR-NETFLIX-force-awakens')).toHaveCount(0)
   await page.getByRole('link', { name: 'Star Wars: Unavailable fixture', exact: true }).click()
   await expect(page.getByTestId('title-play')).toHaveCount(0)
   await expect(page.getByText('Not available from your sources.')).toBeVisible()
   await page.goBack()
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('Star Wars')
+  await expect(searchBox(page)).toHaveValue('Star Wars')
   await page.reload()
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('Star Wars')
+  await expect(searchBox(page)).toHaveValue('Star Wars')
   await page.setViewportSize({ width: 390, height: 844 })
-  await expect(page.getByTestId('group-relevance')).toBeVisible()
+  await expect(searchBox(page)).toHaveValue('Star Wars')
+  await expect(page.getByTestId('search-titles')).toBeVisible()
   await page.screenshot({ path: '/tmp/streamhub-discovery-mobile.png' })
 })
 
@@ -75,8 +77,7 @@ test('unknown audio requires deliberate variant confirmation; no silent French r
 
 test('late search responses cannot replace a newer query', async ({ page }) => {
   await signIn(page)
-  await page.goto('/search')
-  const input = page.getByLabel('Search titles and channels')
+  const input = searchBox(page)
   await input.fill('slow')
   await page.waitForTimeout(500)
   await input.fill('Star Wars')
@@ -87,9 +88,8 @@ test('late search responses cannot replace a newer query', async ({ page }) => {
 
 test('search state is isolated when switching profiles on the same URL', async ({ page }) => {
   await signIn(page)
-  await page.goto('/search')
-  await page.getByLabel('Search titles and channels').fill('Star Wars')
-  await expect(page.getByTestId('group-relevance')).toBeVisible()
+  await searchBox(page).fill('Star Wars')
+  await expect(page.getByTestId('search-titles')).toBeVisible()
   await page.evaluate(async () => {
     const path = '/src/store/session.ts', fixturePath = '/src/mocks/fixtures.ts'
     const { useSession } = await import(/* @vite-ignore */ path)
@@ -97,8 +97,9 @@ test('search state is isolated when switching profiles on the same URL', async (
     await fetch('/api/v1/disclaimer/accept', { method: 'POST', headers: { authorization: 'Bearer mock-access-p1' } })
     useSession.getState().setSession('mock-access-p1', 'mock-refresh-p1', { ...profiles[0], disclaimer_accepted_version: DISCLAIMER.version })
   })
-  await expect(page.getByLabel('Search titles and channels')).toHaveValue('')
-  await expect(page.getByTestId('group-relevance')).toHaveCount(0)
+  await expect(searchBox(page)).toHaveValue('')
+  await expect(page).toHaveURL(/\/search$/)
+  await expect(page.getByTestId('search-titles')).toHaveCount(0)
 })
 
 test('direct playback audio-selection errors stop reconnecting and offer source details', async ({ page }) => {

@@ -125,7 +125,7 @@ test('Watch together makes a room and shows how to share it', async ({ page, con
   await expect(page.getByTestId('room-lock')).toBeVisible()
 })
 
-test('a room is joined by its code, from More and from Search', async ({ browser }) => {
+test('a room is joined by its code, from More', async ({ browser }) => {
   const host = await person(browser, 'p2', 'Guest')
   const guest = await person(browser, 'p3', 'Kids')
   await link(host, guest)
@@ -133,9 +133,9 @@ test('a room is joined by its code, from More and from Search', async ({ browser
   await host.getByTestId('room-start').click()
   await expect(host.getByTestId('room-member')).toHaveCount(1)
 
-  // Search carries the same entry; a code that cannot be one is explained, not sent.
-  await guest.getByTestId('nav-search').click()
-  await guest.getByTestId('search-join-room').click()
+  // A code that cannot be one is explained, not sent.
+  await guest.getByTestId('nav-more').click()
+  await guest.getByTestId('nav-join-room').click()
   await expect(guest.getByLabel('Room code')).toBeFocused()
   await guest.keyboard.type('abc10')
   await expect(guest.getByTestId('join-room-go')).toHaveAttribute('aria-disabled', 'true')
@@ -427,8 +427,7 @@ test('Watch together needs rooms.create and Join a room needs rooms.join', async
   await kid.keyboard.press('s')
   await expect(kid.getByTestId('player-menu')).toBeVisible()
   await expect(kid.getByTestId('player-together')).toHaveCount(0)
-  await kid.goto('/search')
-  await expect(kid.getByTestId('search-join-room')).toBeVisible()
+  await kid.goto('/')
   await kid.getByTestId('nav-more').click()
   await expect(kid.getByTestId('nav-join-room')).toBeVisible()
 
@@ -442,9 +441,8 @@ test('Watch together needs rooms.create and Join a room needs rooms.join', async
     role.permissions = role.permissions.filter((p) => p !== 'rooms.join')
     localStorage.setItem('mock.people.v1', JSON.stringify(db))
   })
-  await kid.goto('/search')
-  await expect(kid.getByTestId('search-controls')).toBeVisible()
-  await expect(kid.getByTestId('search-join-room')).toHaveCount(0)
+  await kid.goto('/')
+  await expect(kid.getByTestId('home')).toBeVisible()
   await kid.getByTestId('nav-more').click()
   await expect(kid.getByTestId('more-menu')).toBeVisible()
   await expect(kid.getByTestId('nav-join-room')).toHaveCount(0)
