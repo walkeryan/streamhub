@@ -59,7 +59,8 @@ async function joinByCode(page: Page, code: string) {
 const clock = (page: Page) => page.evaluate(() => {
   const video = document.querySelector('video')!
   const from = Number(document.querySelector('[data-testid="player"]')?.getAttribute('data-stream-start') ?? 0) / 1000
-  return { at: Date.now(), time: from + video.currentTime, paused: video.paused }
+  // An element asked to play says "not paused" at once; it is only somewhere once it has data and is not mid-seek.
+  return { at: Date.now(), time: from + video.currentTime, paused: video.paused, settled: video.readyState >= 2 && !video.seeking }
 })
 /** The room calls a page makes: seats taken, descriptors asked for, and how each was authorized. */
 function calls(page: Page) {
@@ -96,7 +97,7 @@ async function apart(a: Page, b: Page): Promise<number> {
 async function together(a: Page, b: Page, playing: boolean, near?: number) {
   await expect.poll(async () => {
     const [x, y] = await Promise.all([clock(a), clock(b)])
-    return x.paused === !playing && y.paused === !playing && (near === undefined || Math.abs(x.time - near) < 1.5)
+    return x.settled && y.settled && x.paused === !playing && y.paused === !playing && (near === undefined || Math.abs(x.time - near) < 1.5)
   }, { timeout: 15_000 }).toBe(true)
   // Not one lucky reading: they stay together.
   for (let i = 0; i < 4; i++) {
@@ -243,9 +244,11 @@ test('a room on one shared stream loads its playlist again when the stream epoch
   await guest.keyboard.press('k')
   await together(host, guest, true)
   await guest.keyboard.press('ArrowRight')
+  // Both follow the new start (20 s, or 25 s if the room had played past 15 s) before they are compared.
+  const starts = () => Promise.all([host, guest].map((page) => page.getByTestId('player').getAttribute('data-stream-start')))
+  await expect.poll(async () => { const [a, b] = await starts(); return a === b && a !== '10000' }).toBe(true)
   await together(host, guest, true)
   expect((await clock(host)).time).toBeGreaterThan(20)
-  await expect(host.getByTestId('player')).toHaveAttribute('data-stream-start', '20000')
   expect(await Promise.all([loads(host), loads(guest)])).toEqual([3, 3])
   // Nobody joined a second time, nobody asked for a descriptor, and the two seats are the ones taken at the start.
   expect(seen.host.joins).toBe(1)
@@ -275,9 +278,11 @@ test('a member joining a library-title room starts at the room position, not at 
   const { descriptor } = await (await joined).json() as { descriptor: { resume_position_ms: number; stream_epoch: number | null } }
   expect(descriptor.stream_epoch).toBeNull()
   expect(descriptor.resume_position_ms).toBeGreaterThanOrEqual(10_000)
-  await together(host, guest, true)
+  await expect(guest.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   // The first place the guest's player went is the one the join named: the room's, not 0 and not their own 20 s.
   expect((await guest.evaluate(() => (window as unknown as { __seeks: number[] }).__seeks))[0]).toBe(descriptor.resume_position_ms / 1000)
+  // Started there, the guest is within the room's one-second tolerance of its clock, and so within two of the host.
+  expect(await apart(host, guest)).toBeLessThan(2)
 
   // A seek in such a room is a state and nothing else: each player moves in the file it has.
   await host.keyboard.press('ArrowLeft')

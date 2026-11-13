@@ -362,6 +362,8 @@ test('More offers only what the profile may use, and closes back onto its opener
   await expect(page).toHaveURL(/\/requests$/)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('aria-current', 'page')
   await page.getByTestId('nav-more').click()
+  // Back belongs to the menu once it has taken focus.
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Sports')
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('data-focused', 'true')
