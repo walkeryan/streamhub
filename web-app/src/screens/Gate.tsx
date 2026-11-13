@@ -120,7 +120,9 @@ export function ProfilePicker({ embedded }: { embedded?: boolean } = {}) {
       qc.clear()
       setPending(null); setSecret('')
     } catch (e) {
-      setErr(e instanceof ApiError && e.status === 401 ? (p.has_password ? 'That password is not right.' : 'That PIN is not right.') : e instanceof Error ? e.message : 'Sign-in failed.')
+      // A profile with no PIN that the server will not open on a tap: its person signs in for themselves, or manages the server.
+      const tapRefused = !p.has_password && !p.has_pin ? `${p.name} cannot be opened by choosing the profile. Sign in another way, or have a PIN set for it.` : null
+      setErr(e instanceof ApiError && e.status === 401 ? tapRefused ?? (p.has_password ? 'That password is not right.' : 'That PIN is not right.') : e instanceof Error ? e.message : 'Sign-in failed.')
     } finally { setBusy(false) }
   }
   const choose = (p: Profile) => {
@@ -132,6 +134,7 @@ export function ProfilePicker({ embedded }: { embedded?: boolean } = {}) {
     <main style={embedded ? { display: 'grid', placeItems: 'center' } : { minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="profile-picker">
       <FocusGroup focusKey="picker" className={embedded ? 'flex flex-col items-center gap-4' : 'flex flex-col items-center gap-8'}>
         {embedded ? <h2 className="heading" style={{ textAlign: 'center' }}>At home? Pick a profile</h2> : <h1 className="display" style={{ textAlign: 'center' }}>Who is watching?</h1>}
+        {err && !pending && <p role="alert" data-testid="profile-refused">{err}</p>}
         {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : !profiles ? <p className="muted">Loading profiles…</p> : (
           <div className="flex gap-6 flex-wrap justify-center">
             {profiles.map((p) => (

@@ -411,11 +411,11 @@ def require_same_origin(request: Request, c: C) -> None:
     """A cookie-bound completion is only ever asked for by our own page."""
     origin = request.headers.get("origin")
     parts = urlsplit(public_base.get())
-    if (
-        origin is not None
-        and origin != f"{parts.scheme}://{parts.netloc}"
-        and origin not in c.settings.cors_origin_list
-    ):
+    ours = [f"{parts.scheme}://{parts.netloc}", *c.settings.cors_origin_list]
+    if c.google_auth.enabled:
+        # The public origin the operator configured for Google is this server's too.
+        ours.append(c.google_auth.origin)
+    if origin is not None and origin not in ours:
         raise Forbidden("Same-origin sign-in completion required")
 
 

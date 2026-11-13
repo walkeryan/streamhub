@@ -370,3 +370,11 @@ async def test_completion_is_same_origin(api: Api) -> None:
         "/api/v1/auth/plex/complete", json={"state": state}, headers={"Origin": "http://hub.test"}
     )
     assert ok.status_code == 200
+    # The origin configured for Google sign-in is this server's public one as well.
+    api.c.settings.google_client_id, api.c.settings.google_client_secret = "test-client", "test-secret-not-real"
+    api.c.settings.google_redirect_uri = "https://hub.example.test/api/v1/auth/google/callback"
+    state, _ = await start(api.client)
+    public = await api.client.post(
+        "/api/v1/auth/plex/complete", json={"state": state}, headers={"Origin": "https://hub.example.test"}
+    )
+    assert public.status_code == 200
