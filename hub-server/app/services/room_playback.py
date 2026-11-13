@@ -42,7 +42,7 @@ class RoomSession:
     """The one upstream of a room, and what every member's descriptor says about it."""
 
     code: str
-    ref: str  # what later members resolve: the title, or the episode the first member was given
+    ref: str  # what later members resolve: what the first member was given, which is the room's title
     variant_id: str
     source_id: str
     url: str

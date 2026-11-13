@@ -94,9 +94,12 @@ class Room:
         variant_id: str | None = None,
         audio_track: int | None = None,
         live: bool = False,
+        series: str | None = None,
     ) -> None:
         self.code = code
-        self.ref = ref  # title or channel id
+        # Title or channel id. Never a show: a room made from one is on the episode it was given then.
+        self.ref = ref
+        self.series = series  # the show that episode was taken from, by name
         self.variant_id = variant_id
         self.audio_track = audio_track
         self.host_profile_id = host_profile_id
@@ -323,6 +326,7 @@ class RoomRegistry:
         variant_id: str | None = None,
         audio_track: int | None = None,
         live: bool = False,
+        series: str | None = None,
     ) -> Room:
         if len(self._rooms) >= self._max_rooms:
             raise Conflict("Too many watch rooms are open. Try again later.", code="room_limit")
@@ -336,6 +340,7 @@ class RoomRegistry:
             variant_id=variant_id,
             audio_track=audio_track,
             live=live,
+            series=series,
         )
         self._rooms[code] = room
         return room

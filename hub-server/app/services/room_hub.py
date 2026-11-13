@@ -204,6 +204,7 @@ class RoomHub:
         variant_id: str | None = None,
         audio_track: int | None = None,
         live: bool = False,
+        series: str | None = None,
     ) -> Room:
         room = self.registry.create(
             ref,
@@ -213,6 +214,7 @@ class RoomHub:
             variant_id=variant_id,
             audio_track=audio_track,
             live=live,
+            series=series,
         )
         self._ensure_ticker()
         return room

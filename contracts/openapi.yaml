@@ -823,8 +823,8 @@ components:
       type: object
       required: [id]
       properties:
-        id: {type: string, description: "title or channel id (lib:, tmdb:, ch:). A channel makes a live room."}
-        variant_id: {type: string, nullable: true, description: "source variant every member plays; validated when a member joins"}
+        id: {type: string, description: "title or channel id (lib:, tmdb:, ch:). A channel makes a live room. A show or season makes a room on one of its episodes (see POST /rooms)."}
+        variant_id: {type: string, nullable: true, description: "source variant every member plays; validated when a member joins, and for a show when the room is created"}
         audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255}
     RoomJoin:
       type: object
@@ -840,8 +840,8 @@ components:
       properties:
         id: {type: string}
         kind: { $ref: '#/components/schemas/MediaKind' }
-        title: {type: string}
-        subtitle: {type: string, nullable: true}
+        title: {type: string, description: "for an episode, the episode's own title"}
+        subtitle: {type: string, nullable: true, description: "for an episode, its show where known and its number: \"<show> · S01E02\", or \"S01E02\""}
         year: {type: integer, nullable: true}
         poster: {type: string, nullable: true}
         backdrop: {type: string, nullable: true}
@@ -867,9 +867,9 @@ components:
       properties:
         code: {type: string, description: "six characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789; accepted in either case"}
         join_path: {type: string, description: "web path of the join screen: /room/<code>"}
-        id: {type: string, description: "the title or channel the room watches"}
+        id: {type: string, description: "the title or channel the room watches: what every member plays. Never a show or a season: a room created from one names the episode it is on (see POST /rooms), so this can differ from the id the room was created with"}
         live: {type: boolean}
-        variant_id: {type: string, nullable: true}
+        variant_id: {type: string, nullable: true, description: "in a room created from a show with a variant named, the episode's id"}
         audio_track: {type: integer, nullable: true}
         host_name: {type: string}
         is_host: {type: boolean, description: "the current profile created the room"}
@@ -1665,12 +1665,19 @@ paths:
   /rooms:
     post:
       summary: Create a watch room for a title or channel
-      description: The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+      description: >-
+        The room starts empty and paused at 0 (a live room starts playing). At most 20 rooms exist at once.
+        A room is on one thing. Made from a show (or a season) it is on one episode: the one
+        POST /playback/resolve would start for the creator now (their next unwatched episode, of the
+        variant named or of the one resolve would pick), chosen once, here. Room.id is that episode's
+        id, Room.title describes the episode, and every member plays it whatever their own history
+        with the show; a variant_id naming a variant of the show comes back as the episode's id.
+        The episode does not change for the life of the room.
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomCreate' } } } }
       responses:
         '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
         '403': { description: "content_restricted, or not allowed to create rooms" }
-        '404': { description: unknown title }
+        '404': { description: "unknown title; a show with no episode to play; a variant_id that is not a variant of the show" }
         '409': { description: room_limit }
   /rooms/{code}:
     get:
