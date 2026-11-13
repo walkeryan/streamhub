@@ -277,6 +277,14 @@ class SessionsService:
             raise RateLimited(int(PIN_WINDOW_S - (now - recent[0])) + 1)
         return key
 
+    async def _check_switch_pin(self, user_id: str, pin: str, pin_hash: str) -> None:
+        key = self._switch_budget(user_id)
+        # Counted before it is checked, so guesses sent in parallel share the one budget.
+        self._pin_failures.setdefault(key, []).append(time.monotonic())
+        if not await asyncio.to_thread(verify_secret, pin, pin_hash):
+            raise Unauthorized("Wrong PIN", code="pin_invalid")
+        self._pin_failures.pop(key, None)
+
     async def switch(self, actor: Any, target_user_id: str, pin: str | None) -> tuple[User, Profile, Role, AuthSession]:
         """Hand this shared device to another user: the same ``auth_session`` row, re-bound.
 
@@ -284,6 +292,9 @@ class SessionsService:
         current user must have one, so a child cannot step into a parent. The re-bind is a
         compare-and-set on the row as this request saw it, and bumps its generation, so the
         previous user's tokens for this device are dead from the commit on.
+
+        Switching to oneself hands nothing over. With a PIN it is the device asking "is this
+        their PIN?": checked like any other target's, against the same budget of guesses.
         """
         if not actor.shared_device:
             raise Forbidden("This is not a shared device", code="not_shared_device")
@@ -296,16 +307,14 @@ class SessionsService:
                 raise NotFound("user not found")
             user, profile, role = found[0]
             if user.id == actor.user_id:
+                if pin and profile.pin_hash:
+                    await self._check_switch_pin(user.id, pin, profile.pin_hash)
                 return user, profile, role, row
             if profile.pin_hash:
-                key = self._switch_budget(user.id)
                 if not pin:
+                    self._switch_budget(user.id)
                     raise Unauthorized("Enter this user's PIN", code="pin_required")
-                # Counted before it is checked, so guesses sent in parallel share the one budget.
-                self._pin_failures.setdefault(key, []).append(time.monotonic())
-                if not await asyncio.to_thread(verify_secret, pin, profile.pin_hash):
-                    raise Unauthorized("Wrong PIN", code="pin_invalid")
-                self._pin_failures.pop(key, None)
+                await self._check_switch_pin(user.id, pin, profile.pin_hash)
             elif is_wider(*access(user, role), frozenset(actor.permissions), actor.limits):
                 raise Conflict("That user needs a PIN before this device can switch to them", code="pin_setup_required")
             claimed = await s.execute(

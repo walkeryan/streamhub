@@ -315,7 +315,7 @@ export interface paths {
         put?: never;
         /**
          * Hand a shared device to another user
-         * @description Keeps the device's session and re-binds it to the target, with fresh tokens; the previous user's tokens for this device stop working. A target with a PIN needs it. A target with more access than the current user must have one. Switching to oneself changes nothing.
+         * @description Keeps the device's session and re-binds it to the target, with fresh tokens; the previous user's tokens for this device stop working. A target with a PIN needs it. A target with more access than the current user must have one. Switching to oneself hands nothing over and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the current user's PIN is verified (pin_invalid when wrong, counted against the same five guesses), and a user without a PIN has nothing to check.
          */
         post: {
             parameters: {
@@ -328,7 +328,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         user_id: string;
-                        pin?: string;
+                        /** @description null or absent: no PIN offered */
+                        pin?: string | null;
                     };
                 };
             };
@@ -342,7 +343,7 @@ export interface paths {
                         "application/json": components["schemas"]["Switched"];
                     };
                 };
-                /** @description pin_required | pin_invalid */
+                /** @description pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. */
                 401: {
                     headers: {
                         [name: string]: unknown;
@@ -370,7 +371,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description Five wrong PINs for this target in 15 minutes; respect Retry-After */
+                /** @description rate_limited: five wrong PINs for this target in 15 minutes. Retry-After is whole seconds (an integer), as on every 429 of this API. */
                 429: {
                     headers: {
                         [name: string]: unknown;

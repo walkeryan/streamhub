@@ -1128,15 +1128,18 @@ paths:
       description: >-
         Keeps the device's session and re-binds it to the target, with fresh tokens; the previous
         user's tokens for this device stop working. A target with a PIN needs it. A target with
-        more access than the current user must have one. Switching to oneself changes nothing.
-      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
+        more access than the current user must have one. Switching to oneself hands nothing over
+        and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the
+        current user's PIN is verified (pin_invalid when wrong, counted against the same five
+        guesses), and a user without a PIN has nothing to check.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "null or absent: no PIN offered"} } } } } }
       responses:
         '200': { description: switched, content: { application/json: { schema: { $ref: '#/components/schemas/Switched' } } } }
-        '401': { description: "pin_required | pin_invalid" }
+        '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry." }
         '403': { description: not_shared_device }
         '404': { description: not a user this device can switch to }
         '409': { description: "pin_setup_required (the target has more access and no PIN) | switch_conflict (retry)" }
-        '429': { description: Five wrong PINs for this target in 15 minutes; respect Retry-After }
+        '429': { description: "rate_limited: five wrong PINs for this target in 15 minutes. Retry-After is whole seconds (an integer), as on every 429 of this API." }
   /auth/adult-unlock:
     post:
       summary: Open the adult category on this session for four hours
