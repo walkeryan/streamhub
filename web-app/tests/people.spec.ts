@@ -759,6 +759,28 @@ test.describe('devices', () => {
     await expect(legacy.getByTestId('tab-about')).toBeVisible()
     await expect(legacy.getByTestId('tab-devices')).toHaveCount(0)
   })
+
+  test('pairing a TV: the shared-device choice is the user manager\'s and is sent as shared_device', async ({ page, context }) => {
+    const sent = await record(page)
+    await enter(page, '/pair')
+    await page.getByLabel('TV code', { exact: true }).fill('ABC123')
+    await expect(page.getByTestId('pair-shared-toggle')).toHaveAttribute('aria-pressed', 'false')
+    await page.getByTestId('pair-shared-toggle').click()
+    await expect(page.getByTestId('pair-shared-toggle')).toHaveAttribute('aria-pressed', 'true')
+    await page.getByTestId('pair-approve').click()
+    await expect(page.getByTestId('pair-done')).toBeVisible()
+    await expect(page.getByTestId('pair-shared')).toBeVisible()
+    expect(await sent('/auth/device/approve')).toEqual([['POST', '/auth/device/approve', { user_code: 'ABC123', profile_id: 'p1', shared_device: true }]])
+
+    const guest = await second(context)
+    const plain = await record(guest)
+    await enter(guest, '/pair', { who: 'guest' })
+    await guest.getByLabel('TV code', { exact: true }).fill('ABC123')
+    await expect(guest.getByTestId('pair-shared-toggle')).toHaveCount(0)
+    await guest.getByTestId('pair-approve').click()
+    await expect(guest.getByTestId('pair-done')).toBeVisible()
+    expect(await plain('/auth/device/approve')).toEqual([['POST', '/auth/device/approve', { user_code: 'ABC123', profile_id: 'p2' }]])
+  })
 })
 
 test.describe('adult titles', () => {

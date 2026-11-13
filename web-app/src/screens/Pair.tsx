@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router'
 import { z } from 'zod'
 import { api, ok } from '../api/client'
 import { useProfiles } from '../api/hooks'
+import { useCan } from '../api/me'
+import { Toggle } from '../components/PeopleControls'
 import { Button, Chip } from '../components/ui'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { useRestoreFocus } from '../nav/back'
@@ -16,6 +18,9 @@ export function Pair() {
   const profiles = useProfiles()
   const [code, setCode] = useState((sp.get('code') ?? '').toUpperCase().slice(0, 6))
   const [profileId, setProfileId] = useState(me.id)
+  // Only someone who manages users may make a device a household one; the server checks the same.
+  const manages = useCan('users.manage')
+  const [shared, setShared] = useState(false)
   const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle')
   const [err, setErr] = useState<string | null>(null)
   useRestoreFocus(true, 'pair:code')
@@ -25,7 +30,9 @@ export function Pair() {
     if (!r.success) { setErr(r.error.issues[0]?.message ?? 'Check the code.'); return }
     setErr(null); setState('busy')
     try {
-      await ok(api.POST('/auth/device/approve', { body: { user_code: r.data, profile_id: profileId } }))
+      // shared_device is newer than the generated contract; it is sent only when asked for.
+      const body: { user_code: string; profile_id: string; shared_device?: boolean } = { user_code: r.data, profile_id: profileId, ...(manages && shared ? { shared_device: true } : {}) }
+      await ok(api.POST('/auth/device/approve', { body }))
       setState('done')
     } catch (e) { setState('idle'); setErr(e instanceof Error ? e.message : 'Could not approve that code.') }
   }
@@ -37,6 +44,7 @@ export function Pair() {
         <div className="panel flex flex-col gap-3" role="status" data-testid="pair-done">
           <h2 className="title-xl">TV connected</h2>
           <p>Your TV is signing in as {profiles.data?.find((p) => p.id === profileId)?.name ?? me.name}. You can close this page.</p>
+          {manages && shared && <p className="muted" data-testid="pair-shared">It is a shared household device: it opens on "Who's watching?".</p>}
           <div><Button focusKey="pair:again" onEnter={() => { setCode(''); setState('idle') }}>Connect another TV</Button></div>
         </div>
       ) : (
@@ -48,6 +56,8 @@ export function Pair() {
               <div className="flex gap-2 flex-wrap">{profiles.data!.filter((p) => !p.has_pin || p.id === me.id).map((p) => <Chip key={p.id} focusKey={`pair:p:${p.id}`} pressed={profileId === p.id} onEnter={() => setProfileId(p.id)}>{p.name}</Chip>)}</div>
             </div>
           )}
+          {manages && <Toggle focusKey="pair:shared" label="This is a shared household device" hint={'A living-room TV, say. It opens on "Who\'s watching?" and anyone in the household can pick themselves.'}
+            on={shared} onChange={setShared} testId="pair-shared-toggle" />}
           {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
           <div><Button focusKey="pair:go" primary disabled={state === 'busy' || code.length !== 6} onEnter={() => void approve()} testId="pair-approve">{state === 'busy' ? 'Approving…' : 'Approve TV'}</Button></div>
         </FocusGroup>
