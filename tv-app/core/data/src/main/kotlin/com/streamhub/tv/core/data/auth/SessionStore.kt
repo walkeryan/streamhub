@@ -51,7 +51,7 @@ fun normalizeServerUrl(input: String): String {
  * ever reaches the TV — the server holds them.
  */
 @Singleton
-class SessionStore @Inject constructor(@ApplicationContext private val context: Context) {
+class SessionStore @Inject constructor(@ApplicationContext private val context: Context) : SessionTokens {
     private val json = Json { ignoreUnknownKeys = true }
 
     private object K {
@@ -72,7 +72,7 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
         )
     }
 
-    suspend fun current(): Session = session.first()
+    override suspend fun current(): Session = session.first()
 
     suspend fun setServerUrl(url: String) {
         context.sessionStore.edit {
@@ -120,20 +120,25 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
         }
     }
 
-    /** Refresh alone preserves identity; stale responses must not replace a new login. */
-    suspend fun saveRefreshedTokens(expected: Session, tokens: AuthTokens): Boolean {
+    /**
+     * Refresh tokens rotate: the new refresh token replaces the stored one in the same write as the
+     * new access token, before either is used. Refresh alone preserves identity; a stale response
+     * must not replace a new login or a newer rotation (see [refreshedSession]).
+     */
+    override suspend fun saveRefreshedTokens(expected: Session, tokens: AuthTokens): Boolean {
         var saved=false
         context.sessionStore.edit { values ->
             val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) },values[K.generation])
-            if(canApplyRefresh(expected,current,tokens.profile.id)) {
-                values[K.generation]=switchSessionGeneration(expected)!!
-                values[K.access]=tokens.accessToken;values[K.refresh]=tokens.refreshToken
+            val next=refreshedSession(expected,current,tokens)
+            if(next!=null) {
+                values[K.generation]=next.generation!!
+                values[K.access]=next.accessToken!!;values[K.refresh]=next.refreshToken!!
                 values[K.profile]=json.encodeToString(Profile.serializer(),tokens.profile);saved=true
             }
         }
         return saved
     }
-    suspend fun clearExpiredSession(expected: Session): Boolean {
+    override suspend fun clearExpiredSession(expected: Session): Boolean {
         var cleared=false
         context.sessionStore.edit { values ->
             val current=Session(values[K.server],values[K.access],values[K.refresh],values[K.profile]?.let { json.decodeFromString(Profile.serializer(),it) },values[K.generation])

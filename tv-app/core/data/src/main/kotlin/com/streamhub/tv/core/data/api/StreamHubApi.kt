@@ -125,8 +125,13 @@ class StreamHubApi @Inject constructor(
     suspend fun homeLayout(profileId: String): HomeLayout = get("/profiles/${id(profileId)}/home_layout")
     suspend fun putHomeLayout(profileId: String, layout: HomeLayout): HomeLayout =
         client.put(url("/profiles/${id(profileId)}/home_layout")) { setBody(layout) }.ok()
-    suspend fun setPin(profileId: String, pin: String?) =
-        client.put(url("/profiles/${id(profileId)}/pin")) { setBody(PinUpdate(pin)) }.unit()
+    /**
+     * Sets, changes or (with [pin] null) clears a profile's PIN. Changing or clearing an existing PIN of
+     * one's own needs [currentPin]: 403 `current_pin_required` without it, 403 `pin_invalid` when it is
+     * wrong (five guesses in fifteen minutes, then 429).
+     */
+    suspend fun setPin(profileId: String, pin: String?, currentPin: String? = null) =
+        client.put(url("/profiles/${id(profileId)}/pin")) { setBody(PinUpdate(pin, currentPin)) }.unit()
 
     // ---- Disclaimer ----------------------------------------------------------------------------
 

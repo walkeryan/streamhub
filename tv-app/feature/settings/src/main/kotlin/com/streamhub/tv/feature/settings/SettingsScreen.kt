@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +42,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.streamhub.tv.core.data.model.Settings
+import com.streamhub.tv.core.data.repo.PinStep
+import com.streamhub.tv.core.data.repo.pinChangeSteps
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.DISCLAIMER_TEXT
 import com.streamhub.tv.core.ui.components.DISCLAIMER_VERSION
@@ -241,12 +244,17 @@ private fun RowsPane(s: SettingsState, vm: SettingsViewModel) = Pane("Home rows"
 
 @Composable
 private fun ParentalPane(s: SettingsState, vm: SettingsViewModel) {
-    var pinDialog by remember { mutableStateOf(false) }
+    // A PIN change in progress: whether it removes the PIN, the steps still to ask, and the PIN in force once typed.
+    var removing by remember { mutableStateOf(false) }
+    var steps by remember { mutableStateOf<List<PinStep>>(emptyList()) }
+    var currentPin by remember { mutableStateOf<String?>(null) }
+    val hasPin = s.current?.hasPin == true
+    fun begin(remove: Boolean) { removing = remove; currentPin = null; steps = pinChangeSteps(hasPin, remove) }
     Pane("Parental controls") {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ShButton(if (s.current?.hasPin == true) "Change PIN" else "Set PIN", { pinDialog = true })
-                if (s.current?.hasPin == true) ShButton("Remove PIN", { vm.setPin(null) }, style = ButtonStyle.Danger)
+                ShButton(if (hasPin) "Change PIN" else "Set PIN", { begin(remove = false) })
+                if (hasPin) ShButton("Remove PIN", { begin(remove = true) }, style = ButtonStyle.Danger)
             }
         }
         item { Text("Hidden channel groups (hidden for everyone; per-rating locks are configured on the server)", color = LocalThemeTokens.current.textMuted, style = MaterialTheme.typography.bodySmall) }
@@ -254,7 +262,18 @@ private fun ParentalPane(s: SettingsState, vm: SettingsViewModel) {
             ShChip("${g.name} · ${g.channelCount}" + if (g.hidden) " · hidden" else "", g.hidden, { vm.toggleGroupHidden(g) })
         }
     }
-    if (pinDialog) PinDialog("New 4-digit PIN", onSubmit = { vm.setPin(it); pinDialog = false }, onDismiss = { pinDialog = false })
+    // The PIN in force is asked for first (the server checks it), then the new one. Back at either step changes nothing.
+    when (steps.firstOrNull()) {
+        PinStep.Current -> key("current") {
+            PinDialog(if (removing) "Current PIN, to remove it" else "Current PIN", onSubmit = { typed ->
+                if (steps.size == 1) { vm.setPin(null, typed); steps = emptyList() } else { currentPin = typed; steps = steps.drop(1) }
+            }, onDismiss = { steps = emptyList(); currentPin = null })
+        }
+        PinStep.New -> key("new") {
+            PinDialog("New PIN (4 to 8 digits)", onSubmit = { typed -> vm.setPin(typed, currentPin); steps = emptyList(); currentPin = null }, onDismiss = { steps = emptyList(); currentPin = null })
+        }
+        null -> Unit
+    }
 }
 
 @Composable

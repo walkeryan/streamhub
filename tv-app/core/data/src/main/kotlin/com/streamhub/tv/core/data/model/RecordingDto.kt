@@ -37,7 +37,13 @@ data class Recording(
     val state: String = RecordingStates.SCHEDULED,
     /** Why it failed or was missed. */
     val error: String? = null,
+    /** What the capture wrote. Not whether it can be played: see [hasFile]. */
     @SerialName("size_bytes") val sizeBytes: Long? = null,
+    /**
+     * There is a file that `rec:<id>` would play now: the recording is done, or failed and kept what it
+     * had captured, and that file is still on the server. Null only from a server that does not say.
+     */
+    @SerialName("has_file") val hasFile: Boolean? = null,
 )
 
 @Serializable

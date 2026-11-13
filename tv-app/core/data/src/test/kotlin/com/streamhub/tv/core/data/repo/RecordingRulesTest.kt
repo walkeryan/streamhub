@@ -70,6 +70,20 @@ class RecordingRulesTest {
         assertEquals("rec:r9", recording("done").playbackId())
     }
 
+    @Test fun theServersHasFileDecidesWhatCanBePlayedNotTheSize() {
+        fun recording(state: String, hasFile: Boolean?, size: Long? = null) = Recording(id = "r9", title = "t", state = state, sizeBytes = size, hasFile = hasFile)
+        // Done, but the file has since been removed: not offered, whatever size the capture wrote.
+        assertFalse(recording("done", hasFile = false, size = 5_000_000).isPlayable())
+        // Failed and kept what it had, though no size was reported.
+        assertTrue(recording("failed", hasFile = true).isPlayable())
+        assertFalse(recording("failed", hasFile = false, size = 5_000_000).isPlayable())
+        assertFalse(recording("recording", hasFile = false, size = 9).isPlayable())
+        val decoded = StreamHubJson.decodeFromString(Recording.serializer(), """{"id":"r3","title":"t","state":"done","size_bytes":123,"has_file":false}""")
+        assertEquals(false, decoded.hasFile)
+        assertFalse(decoded.isPlayable())
+        assertNull(StreamHubJson.decodeFromString(Recording.serializer(), """{"id":"r3","title":"t","state":"done"}""").hasFile)
+    }
+
     @Test fun stateLabelsAndMarks() {
         assertEquals("Will record", recordingStateLabel("scheduled"))
         assertEquals("Recording", recordingStateLabel("recording"))

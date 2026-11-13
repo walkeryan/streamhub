@@ -4,13 +4,19 @@ import com.streamhub.tv.core.data.model.*
 import kotlinx.coroutines.*
 
 /** Restricted exit uses the dedicated owner PIN, never a target profile PIN or Google-only approval. */
-enum class ProfileSwitchPath { SameProfile, OwnerPin, Secure, Legacy, Unavailable }
+enum class ProfileSwitchPath {
+    SameProfile, OwnerPin, Secure, Legacy, Unavailable,
+    /** The profile picker (POST /auth/login) answers only on the home network, and this TV is not on it. */
+    HomeNetworkOnly,
+}
 fun profileSwitchPath(config: AuthConfig?, current: Profile?, target: Profile): ProfileSwitchPath = when {
     config==null || current==null -> ProfileSwitchPath.Unavailable
     current.id==target.id -> ProfileSwitchPath.SameProfile
     config.contentPolicyEnabled && current.isAdmin && !current.contentRestricted && target.contentRestricted -> ProfileSwitchPath.Secure
     config.contentPolicyEnabled -> ProfileSwitchPath.OwnerPin
     config.googleRequired -> ProfileSwitchPath.Unavailable
+    // Away from home the server refuses the picker's login before looking anything up: do not ask for a PIN it will never read.
+    config.profilesEnabled == false -> ProfileSwitchPath.HomeNetworkOnly
     else -> ProfileSwitchPath.Legacy
 }
 
@@ -69,4 +75,17 @@ suspend fun awaitOwnerPin(
     } finally {
         if(!completed) withContext(NonCancellable) {withTimeoutOrNull(5000) {runCatching {if(stillCurrent())cancel(OwnerPinCancel(challenge.challengeId,challenge.pollToken))}}}
     }
+}
+
+/** What a TV away from home is told when the profile picker is closed to it. Pairing by code works everywhere. */
+const val PROFILES_HOME_ONLY = "Profiles can be switched here only on the home network. Away from home, sign out of this TV (Settings → Playback & server) and pair it with a code for the person who is watching."
+
+/** Whether a refused profile list or login means "not from this network" rather than a real failure. */
+fun isHomeNetworkRefusal(status: Int?, code: String?): Boolean = code == "home_network_only" || (status == 403 && code == "remote_access_denied")
+
+/** What a PIN change asks for, in order: the PIN in force (when there is one), then the new one (unless it is being removed). */
+enum class PinStep { Current, New }
+fun pinChangeSteps(hasPin: Boolean, removing: Boolean): List<PinStep> = buildList {
+    if (hasPin) add(PinStep.Current)
+    if (!removing) add(PinStep.New)
 }

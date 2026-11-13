@@ -96,7 +96,18 @@ object ApiErrors {
             )
             "room_full" -> UserError("The room is full", "This room already has as many people as it can hold. Try again when someone has left.", canRetry = true)
             "room_limit" -> UserError("Too many rooms", "The server is already running as many watch rooms as it allows. Try again when one has closed.", canRetry = true)
+            // Reached only when fetching the room's descriptor again did not settle it (see the player).
+            "stream_epoch_stale" -> UserError("Out of step with the room", "The room's stream was moved and this TV couldn't follow it. Try again, or leave and join again with the room's code.", canRetry = true)
             "room_unsupported" -> UserError("Can't be watched together", "This title can't be played in a watch room on this TV.", canRetry = false)
+            // The profile picker's own routes (GET /profiles without a token, POST /auth/login) answer only at home.
+            "home_network_only" -> UserError(
+                "Home network only",
+                "Choosing a profile with its PIN works only on the home network. Pair this TV with a code instead: that works from anywhere.",
+                canRetry = false,
+            )
+            "pin_invalid" -> UserError("That PIN isn't right", "Check the PIN and try again.", canRetry = false)
+            "current_pin_required" -> UserError("Current PIN needed", "Changing or removing a PIN needs the PIN that is set now.", canRetry = false)
+            "rate_limited" -> UserError("Too many attempts", retryAfterBody(e.retryAfterSeconds), canRetry = true)
             "content_restricted" -> UserError("Not available for this profile", "This profile isn't allowed to watch this.", canRetry = false)
             "recording_forbidden" -> UserError("Not allowed", "This account can't schedule or remove recordings.", canRetry = false)
             "recording_unavailable" -> UserError("Recording isn't set up", "The server has nowhere to keep recordings, or can't record this right now.", canRetry = false)
@@ -126,6 +137,12 @@ object ApiErrors {
                 else -> UserError("That didn't work", detail ?: "The server refused the request (error ${e.status}).", canRetry = e.status == 408 || e.status == 409 || e.status == 429)
             }
         }
+    }
+
+    private fun retryAfterBody(seconds: Int?): String = when {
+        seconds == null || seconds <= 0 -> "Wait a little, then try again."
+        seconds < 90 -> "Wait $seconds seconds, then try again."
+        else -> "Wait about ${(seconds + 59) / 60} minutes, then try again."
     }
 
     /** Why this TV's session stopped working, for the dialog shown before the picker or the pairing screen. */

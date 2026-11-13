@@ -243,6 +243,13 @@ class PlayerViewModel @Inject constructor(
 
     private fun streamRefused(refusal: ApiException) {
         if (refusal.error?.code in StreamRefusals.ABOUT_THE_SESSION && !reauthorized) { reauthorize(); return }
+        // Segments of a start of the room's stream that a seek has replaced, and this member missed the
+        // `state` that said so: the room's descriptor is fetched again, a few times before the viewer is asked.
+        if (refusal.error?.code == StreamRefusals.STREAM_EPOCH_STALE && seat != null && _state.value.roomEnded == null && autoRecoveries < MAX_AUTO_RECOVERIES) {
+            autoRecoveries++
+            recoverRoom(auto = true)
+            return
+        }
         // Worded as the same refusal of a resolve would be; "Try again" resolves afresh.
         attachJob?.cancel()
         _state.update { it.copy(failure = ApiErrors.describe(refusal), failureKeepsPlaying = false, retrying = false, roomCatchUp = false) }

@@ -18,6 +18,8 @@ import com.streamhub.tv.core.data.repo.ProfileSwitchPath
 import com.streamhub.tv.core.data.repo.profileSwitchPath
 import com.streamhub.tv.core.data.repo.AuthorizationCommitGate
 import com.streamhub.tv.core.data.repo.AuthorizationOutcomeUnknown
+import com.streamhub.tv.core.data.repo.PROFILES_HOME_ONLY
+import com.streamhub.tv.core.data.repo.isHomeNetworkRefusal
 import com.streamhub.tv.core.data.repo.awaitOwnerPin
 import com.streamhub.tv.core.data.repo.validOwnerPin
 import com.streamhub.tv.core.data.repo.ownerPinRetryDelay
@@ -213,15 +215,22 @@ class SettingsViewModel @Inject constructor(
             .onSuccess { _state.update { s -> s.copy(groups = s.groups.map { if (it.id == g.id) it.copy(hidden = !g.hidden) else it }) } }
     }
 
-    fun setPin(pin: String?) = viewModelScope.launch {
+    /**
+     * Sets, changes or (with [pin] null) removes the signed-in profile's PIN. An existing PIN is only
+     * changed or removed with [currentPin], which the server checks; a wrong one is said as such.
+     */
+    fun setPin(pin: String?, currentPin: String? = null) = viewModelScope.launch {
         val p = _state.value.current ?: return@launch
-        runCatching { api.setPin(p.id, pin?.takeIf { it.isNotBlank() }) }
-            .onSuccess {
-                val updated = p.copy(hasPin = !pin.isNullOrBlank())
-                session.updateProfile(updated)
-                _state.update { it.copy(current = updated, message = if (pin.isNullOrBlank()) "PIN removed" else "PIN set") }
-            }
-            .onFailure { e -> _state.update { it.copy(message = e.message) } }
+        try {
+            api.setPin(p.id, pin?.takeIf { it.isNotBlank() }, currentPin?.takeIf { it.isNotBlank() })
+            val updated = p.copy(hasPin = !pin.isNullOrBlank())
+            session.updateProfile(updated)
+            _state.update { it.copy(current = updated, message = if (pin.isNullOrBlank()) "PIN removed" else if (p.hasPin) "PIN changed" else "PIN set") }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            val said = ApiErrors.describe(e)
+            _state.update { it.copy(message = "${said.title}. ${said.body}") }
+        }
     }
 
     // ---- Profiles -----------------------------------------------------------------------------
@@ -245,12 +254,15 @@ class SettingsViewModel @Inject constructor(
                     }
                     ProfileSwitchPath.Legacy -> if(p.hasPin && pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.login(LoginRequest(p.id,pin=pin)))
                     ProfileSwitchPath.Unavailable -> _state.update{it.copy(message="Secure profile switching is unavailable. Google sign-in restrictions remain in place.")}
+                    // Away from home the picker's login is refused for every profile: say so, and name the way that works.
+                    ProfileSwitchPath.HomeNetworkOnly -> _state.update{it.copy(message=PROFILES_HOME_ONLY,pinPromptFor=null)}
                 }
             } catch(_:AuthorizationOutcomeUnknown) {markAuthorizationUncertain()}
             catch(e:TimeoutCancellationException) {_state.update{it.copy(message="Owner authorization expired. Start a new request.",ownerPin=null)}}
             catch(e:CancellationException){throw e}
             catch(e:ApiException) {
                 if(e.error?.code=="owner_pin_required") ownerPinSafely(original,p)
+                else if(isHomeNetworkRefusal(e.status,e.error?.code)) _state.update{it.copy(message=PROFILES_HOME_ONLY,pinPromptFor=null)}
                 else _state.update{it.copy(message=if(e.error?.code=="owner_pin_setup_required") "Set up the owner PIN in Streamhub on your phone with local VM approval." else when(e.status){401->"Authentication failed. Use the existing credential or sign in again.";403->"Profile switch denied. Use the existing owner PIN or approved owner phone flow.";410->"Owner sign-in expired. Start again.";else->"Could not switch profiles. Current profile remains selected."},pinPromptFor=null)}
             } catch(_:Exception){_state.update{it.copy(message="Could not switch profiles. Current profile remains selected.",pinPromptFor=null)}}
             finally {_state.update{it.copy(switching=false)}}

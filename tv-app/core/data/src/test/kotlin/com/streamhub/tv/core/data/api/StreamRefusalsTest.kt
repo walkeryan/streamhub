@@ -58,6 +58,31 @@ class StreamRefusalsTest {
         for (code in listOf("remote_access_denied", "content_restricted", "user_stream_limit")) assertFalse(code, code in StreamRefusals.ABOUT_THE_SESSION)
     }
 
+    @Test fun aSegmentOfAnEarlierStartOfARoomsStreamIsReadAsItsOwnRefusal() {
+        val e = StreamRefusals.parse(403, body(StreamRefusals.STREAM_EPOCH_STALE))!!
+        assertEquals("stream_epoch_stale", e.error?.code)
+        // It is not about the session (no refresh is made for it) and it is not the generic 403.
+        assertFalse(StreamRefusals.STREAM_EPOCH_STALE in StreamRefusals.ABOUT_THE_SESSION)
+        val shown = ApiErrors.describe(e)
+        assertEquals("Out of step with the room", shown.title)
+        assertTrue(shown.canRetry)
+        // Any other segment that is not of the grant's stream answers plain forbidden: left to the player.
+        assertNull(StreamRefusals.parse(403, body("forbidden")))
+    }
+
+    @Test fun thePickersOwnRefusalsAndPinAnswersAreWorded() {
+        fun refusal(status: Int, code: String, retryAfter: Int? = null) = ApiErrors.describe(ApiException(status, com.streamhub.tv.core.data.model.ApiError(code, "server text"), "server text", retryAfter))
+        val home = refusal(403, "home_network_only")
+        assertEquals("Home network only", home.title)
+        assertTrue(home.body.contains("Pair this TV with a code"))
+        assertFalse(home.canRetry)
+        assertEquals("That PIN isn't right", refusal(403, "pin_invalid").title)
+        assertEquals("Current PIN needed", refusal(403, "current_pin_required").title)
+        assertEquals("Wait 45 seconds, then try again.", refusal(429, "rate_limited", 45).body)
+        assertEquals("Wait about 15 minutes, then try again.", refusal(429, "rate_limited", 900).body)
+        assertEquals("Wait a little, then try again.", refusal(429, "rate_limited").body)
+    }
+
     @Test fun whatIsNotOneOfTheseRefusalsIsLeftToThePlayer() {
         // A busy source keeps reconnecting on a live channel, as before.
         assertNull(StreamRefusals.parse(409, body("source_busy")))

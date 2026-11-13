@@ -74,8 +74,18 @@ data class Profile(
     @SerialName("content_restricted") val contentRestricted: Boolean = false,
 )
 
+/**
+ * PUT /profiles/{id}/pin. Changing or clearing one's own existing PIN needs proof that this is still
+ * its owner: [currentPin] (or [currentPassword]). A first PIN needs neither. `pin` null clears.
+ */
 @Serializable
-data class PinUpdate(val pin: String?)
+data class PinUpdate(
+    val pin: String?,
+    @SerialName("current_pin") val currentPin: String? = null,
+    @SerialName("current_password") val currentPassword: String? = null,
+) {
+    override fun toString(): String = "PinUpdate(pin=[REDACTED], currentPin=[REDACTED], currentPassword=[REDACTED])"
+}
 
 // ---- Disclaimer --------------------------------------------------------------------------------
 
@@ -633,6 +643,15 @@ data class PlaybackOptions(
     @SerialName("google_required") val googleRequired: Boolean = true,
     @SerialName("content_policy_enabled") val contentPolicyEnabled: Boolean = false,
     @SerialName("owner_pin_configured") val ownerPinConfigured: Boolean = false,
+    /** "Continue with Plex" and username-and-password sign-in are offered (on the web: a TV pairs with a code). */
+    @SerialName("plex_enabled") val plexEnabled: Boolean = false,
+    @SerialName("password_enabled") val passwordEnabled: Boolean = false,
+    /**
+     * The household profile picker (GET /profiles without a token, POST /auth/login) is open to this
+     * request: it comes from the home network and google_required is false. Null from a server that
+     * does not say, which is treated as before.
+     */
+    @SerialName("profiles_enabled") val profilesEnabled: Boolean? = null,
 )
 @Serializable data class OwnerPinStart(@SerialName("profile_id") val profileId: String, val action: String = "profile_switch")
 @Serializable data class OwnerPinChallenge(
