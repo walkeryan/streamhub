@@ -109,9 +109,9 @@ test('profile change uses its own saved discovery filters and never reuses the p
   await expect.poll(async()=> (await requests(page)).at(-1)).toContain('year=2005')
 })
 
-test('default metadata fixtures support rail navigation and source scope without filtering out titles',async({page})=>{
+test('default metadata fixtures support bar navigation and source scope without filtering out titles',async({page})=>{
   await signIn(page)
-  // Movies and Shows in the rail are the library; the metadata catalog is a step from Search.
+  // Movies and Shows in the bar are the library; the metadata catalog is a step from Search.
   await page.getByRole('link',{name:'Movies',exact:true}).click()
   await expect(page).toHaveURL(/\/browse\/movies$/)
   await openDiscover(page)

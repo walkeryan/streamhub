@@ -180,24 +180,33 @@ test.describe('on a phone', () => {
   })
 })
 
-test('keyboard only: rail to Movies, along a shelf to See all and back, then the Filter panel', async ({ page }) => {
+test('keyboard only: the bar to Movies, along a shelf to See all and back, then the Filter panel', async ({ page }) => {
   await enter(page)
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowLeft')
   const rail = page.getByTestId('rail')
-  await expect(rail).toHaveAttribute('data-expanded', 'true')
-  // Focus names every destination, and no two share an icon.
-  await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Search', 'Live TV', 'Movies', 'Shows', 'My List', 'More', 'Guest'])
-  await expect(page.getByTestId('nav-movies').locator('.lbl')).toHaveCSS('opacity', '1')
+  // Every place to watch is named before focus goes anywhere near the bar; the three at its end are
+  // icons with a name of their own, and no two share an icon.
+  await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Movies', 'Shows', 'My List'])
+  for (const label of await rail.locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
+  await expect(rail.locator('.rail-icon')).toHaveCount(3)
+  await expect(rail.getByRole('link', { name: 'Search', exact: true })).toBeVisible()
+  await expect(rail.getByRole('button', { name: 'More', exact: true })).toBeVisible()
+  await expect(rail.getByRole('link', { name: 'Profile Guest', exact: true })).toBeVisible()
   const icons = await rail.locator('.rail-item svg path').evaluateAll((paths) => paths.map((path) => path.getAttribute('d')))
-  expect(new Set(icons).size).toBe(7)
-  await walk(page, 'ArrowDown', page.getByTestId('nav-movies'))
+  expect(new Set(icons).size).toBe(2)
+  // Up lands on the section being shown; the bar is the same size with focus in it as without.
+  const before = (await rail.boundingBox())!
+  await page.keyboard.press('ArrowUp')
+  await expect(page.getByTestId('nav-home')).toHaveAttribute('data-focused', 'true')
+  expect(await rail.boundingBox()).toEqual(before)
+  await walk(page, 'ArrowRight', page.getByTestId('nav-movies'))
   await page.keyboard.press('Enter')
 
   // Movies arrives on the first poster, not on a control.
   await expect(page).toHaveURL(/\/browse\/movies$/)
   await expect(page.locator('[data-row="shelf:New Releases"] [data-testid="tile"]').first()).toHaveAttribute('data-focused', 'true')
-  await expect(rail).toHaveAttribute('data-expanded', 'false')
+  await expect(rail.locator('[data-focused="true"]')).toHaveCount(0)
+  await expect(page.getByTestId('nav-movies')).toHaveAttribute('aria-current', 'page')
   await page.keyboard.press('ArrowDown')
   const drama = page.locator('[data-row="shelf:Drama"]')
   await expect(drama.locator('.fx[data-focused="true"]')).toHaveCount(1)
@@ -248,9 +257,11 @@ test('Home is composed from shelves: New Releases, shelves with See all, Recentl
   // The hero features the New Releases shelf, and says where its title plays the way a tile does.
   await expect(page.getByTestId('hero-title')).toHaveText('Neon Cartographers')
   await expect(page.getByTestId('hero').locator('.badge')).toHaveText(['In your library'])
-  // First screen at 1280x720: the hero, what is in progress, what is on, and the first shelf's posters.
+  // First screen at 1280x720, under the bar: the hero, what is in progress, what is on, and the first shelf's
+  // name over the top of its posters.
   const poster = (await page.locator('[data-row="shelf:movies:New Releases"] .tile-poster').first().boundingBox())!
-  expect(poster.y + poster.height / 2).toBeLessThan(720)
+  expect(poster.y).toBeLessThan(720)
+  await expect(page.locator('[data-row="shelf:movies:New Releases"] .row-title')).toBeInViewport({ ratio: 1 })
   await expect(page.locator('[data-row="shelf:shows:Netflix"]')).toHaveAttribute('aria-label', 'Netflix · Shows')
   await page.locator('[data-row="shelf:shows:Netflix"]').getByTestId('see-all').click()
   await expect(page).toHaveURL(/\/browse\/shows\?category=Netflix$/)
@@ -380,14 +391,19 @@ test('More offers only what the profile may use, and closes back onto its opener
   await owner.context.close()
 })
 
-test('a tablet without hover names the rail icons while it is collapsed', async ({ browser }) => {
+test('a tablet without hover reads every section name in the bar, on one row', async ({ browser }) => {
   const tablet = await other(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true })
   await enter(tablet.page)
   const rail = tablet.page.getByTestId('rail')
   await expect(rail.locator('.rail-item .lbl').first()).toBeVisible()
   expect(await tablet.page.evaluate(() => matchMedia('(hover: none)').matches)).toBe(true)
-  for (const label of await rail.locator('.rail-item .lbl').all()) await expect(label).toHaveCSS('opacity', '1')
-  expect((await rail.boundingBox())!.x).toBe(0)
+  await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Movies', 'Shows', 'My List'])
+  for (const label of await rail.locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
+  const bar = (await rail.boundingBox())!
+  expect([bar.x, bar.y, bar.width]).toEqual([0, 0, 820])
+  const entries = await rail.locator('.rail-item').evaluateAll((all) => all.map((e) => e.getBoundingClientRect().toJSON() as DOMRect))
+  expect(new Set(entries.map((e) => Math.round(e.y))).size).toBe(1)
+  for (const e of entries) expect(e.x + e.width).toBeLessThanOrEqual(820)
   expect(await fits(tablet.page)).toBe(true)
   const rows = tablet.page.getByTestId('row')
   for (const i of [0, 1, 2, 3]) expect(await bottom(rows.nth(i))).toBeLessThanOrEqual(1180)
@@ -493,7 +509,7 @@ test('TV browser at 1920x1080: Movies shows three shelves on the first screen an
   expect(Math.abs((await middle(tv.page.getByTestId('browse-filter'))) - line)).toBeLessThan(6)
   for (const i of [0, 1]) expect(await bottom(rows.nth(i).locator('.tile-poster').first())).toBeLessThanOrEqual(1080)
   const third = (await rows.nth(2).locator('.tile-poster').first().boundingBox())!
-  expect(third.y + third.height / 2).toBeLessThan(1080) // most of the third shelf's posters
+  expect(third.y + third.height / 3).toBeLessThan(1080) // under the bar: the third shelf's name and a third of its posters
   expect(await fits(tv.page)).toBe(true)
 
   await tv.page.goto('/title/tmdb%3Amovie%3A103')
@@ -624,7 +640,7 @@ test.describe('review of the first pass', () => {
     await guest.context.close()
   })
 
-  test('the rail and the phone menu show the person, not only an initial: a picture, else their avatar', async ({ page, browser }) => {
+  test('the bar and the phone menu show the person, not only an initial: a picture, else their avatar', async ({ page, browser }) => {
     const picture = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#888"/></svg>')}`
     const withPicture = (url: string) => page.evaluate((url) => {
       const db = JSON.parse(localStorage.getItem('mock.people.v1')!) as { users: Array<{ id: string; picture: string | null }> }
@@ -640,7 +656,7 @@ test.describe('review of the first pass', () => {
     await page.reload()
     await expect(entry.locator('img')).toHaveAttribute('src', picture)
     const face = (await entry.locator('img').boundingBox())!
-    expect([Math.round(face.width), Math.round(face.height)]).toEqual([22, 22])
+    expect([Math.round(face.width), Math.round(face.height)]).toEqual([28, 28])
     // A picture that will not load falls back quietly.
     await withPicture('/api/v1/images/refused-token')
     await page.reload()

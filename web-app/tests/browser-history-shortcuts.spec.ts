@@ -1,13 +1,14 @@
 import { expect, test } from '@playwright/test'
 import { activeFilter, closeFilters, openFilters, signIn } from './helpers'
 
-test('Alt arrows leave focus alone; browser history restores filters and plain Left opens the rail', async ({ page }) => {
+test('Alt arrows leave focus alone; browser history restores filters and plain Up reaches the bar', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await signIn(page)
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowLeft')
-  await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
+  const inBar = page.getByTestId('rail').locator('[data-focused="true"]')
+  await page.keyboard.press('ArrowUp')
+  await expect(inBar).toHaveCount(1)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
   await openFilters(page)
   await page.getByRole('button', { name: 'Year', exact: true }).click()
@@ -15,12 +16,15 @@ test('Alt arrows leave focus alone; browser history restores filters and plain L
   await closeFilters(page)
   await page.getByRole('link', { name: 'Shows', exact: true }).click()
   await expect(page).toHaveURL(/\/browse\/shows$/)
+  // The screen takes focus from the bar once its shelves are in; a field tapped before that keeps the caret
+  // and leaves the bar entry ringed, which is not what this test is about.
+  await expect(inBar).toHaveCount(0)
   const search = page.getByLabel('Search this library')
   await search.click()
   await expect(search).toBeFocused()
   await page.keyboard.press('Alt+ArrowLeft')
   await expect(search).toBeFocused()
-  await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'false')
+  await expect(inBar).toHaveCount(0)
   // Headless Chrome does not execute browser-chrome accelerators. Exercise its
   // history separately; the companion test proves our handler leaves defaults intact.
   await page.goBack()
@@ -45,5 +49,5 @@ test('modified arrow events remain uncancelled even in a search field', async ({
   }))
   expect(outcomes).toEqual([{ allowed: true, prevented: false }, { allowed: true, prevented: false }])
   await expect(input).toBeFocused()
-  await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'false')
+  await expect(page.getByTestId('rail').locator('[data-focused="true"]')).toHaveCount(0)
 })

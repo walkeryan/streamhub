@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { signIn } from './helpers'
+import { focusBarEntry, signIn } from './helpers'
 
 const MOVIE = 'Velvet Antarctica'
 const MOVIE_ID = 'tmdb:movie:301'
@@ -23,20 +23,15 @@ async function connectManager(page: Page) {
   expect(saved.json).toEqual({ url: MANAGER, api_key_set: true })
 }
 
-/** Open the rail with Left and walk it with Up/Down to a destination. */
-async function rail(page: Page, testId: string) {
-  await page.keyboard.press('ArrowLeft')
-  await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
-  const item = page.getByTestId(testId)
-  for (let i = 0; i < 12 && (await item.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowUp')
-  for (let i = 0; i < 12 && (await item.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowDown')
-  await expect(item).toHaveAttribute('data-focused', 'true')
+/** Reach the top bar with Up, walk it with Left/Right to a destination and open it. */
+async function bar(page: Page, testId: string) {
+  await focusBarEntry(page, testId)
   await page.keyboard.press('Enter')
 }
 
-/** Requests sits in the More menu: open it from the rail, walk down to the entry. */
+/** Requests sits in the More menu: open it from the bar, walk down to the entry. */
 async function more(page: Page, testId: string) {
-  await rail(page, 'nav-more')
+  await bar(page, 'nav-more')
   const item = page.getByTestId('more-menu').getByTestId(testId)
   for (let i = 0; i < 8 && (await item.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowDown')
   await expect(item).toHaveAttribute('data-focused', 'true')
@@ -52,7 +47,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await expect(page.getByTestId('notices')).toHaveCount(0)
 
   // Search finds a title no source has; its tile says so and opens the title page.
-  await rail(page, 'nav-search')
+  await bar(page, 'nav-search')
   await expect(page.getByLabel('Search titles and channels')).toBeFocused()
   await page.keyboard.type('velvet')
   const result = page.getByTestId('group-missing').getByTestId('tile')
@@ -100,7 +95,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
 
   // The next library sync brings the title in; Home tells the requester.
   expect((await elsewhere(page, 'p1', 'POST', '/sources/s_plex/sync')).status).toBe(202)
-  await rail(page, 'nav-home')
+  await bar(page, 'nav-home')
   const notice = page.getByTestId('notice')
   await expect(notice).toHaveCount(1)
   await expect(notice).toContainText(`${MOVIE} is now available`)

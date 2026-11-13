@@ -12,7 +12,7 @@ test('Home rows retain titles and remote focus on desktop and mobile', async ({ 
   await expect(focused.locator('.cap')).toHaveCSS('opacity', '1')
   const art = await focused.boundingBox()
   expect(art!.width / art!.height).toBeCloseTo(16 / 9, 1)
-  await page.waitForTimeout(250) // allow focus/rail transitions to finish for visual evidence
+  await page.waitForTimeout(250) // allow focus transitions to finish for visual evidence
   await page.screenshot({ path: '/tmp/streamhub-reference-home-desktop.png' })
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)

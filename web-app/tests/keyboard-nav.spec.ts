@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { focusedLabel, signIn } from './helpers'
+import { focusBarEntry, focusedLabel, signIn } from './helpers'
 
 test('keyboard only: Home -> title -> player, Escape restores focus', async ({ page }) => {
   await signIn(page)
@@ -39,12 +39,15 @@ test('keyboard only: Home -> title -> player, Escape restores focus', async ({ p
   await expect.poll(() => focusedLabel(page)).toBe(tileLabel)
 })
 
-test('keyboard only: left from the first tile opens the rail, Enter navigates, Escape collapses', async ({ page }) => {
+test('keyboard only: Up from the hero reaches the bar, Escape returns to the content, Enter navigates', async ({ page }) => {
   await signIn(page)
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowLeft') // hero Play -> rail
-  await expect(page.getByTestId('rail')).toHaveAttribute('data-expanded', 'true')
-  await page.keyboard.press('ArrowDown') // Search
+  await page.keyboard.press('ArrowUp') // hero Play -> the bar, on the section being shown
+  await expect(page.getByTestId('nav-home')).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
+  await expect(page).toHaveURL(/\/$/)
+  await focusBarEntry(page, 'nav-search')
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/search/)
   await expect(page.getByLabel('Search titles and channels')).toBeFocused()

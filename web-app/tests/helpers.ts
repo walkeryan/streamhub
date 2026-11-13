@@ -40,4 +40,15 @@ export async function closeFilters(page: Page) {
 /** A filter in force is named under the search field, also while the Filter panel is closed. */
 export const activeFilter = (page: Page, text: string) => page.getByTestId('active-filter').filter({ hasText: text })
 
+/** Keyboard only: Up from the content reaches the top bar, Left/Right walk it to an entry. */
+export async function focusBarEntry(page: Page, testId: string) {
+  const bar = page.getByTestId('rail')
+  for (let i = 0; i < 8 && (await bar.locator('[data-focused="true"]').count()) === 0; i++) await page.keyboard.press('ArrowUp')
+  await expect(bar.locator('[data-focused="true"]')).toHaveCount(1)
+  const item = page.getByTestId(testId)
+  for (let i = 0; i < 8 && (await item.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowLeft')
+  for (let i = 0; i < 8 && (await item.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowRight')
+  await expect(item).toHaveAttribute('data-focused', 'true')
+}
+
 export const focusedLabel = (page: Page) => page.locator('.fx[data-focused="true"]').last().getAttribute('aria-label')
