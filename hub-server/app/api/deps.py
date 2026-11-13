@@ -25,12 +25,37 @@ def get_container(request: Request) -> Container:
 C = Annotated[Container, Depends(get_container)]
 
 
+_BROWSERS = (("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"), ("Chrome/", "Chrome"), ("Safari/", "Safari"))
+_SYSTEMS = (
+    ("Android", "Android"),
+    ("iPhone", "iPhone"),
+    ("iPad", "iPad"),
+    ("Windows", "Windows"),
+    ("Mac OS X", "macOS"),
+    ("CrOS", "ChromeOS"),
+    ("Linux", "Linux"),
+)
+
+
+def device_label(kind: str, agent: str) -> str | None:
+    """A name a person recognizes their device by in a session list: "Chrome on Linux", "TV"."""
+    if kind == "tv":
+        return "TV"
+    browser = next((name for mark, name in _BROWSERS if mark in agent), None)
+    system = next((name for mark, name in _SYSTEMS if mark in agent), None)
+    if kind != "browser" or not browser:
+        return None
+    return f"{browser} on {system}" if system else browser
+
+
 def session_meta(request: Request, kind: str | None = None) -> SessionMeta:
     """What to record about the device asking for tokens. Informational: shown to its owner."""
     agent = request.headers.get("user-agent", "")
     forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    kind = kind or ("browser" if agent.startswith("Mozilla/") else "api")
     return SessionMeta(
-        kind=kind or ("browser" if agent.startswith("Mozilla/") else "api"),
+        kind=kind,
+        label=device_label(kind, agent),
         user_agent=agent or None,
         ip=forwarded or (request.client.host if request.client else None),
     )
