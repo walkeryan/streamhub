@@ -128,6 +128,17 @@ class DeviceCode(_M):
     interval: int
 
 
+class DeviceLookupRequest(_M):
+    user_code: str = Field(default="", max_length=64)
+
+
+class DeviceLookup(_M):
+    user_code: str
+    ip: str | None = Field(default=None, description="where the device asked from, as the server saw it")
+    user_agent: str | None = None
+    expires_in: int
+
+
 class DevicePoll(_M):
     device_code: str = ""
 

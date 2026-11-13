@@ -132,6 +132,7 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "plex": (20, 60),
     "device": (10, 60),
     "device_poll": (60, 60),
+    "device_lookup": (30, 60),
     "invite": (20, 60),
     "password": (30, 60),
     "profiles": (60, 60),

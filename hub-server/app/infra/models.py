@@ -205,6 +205,9 @@ class DeviceCode(Base):
     # "Shared household device", ticked by an approver holding users.manage, and who that was.
     shared_device: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     approved_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Where the request for this code came from, shown to whoever is asked to approve it.
+    requested_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
 class Source(Base):

@@ -1393,6 +1393,16 @@ paths:
     post: { security: [], summary: "Exchange a refresh token for a new pair; refresh tokens rotate", description: "Every refresh answers a new refresh token and makes the presented one the previous one. The previous one is still honoured for 60 seconds (two tabs, or a retried request, refreshing at once) and answers the current pair without rotating again. A token older than that being presented means a copy is being replayed: the session is revoked (401 session_revoked) for whoever holds it, and the device signs in again. A client stores the new refresh token before it uses the new access token.", requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
   /auth/device:
     post: { security: [], summary: TV starts pairing; shows user_code, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceCode' } } } } } }
+  /auth/device/lookup:
+    post:
+      summary: What is asking to pair under a code, shown before it is approved
+      description: >-
+        A link with a code in it is how someone else's device gets signed in as the person who approves
+        it, so the approval screen says what is asking: the address and user agent the request for the
+        code came from. Signs nothing in. 404 for a code that is unknown, expired, used or already approved.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_code], properties: { user_code: {type: string, maxLength: 64} } } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [user_code, expires_in], properties: { user_code: {type: string}, ip: {type: string, nullable: true}, user_agent: {type: string, nullable: true}, expires_in: {type: integer} } } } } }
   /auth/device/poll:
     post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { device_code: {type: string} } } } } }, responses: { '200': { description: approved, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }, '428': { description: pending } } }
   /auth/device/approve:
@@ -1765,8 +1775,13 @@ paths:
   /users/{id}/pin:
     put:
       summary: Set or clear a user's PIN (one's own; anyone's with users.manage)
+      description: >-
+        Changing or clearing one's own existing PIN needs proof that this is still its owner: current_pin
+        (403 pin_invalid when wrong; five guesses in fifteen minutes, then 429), or current_password, or a
+        sign-in made in the last ten minutes. Otherwise 403 current_pin_required. A first PIN needs nothing;
+        someone else's is a user manager's to set. PUT /profiles/{id}/pin asks the same.
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }
       responses: { '204': { description: ok } }
   /users/{id}/methods/{method}:
     delete:

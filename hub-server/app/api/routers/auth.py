@@ -140,8 +140,17 @@ async def adult_lock(c: C, p: P) -> Response:
 
 
 @router.post("/auth/device", response_model=S.DeviceCode, tags=["auth"], dependencies=[limited("device")])
-async def device_start(c: C) -> dict[str, Any]:
-    return await c.auth.start_device()
+async def device_start(request: Request, c: C) -> dict[str, Any]:
+    return await c.auth.start_device(session_meta(request, "tv"))
+
+
+@router.post(
+    "/auth/device/lookup", response_model=S.DeviceLookup, tags=["auth"], dependencies=[limited("device_lookup")]
+)
+async def device_lookup(body: S.DeviceLookupRequest, response: Response, c: C, p: P) -> dict[str, Any]:
+    """What is asking to pair under this code, shown before it is approved."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return await c.auth.describe_device(body.user_code)
 
 
 @router.post(

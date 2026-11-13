@@ -813,7 +813,7 @@ class AuthService:
         return prof, await self.issue(prof, meta=meta)
 
     # ------------------------------------------------------------------ device pairing
-    async def start_device(self) -> dict[str, Any]:
+    async def start_device(self, meta: SessionMeta | None = None) -> dict[str, Any]:
         device_code = secrets.token_urlsafe(32)
         async with self._db.session() as s:
             await s.execute(delete(DeviceCode).where(DeviceCode.expires_at < utcnow()))
@@ -829,6 +829,8 @@ class AuthService:
                     device_code=device_code,
                     user_code=user_code,
                     expires_at=utcnow() + timedelta(seconds=DEVICE_CODE_TTL),
+                    requested_ip=(meta.ip or "")[:64] or None if meta else None,
+                    requested_agent=(meta.user_agent or "")[:512] or None if meta else None,
                 )
             )
             await s.commit()
@@ -907,6 +909,33 @@ class AuthService:
         )
 
     @staticmethod
+    def _user_code(value: str) -> str:
+        return (value or "").strip().upper().replace("-", "").replace(" ", "")
+
+    async def describe_device(self, user_code: str) -> dict[str, Any]:
+        """What is asking to be paired under this code, for the person about to approve it.
+
+        A code in a link is the way an attacker's device gets signed in as someone else, so the
+        approval screen says where the request came from. Nothing here signs anything in.
+        """
+        code = self._user_code(user_code)
+        async with self._db.session() as s:
+            row = (
+                (await s.execute(select(DeviceCode).where(DeviceCode.user_code == code))).scalar_one_or_none()
+                if code
+                else None
+            )
+        now = utcnow()
+        if row is None or row.consumed or row.approved_profile_id or row.expires_at <= now:
+            raise NotFound("unknown code")
+        return {
+            "user_code": row.user_code,
+            "ip": row.requested_ip,
+            "user_agent": row.requested_agent,
+            "expires_in": max(1, int((row.expires_at - now).total_seconds())),
+        }
+
+    @staticmethod
     def _require_pairing_proof(proof: float | None, created: float) -> None:
         if proof is None or proof < created - 2 or proof > time.time() + 2:
             raise Forbidden(
@@ -916,7 +945,7 @@ class AuthService:
     async def approve_device(
         self, principal: Principal, user_code: str, profile_id: str | None, shared_device: bool = False
     ) -> None:
-        code = (user_code or "").strip().upper().replace("-", "").replace(" ", "")
+        code = self._user_code(user_code)
         target = profile_id or principal.profile_id
         if shared_device and not _can(principal, "users.manage"):
             # A shared device offers every household user at its picker: a manager's decision.

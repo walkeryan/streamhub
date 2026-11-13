@@ -1,5 +1,5 @@
 """More ways to sign in: a Plex identity and a username with a password on the user, named
-invites, and sessions that count their refreshes."""
+invites, sessions that count their refreshes, and pairing codes that remember what asked."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -27,9 +27,15 @@ def upgrade() -> None:
     # which is what a token minted before this carries.
     op.add_column("auth_session", sa.Column("refresh_seq", sa.Integer(), nullable=False, server_default="0"))
     op.add_column("auth_session", sa.Column("refresh_rotated_at", sa.DateTime()))
+    # What asked for a pairing code, so whoever approves it can be shown.
+    op.add_column("device_code", sa.Column("requested_ip", sa.String(64)))
+    op.add_column("device_code", sa.Column("requested_agent", sa.String(512)))
 
 
 def downgrade() -> None:
+    with op.batch_alter_table("device_code") as batch:
+        batch.drop_column("requested_agent")
+        batch.drop_column("requested_ip")
     with op.batch_alter_table("auth_session") as batch:
         batch.drop_column("refresh_rotated_at")
         batch.drop_column("refresh_seq")
