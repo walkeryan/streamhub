@@ -152,7 +152,7 @@ export function LiveTV() {
   const chipGroups = topGroups.slice(0, GROUP_CHIPS)
   // Beside its chip where the row has room to grow; on a phone, or for a group past the chips, on a line of its own.
   const besideChip = !phone && chipGroups.some((g) => g.id === chip?.id)
-  const subgroups = chip && children.length > 0 && <CatalogPicker scope="live:subgroup" label={chip.name} search={false} testId="live-subgroup" className={besideChip ? 'btn-chip' : undefined} value={group}
+  const subgroups = chip && children.length > 0 && <CatalogPicker scope="live:subgroup" label={chip.name} search={false} testId="live-subgroup" className="btn-chip" value={group}
     options={[{ id: chip.id, label: `All ${chip.name}`, count: chip.channel_count }, ...children.map((g) => ({ id: g.id, label: g.name, count: g.channel_count }))]} onChange={(id) => pick(id)} />
   const sourceOptions = [{ id: '', label: 'All sources' }, ...(sources.data ?? []).filter((s) => s.type === 'm3u' || s.type === 'xtream').map((s) => ({ id: s.id, label: s.name }))]
 

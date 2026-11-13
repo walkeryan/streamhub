@@ -366,7 +366,8 @@ h1, h2, h3, p { margin: 0; }
   /* Title, switch and the two icons share the first line; an open search field takes the next one. */
   .live-bar { flex-wrap: wrap; gap: 0.5rem; }
   .live-tools { margin-left: auto; max-width: 100%; }
-  .live-search { flex: 1; }
+  .live-tools:has(.live-search) { flex: 1 1 100%; }
+  .live-search { flex: 1; width: auto; }
   /* No room for the note: the guide's last row has the count, Options the choices. Screen readers still get it. */
   .live-note { position: absolute; width: 1px; height: 1px; flex: none; clip: rect(0 0 0 0); }
 }

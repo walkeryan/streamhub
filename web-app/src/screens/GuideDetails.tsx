@@ -60,7 +60,8 @@ export function GuideDetailsPanel(p: GuideDetailsProps) {
 export function GuideDetailsLine(p: GuideDetailsProps) {
   const [open, setOpen] = useState(false)
   const { channel: c, programme } = p
-  if (!c) return <p className="epg-details-line label" data-testid="guide-info"><span className="truncate">{p.hint}</span></p>
+  // One line has no room for the panel's hint, and a finger does not "move over" anything.
+  if (!c) return <p className="epg-details-line label" data-testid="guide-info"><span className="truncate">Select a programme for its details.</span></p>
   const title = programme?.title ?? c.name
   return <>
     <Focusable focusKey="guide:details" className="epg-details-line fx-flat" label={`Details: ${title}`} data-testid="guide-info" onEnter={() => setOpen(true)}>
