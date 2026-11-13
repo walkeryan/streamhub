@@ -292,7 +292,7 @@ h1, h2, h3, p { margin: 0; }
 .search-sections { display: flex; flex-direction: column; gap: 1.75rem; padding-bottom: 2rem; }
 .search-section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
 [data-testid='search-results'][data-stale] { opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
-.search-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(19rem, 100%), 1fr)); gap: 0.5rem; }
+.search-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(22rem, 100%), 1fr)); gap: 0.5rem; }
 .search-row {
   display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; min-height: 3.5rem; padding: 0.5rem 0.75rem;
   border-radius: var(--radius-md); background: var(--t-surface); border: 1px solid var(--surface-edge);
