@@ -8,6 +8,7 @@ import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.normalizeServerUrl
 import com.streamhub.tv.core.data.model.DeviceCode
 import com.streamhub.tv.core.data.repo.LocalPrefs
+import com.streamhub.tv.core.data.repo.MeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -42,6 +43,7 @@ class OnboardingViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val session: SessionStore,
     private val prefs: LocalPrefs,
+    private val me: MeRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(OnboardingState())
     val state: StateFlow<OnboardingState> = _state.asStateFlow()
@@ -146,6 +148,10 @@ class OnboardingViewModel @Inject constructor(
         session.saveTokens(tokens)
         val v = _state.value.disclaimerVersion
         if (tokens.profile.disclaimerAcceptedVersion != v) runCatching { api.acceptDisclaimer(v) }
+        // Who was just signed in and what they may do, before the first screen asks. A failure here
+        // must not hold up pairing: the shell reads it again.
+        me.clear()
+        runCatching { me.refresh() }
         _state.update { it.copy(step = OnboardingStep.Done) }
     }
 

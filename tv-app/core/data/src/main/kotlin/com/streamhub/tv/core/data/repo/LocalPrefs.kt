@@ -67,7 +67,19 @@ class LocalPrefs @Inject constructor(@ApplicationContext private val context: Co
         context.localPrefs.edit { it[DISCLAIMER] = version }
     }
 
+    /**
+     * What GET /auth/me last said about `shared_device`; null before the first answer. Kept on the
+     * device so a household TV opens straight on "Who's watching?" instead of flashing the last
+     * person's Home while the server is asked again.
+     */
+    val sharedDevice: Flow<Boolean?> = context.localPrefs.data.map { it[SHARED_DEVICE] }
+
+    suspend fun setSharedDevice(shared: Boolean) {
+        context.localPrefs.edit { it[SHARED_DEVICE] = shared }
+    }
+
     private companion object {
+        val SHARED_DEVICE = booleanPreferencesKey("shared_device")
         val REDUCED_MOTION = booleanPreferencesKey("reduced_motion")
         val DISCLAIMER = stringPreferencesKey("disclaimer_version")
     }

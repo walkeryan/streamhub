@@ -77,6 +77,9 @@ class StreamHubApi @Inject constructor(
     suspend fun health(serverBase: String): Boolean =
         runCatching { client.get("$serverBase/api/v1/health").status.isSuccess() }.getOrDefault(false)
 
+    /** Who this TV is signed in as and what they may do. Servers without users and roles answer 404. */
+    suspend fun me(): Me = get("/auth/me")
+
     suspend fun login(req: LoginRequest): AuthTokens = client.post(url("/auth/login")) { setBody(req) }.ok()
     suspend fun startDevicePairing(): DeviceCode = client.post(url("/auth/device")).ok()
 

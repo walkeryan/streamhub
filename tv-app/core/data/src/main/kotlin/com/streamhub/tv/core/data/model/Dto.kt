@@ -21,8 +21,10 @@ data class ActiveStream(
 data class ApiError(
     val code: String = "",
     val message: String = "",
-    /** Optional on `source_busy`: who is using the source's connections right now. */
+    /** Optional on `source_busy` and `user_stream_limit`: the streams in the way right now. */
     val active: List<ActiveStream> = emptyList(),
+    /** Optional on 403 `forbidden`: the permissions the caller lacks. */
+    val missing: List<String> = emptyList(),
 )
 
 // ---- Auth ------------------------------------------------------------------------------------

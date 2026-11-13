@@ -50,6 +50,8 @@ import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.handoff.HandoffResult
 import com.streamhub.tv.core.data.repo.LocalPrefs
+import com.streamhub.tv.core.data.repo.MeRepository
+import com.streamhub.tv.core.data.repo.MeState
 import com.streamhub.tv.core.data.repo.PlayEvent
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.data.repo.SessionEvents
@@ -85,7 +87,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.stateIn
 import androidx.lifecycle.viewModelScope
 import javax.inject.Inject
@@ -134,6 +138,7 @@ class RootViewModel @Inject constructor(
     prefs: LocalPrefs,
     val coordinator: PlaybackCoordinator,
     val sessionEvents: SessionEvents,
+    val me: MeRepository,
 ) : ViewModel() {
     /** null until DataStore has loaded (avoids flashing onboarding). */
     val session: StateFlow<Session?> = sessionStore.session.map<Session, Session?> { it }
@@ -142,6 +147,15 @@ class RootViewModel @Inject constructor(
     /** null until loaded. A paired TV that never accepted the legal notice still goes through the gate. */
     val disclaimerAccepted: StateFlow<Boolean?> = prefs.disclaimerAcceptedVersion.map<String?, Boolean?> { isDisclaimerAccepted(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    init {
+        // What the signed-in user may do: read on start, forgotten when the TV is signed out.
+        viewModelScope.launch {
+            sessionStore.session.map { it.isPaired }.distinctUntilChanged().collect { paired ->
+                if (paired) { if (me.state.value == MeState.Unknown) me.refresh() } else me.clear()
+            }
+        }
+    }
 }
 
 @Composable

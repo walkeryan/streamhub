@@ -1,6 +1,7 @@
 package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.model.ActiveStream
+import com.streamhub.tv.core.data.model.Permissions
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.nio.channels.UnresolvedAddressException
@@ -46,6 +47,24 @@ object ApiErrors {
                 "No source for this title has confirmed audio in your languages. Try again and pick the one to play.",
                 canRetry = true,
             )
+            "forbidden" -> UserError("Not allowed", forbiddenBody(error.missing), canRetry = false)
+            "user_suspended" -> UserError(
+                "Account suspended",
+                "This account has been suspended. Ask the owner of this StreamHub server to reinstate it.",
+                canRetry = false,
+            )
+            "approval_pending" -> UserError(
+                "Waiting for approval",
+                "The owner of this StreamHub server hasn't approved this account yet. Try again once they have.",
+                canRetry = true,
+            )
+            "user_stream_limit" -> UserError("Already watching", ownStreamsBody(error.active), canRetry = true)
+            // Reached only when the silent refresh and its one retry did not settle it (see HttpClientFactory).
+            "session_stale" -> UserError(
+                "Access updated",
+                "What this account may do was changed on the server. Try again.",
+                canRetry = true,
+            )
             "disclaimer_required" -> UserError(
                 "Legal notice not accepted",
                 "This can't play until the legal notice has been accepted for this profile. Restart StreamHub to read and accept it.",
@@ -64,6 +83,23 @@ object ApiErrors {
                 0 -> UserError("No server set", "This TV isn't connected to a StreamHub server yet.", canRetry = false)
                 else -> UserError("That didn't work", detail ?: "The server refused the request (error ${e.status}).", canRetry = e.status == 408 || e.status == 409 || e.status == 429)
             }
+        }
+    }
+
+    /** "You don't have permission for this." and, when the server names them, what is missing. */
+    private fun forbiddenBody(missing: List<String>): String {
+        val named = missing.filter { it.isNotBlank() }.map(Permissions::label)
+        return if (named.isEmpty()) "You don't have permission for this."
+        else "You don't have permission for this. Ask the owner to let you ${named.joinToString(", ")}."
+    }
+
+    /** "You're already watching <title> on another device." when the server lists the streams in the way. */
+    private fun ownStreamsBody(active: List<ActiveStream>): String {
+        val titles = active.mapNotNull { it.title?.takeIf(String::isNotBlank) }
+        return when (titles.size) {
+            0 -> "You're already watching on as many devices as your account allows. Stop playback on one of them, then try again."
+            1 -> "You're already watching ${titles[0]} on another device. Stop it there, then try again."
+            else -> "You're already watching ${titles.dropLast(1).joinToString(", ")} and ${titles.last()} on other devices. Stop one of them, then try again."
         }
     }
 

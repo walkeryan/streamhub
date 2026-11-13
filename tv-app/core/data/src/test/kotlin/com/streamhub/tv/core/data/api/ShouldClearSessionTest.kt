@@ -19,4 +19,17 @@ class ShouldClearSessionTest {
     }
 
     @Test fun noResponseKeepsTheSession() = assertFalse(shouldClearSession(null))
+
+    @Test fun suspensionAndPendingApprovalKeepThePairing() {
+        // Both are about the person and can be undone on the server; the token itself is not bad.
+        assertFalse(shouldClearSession(401, "user_suspended"))
+        assertFalse(shouldClearSession(403, "user_suspended"))
+        assertFalse(shouldClearSession(403, "approval_pending"))
+    }
+
+    @Test fun otherRefusalsOfTheRefreshTokenStillClear() {
+        assertTrue(shouldClearSession(401, "session_revoked"))
+        assertTrue(shouldClearSession(401, "unauthorized"))
+        assertTrue(shouldClearSession(401, null))
+    }
 }
