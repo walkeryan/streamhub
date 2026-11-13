@@ -34,6 +34,8 @@ type SavedLiveFilters = z.infer<typeof liveFilterSchema>
 const channelCount = (groups?: ChannelGroup[]) => groups?.reduce((sum, g) => sum + g.channel_count, 0)
 const validateLiveFilters = (raw: unknown) => { const parsed = liveFilterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
 
+const PREVIEW_KEY = 'sh.live.preview'
+
 export function LiveTV() {
   const location = useLocation()
   const [view, setView] = useHistoryState<'channels' | 'guide'>('live:view', new URLSearchParams(location.search).get('view') === 'guide' ? 'guide' : 'channels')
@@ -50,7 +52,14 @@ export function LiveTV() {
   const term = useDebounced(search, 300)
   const [page, setPage] = useHistoryState('live:page', 0)
   const [focusedId, setFocusedId] = useHistoryState<string | null>('live:selected-channel', null)
-  const [previewEnabled, setPreviewEnabled] = useState(false)
+  // Off until the viewer asks: every preview holds one of the source's few connections. The choice
+  // is kept for this browser, so someone who wants previews turns them on once.
+  const [previewEnabled, setPreviewOn] = useState(() => { try { return localStorage.getItem(PREVIEW_KEY) === '1' } catch { return false } })
+  const setPreviewEnabled = (next: boolean | ((was: boolean) => boolean)) => setPreviewOn((was) => {
+    const on = typeof next === 'function' ? next(was) : next
+    try { localStorage.setItem(PREVIEW_KEY, on ? '1' : '0') } catch { /* private window: the choice lasts for the visit */ }
+    return on
+  })
   const [previewId, setPreviewId] = useState<string | null>(null)
   const phone = usePhone()
   const languages = useLanguages()
@@ -162,7 +171,7 @@ export function LiveTV() {
       </div>
       {/* A phone has no room for a preview: selecting a channel plays it. */}
       {!phone && <aside className="live-catalog-preview flex flex-col gap-3" aria-label="Preview" style={{ position: 'sticky', top: 'calc(var(--bar-h) + 1rem)', alignSelf: 'start' }}>
-        <Preview channelId={previewId} />
+        <Preview channelId={previewId} off={!previewEnabled} onTurnOn={() => setPreviewEnabled(true)} />
         {focused && <div className="flex flex-col gap-1" data-testid="live-info"><h2 className="title-xl">{focused.number} · {focused.name}</h2><p className="flex items-center gap-2 flex-wrap">{focused.now ? `Now: ${focused.now.title} (${fmtTime(focused.now.start)} to ${fmtTime(focused.now.stop)})` : 'No programme data supplied for this channel'}<RecordingBadge state={focused.now?.recording_state} /></p>{focused.next && <p className="muted flex items-center gap-2 flex-wrap">Next: {focused.next.title} at {fmtTime(focused.next.start)}<RecordingBadge state={focused.next.recording_state} /></p>}</div>}
         <FocusGroup focusKey="live:actions" className="flex gap-2 flex-wrap">
           <Button focusKey="live:watch" primary icon="play" disabled={!focused} onEnter={() => focused && playChannel(focused)}>Watch full screen</Button>
