@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-// Same breakpoint as base.css: below it the bottom bar replaces the rail.
+// Same breakpoint as base.css: below it the bottom bar replaces the top bar.
 const PHONE = '(max-width: 720px)'
 const subscribe = (notify: () => void) => {
   const query = window.matchMedia(PHONE)

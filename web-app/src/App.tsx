@@ -47,7 +47,8 @@ function Shell() {
   return (
     <div className="shell">
       <Rail />
-      <FocusGroup focusKey="MAIN" as="main" className="main" remember={false}>
+      {/* Down from the top bar, and Back while in it, return to what was focused here. */}
+      <FocusGroup focusKey="MAIN" as="main" className="main">
         <Suspense fallback={<div className="page-pad"><Skeleton style={{ height: '16rem' }} /></div>}><Outlet /></Suspense>
       </FocusGroup>
     </div>
