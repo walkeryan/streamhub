@@ -127,7 +127,9 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
     const el = scroller.current
     if (!el) return
     const px = remPx(), box = el.getBoundingClientRect(), r = node.getBoundingClientRect()
-    const top = box.top + HEAD_REM * px, bottom = box.top + el.clientHeight
+    // The grid runs to the bottom edge; on a TV the focused row still stops short of the overscan margin.
+    const margin = window.matchMedia('(min-width: 1800px)').matches ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-y')) * px : 0
+    const top = box.top + HEAD_REM * px, bottom = Math.min(box.top + el.clientHeight, window.innerHeight - margin)
     if (r.top < top) el.scrollTop -= top - r.top
     else if (r.bottom > bottom) el.scrollTop += r.bottom - bottom
     if (!programme) return

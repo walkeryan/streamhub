@@ -151,13 +151,13 @@ export function LiveTV() {
   const parents = new Set(shownGroups.filter((g) => g.parent).map((g) => `${g.source_id}|${g.parent}`))
   const chipGroups = topGroups.slice(0, GROUP_CHIPS)
   // Beside its chip where the row has room to grow; on a phone, or for a group past the chips, on a line of its own.
-  const besideChip = !phone && chipGroups.some((g) => g.id === chip?.id)
+  const chipInRow = chipGroups.some((g) => g.id === chip?.id)
+  const besideChip = !phone && chipInRow
   const subgroups = chip && children.length > 0 && <CatalogPicker scope="live:subgroup" label={chip.name} search={false} testId="live-subgroup" className="btn-chip" value={group}
     options={[{ id: chip.id, label: `All ${chip.name}`, count: chip.channel_count }, ...children.map((g) => ({ id: g.id, label: g.name, count: g.channel_count }))]} onChange={(id) => pick(id)} />
   const sourceOptions = [{ id: '', label: 'All sources' }, ...(sources.data ?? []).filter((s) => s.type === 'm3u' || s.type === 'xtream').map((s) => ({ id: s.id, label: s.name }))]
 
   // One small × beside the filter in force clears them all: after the chosen chip, else beside the search.
-  const chipInRow = chipGroups.some((g) => g.id === chip?.id)
   const clearAt = favOnly ? 'fav' : chipInRow ? chip!.id : group ? 'more' : 'search'
   const clear = (group || source || favOnly || search) && <Chip focusKey="live:reset" label="Clear filters" onEnter={reset}><Icon name="x" size={14} /></Chip>
   // A choice made in Options is named in the header only while it is not the usual one.
