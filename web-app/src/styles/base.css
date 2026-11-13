@@ -562,11 +562,12 @@ h1, h2, h3, p { margin: 0; }
   .sports-row { grid-template-columns: 4.5rem minmax(0, 1fr) auto; padding-inline: 0.75rem; }
 }
 
-/* Movies and Shows: title (or the phone's Movies/Shows switch), search and Filter on one band, then content. */
+/* Movies and Shows: the title and Filter on one band (on a phone the Movies/Shows switch, with Filter at
+   the end of its line), then content. */
 .browse-head { display: flex; flex-direction: column; gap: 0.75rem; padding-bottom: 0.75rem; }
 .browse-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
-.browse-search { flex: 1 1 12rem; max-width: 28rem; min-width: 0; }
-.browse-switch { display: flex; gap: 0.5rem; flex-basis: 100%; }
+.browse-switch { display: flex; gap: 0.5rem; }
+@media (max-width: 720px) { .browse-bar { justify-content: space-between; } }
 
 /* Title page: poster beside the text on wide screens; on a phone a small poster beside the name,
    then the overview and one row of primary actions. */

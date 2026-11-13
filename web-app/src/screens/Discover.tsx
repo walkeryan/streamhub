@@ -6,7 +6,7 @@ import type { paths } from '../api/types'
 import { useProfilePreference } from '../api/profilePreferences'
 import { useSources } from '../api/hooks'
 import { useSession } from '../store/session'
-import { useGo, useRestoreFocus } from '../nav/back'
+import { useRestoreFocus } from '../nav/back'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { MediaTile } from '../components/Tile'
 import { CatalogPicker } from '../components/CatalogPicker'
@@ -27,7 +27,6 @@ export function Discover() {
   const validYear=year===''||(/^\d{4}$/.test(year)&&+year>=1888&&+year<=2100)
   const preferred=language==='mine'?profile?.languages.join(',')||'all':'all'
   const sources=useSources()
-  const go=useGo()
   const query=useQuery({
     queryKey:['discover',profile?.id,profile?.content_restricted,section,page,sort,year,source,preferred],
     enabled:saved.ready&&validYear,staleTime:30_000,
@@ -43,7 +42,6 @@ export function Discover() {
       <FocusGroup focusKey="discover:filters" label="Discovery filters" className="flex flex-wrap gap-3 items-center mb-3">
         <CatalogPicker scope="discover:sort" label="Sort" value={sort} options={[{id:'popular',label:'Popular'},{id:'rating',label:'Top rated'},{id:'newest',label:'Newest'}]} onChange={value=>update({sort:value as Filters['sort']})}/>
         <div style={{width:'min(12rem,100%)'}}><FocusableInput focusKey="discover:year" label="Release year" placeholder="Any year" inputMode="numeric" value={year} onChange={value=>update({year:value.replace(/\D/g,'').slice(0,4)})}/></div>
-        <Button focusKey="discover:search" onEnter={()=>go('/search')}>Search all titles</Button>
         <Button focusKey="discover:reset" ghost onEnter={()=>saved.update(defaults)}>Reset discovery filters</Button>
       </FocusGroup>
       <FocusGroup focusKey="discover:availability" label="Availability preferences" className="flex flex-wrap gap-3 items-center mb-3">
