@@ -15,6 +15,8 @@ export interface PlaybackReq {
   audioTrack?: number | null
   /** Start a restart-at-offset stream here instead of at the profile's resume position. */
   startPositionMs?: number | null
+  /** The viewer's quality cap (480, 720 or 1080); the server applies it to films taller than that. */
+  maxHeight?: number | null
 }
 
 async function playbackGeneration(): Promise<string> {
@@ -29,7 +31,7 @@ export async function resolve(req: PlaybackReq, generation?: string): Promise<Pl
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)) },
+      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null },
     }),
   )
 }
@@ -48,6 +50,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   muted?: boolean; report?: boolean; buffer?: boolean
   /** A watch room supplies its member's descriptor (the room decides variant and position) instead of /playback/resolve. */
   descriptor?: (generation: string | undefined) => Promise<PlaybackDescriptor>
+  /** The quality cap playback starts with (the browser's remembered choice); setMaxHeight changes it. */
+  maxHeight?: number | null
 } = {}) {
   const descriptorSource = useRef(opts.descriptor)
   descriptorSource.current = opts.descriptor
@@ -64,6 +68,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   // The viewer paused. A seek or a track change that needs a new stream then starts it paused, as a seek
   // inside the old one would have left it. A room decides for its members whether they play.
   const pausedByViewer = useRef(false)
+  // A channel is delivered as it is; a room's stream is the room's.
+  const maxHeight = useRef<number | null>(opts.maxHeight ?? null)
   // The viewer's own mute. Unmuting is asked of checkAudio, never done here: a stream whose audio is
   // not allowed for this profile stays silent whatever the mute button says.
   const silenced = useRef(false)
@@ -246,7 +252,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         }
         const d = descriptorSource.current
           ? await descriptorSource.current(intent.current.generation)
-          : await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs }, intent.current.generation)
+          : await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs, maxHeight: req.id.startsWith('ch:') ? null : maxHeight.current }, intent.current.generation)
         if (cancelled || !ownsSession()) return
         setDesc(d)
         descRef.current = d
@@ -401,8 +407,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (!v) return
     const onMeta = () => {
       const d = descRef.current
-      // A restart-at-offset stream already begins at the resume position.
-      if (d && !d.live && d.start_position_ms == null && d.resume_position_ms > 0 && v.currentTime < 1) v.currentTime = d.resume_position_ms / 1000
+      if (!d || d.live || d.start_position_ms != null) return // a restart-at-offset stream already begins where it should
+      // Back from a capped quality to a file the browser plays as it is: carry on where the viewer was, once.
+      const carried = restart.current.startMs
+      if (carried != null) restart.current = { ...restart.current, startMs: undefined }
+      const at = carried ?? d.resume_position_ms
+      if (at > 0 && v.currentTime < 1) v.currentTime = at / 1000
     }
     // The source can drop mid-film and ffmpeg then closes the stream as if it had ended. Carry on from there.
     const onEnded = () => {
@@ -525,6 +535,16 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     reload: () => {
       if (terminal.current) return
       clearWaiting(); clearRetry(); retry.current = 0
+      setAttempt((a) => a + 1)
+    },
+    /** Another quality: a new stream of the same film from where the viewer is (the cap is part of the server's session). */
+    setMaxHeight: (height: number | null) => {
+      if (maxHeight.current === height) return
+      maxHeight.current = height
+      const d = descRef.current
+      if (!d || d.live || d.mode === 'handoff' || descriptorSource.current || terminal.current) return
+      clearWaiting(); clearRetry(); retry.current = 0
+      restart.current = { ...restart.current, startMs: titlePositionMs() }
       setAttempt((a) => a + 1)
     },
     /** Have the server encode another audio track of the file, continuing from the current position. */

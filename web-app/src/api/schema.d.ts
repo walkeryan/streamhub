@@ -6209,6 +6209,11 @@ export interface components {
             output_width?: number | null;
             /** @description Height of the picture as delivered. */
             output_height?: number | null;
+            /**
+             * @description The quality cap in force for this stream (PlaybackRequest.max_height); left out when none was asked for or the file is no taller than it.
+             * @enum {integer|null}
+             */
+            max_height?: 480 | 720 | 1080 | null;
         };
         PlaybackOption: {
             variant_id: string;
@@ -6269,6 +6274,11 @@ export interface components {
             audio_track?: number | null;
             /** @description Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced). */
             start_position_ms?: number | null;
+            /**
+             * @description Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height.
+             * @enum {integer|null}
+             */
+            max_height?: 480 | 720 | 1080 | null;
             catchup_programme_id?: string | null;
             /**
              * Format: date-time

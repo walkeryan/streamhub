@@ -95,7 +95,7 @@ export const SHORTCUT_HELP: ReadonlyArray<{ title: string; lines: ShortcutLine[]
     { keys: ['M'], does: 'Mute' },
     { keys: ['C'], does: 'Subtitles on or off' },
     { keys: ['A'], does: 'Audio tracks' },
-    { keys: ['S', 'O'], does: 'Settings: speed, aspect, sleep timer' },
+    { keys: ['S', 'O'], does: 'Settings: speed, quality, aspect, sleep timer' },
     { keys: ['F'], does: 'Full screen' },
     { keys: ['P'], does: 'Picture in picture' },
   ] },

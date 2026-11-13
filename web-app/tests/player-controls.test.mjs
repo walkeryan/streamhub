@@ -218,6 +218,8 @@ test('the panel has a row only for what is known', () => {
   }, null)
   assert.deepEqual(full.map((s) => s.title), ['Source', 'Video', 'Audio', 'Delivery'])
   assert.deepEqual(full[3].rows, [['Method', 'Remux: video copied, not re-encoded'], ['Audio sent as', 'AAC stereo'], ['Picture sent', '1920 × 1080']])
+  const capped = infoSections({ delivery: 'transcode', encoder: 'software', output_width: 1280, output_height: 720, max_height: 720 }, null)
+  assert.deepEqual(capped[0].rows, [['Method', 'Transcode: video re-encoded in software'], ['Picture sent', '1280 × 720'], ['Quality', 'Limited to 720p']])
   assert.deepEqual(full[2].rows, [['Codec', 'AC-3'], ['Channels', '5.1'], ['Language', 'French']])
   // A channel: the source and the delivery, no empty Video or Audio heading.
   assert.deepEqual(infoSections({ source_name: 'Antenna', delivery: 'direct' }, null), [
@@ -238,4 +240,57 @@ test('buffered ahead is counted in the range the playhead is in', () => {
   assert.equal(bufferedAhead([[0, 30], [60, 90]], 75), 15)
   assert.equal(bufferedAhead([[0, 30], [60, 90]], 45), 0)
   assert.equal(bufferedAhead([], 0), 0)
+})
+
+// ---- quality ----
+const { QUALITY_KBPS, chosenQuality, dataRateText, parseQuality, qualityOptions, savingData } = await import('../src/player/quality.ts')
+
+test('the data rate reads as what an hour costs', () => {
+  // 720p: 2800 kbit/s of video and 160 of audio.
+  assert.equal(dataRateText(QUALITY_KBPS[720] + 160), 'about 1.3 GB per hour')
+  assert.equal(dataRateText(QUALITY_KBPS[1080] + 160), 'about 2.3 GB per hour')
+  assert.equal(dataRateText(QUALITY_KBPS[480] + 160), 'about 700 MB per hour')
+  assert.equal(dataRateText(18_250), 'about 8.2 GB per hour')
+  assert.equal(dataRateText(40_000), 'about 18 GB per hour')
+  assert.equal(dataRateText(60), 'about 50 MB per hour')
+})
+
+test('only qualities below the source are offered, Original first', () => {
+  const uhd = { delivery: 'direct', bitrate_kbps: 18_250, video: { width: 3840, height: 2160 } }
+  assert.deepEqual(qualityOptions(uhd), [
+    { height: null, label: 'Original (2160p)', rate: 'about 8.2 GB per hour' },
+    { height: 1080, label: '1080p', rate: 'about 2.3 GB per hour' },
+    { height: 720, label: '720p', rate: 'about 1.3 GB per hour' },
+    { height: 480, label: '480p', rate: 'about 700 MB per hour' },
+  ])
+  // A 1080p file is not offered 1080p: the server would change nothing.
+  assert.deepEqual(qualityOptions({ delivery: 'remux', video: { width: 1920, height: 1080 } }).map((o) => o.height), [null, 720, 480])
+  assert.deepEqual(qualityOptions({ delivery: 'direct', video: { width: 1920, height: 800 } }).map((o) => o.label), ['Original (800p)', '720p', '480p'])
+  assert.deepEqual(qualityOptions({ delivery: 'direct', video: { width: 720, height: 480 } }).map((o) => o.height), [null])
+  // Nothing known about the picture: Original alone, and no rate to quote.
+  assert.deepEqual(qualityOptions({ delivery: 'transcode' }), [{ height: null, label: 'Original', rate: null }])
+  assert.deepEqual(qualityOptions(null), [{ height: null, label: 'Original', rate: null }])
+  // An uncapped transcode sends at most its own ceiling, whatever the file's rate.
+  assert.equal(qualityOptions({ delivery: 'transcode', bitrate_kbps: 18_250, video: { height: 2160 } })[0].rate, 'about 3.7 GB per hour')
+  assert.equal(qualityOptions({ delivery: 'transcode', bitrate_kbps: 3_000, video: { height: 2160 } })[0].rate, 'about 1.4 GB per hour')
+})
+
+test('a stored quality counts only where the title offers it', () => {
+  const options = qualityOptions({ delivery: 'direct', video: { height: 720 } })
+  assert.equal(chosenQuality(options, 480), 480)
+  assert.equal(chosenQuality(options, 1080), null)
+  assert.equal(chosenQuality(options, null), null)
+  assert.deepEqual(parseQuality(null), { normal: null, saver: null })
+  assert.deepEqual(parseQuality('{"normal":720,"saver":480}'), { normal: 720, saver: 480 })
+  assert.deepEqual(parseQuality('{"normal":360,"saver":"480"}'), { normal: null, saver: null })
+  assert.deepEqual(parseQuality('nonsense'), { normal: null, saver: null })
+})
+
+test('data is short when the browser says so', () => {
+  assert.equal(savingData(undefined), false)
+  assert.equal(savingData({ effectiveType: '4g' }), false)
+  assert.equal(savingData({ saveData: true, effectiveType: '4g' }), true)
+  assert.equal(savingData({ type: 'cellular' }), true)
+  assert.equal(savingData({ effectiveType: '3g' }), true)
+  assert.equal(savingData({ type: 'wifi', effectiveType: '4g' }), false)
 })

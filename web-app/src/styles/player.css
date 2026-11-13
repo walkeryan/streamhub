@@ -95,6 +95,9 @@
 
 /* ---------- menu and shortcut sheet ---------- */
 .pmenu-note { flex-basis: 100%; }
+/* What an hour of a quality costs, beside its name. */
+.pmenu-rate { opacity: 0.75; font-weight: 500; }
+.pmenu-rate::before { content: '·'; margin-right: 0.375rem; }
 .keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem 2rem; }
 .keys section { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
 .keys section:first-child { grid-row: span 2; }

@@ -6,7 +6,7 @@ const FILM = 'tmdb:movie:110'
 const CONVERTED = 'tmdb:movie:108'
 const LENGTH_S = 112 * 60
 
-type Resolve = { id: string; start_position_ms?: number | null }
+type Resolve = { id: string; start_position_ms?: number | null; max_height?: number | null }
 type Watched = { __seeks: number[]; __session: Record<string, ((details: { seekTime?: number }) => void) | null>; __noteResolve: (body: Resolve) => void }
 
 /** Signed in as Guest with the first-run notice accepted, and every resolve the player makes on record. */
@@ -399,6 +399,99 @@ test('stream information: what is playing, how it is delivered, and what the pla
   await expect(panel).toHaveCount(0)
   // Nothing the server sends for it is an address.
   expect(JSON.stringify(await page.evaluate(() => document.querySelector('[data-testid="player"]')!.textContent))).not.toMatch(/https?:|\/mock\//)
+})
+
+test('quality: the choices below the source with what an hour costs; a change restarts where the film is and is remembered', async ({ page }) => {
+  const resolves = await enter(page)
+  await play(page, CONVERTED)
+  expect(resolves[0]!.max_height ?? null).toBeNull()
+  await page.keyboard.press('Shift+ArrowRight')
+  await page.keyboard.press('Shift+ArrowRight')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-stream-start', '120000')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await page.keyboard.press('s')
+  const menu = page.getByTestId('player-menu')
+  const choices = menu.getByTestId('player-quality')
+  // The file is 3840 x 1600: every cap is below it. Uncapped, the server transcodes it to at most 8 Mbit/s.
+  await expect(choices).toHaveText(['Original (1600p)about 3.7 GB per hour', '1080pabout 2.3 GB per hour', '720pabout 1.3 GB per hour', '480pabout 700 MB per hour'])
+  await expect(choices.first()).toHaveAttribute('aria-pressed', 'true')
+  // The speed is still there beside it.
+  await expect(menu.getByTestId('player-speed')).toHaveCount(7)
+  const before = resolves.length
+  await choices.filter({ hasText: '720p' }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(page.getByTestId('player-flash')).toHaveText('Quality: 720p')
+  // One new stream, capped, from where the film was: the bar shows that place while it comes.
+  await expect.poll(() => resolves.length).toBe(before + 1)
+  expect(resolves.at(-1)).toMatchObject({ max_height: 720 })
+  expect(resolves.at(-1)!.start_position_ms).toBeGreaterThanOrEqual(120_000)
+  expect(resolves.at(-1)!.start_position_ms).toBeLessThan(130_000)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-stream-start', '120000')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await expect(page.getByTestId('player-time')).toHaveText(/^2:0\d \//)
+  // The information panel says what is now sent.
+  await page.keyboard.press('i')
+  const delivery = page.getByTestId('player-info').locator('[data-section="Delivery"]')
+  await expect(delivery).toContainText('1728 × 720')
+  await expect(delivery).toContainText('Limited to 720p')
+  await page.keyboard.press('i')
+  await page.keyboard.press('s')
+  await expect(choices.filter({ hasText: '720p' })).toHaveAttribute('aria-pressed', 'true')
+  // Choosing what is already in force starts nothing.
+  await choices.filter({ hasText: '720p' }).click()
+  await page.waitForTimeout(600)
+  expect(resolves).toHaveLength(before + 1)
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.quality.v1')!))).toEqual({ normal: 720, saver: null })
+
+  // The browser remembers: a 1080p film it would have played as the file it is now arrives capped...
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('player')).toHaveCount(0)
+  await play(page, FILM)
+  expect(resolves.at(-1)).toMatchObject({ id: FILM, max_height: 720 })
+  await expect(page.getByTestId('player')).toHaveAttribute('data-stream-start', '0')
+  await page.keyboard.press('s')
+  // ...and is offered only what is below its own height.
+  await expect(choices).toHaveText(['Original (1080p)about 4.2 GB per hour', '720pabout 1.3 GB per hour', '480pabout 700 MB per hour'])
+  await expect(choices.filter({ hasText: '720p' })).toHaveAttribute('aria-pressed', 'true')
+  // Back to Original: the file itself again, carried on from where the capped stream was.
+  await expect.poll(() => video(page, (v) => v.currentTime)).toBeGreaterThan(1.5)
+  const sought = (await seeks(page)).length
+  await choices.first().click()
+  await expect.poll(() => resolves.at(-1)!.max_height ?? null).toBeNull()
+  expect(resolves.at(-1)!.start_position_ms).toBeGreaterThan(1000)
+  await expect(page.getByTestId('player')).not.toHaveAttribute('data-stream-start')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  const carried = (await seeks(page)).slice(sought)
+  expect(carried.some((at) => at > 1 && at < 15)).toBe(true)
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.quality.v1')!))).toEqual({ normal: null, saver: null })
+})
+
+test('quality when the browser asks to save data is a choice of its own; a channel is offered none', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'connection', { configurable: true, get: () => ({ saveData: true, effectiveType: '4g' }) })
+    localStorage.setItem('sh.player.quality.v1', JSON.stringify({ normal: 1080, saver: null }))
+  })
+  const resolves = await enter(page)
+  await play(page, CONVERTED)
+  // The choice for ordinary connections is not the one in force here.
+  expect(resolves[0]!.max_height ?? null).toBeNull()
+  await page.keyboard.press('s')
+  const menu = page.getByTestId('player-menu')
+  await expect(menu).toContainText('Your browser asks to save data')
+  await menu.getByTestId('player-quality').filter({ hasText: '480p' }).click()
+  await expect.poll(() => resolves.at(-1)!.max_height).toBe(480)
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.quality.v1')!))).toEqual({ normal: 1080, saver: 480 })
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  // A channel is delivered as it is: its settings have no quality, and its resolve carries no cap.
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('player')).toHaveCount(0)
+  await play(page, 'ch:s_xt:1001')
+  expect(resolves.at(-1)!.max_height ?? null).toBeNull()
+  await page.keyboard.press('s')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByTestId('player-quality')).toHaveCount(0)
 })
 
 test('a live channel keeps its keys: Up and Down zap, digits are channel numbers, and nothing offers a speed', async ({ page }) => {

@@ -14,6 +14,9 @@ from typing import Any
 HARDWARE_ENCODERS = {"nvenc", "vaapi", "qsv"}
 # A transcode for a browser is at most this wide (``vod_ffmpeg_attempts``).
 MAX_WIDTH = 1920
+# The qualities a viewer can cap a film at (``max_height``), and the video bit rate in kbit/s each is
+# held to. The audio beside it is always 160 kbit/s AAC, so a client can say what an hour will cost.
+QUALITY_KBPS = {1080: 5000, 720: 2800, 480: 1400}
 # ffprobe's ``color_transfer`` values that mean high dynamic range.
 HDR_TRANSFERS = {"smpte2084": "hdr10", "arib-std-b67": "hlg"}
 
@@ -40,12 +43,22 @@ def _even(value: float) -> int:
     return max(2, round(value / 2) * 2)
 
 
-def output_size(width: int | None, height: int | None) -> tuple[int, int] | None:
+def capped_height(height: Any, max_height: int | None) -> int | None:
+    """The cap that takes effect: only for a source known to be taller. Otherwise the file is
+    delivered as it would be without one, and nothing is ever scaled up."""
+    if max_height not in QUALITY_KBPS or not isinstance(height, int) or isinstance(height, bool):
+        return None
+    return max_height if height > max_height else None
+
+
+def output_size(width: int | None, height: int | None, max_height: int | None = None) -> tuple[int, int] | None:
     """The picture size a transcode delivers, keeping the shape: ``None`` when the source's is unknown."""
     if not width or not height:
         return None
     if width > MAX_WIDTH:
         width, height = MAX_WIDTH, _even(height * MAX_WIDTH / width)
+    if max_height and height > max_height:
+        width, height = _even(width * max_height / height), max_height
     return width, height
 
 
@@ -70,12 +83,14 @@ def media_info(
     video_plan: str | None,
     hw: str,
     live_transcode: bool = False,
+    max_height: int | None = None,
 ) -> dict[str, Any] | None:
     """The ``media_info`` of a playback descriptor; ``None`` for a title another app plays.
 
-    ``video_plan`` is the web VOD plan (``copy`` or ``transcode``, ``None`` without one) and
-    ``live_transcode`` a channel whose source asks for transcoding. Whatever is unknown is ``None``
-    and is left out of the answer by the schema.
+    ``video_plan`` is the web VOD plan (``copy`` or ``transcode``, ``None`` without one),
+    ``live_transcode`` a channel whose source asks for transcoding and ``max_height`` the quality
+    cap in force (``capped_height``). Whatever is unknown is ``None`` and is left out of the answer
+    by the schema.
     """
     if mode == "handoff":
         return None
@@ -91,7 +106,10 @@ def media_info(
         # HLS made by this server without encoding the video is a remux; anything else is the file or feed itself.
         delivery = "remux" if mode == "hls" else "direct"
     width, height = _positive(video.get("width")), _positive(video.get("height"))
-    size = output_size(width, height) if video_plan == "transcode" else (width, height) if width and height else None
+    if video_plan == "transcode":
+        size = output_size(width, height, max_height)
+    else:
+        size = (width, height) if width and height else None
     fps = video.get("fps")
     language = str(track.get("language") or "")
     bit_rate = _positive(probe.get("bit_rate")) if probe else None
@@ -120,4 +138,5 @@ def media_info(
         "encoder": encoder_kind(delivery, hw),
         "output_width": size[0] if size else None,
         "output_height": size[1] if size else None,
+        "max_height": max_height if video_plan == "transcode" else None,
     }

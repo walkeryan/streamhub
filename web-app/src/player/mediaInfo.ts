@@ -84,6 +84,7 @@ export function infoSections(info: MediaInfo | null | undefined, live: LiveNumbe
       // A remux or a transcode always carries one track as AAC stereo.
       ['Audio sent as', info.delivery !== 'direct' && a ? 'AAC stereo' : null],
       ['Picture sent', info.output_width && info.output_height ? sizeLabel(info.output_width, info.output_height) : null],
+      ['Quality', info.max_height ? `Limited to ${info.max_height}p` : null],
     ])
   }
   if (live) {

@@ -20,6 +20,7 @@ import { endTarget, fractionTarget, seekHint } from '../player/seekSteps'
 import { shortcutFor, type MenuSection, type ShortcutAction } from '../player/shortcuts'
 import { SPEEDS, loadPrefs, nextSpeed, nextVolume, savePrefs, speedLabel, type PlayerPrefs } from '../player/playerPrefs'
 import { useSeekControl } from '../player/useSeekControl'
+import { chosenQuality, loadQuality, qualityOptions, saveQuality, savingData, type QualityHeight } from '../player/quality'
 import { busyHeading, busyLines } from '../player/sourceBusy'
 import { LocalBufferControls } from '../player/LocalBufferControls'
 import { RewindControls } from '../player/RewindControls'
@@ -79,7 +80,10 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   const channelAudio = useChannelAudio(req, manualChoice === selectionKey)
   // A room's audio was settled when the member joined; its stream comes from the room, without a local rewind buffer.
   const audio = room ? { ...channelAudio, enabled: false, blocked: false, request: req } : channelAudio
-  const pb = usePlayback(videoRef, audio.request, { buffer: !room, descriptor: room?.descriptor })
+  // Quality: this browser's choice, with one of its own for when the browser says data is short.
+  const dataSaver = useMemo(() => savingData((navigator as Navigator & { connection?: Parameters<typeof savingData>[0] }).connection), [])
+  const [quality, setQualityState] = useState<QualityHeight | null>(() => loadQuality(dataSaver))
+  const pb = usePlayback(videoRef, audio.request, { buffer: !room, descriptor: room?.descriptor, maxHeight: quality })
   const { desc, state } = pb
   const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
   // A restart-at-offset stream: the media element starts at `offset` seconds into the title and only
@@ -261,6 +265,19 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     if (resuming && overlayRef.current === 'bar') { closeOverlay(); poke() }
   }
   const openMenu = useCallback((section: MenuSection) => { setMenuSection(section); setOverlay('menu') }, [setOverlay])
+  // Offered for a film this player resolves itself: a room's stream is the room's, a channel comes as it is.
+  const qualities = !live && !room && desc?.id === id ? qualityOptions(desc.media_info) : []
+  const chooseQuality = (height: QualityHeight | null, label: string) => {
+    setQualityState(height)
+    saveQuality(dataSaver, height)
+    if (height !== chosenQuality(qualities, quality)) {
+      // The new stream starts where this one is: show that place, not zero, while it comes.
+      seek.setHeading(position)
+      pb.setMaxHeight(height)
+      showFlash(`Quality: ${label}`)
+    }
+    closeOverlay()
+  }
   const chooseSubtitle = (trackId: number, label?: string) => {
     pb.setSubtitle(trackId)
     if (trackId >= 0 && label) setPrefs({ subtitle: label })
@@ -748,6 +765,15 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
               {shows('settings') && !live && !room && (
                 <MenuSection title="Speed">
                   {SPEEDS.map((value) => <Chip key={value} focusKey={first(`pm:sp:${value}`)} pressed={prefs.speed === value} onEnter={() => changeSpeed(value)} testId="player-speed">{speedLabel(value)}</Chip>)}
+                </MenuSection>
+              )}
+              {shows('settings') && qualities.length > 1 && (
+                <MenuSection title="Quality">
+                  {qualities.map((option) => (
+                    <Chip key={option.height ?? 'original'} focusKey={first(`pm:q:${option.height ?? 'original'}`)} pressed={chosenQuality(qualities, quality) === option.height}
+                      onEnter={() => chooseQuality(option.height, option.label)} testId="player-quality">{option.label}{option.rate && <span className="pmenu-rate">{option.rate}</span>}</Chip>
+                  ))}
+                  <span className="muted label pmenu-note">{dataSaver ? 'Your browser asks to save data: this choice is kept apart from the one for other connections.' : 'A lower quality uses less data. The film carries on from where it is.'}</span>
                 </MenuSection>
               )}
               {shows('settings') && (

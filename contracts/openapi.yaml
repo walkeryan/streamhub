@@ -546,6 +546,7 @@ components:
         encoder: {type: string, nullable: true, enum: [hardware, software], description: "transcode only: what the server planned to encode the video with. A hardware encoder that fails to start falls back to software for that session without this changing."}
         output_width: {type: integer, nullable: true, description: Width of the picture as delivered.}
         output_height: {type: integer, nullable: true, description: Height of the picture as delivered.}
+        max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "The quality cap in force for this stream (PlaybackRequest.max_height); left out when none was asked for or the file is no taller than it."}
     PlaybackOption:
       type: object
       required: [variant_id, source_id, source_name, provider_label, audio_languages, audio_verified, audio_evidence, preferred_audio_available]
@@ -587,6 +588,7 @@ components:
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255, description: "Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself."}
         start_position_ms: {type: integer, nullable: true, minimum: 0, description: "Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced)."}
+        max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height."}
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}

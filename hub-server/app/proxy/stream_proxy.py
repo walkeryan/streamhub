@@ -7,7 +7,8 @@
 - **HLS remux / transcode** (``/stream/{token}/index.m3u8``): ffmpeg ``-c copy -f hls``
   (or libx264 / VAAPI when enabled) into ``<transcode>/<id>/``; idle sessions are reaped.
 - **Web VOD** (``VodPlan``): a file a browser cannot decode becomes an HLS session of its own,
-  with the video copied or transcoded and one audio track encoded to AAC stereo.
+  with the video copied or transcoded and one audio track encoded to AAC stereo. A viewer's quality
+  cap (``max_height``) makes a taller file a transcode scaled down to it, at a lower rate ceiling.
 - Every session carries the ``Viewer`` its grant named, so a profile turned away by a source's
   connection limit can be told who holds the connections (``active_viewers``).
 - **Pinned upstream sessions** (``pin``): panels that hand out a per-viewer session on redirect see
@@ -55,6 +56,7 @@ from app.infra.http import pin_upstream_session
 from app.infra.logging import redact_url
 from app.proxy.dvr import MAX_SEGMENTS, DvrManager
 from app.services.errors import Conflict, Forbidden, ServiceError
+from app.services.media_info import QUALITY_KBPS, output_size
 
 log = logging.getLogger(__name__)
 
@@ -349,6 +351,10 @@ class VodPlan:
     hw: str = "none"  # transcode_hw setting: none | vaapi | nvenc | qsv
     codec: str | None = None  # input video codec, when the probe knew it
     width: int | None = None
+    height: int | None = None
+    # The viewer's quality cap (480, 720 or 1080), set only when the source is taller: the picture is
+    # scaled down to it and the bit rate held to ``QUALITY_KBPS``.
+    max_height: int | None = None
     audio_track: int | None = None
     start_s: int = 0
     family: str = ""  # sessions of one viewer for one file replace each other
@@ -498,8 +504,18 @@ def vod_ffmpeg_attempts(
     if plan.video == "copy":
         return [("copy", command([], ["-c:v", "copy"]))]
     # H.264 for a browser: 8-bit 4:2:0, at most 1080p wide, a keyframe wherever a segment starts.
-    scale = "scale=1920:-2," if (plan.width or 0) > 1920 else ""
-    pace = ["-maxrate", "8M", "-bufsize", "16M", "-force_key_frames", f"expr:gte(t,n_forced*{VOD_SEGMENT_S})"]
+    # A quality cap scales to the exact size (the shape kept, never up) and lowers the rate ceiling.
+    capped = output_size(plan.width, plan.height, plan.max_height) if plan.max_height else None
+    if capped:
+        size: tuple[str, str] | None = (str(capped[0]), str(capped[1]))
+    elif plan.max_height:
+        size = ("-2", str(plan.max_height))  # a source whose width nobody knows
+    else:
+        size = ("1920", "-2") if (plan.width or 0) > 1920 else None
+    scale = f"scale={size[0]}:{size[1]}," if size else ""
+    rate = QUALITY_KBPS.get(plan.max_height or 0)
+    ceiling = ["-maxrate", f"{rate}k", "-bufsize", f"{rate * 2}k"] if rate else ["-maxrate", "8M", "-bufsize", "16M"]
+    pace = [*ceiling, "-force_key_frames", f"expr:gte(t,n_forced*{VOD_SEGMENT_S})"]
     software = ["-vf", f"{scale}format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", *pace]
     attempts: list[tuple[str, list[str]]] = []
     if plan.hw == "nvenc":
@@ -510,11 +526,13 @@ def vod_ffmpeg_attempts(
         attempts.append(("nvenc", command([], nvenc)))
     elif plan.hw == "vaapi":
         decode = ["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", vaapi_device]
-        size = "w=1920:h=-2:" if scale else ""
-        filters = f"format=nv12|vaapi,hwupload,scale_vaapi={size}format=nv12"
+        gpu_size = f"w={size[0]}:h={size[1]}:" if size else ""
+        filters = f"format=nv12|vaapi,hwupload,scale_vaapi={gpu_size}format=nv12"
         attempts.append(("vaapi", command(decode, ["-vf", filters, "-c:v", "h264_vaapi", *pace])))
     elif plan.hw == "qsv":
-        attempts.append(("qsv", command(["-hwaccel", "qsv"], ["-c:v", "h264_qsv", *pace])))
+        # Decoded frames come back to system memory here, so a cap is an ordinary scale before the encoder.
+        shrink = ["-vf", f"scale={size[0]}:{size[1]}"] if size and plan.max_height else []
+        attempts.append(("qsv", command(["-hwaccel", "qsv"], [*shrink, "-c:v", "h264_qsv", *pace])))
     return [*attempts, ("libx264", command([], software))]
 
 

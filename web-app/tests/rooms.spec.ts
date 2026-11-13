@@ -359,6 +359,7 @@ test('a channel is watched together from the player menu: play and pause, no see
   await page.keyboard.press('s')
   await expect(page.getByTestId('player-menu')).toHaveAttribute('data-section', 'settings')
   await expect(page.getByTestId('player-speed')).toHaveCount(0)
+  await expect(page.getByTestId('player-quality')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('player-menu')).toHaveCount(0)
   // The control bar has focus on Pause: the room pauses, and with it this player.
@@ -524,6 +525,16 @@ test('on a phone the room player keeps back and title on one row; the members ar
   expect(new Set(buttons.map((b) => b.top)).size).toBe(2)
   expect(buttons.every((b) => b.width >= 44 && b.height >= 44 && b.right <= 390)).toBe(true)
   await expect(page.getByTestId('room-leave')).toHaveAttribute('aria-label', 'Leave room')
+  // What the room's buttons crowded out of the bar is in the settings menu; speed and quality are not a member's to choose.
+  await expect(page.getByTestId('player-pip')).toHaveCount(0)
+  await page.getByTestId('player-menu-btn').tap()
+  const settings = page.getByTestId('player-menu')
+  await expect(settings.getByRole('button', { name: 'Stream information' })).toBeVisible()
+  await expect(settings.getByRole('button', { name: 'Picture in picture' })).toBeVisible()
+  await expect(settings.getByTestId('player-speed')).toHaveCount(0)
+  await expect(settings.getByTestId('player-quality')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(settings).toHaveCount(0)
 
   await count.tap()
   const list = page.getByTestId('room-member-list')

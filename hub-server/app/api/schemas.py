@@ -346,6 +346,7 @@ class PlaybackRequest(_M):
     rewind_at: AwareDatetime | None = None
     audio_track: int | None = Field(default=None, ge=0, le=255)
     start_position_ms: int | None = Field(default=None, ge=0)
+    max_height: Literal[480, 720, 1080] | None = None
 
 
 class MultiviewRequest(_M):
@@ -457,6 +458,7 @@ class MediaInfo(_Known):
     encoder: Literal["hardware", "software"] | None = None
     output_width: int | None = None
     output_height: int | None = None
+    max_height: Literal[480, 720, 1080] | None = None
 
 
 class PlaybackDescriptor(_M):
