@@ -140,6 +140,15 @@ export const seasonsOf = (show: number): Tile[] =>
 
 /* ---------- live ---------- */
 const groups = ['News', 'Sports', 'Movies', 'Kids', 'Music', 'Local']
+// Sports is a parent: some of its channels are its own, the rest sit in three children (`Parent / Child`).
+const nested: Record<number, string> = { 7: 'Sports / Basketball', 13: 'Sports / Football', 19: 'Sports / Football', 37: 'Sports / Hockey' }
+/** The server's reading of a group name: only the first ` / ` separates the two levels. */
+export function groupLevels(path: string): { parent: string | null; name: string } {
+  const at = path.indexOf(' / ')
+  return at > 0 && at + 3 < path.length ? { parent: path.slice(0, at), name: path.slice(at + 3) } : { parent: null, name: path }
+}
+/** The top-level group a channel is in, whichever level it is stored under. */
+export const topGroup = (path: string): string => groupLevels(path).parent ?? path
 const langs = ['eng', 'eng', 'eng', 'spa', 'fra', 'deu', 'hin']
 const chanNames = [
   'Harbor News 24', 'Metro Sports 1', 'Cinema Classics', 'Little Orbit', 'Static Radio TV', 'Channel 9 Local', 'World Report',
@@ -152,7 +161,7 @@ export const channels: Channel[] = chanNames.map((name, i) => {
   const lang = i < 18 ? 'eng' : (['spa', 'spa', 'spa', 'spa', 'fra', 'fra', 'fra', 'deu', 'deu', 'deu', 'hin', 'hin'][i - 18] ?? langs[i % langs.length]!)
   const num = 1000 + i + 1
   return {
-    id: `ch:s_xt:${num}`, source_id: 's_xt', ext_id: String(num), number: i + 1, name, logo: logo(name), group: groups[i % groups.length]!,
+    id: `ch:s_xt:${num}`, source_id: 's_xt', ext_id: String(num), number: i + 1, name, logo: logo(name), group: nested[i] ?? groups[i % groups.length]!,
     language: lang, language_source: 'tag', country: lang === 'eng' ? 'US' : null, epg_id: `epg${num}`, catchup_days: i % 3 === 0 ? 2 : 0,
     is_favorite: fav.has(`ch:s_xt:${num}`),
   }
@@ -176,12 +185,12 @@ export function programmesFor(ch: Channel, fromMs: number, toMs: number): Progra
   while (t < toMs) {
     const len = (1 + ((seed + i) % 3)) * slot
     const start = Math.max(t, t)
-    const sport = ch.group === 'Sports'
+    const sport = topGroup(ch.group) === 'Sports'
     const title = `${(sport ? games : showNames)[(seed + i) % (sport ? games : showNames).length]}${i % 4 === 0 ? ' (Live)' : ''}`
     out.push({
       id: `${ch.id}@${start}`, channel_id: ch.id, start: new Date(start).toISOString(), stop: new Date(start + len).toISOString(),
       title, description: 'Fixture programme. In mock mode every channel plays the same test pattern.',
-      category: ch.group, icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(), is_sport: sport, teams: sport ? teamsOf(title) : [],
+      category: topGroup(ch.group), icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(), is_sport: sport, teams: sport ? teamsOf(title) : [],
     })
     t += len
     i++

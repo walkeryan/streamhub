@@ -2,7 +2,7 @@ import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
 import type { PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
-  DISCLAIMER, adultShelf, channelTile, channels, episodesOf, fav, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
+  DISCLAIMER, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
   sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
@@ -30,6 +30,30 @@ const settingsFor = (request: Request) => {
 }
 let pinPolls = 0
 const hiddenGroups = new Set<string>()
+interface GroupRow { id: string; name: string; parent: string | null; path: string }
+/** The groups of the fixture channels as the server lists them: each top-level group, then its children. */
+function groupRows(): GroupRow[] {
+  const below = new Map<string, string[]>()
+  for (const path of new Set(channels.map((c) => c.group))) {
+    const { parent } = groupLevels(path)
+    if (!below.has(parent ?? path)) below.set(parent ?? path, [])
+    if (parent) below.get(parent)!.push(path)
+  }
+  return [...below].flatMap(([top, paths], i) => [
+    { id: `g${i}`, name: top, parent: null, path: top },
+    ...paths.map((path, j) => ({ id: `g${i}c${j}`, name: groupLevels(path).name, parent: top, path })),
+  ])
+}
+const groupHidden = (path: string) => hiddenGroups.has(path) || hiddenGroups.has(groupLevels(path).parent ?? path)
+/** The stored groups a `group` filter names: an id or a path, a parent with its children, or a child's bare name if only one has it. */
+function groupPaths(group: string): Set<string> {
+  const rows = groupRows()
+  const named = rows.find((r) => r.id === group) ?? rows.find((r) => r.path === group)
+  const bare = named ? [] : rows.filter((r) => r.parent && r.name === group)
+  const row = named ?? (bare.length === 1 ? bare[0] : undefined)
+  if (!row) return new Set()
+  return new Set([row.path, ...(row.parent ? [] : rows.filter((r) => r.parent === row.name && !hiddenGroups.has(r.path)).map((r) => r.path))])
+}
 
 const withProfile = (id: string) => {
   const p = profiles.find((x) => x.id === id) ?? mockProfile(id) ?? profiles[0]!
@@ -268,10 +292,9 @@ export const handlers = [
     const q = u.searchParams.get('q')?.toLowerCase()
     const pid = currentProfileId(request)
     const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === pid)?.languages ?? []
-    const groupNames = [...new Set(channels.map((c) => c.group))]
-    const selectedGroup = group?.startsWith('g') && /^g\d+$/.test(group) ? groupNames[Number(group.slice(1))] : group
+    const selected = group ? groupPaths(group) : null
     const list = channels
-      .filter((c) => countryMatches(c.country, country) && !hiddenGroups.has(c.group) && (!selectedGroup || c.group === selectedGroup) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
+      .filter((c) => countryMatches(c.country, country) && !groupHidden(c.group) && (!selected || selected.has(c.group)) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
 
     const offset = Number(u.searchParams.get('offset') ?? 0), limit = Number(u.searchParams.get('limit') ?? list.length)
     return HttpResponse.json({ list_id: `list:${group ?? 'all'}:${lang ?? 'p'}:${favs}`, channels: list.slice(offset, offset + limit).map(withNowNext).map(withRecordingStates), total: list.length, limit, offset })
@@ -280,19 +303,23 @@ export const handlers = [
     const u = new URL(request.url), lang = u.searchParams.get('language'), country = u.searchParams.get('country')
     const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === currentProfileId(request))?.languages ?? []
     const q = u.searchParams.get('q')?.toLowerCase()
-    const all = [...new Set(channels.map((c) => c.group))]
     // One pass over the channels: a large fixture catalog has hundreds of groups.
     const counts = new Map<string, number>()
     for (const c of channels) {
-      if (countryMatches(c.country, country) && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)) counts.set(c.group, (counts.get(c.group) ?? 0) + 1)
+      if (countryMatches(c.country, country) && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)) {
+        counts.set(c.group, (counts.get(c.group) ?? 0) + 1)
+        // A parent counts its children's channels with its own.
+        const { parent } = groupLevels(c.group)
+        if (parent) counts.set(parent, (counts.get(parent) ?? 0) + 1)
+      }
     }
-    return HttpResponse.json(all.map((g, i) => ({ id: `g${i}`, source_id: 's_xt', name: g, channel_count: counts.get(g) ?? 0,
-      hidden: hiddenGroups.has(g), language_override: null })).filter((g) => g.channel_count > 0))
+    return HttpResponse.json(groupRows().map((g) => ({ id: g.id, source_id: 's_xt', name: g.name, parent: g.parent, path: g.path, channel_count: counts.get(g.path) ?? 0,
+      hidden: groupHidden(g.path), language_override: null })).filter((g) => g.channel_count > 0))
   }),
   http.patch(`${B}/channels/groups/:id`, async ({ params, request }) => {
     const b = (await request.json()) as { hidden?: boolean }
-    const name = [...new Set(channels.map((c) => c.group))][Number(String(params.id).slice(1))]
-    if (name && b.hidden !== undefined) { if (b.hidden) hiddenGroups.add(name); else hiddenGroups.delete(name) }
+    const path = groupRows().find((g) => g.id === params.id)?.path
+    if (path && b.hidden !== undefined) { if (b.hidden) hiddenGroups.add(path); else hiddenGroups.delete(path) }
     return HttpResponse.json({})
   }),
   http.get(`${B}/channels/languages`, () => {

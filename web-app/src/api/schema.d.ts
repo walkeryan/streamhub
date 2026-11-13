@@ -3066,6 +3066,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        /** Hide, sort or set the language of a group. Hiding a parent hides its children without changing their own setting, so a child hidden alone stays hidden when the parent is shown again. */
         patch: {
             parameters: {
                 query?: never;
@@ -3090,7 +3091,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["ChannelGroup"];
+                    };
                 };
             };
         };
@@ -6713,12 +6716,22 @@ export interface components {
             /** @description As now. On an event-slot channel: the game in its name until it starts. */
             next?: components["schemas"]["Programme"];
         };
+        /** @description A channel group of one source. Groups have two levels: a source names a child `Parent / Child`. GET /channels/groups lists each top-level group followed by its children; clients that show one level list the rows whose parent is null. */
         ChannelGroup: {
+            /** @description Stable for a source and a path. A parent has an id whether or not any channel is in it directly. */
             id: string;
             source_id: string;
+            /** @description The group's own name: for a child, the part after the parent. */
             name: string;
+            /** @description The parent's name; null for a top-level group. */
+            parent?: string | null;
+            /** @description `Parent / Child`, or the name of a top-level group. Channel.group carries this. */
+            path: string;
+            /** @description A parent counts its own channels and its children's. */
             channel_count: number;
+            /** @description True when the group is hidden or its parent is. */
             hidden: boolean;
+            /** @description A parent's also applies to its children that set none. */
             language_override?: string | null;
         };
         Programme: {
