@@ -212,3 +212,67 @@ async def test_saved_layout_can_hide_and_move_shelf_rows(api: Api) -> None:
     assert (await api.put(f"/profiles/{api.profile_id}/home_layout", json={"rows": layout})).status_code == 200
     _, ids = await home_rows(api)
     assert ids == ["recently_added", "shelf:movies:New Releases", "shelf:shows:TV Shows", "recommendations"]
+
+
+# ---------------------------------------------------------------- the setting itself
+async def test_home_shelves_is_set_through_the_settings_api(api: Api) -> None:
+    await seed(
+        api,
+        rows_for("New Releases", 2)
+        + rows_for("Drama", 9)
+        + rows_for("Action", 3)
+        + rows_for("Netflix", 4)
+        + rows_for("Netflix", 5, kind="series"),
+    )
+    before = (await api.get("/settings")).json()
+    assert (before["home_shelves"], before["home_shelves_unknown"]) == ([], [])
+
+    wanted = [" Action ", "shows:Netflix", "No Such Shelf", "movies:TV Classics", "shows:Drama", "Action", " "]
+    r = await api.patch("/settings", json={"home_shelves": wanted})
+    assert r.status_code == 200, r.text
+    # Trimmed, blanks and repeats dropped, order kept. Names no shelf has are kept and pointed out:
+    # a shelf can turn up with the next sync. "shows:Drama" is unknown because Drama is a movie shelf.
+    kept = ["Action", "shows:Netflix", "No Such Shelf", "movies:TV Classics", "shows:Drama"]
+    assert r.json()["home_shelves"] == kept
+    assert r.json()["home_shelves_unknown"] == ["No Such Shelf", "movies:TV Classics", "shows:Drama"]
+    assert (await api.get("/settings")).json()["home_shelves"] == kept
+    _, ids = await home_rows(api)
+    assert [rid for rid in ids if rid.startswith("shelf:")] == [
+        "shelf:movies:New Releases",
+        "shelf:movies:Action",
+        "shelf:shows:Netflix",
+    ]
+    # Once the shelf exists it is no longer unknown, and Home shows it where the list has it.
+    async with api.c.db.session() as s:
+        await s.execute(insert(Title), rows_for("No Such Shelf", 2))
+        await s.commit()
+    assert (await api.get("/settings")).json()["home_shelves_unknown"] == ["movies:TV Classics", "shows:Drama"]
+    _, ids = await home_rows(api)
+    assert [rid for rid in ids if rid.startswith("shelf:")][-1] == "shelf:movies:No Such Shelf"
+    # Other settings leave it alone; null or an empty list hands the choice back to Home.
+    assert (await api.patch("/settings", json={"region": "GB"})).json()["home_shelves"] == kept
+    for cleared in (None, []):
+        assert (await api.patch("/settings", json={"home_shelves": ["Action"]})).json()["home_shelves"] == ["Action"]
+        r = await api.patch("/settings", json={"home_shelves": cleared})
+        assert (r.json()["home_shelves"], r.json()["home_shelves_unknown"]) == ([], [])
+    _, ids = await home_rows(api)
+    assert "shelf:movies:Drama" in ids
+
+
+async def test_home_shelves_is_validated_and_the_administrators(api: Api) -> None:
+    from tests.people import member
+
+    for bad in ("Action", [1, 2], ["x" * 201], [f"Shelf {i}" for i in range(25)], {"names": ["Action"]}):
+        r = await api.patch("/settings", json={"home_shelves": bad})
+        assert r.status_code == 422, (bad, r.text)
+    assert (await api.get("/settings")).json()["home_shelves"] == []
+    assert (await api.patch("/settings", json={"home_shelves": ["Action"]})).status_code == 200
+    parent = await member(api, "family", "Parent")
+    r = await parent.req("PATCH", "/settings", json={"home_shelves": ["Drama"]})
+    assert r.status_code == 403 and r.json()["missing"] == ["system.manage"]
+    seen = (await parent.get("/settings")).json()
+    assert seen["home_shelves"] is None and seen["home_shelves_unknown"] is None
+    assert (await api.get("/settings")).json()["home_shelves"] == ["Action"]
+    # It is a stored setting: a restart reads it back.
+    await api.c.app_settings.load()
+    assert api.c.app_settings.public()["home_shelves"] == ["Action"]

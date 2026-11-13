@@ -857,6 +857,44 @@ class CatalogService:
         value = row.value if row is not None else None
         return [str(name).strip() for name in value if str(name).strip()] if isinstance(value, list) else []
 
+    async def unknown_shelves(self, entries: list[str]) -> list[str]:
+        """The ``home_shelves`` entries that name no shelf of an enabled source right now.
+
+        Read the way Home reads them: ``movies:Name`` and ``shows:Name`` name one side, a bare
+        name the shelf on either. Not scoped to any profile: this is the administrator's list.
+        """
+        from app.services.content_policy import active_policy
+        from app.services.visibility import watch_scope
+
+        if not entries:
+            return []
+        known: dict[str, set[str]] = {}
+        reset = active_policy.set(None)
+        try:
+            with watch_scope(None):
+                async with self._db.session() as session:
+                    for section in ("movies", "shows"):
+                        rows = await session.execute(
+                            select(Title.group_name)
+                            .join(Source, Source.id == Title.source_id)
+                            .where(
+                                Source.enabled.is_(True),
+                                Title.kind.in_(BROWSE_KINDS[section]),
+                                Title.group_name != "",
+                            )
+                            .distinct()
+                        )
+                        known[section] = {name for name in rows.scalars() if name}
+        finally:
+            active_policy.reset(reset)
+        unknown = []
+        for entry in entries:
+            scope, _, name = entry.partition(":")
+            sides = [(scope, name)] if scope in known and name else [("movies", entry), ("shows", entry)]
+            if not any(shelf in known[side] for side, shelf in sides):
+                unknown.append(entry)
+        return unknown
+
     async def genre_facets(
         self,
         section: str,

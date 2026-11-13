@@ -12,6 +12,7 @@ from app.adapters.tmdb.client import JUSTWATCH_ATTRIBUTION, TMDB_ATTRIBUTION
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.infra.settings import APP_VERSION
+from app.services.auth import Principal
 from app.services.errors import NotFound, ServiceError
 from app.services.tv_release import read_release
 
@@ -28,19 +29,22 @@ async def create_theme(body: S.Theme, c: C, p: Admin) -> dict[str, Any]:
     return await c.themes.create(p.profile_id, body.model_dump())
 
 
+async def _settings(c: C, p: Principal, settings: dict[str, Any]) -> dict[str, Any]:
+    if not p.can("system.manage"):
+        # How the household's network is laid out, and which shelves exist, is the administrator's to know.
+        return {**settings, "home_networks": None, "home_shelves": None, "home_shelves_unknown": None}
+    return {**settings, "home_shelves_unknown": await c.catalog.unknown_shelves(settings["home_shelves"])}
+
+
 @router.get("/settings", response_model=S.Settings, tags=["system"])
 async def get_settings(c: C, p: P) -> dict[str, Any]:
-    settings = c.app_settings.public()
-    if not p.can("system.manage"):
-        # How the household's network is laid out is the administrator's to know.
-        settings["home_networks"] = None
-    return settings
+    return await _settings(c, p, c.app_settings.public())
 
 
 @router.patch("/settings", response_model=S.Settings, tags=["system"])
 async def patch_settings(body: S.SettingsPatch, c: C, p: Admin) -> dict[str, Any]:
     try:
-        return await c.app_settings.update(body.model_dump(exclude_unset=True))
+        return await _settings(c, p, await c.app_settings.update(body.model_dump(exclude_unset=True)))
     except ValueError as exc:
         raise ServiceError(str(exc)) from exc
 

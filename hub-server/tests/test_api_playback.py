@@ -445,6 +445,8 @@ async def test_settings(api: Api) -> None:
         "signup_mode": "approval",
         "notify_webhook_set": False,
         "home_networks": DEFAULT_HOME_NETWORKS,
+        "home_shelves": [],
+        "home_shelves_unknown": [],
     }
     s = (await api.patch("/settings", json={"region": "gb", "sleep_timer_min": 60, "transcode_hw": "vaapi"})).json()
     assert s["region"] == "GB" and s["sleep_timer_min"] == 60 and s["transcode_hw"] == "vaapi"

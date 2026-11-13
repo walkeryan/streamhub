@@ -732,6 +732,8 @@ components:
         notify_webhook_set: {type: boolean, readOnly: true, description: "A notification webhook is stored. The address is never returned."}
         notify_webhook: {type: string, nullable: true, writeOnly: true, description: "PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it"}
         home_networks: {type: string, nullable: true, description: "Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges)"}
+        home_shelves: {type: array, nullable: true, maxItems: 24, items: {type: string, maxLength: 200}, description: "The shelves Home shows after New Releases, in order (at most 12 are shown). An entry is a shelf (category) name, or movies:Name / shows:Name for one side only. Empty: Home chooses its shelves. Stored trimmed, without blanks or repeats. Null for callers without system.manage; PATCH null or [] clears it."}
+        home_shelves_unknown: {type: array, nullable: true, readOnly: true, items: {type: string}, description: "The entries of home_shelves that name no shelf of an enabled source right now. They are kept (the shelf may arrive with a later sync) and skipped by Home. Null for callers without system.manage."}
     Disclaimer:
       type: object
       required: [version, text]

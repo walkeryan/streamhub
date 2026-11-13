@@ -6373,6 +6373,10 @@ export interface components {
             notify_webhook?: string | null;
             /** @description Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges) */
             home_networks?: string | null;
+            /** @description The shelves Home shows after New Releases, in order (at most 12 are shown). An entry is a shelf (category) name, or movies:Name / shows:Name for one side only. Empty: Home chooses its shelves. Stored trimmed, without blanks or repeats. Null for callers without system.manage; PATCH null or [] clears it. */
+            home_shelves?: string[] | null;
+            /** @description The entries of home_shelves that name no shelf of an enabled source right now. They are kept (the shelf may arrive with a later sync) and skipped by Home. Null for callers without system.manage. */
+            readonly home_shelves_unknown?: string[] | null;
         };
         Disclaimer: {
             version: string;
