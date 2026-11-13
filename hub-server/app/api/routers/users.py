@@ -73,6 +73,13 @@ async def set_user_pin(id: str, body: S.UserPin, c: C, p: P) -> Response:
     return Response(status_code=204)
 
 
+@router.post("/users/{id}/password-reset", response_model=S.SetupLink, tags=["users"])
+async def reset_password(id: str, response: Response, c: C, p: UsersAdmin) -> dict[str, Any]:
+    """Take away a user's password and sessions and answer a setup link for them to choose a new one."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return await c.passwords.reset(p, id)
+
+
 # ---------------------------------------------------------------- roles
 @router.get("/roles", response_model=list[S.Role], tags=["users"])
 async def list_roles(c: C, p: UsersAdmin) -> list[dict[str, Any]]:
@@ -104,7 +111,7 @@ async def delete_role(id: str, c: C, p: UsersAdmin) -> Response:
 @router.post("/invites", response_model=S.InviteCreated, status_code=201, tags=["users"])
 async def create_invite(body: S.InviteCreate, response: Response, c: C, p: Inviter) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
-    return await c.invites.create(p, body.role_id, body.expires_in_hours, body.max_uses)
+    return await c.invites.create(p, body.role_id, body.expires_in_hours, body.max_uses, body.name)
 
 
 @router.get("/invites", response_model=list[S.Invite], tags=["users"])

@@ -77,11 +77,19 @@ class InvitesService:
             "max_uses": row.max_uses,
             "uses": row.uses,
             "state": state,
+            "display_name": row.display_name,
+            "user_id": row.user_id,
         }
 
-    async def create(self, actor: Any, role_id: str, expires_in_hours: int = 72, max_uses: int = 1) -> dict[str, Any]:
+    async def create(
+        self, actor: Any, role_id: str, expires_in_hours: int = 72, max_uses: int = 1, name: str | None = None
+    ) -> dict[str, Any]:
+        """An invite; with ``name`` it is for one person, who starts out under that name."""
         if not 1 <= expires_in_hours <= MAX_HOURS or not 1 <= max_uses <= MAX_USES:
             raise ServiceError("invalid expiry or use count", code="invalid_invite")
+        name = (name or "").strip()[:64] or None
+        if name and max_uses != 1:
+            raise ServiceError("An invite for one person is used once", code="invalid_invite")
         token = secrets.token_urlsafe(32)
         async with self._db.session() as s:
             role = await s.get(Role, role_id)
@@ -97,6 +105,7 @@ class InvitesService:
                 expires_at=utcnow() + timedelta(hours=expires_in_hours),
                 max_uses=max_uses,
                 uses=0,
+                display_name=name,
             )
             s.add(row)
             audit(
@@ -108,6 +117,7 @@ class InvitesService:
                 role_id=role.id,
                 expires_in_hours=expires_in_hours,
                 max_uses=max_uses,
+                named=bool(name),
             )
             await s.commit()
         # The only time the token is ever returned.
@@ -138,6 +148,24 @@ class InvitesService:
             await s.commit()
 
     @staticmethod
+    async def _confers(s: AsyncSession, row: Invite) -> Role | None:
+        """The role this invite still hands out: none once its creator may no longer invite to it."""
+        role = await s.get(Role, row.role_id)
+        creator = await s.get(User, row.created_by_user_id) if row.created_by_user_id else None
+        creator_role = await s.get(Role, creator.role_id) if creator is not None and creator.role_id else None
+        permissions, limits = access(creator, creator_role)
+        if role is None or "users.invite" not in permissions or not _may_confer(role, permissions, limits):
+            return None
+        return role
+
+    @staticmethod
+    async def usable(s: AsyncSession, row: Invite) -> bool:
+        """Would this invitation admit someone right now? Claims nothing."""
+        if row.user_id is not None or row.revoked_at is not None or row.expires_at <= utcnow():
+            return False
+        return row.uses < row.max_uses and await InvitesService._confers(s, row) is not None
+
+    @staticmethod
     async def redeem_in(s: AsyncSession, token: str) -> Redeemed | None:
         """Claim one use inside the caller's transaction, or None.
 
@@ -151,11 +179,8 @@ class InvitesService:
         row = (await s.execute(select(Invite).where(Invite.token_hash == token_hash(token)))).scalar_one_or_none()
         if row is None or row.user_id is not None:
             return None
-        role = await s.get(Role, row.role_id)
-        creator = await s.get(User, row.created_by_user_id) if row.created_by_user_id else None
-        creator_role = await s.get(Role, creator.role_id) if creator is not None and creator.role_id else None
-        permissions, limits = access(creator, creator_role)
-        if role is None or "users.invite" not in permissions or not _may_confer(role, permissions, limits):
+        role = await InvitesService._confers(s, row)
+        if role is None:
             return None
         claimed = (
             await s.execute(

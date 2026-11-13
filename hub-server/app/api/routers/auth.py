@@ -9,7 +9,7 @@ from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api import schemas as S
-from app.api.deps import C, Handover, P, UsersAdmin, resolve, session_meta
+from app.api.deps import C, Handover, P, UsersAdmin, client_ip, resolve, session_meta
 from app.infra.models import Profile as ProfileRow
 from app.services.context import is_https, public_base
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
@@ -268,6 +268,7 @@ async def auth_config(c: C) -> dict[str, Any]:
         "owner_pin_setup_required": not await c.owner_pin.configured(),
         "signup_mode": c.app_settings.get("signup_mode"),
         "plex_enabled": c.plex_auth.enabled,
+        "password_enabled": c.passwords.enabled,
     }
 
 
@@ -392,3 +393,34 @@ async def plex_complete(body: S.PlexSignInComplete, request: Request, response: 
     tx = c.plex_auth.claim(body.state, request.cookies.get(name, ""))
     account = await c.plex_auth.account(tx)
     return await _signed_in(request, c, await c.plex_auth.sign_in(account, tx.invite))
+
+
+# ---------------------------------------------------------------- username and password
+@router.post("/auth/password", response_model=S.AuthTokens, tags=["auth"])
+async def password_sign_in(body: S.PasswordSignIn, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Sign in with a username and a password. A wrong name and a wrong password are one answer."""
+    response.headers["Cache-Control"] = "no-store"
+    prof, tokens = await c.passwords.sign_in(body.username, body.password, client_ip(request), session_meta(request))
+    return await tokens_out(c, prof, tokens)
+
+
+@router.put("/auth/password", status_code=204, tags=["auth"])
+async def password_change(body: S.PasswordChange, request: Request, c: C, p: P) -> Response:
+    """Change one's own password (the current one is needed; other devices are signed out), or set a first one."""
+    await c.passwords.change(p, body.current_password, body.new_password, body.username, client_ip(request))
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/auth/invite/lookup", response_model=S.InviteLookup, tags=["auth"])
+async def invite_lookup(body: S.InviteLookupRequest, response: Response, c: C) -> dict[str, Any]:
+    """What the page behind an invite or setup link shows. The token travels in the body, not the URL."""
+    response.headers["Cache-Control"] = "no-store"
+    return await c.passwords.lookup(body.token)
+
+
+@router.post("/auth/invite/accept", response_model=S.AuthTokens, tags=["auth"])
+async def invite_accept(body: S.InviteAccept, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Accept an invite, or use a setup link, by choosing a username and a password."""
+    response.headers["Cache-Control"] = "no-store"
+    prof, tokens = await c.passwords.accept(body.token, body.username, body.password, session_meta(request))
+    return await tokens_out(c, prof, tokens)

@@ -82,6 +82,40 @@ class PlexSignInComplete(_M):
     state: str = Field(default="", max_length=64, repr=False)
 
 
+class PasswordSignIn(_M):
+    # Bounds only: what is a valid name or password is never said to someone signing in.
+    username: str = Field(default="", max_length=64)
+    password: str = Field(default="", max_length=256, repr=False)
+
+
+class PasswordChange(_M):
+    current_password: str | None = Field(default=None, max_length=256, repr=False)
+    new_password: str = Field(max_length=256, repr=False)
+    username: str | None = Field(default=None, max_length=64, description="only when setting a first password")
+
+
+class InviteLookupRequest(_M):
+    token: str = Field(default="", max_length=64, repr=False)
+
+
+class InviteLookup(_M):
+    valid: bool
+    display_name: str | None = None
+    username: str | None = Field(default=None, description="a setup link for someone who already has a username")
+    setup: bool = Field(default=False, description="a password setup link for one existing user")
+
+
+class InviteAccept(_M):
+    token: str = Field(default="", max_length=64, repr=False)
+    username: str = Field(default="", max_length=64)
+    password: str = Field(default="", max_length=256, repr=False)
+
+
+class SetupLink(_M):
+    url: str = Field(description="/invite/<token>; the token is never shown again")
+    expires_at: datetime
+
+
 class RefreshRequest(_M):
     refresh_token: str = ""
 
@@ -941,6 +975,7 @@ class InviteCreate(_M):
     role_id: str
     expires_in_hours: int = Field(default=72, ge=1, le=720)
     max_uses: int = Field(default=1, ge=1, le=50)
+    name: str | None = Field(default=None, max_length=64, description="who it is for; such an invite is used once")
 
 
 class Invite(_M):
@@ -954,6 +989,8 @@ class Invite(_M):
     max_uses: int
     uses: int
     state: Literal["open", "used", "expired", "revoked"]
+    display_name: str | None = None
+    user_id: str | None = Field(default=None, description="set on a password setup link: the user it is for")
 
 
 class InviteCreated(Invite):

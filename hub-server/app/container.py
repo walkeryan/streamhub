@@ -44,6 +44,7 @@ from app.services.media_probe import MediaProbe
 from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
 from app.services.owner_reauth import OwnerReauthService
+from app.services.passwords import PasswordAuth
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.plex_auth import PlexAuthService
 from app.services.recorder import RecorderService
@@ -87,6 +88,7 @@ class Container:
     invites: InvitesService
     google_auth: GoogleAuthService
     plex_auth: PlexAuthService
+    passwords: PasswordAuth
     language: LanguageChain
     tmdb: TmdbClient
     sources: SourceService
@@ -268,6 +270,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         invites=InvitesService(db),
         google_auth=google_auth,
         plex_auth=plex_auth,
+        passwords=PasswordAuth(db, auth, app_settings.get, available=lambda: not content_policy.enabled),
         language=language,
         tmdb=tmdb,
         sources=sources,

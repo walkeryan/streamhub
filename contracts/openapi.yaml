@@ -218,6 +218,14 @@ components:
         max_uses: {type: integer}
         uses: {type: integer}
         state: {type: string, enum: [open, used, expired, revoked]}
+        display_name: {type: string, nullable: true, description: "Who the invite is for, when it was made for one person (\"Add person\"). The new user starts under this name."}
+        user_id: {type: string, nullable: true, description: "Set on a password setup link (POST /users/{id}/password-reset): the one user whose password it sets. Such a link admits nobody and is ignored by Google and Plex sign-in."}
+    SetupLink:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url: {type: string, description: "/invite/<token>. The token is shown this once and stored only as a hash."}
+        expires_at: {type: string, format: date-time}
     InviteCreated:
       allOf:
         - $ref: '#/components/schemas/Invite'
@@ -1096,10 +1104,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required, plex_enabled]
+                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required, plex_enabled, password_enabled]
                 properties:
                   google_enabled: {type: boolean}
                   plex_enabled: {type: boolean, description: "\"Continue with Plex\" is offered"}
+                  password_enabled: {type: boolean, description: "Username and password sign-in is offered"}
                   google_required: {type: boolean, description: "Google sign-in is the only way in for people"}
                   content_policy_enabled: {type: boolean}
                   owner_pin_configured: {type: boolean}
@@ -1281,6 +1290,64 @@ paths:
       security: []
       summary: Profile login (password for admin, PIN for profiles)
       requestBody: { content: { application/json: { schema: { type: object, required: [profile_id], properties: { profile_id: {type: string}, pin: {type: string, nullable: true}, password: {type: string, nullable: true} } } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
+  /auth/password:
+    post:
+      security: []
+      summary: Sign in with a username and a password
+      description: >-
+        A wrong username and a wrong password are one answer: 401 invalid_credentials, the same body, and
+        the same work (an unknown name is verified against a stand-in hash). Guessing is throttled by
+        username and by client address: five attempts for a name, twenty from an address, in fifteen
+        minutes, then a lock of 60 seconds that doubles each time up to an hour, and a ceiling of 300
+        failures in five minutes for everyone. A refused attempt is 429 rate_limited with Retry-After,
+        whoever the name belongs to. 403 password_disabled when the method is off. A suspended user is
+        told so (401 user_suspended) only after the right password.
+      requestBody: { content: { application/json: { schema: { type: object, required: [username, password], properties: { username: {type: string, maxLength: 64}, password: {type: string, maxLength: 256, writeOnly: true} } } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }
+        '401': { description: "invalid_credentials | user_suspended" }
+        '429': { description: "rate_limited; Retry-After is whole seconds" }
+    put:
+      summary: Change one's own password, or set a first one
+      description: >-
+        With a password already set, current_password is required (403 wrong_password, throttled like a
+        sign-in) and every other session of the user is revoked. Without one, this links a password to the
+        account: username is required unless the user has one (409 username_taken, 400 invalid_username).
+        A username is 3 to 32 of a-z 0-9 . - _ and is stored lower case. A password has at least 10
+        characters, does not contain the username and is not one of the most common (400 weak_password).
+        Not on a shared device (403 shared_device).
+      requestBody: { content: { application/json: { schema: { type: object, required: [new_password], properties: { current_password: {type: string, nullable: true, writeOnly: true}, new_password: {type: string, maxLength: 256, writeOnly: true}, username: {type: string, nullable: true, maxLength: 64} } } } } }
+      responses: { '204': { description: ok } }
+  /auth/invite/lookup:
+    post:
+      security: []
+      summary: What the page behind an invite or setup link shows
+      description: The token travels in the body. Every link that cannot be used (unknown, used, expired, revoked) answers the same valid false.
+      requestBody: { content: { application/json: { schema: { type: object, required: [token], properties: { token: {type: string, maxLength: 64} } } } } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid, setup]
+                properties:
+                  valid: {type: boolean}
+                  display_name: {type: string, nullable: true}
+                  username: {type: string, nullable: true, description: "A setup link for someone who already has a username: it is kept"}
+                  setup: {type: boolean, description: "A password setup link for one existing user rather than an invitation"}
+  /auth/invite/accept:
+    post:
+      security: []
+      summary: Accept an invite, or use a setup link, by choosing a username and a password
+      description: >-
+        An invite makes a new active user with the invite's role and signs them in. A setup link sets the
+        password of the user it names (who keeps a username they already have). Nothing is spent unless it
+        goes through: 400 invalid_username, 400 weak_password and 409 username_taken leave the link good.
+        403 invite_invalid for any link that cannot be used.
+      requestBody: { content: { application/json: { schema: { type: object, required: [token, username, password], properties: { token: {type: string, maxLength: 64}, username: {type: string, maxLength: 64}, password: {type: string, maxLength: 256, writeOnly: true} } } } } }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
   /auth/refresh:
     post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
@@ -1661,6 +1728,17 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"} } } } } }
       responses: { '204': { description: ok } }
+  /users/{id}/password-reset:
+    post:
+      summary: Reset a user's password and answer a setup link (users.manage)
+      description: >-
+        The password stops working and every session of that user is revoked at once (the caller's own
+        device stays when resetting oneself). The answer is a one-time link, good for 72 hours, where that
+        person chooses a new password; an earlier setup link for them stops working. Also how someone
+        without a password gets one. Only an owner resets an owner; 409 not_active for a pending user.
+        There is no e-mail recovery and no self-registration.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SetupLink' } } } } }
   /roles:
     get: { summary: Roles with their permissions and limits (users.manage), responses: { '200': { description: built-ins first, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Role' } } } } } } }
     post: { summary: Create a custom role (users.manage), requestBody: { content: { application/json: { schema: { allOf: [{$ref: '#/components/schemas/RoleInput'}], required: [name] } } } }, responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/Role' } } } } } }
@@ -1676,7 +1754,7 @@ paths:
     post:
       summary: Create an invite link for a role (users.invite)
       description: The role may be no wider than the inviter's own access, and is never the Owner role (403 invite_role_too_wide).
-      requestBody: { content: { application/json: { schema: { type: object, required: [role_id], properties: { role_id: {type: string}, expires_in_hours: {type: integer, minimum: 1, maximum: 720, default: 72}, max_uses: {type: integer, minimum: 1, maximum: 50, default: 1} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [role_id], properties: { role_id: {type: string}, expires_in_hours: {type: integer, minimum: 1, maximum: 720, default: 72}, max_uses: {type: integer, minimum: 1, maximum: 50, default: 1}, name: {type: string, maxLength: 64, nullable: true, description: "Add a person: who the invite is for. Used once (max_uses must be 1). They accept it with Google, with Plex, or by choosing a username and password."} } } } } }
       responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/InviteCreated' } } } } }
   /invites/{id}:
     delete: { summary: Revoke an invite (its creator; anyone's with users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: revoked } } }
