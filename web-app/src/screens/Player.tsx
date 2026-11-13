@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
-import { useChannels } from '../api/hooks'
+import { createRoom, useChannels } from '../api/hooks'
+import type { Room } from '../api/types'
 import { Button, Chip, ProgressBar } from '../components/ui'
 import { ChannelRow } from '../components/ChannelRow'
 import { FocusGroup, Focusable } from '../nav/Focusable'
@@ -14,6 +15,9 @@ import { seekPlan, seekableRanges } from '../player/restartSeek'
 import { busyHeading, busyLines } from '../player/sourceBusy'
 import { LocalBufferControls } from '../player/LocalBufferControls'
 import { RewindControls } from '../player/RewindControls'
+import type { RoomSession } from '../room/session'
+import { ShareSheet } from '../room/ShareSheet'
+import { useRoomPlayer } from '../room/useRoomPlayer'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
@@ -23,8 +27,10 @@ type Aspect = 'contain' | 'cover' | 'fill'
 const ASPECTS: Array<{ id: Aspect; label: string }> = [{ id: 'contain', label: 'Fit' }, { id: 'cover', label: 'Fill' }, { id: 'fill', label: 'Stretch' }]
 const SLEEP = [null, 15, 30, 45, 60, 90, 120]
 
-export function Player() {
-  const id = decodeURIComponent(useParams().id ?? '')
+/** `room`: play as a member of a watch room. The room supplies the stream and the transport controls go to it. */
+export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () => void } = {}) {
+  const routeId = decodeURIComponent(useParams().id ?? '')
+  const id = room ? room.room.id : routeId
   const [sp] = useSearchParams()
   const sourceId = sp.get('source')
   const variantId = sp.get('variant') ?? undefined
@@ -46,14 +52,18 @@ export function Player() {
   }
   const videoRef = useRef<HTMLVideoElement>(null)
   const isChannel = id.startsWith('ch:')
+  // A finished recording (rec:<id>) plays like a title, but has no title page to choose a source on.
+  const isRecording = id.startsWith('rec:')
   // Router URL updates can precede the next React commit. Remote events in
   // that gap must use the selected channel, not the previous render's id.
   const activeId = useRef(id)
   useLayoutEffect(() => { activeId.current = id }, [id])
 
   const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, audioTrack }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, audioTrack])
-  const audio = useChannelAudio(req, manualChoice === selectionKey)
-  const pb = usePlayback(videoRef, audio.request, { buffer: true })
+  const channelAudio = useChannelAudio(req, manualChoice === selectionKey)
+  // A room's audio was settled when the member joined; its stream comes from the room, without a local rewind buffer.
+  const audio = room ? { ...channelAudio, enabled: false, blocked: false, request: req } : channelAudio
+  const pb = usePlayback(videoRef, audio.request, { buffer: !room, descriptor: room?.descriptor })
   const { desc, state } = pb
   const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
   // A restart-at-offset stream: the media element starts at `offset` seconds into the title and only
@@ -95,7 +105,7 @@ export function Player() {
     setOverlayState(back)
   }, [])
   // Live starts with only the channel OSD so Up/Down zap straight away; VOD starts with the control bar visible.
-  const [ui, setUi] = useState(() => !isChannel)
+  const [ui, setUi] = useState(() => !isChannel || !!room)
   const [osd, setOsd] = useState(true)
   const [paused, setPaused] = useState(true)
   const [time, setTime] = useState({ cur: 0, dur: 0, seekable: false })
@@ -106,7 +116,16 @@ export function Player() {
   const [digits, setDigits] = useState('')
   const digitsRef = useRef('')
   const now = useNow(15_000)
-  const blocking = audio.blocked || overlay !== null || state === 'error' || state === 'handoff'
+  // ---- watch room ----
+  const roomCtl = useRoomPlayer(room, videoRef, {
+    state, audioBlocked: pb.audioBlocked, pause: pb.pause, resume: pb.resume, reload: pb.reload,
+    offsetS: offset, durationS: fullDuration || time.dur, restartable,
+  }, onRejoin)
+  // Watch together from the player: the room that was just made, shown with its link and code.
+  const [together, setTogether] = useState<Room | null>(null)
+  const [startingRoom, setStartingRoom] = useState(false)
+  const zappable = isChannel && !room
+  const blocking = audio.blocked || overlay !== null || state === 'error' || state === 'handoff' || !!roomCtl?.modal || !!together
   const blockingRef = useRef(false)
   blockingRef.current = blocking || activeId.current !== id
   const [backHint, setBackHint] = useState(false)
@@ -141,15 +160,19 @@ export function Player() {
   }, [])
 
   const exit = useCallback(() => navigate(-1), [navigate])
-  const togglePlay = () => { const v = videoRef.current; if (!v) return; if (v.paused) pb.resume(); else pb.pause() }
+  const leaveOrExit = roomCtl ? roomCtl.askLeave : exit
+  const togglePlay = () => { if (roomCtl) { roomCtl.toggle(); return } const v = videoRef.current; if (!v) return; if (v.paused) pb.resume(); else pb.pause() }
+  const roomSeekTo = roomCtl?.seekTo, roomSeekBy = roomCtl?.seekBy
   const seekTo = useCallback((title: number) => {
+    if (roomSeekTo) { roomSeekTo(title); return }
     const v = videoRef.current
     if (!v || !restartable) return
     const plan = seekPlan(title, offset, seekableRanges(v), fullDuration)
     if ('within' in plan) v.currentTime = plan.within
     else { setPendingSeek(plan.restart / 1000); pb.seekTo(plan.restart) }
-  }, [restartable, offset, fullDuration, pb])
+  }, [restartable, offset, fullDuration, pb, roomSeekTo])
   const seekBy = useCallback((s: number) => {
+    if (roomSeekBy) { roomSeekBy(s); return }
     const v = videoRef.current
     if (!v) return
     if (restartable) { seekTo(offset + v.currentTime + s); return }
@@ -161,7 +184,15 @@ export function Player() {
       if (Math.abs(candidate - wanted) < distance) { closest = candidate; distance = Math.abs(candidate - wanted) }
     }
     v.currentTime = closest
-  }, [restartable, offset, seekTo])
+  }, [restartable, offset, seekTo, roomSeekBy])
+  const startTogether = async () => {
+    if (startingRoom) return
+    setStartingRoom(true)
+    try {
+      setTogether(await createRoom({ id, variant_id: variantId ?? null, audio_track: desc?.id === id && desc.audio_track != null ? desc.audio_track : audioTrack }))
+      setOverlay(null)
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not start a room.', 'error') } finally { setStartingRoom(false) }
+  }
   const pip = useCallback(async () => {
     const v = videoRef.current
     if (!v) return
@@ -207,7 +238,8 @@ export function Player() {
   // zap never sees stale state.
   // zapping with the controls hidden keeps them hidden (poke() runs on every key)
   const hideIfHidden = useCallback((visible: boolean) => { if (!visible) hideChrome() }, [hideChrome])
-  const handlers = { id, live, isChannel, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
+  // A room never zaps: its live channel takes the keys a title does.
+  const handlers = { id, live: live && !room, isChannel, zap, zapTo, seekBy, togglePlay, pip, fullscreen, poke, showOsd, toast, hideIfHidden }
   const apiRef = useRef(handlers)
   apiRef.current = handlers
   useEffect(() => {
@@ -278,6 +310,8 @@ export function Player() {
     const o = overlayRef.current
     if (o) { closeOverlay(); if (o === 'bar') hideChrome(); return true }
     if (chromeRef.current && !pausedRef.current) { hideChrome(); return true }
+    // Back out of a room asks first: leaving gives the seat up.
+    if (roomCtl) { roomCtl.askLeave(); return true }
     const last = useUi.getState().lastChannelId
     if (!live || !last || last === activeId.current) return false
     if (backTimer.current) {
@@ -355,9 +389,9 @@ export function Player() {
               <p>{pb.error ?? 'The stream could not be played.'}</p>
             </>}
             <div className="flex gap-3">
-              {!pb.busy && <Button focusKey="perr:source" onEnter={() => { if (audio.enabled) { setManualChoice(selectionKey); void audio.query.refetch() } else navigate(`/title/${encodeURIComponent(id)}?choose=1`) }}>Choose audio / source</Button>}
+              {!pb.busy && !room && !isRecording && <Button focusKey="perr:source" onEnter={() => { if (audio.enabled) { setManualChoice(selectionKey); void audio.query.refetch() } else navigate(`/title/${encodeURIComponent(id)}?choose=1`) }}>Choose audio / source</Button>}
               <Button focusKey="perr:retry" primary icon="refresh" onEnter={pb.retryNow}>Try again</Button>
-              <Button focusKey="perr:back" onEnter={exit}>Back</Button>
+              <Button focusKey="perr:back" onEnter={leaveOrExit}>{room ? 'Leave room' : 'Back'}</Button>
             </div>
           </FocusGroup>
           <HandoffFocus keyName="perr:retry" />
@@ -372,9 +406,10 @@ export function Player() {
       <div className="player-ui" data-show={showChrome} data-testid="player-ui">
         <div className="top">
           <FocusGroup focusKey="pt" className="flex gap-3 items-center">
-            <Button focusKey="pt:back" iconOnly icon="back" label="Back" onEnter={exit} />
+            <Button focusKey="pt:back" iconOnly icon="back" label={room ? 'Leave room' : 'Back'} onEnter={leaveOrExit} />
           </FocusGroup>
           <div className="min-w-0"><h1 className="title-xl truncate" data-testid="player-title">{title}</h1>{desc?.subtitle && <p className="label truncate" style={{ color: 'rgba(255,255,255,.75)' }}>{desc.subtitle}</p>}</div>
+          {roomCtl?.top}
         </div>
         <div className="bottom">
           {!live && (
@@ -390,7 +425,7 @@ export function Player() {
                   e.stopPropagation()
                   const box = e.currentTarget.getBoundingClientRect()
                   const wanted = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)) * duration
-                  if (restartable) seekTo(wanted); else seekBy(wanted - (videoRef.current?.currentTime ?? 0))
+                  if (restartable || room) seekTo(wanted); else seekBy(wanted - (videoRef.current?.currentTime ?? 0))
                 }}><ProgressBar pct={pct} /></div>
               </Focusable>
               <span className="label" style={{ color: '#fff' }}>{fmtDuration(duration)}</span>
@@ -401,15 +436,16 @@ export function Player() {
             <Button focusKey="pb:play" primary iconOnly icon={paused ? 'play' : 'pause'} label={paused ? 'Play' : 'Pause'} onEnter={togglePlay} />
             {!live && <Button focusKey="pb:back10" disabled={!canSeek} ghost onEnter={() => seekBy(-10)}>−10 s</Button>}
             {!live && <Button focusKey="pb:fwd10" disabled={!canSeek} ghost onEnter={() => seekBy(10)}>+10 s</Button>}
-            {isChannel && <Button focusKey="pb:ch-" ghost icon="down" label="Channel down" onEnter={() => zap(-1)} />}
-            {isChannel && <Button focusKey="pb:ch+" ghost icon="up" label="Channel up" onEnter={() => zap(1)} />}
-            {isChannel && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn">Channels</Button>}
+            {zappable && <Button focusKey="pb:ch-" ghost icon="down" label="Channel down" onEnter={() => zap(-1)} />}
+            {zappable && <Button focusKey="pb:ch+" ghost icon="up" label="Channel up" onEnter={() => zap(1)} />}
+            {zappable && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn">Channels</Button>}
             <Button focusKey="pb:menu" ghost icon="cc" onEnter={() => setOverlay('menu')} testId="player-menu-btn">Audio and subtitles</Button>
             <Button focusKey="pb:pip" ghost icon="pip" label="Picture in picture" onEnter={() => void pip()} testId="player-pip">PiP</Button>
             <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" onEnter={fullscreen} />
+            {roomCtl?.bar}
           {pb.bufferWindow && <LocalBufferControls window={pb.bufferWindow} issue={pb.bufferIssue} onSeek={pb.seekBuffer} />}
           {pb.bufferIssue && !pb.bufferWindow && <span role="status">{pb.bufferIssue}</span>}
-          {isChannel && !pb.bufferWindow && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
+          {zappable && !pb.bufferWindow && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
             const next = new URLSearchParams(sp); next.delete("catchup");
             if (at) next.set("rewind", at); else next.delete("rewind");
             navigate(`/play/${encodeURIComponent(id)}?${next}`, { replace: true });
@@ -435,7 +471,7 @@ export function Player() {
               <div className="heading truncate">{channel?.name ?? title}</div>
               <div className="truncate">{channel?.now ? `${channel.now.title}  ${fmtTime(channel.now.start)} to ${fmtTime(channel.now.stop)}` : 'No programme data'}</div>
               {channel?.next && <div className="label truncate" style={{ color: 'rgba(255,255,255,.7)' }}>Next · {channel.next.title} at {fmtTime(channel.next.start)}</div>}
-              {!showChrome && <div className="label truncate" style={{ color: 'rgba(255,255,255,.7)' }}>▲▼ change channel · ◀ ▶ show controls · OK channel list</div>}
+              {!showChrome && !room && <div className="label truncate" style={{ color: 'rgba(255,255,255,.7)' }}>▲▼ change channel · ◀ ▶ show controls · OK channel list</div>}
             </div>
           </div>
           {channel?.now && <ProgressBar pct={pct} />}
@@ -464,12 +500,22 @@ export function Player() {
             <MenuSection title="Aspect ratio">
               {ASPECTS.map((a) => <Chip key={a.id} focusKey={`pm:asp:${a.id}`} pressed={aspect === a.id} onEnter={() => setAspect(a.id)}>{a.label}</Chip>)}
             </MenuSection>
+            {!room && !catchup && !rewindAt && !isRecording && (
+              <MenuSection title="Watch together">
+                <Button focusKey="pm:together" icon="people" disabled={startingRoom} onEnter={() => void startTogether()} testId="player-together">{startingRoom ? 'Starting a room…' : 'Watch together'}</Button>
+                <span className="muted label" style={{ flexBasis: '100%' }}>Start a room for this {isChannel ? 'channel' : 'title'} and invite others with a link or code.</span>
+              </MenuSection>
+            )}
             <MenuSection title="Sleep timer">
               {SLEEP.map((m) => <Chip key={m ?? 'off'} focusKey={`pm:sl:${m ?? 'off'}`} pressed={sleepMinutes === m} onEnter={() => { setSleep(m); if (m) toast(`Sleep timer set for ${m} minutes.`) }}>{m ? `${m} min` : 'Off'}</Chip>)}
             </MenuSection>
           </FocusGroup>
         </div>
       )}
+
+      {roomCtl?.layers}
+      <ShareSheet room={together} onClose={() => setTogether(null)}
+        onStart={() => together && navigate(`/room/${together.code}?start=1${live ? '' : `&at=${Math.floor(position * 1000)}`}`, { replace: true })} />
 
       {/* OK on live: mini channel list */}
       {overlay === 'list' && (

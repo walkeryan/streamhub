@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
-import { useChannelGroups, useChannels, useLanguages, useSources, useToggleFavorite } from '../api/hooks'
+import { useChannelGroups, useChannels, useLanguages, useRecordings, useSources, useToggleFavorite } from '../api/hooks'
 import type { Channel, ChannelGroup } from '../api/types'
 import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
 import { CatalogPicker } from '../components/CatalogPicker'
@@ -17,6 +17,9 @@ import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { usePhone } from '../lib/layout'
 import { fmtTime, useDebounced } from '../lib/util'
+import { can } from '../lib/can'
+import { RecordDialog } from '../recordings/RecordDialog'
+import { RecordingBadge } from '../recordings/RecordingBadge'
 
 const PAGE = 80
 // Groups shown as chips; a provider with more keeps the rest behind one searchable picker.
@@ -74,6 +77,11 @@ export function LiveTV() {
   const focused = channels.find((c) => c.id === focusedId) ?? null
   const setChannelList = useUi((s) => s.setChannelList)
   const toggleFav = useToggleFavorite()
+  // Recording the focused channel's now or next, where the server has recording on and this profile may schedule.
+  const recordings = useRecordings(can(profile, 'recordings'), false)
+  const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
+  const [recordingId, setRecordingId] = useState<string | null>(null)
+  const recordingChannel = channels.find((c) => c.id === recordingId)
   const go = useGo()
   useEffect(() => { if (ready && q.data) setChannelList(q.data.list_id ?? null, channels) }, [ready, q.data, channels, setChannelList])
   // Arrive on the channels, not on the search field (a focused field raises the on-screen keyboard).
@@ -155,13 +163,15 @@ export function LiveTV() {
       {/* A phone has no room for a preview: selecting a channel plays it. */}
       {!phone && <aside className="live-catalog-preview flex flex-col gap-3" aria-label="Preview" style={{ position: 'sticky', top: '1rem', alignSelf: 'start' }}>
         <Preview channelId={previewId} />
-        {focused && <div className="flex flex-col gap-1" data-testid="live-info"><h2 className="title-xl">{focused.number} · {focused.name}</h2><p>{focused.now ? `Now: ${focused.now.title} (${fmtTime(focused.now.start)} to ${fmtTime(focused.now.stop)})` : 'No programme data supplied for this channel'}</p>{focused.next && <p className="muted">Next: {focused.next.title} at {fmtTime(focused.next.start)}</p>}</div>}
+        {focused && <div className="flex flex-col gap-1" data-testid="live-info"><h2 className="title-xl">{focused.number} · {focused.name}</h2><p className="flex items-center gap-2 flex-wrap">{focused.now ? `Now: ${focused.now.title} (${fmtTime(focused.now.start)} to ${fmtTime(focused.now.stop)})` : 'No programme data supplied for this channel'}<RecordingBadge state={focused.now?.recording_state} /></p>{focused.next && <p className="muted flex items-center gap-2 flex-wrap">Next: {focused.next.title} at {fmtTime(focused.next.start)}<RecordingBadge state={focused.next.recording_state} /></p>}</div>}
         <FocusGroup focusKey="live:actions" className="flex gap-2 flex-wrap">
           <Button focusKey="live:watch" primary icon="play" disabled={!focused} onEnter={() => focused && playChannel(focused)}>Watch full screen</Button>
           <Chip focusKey="live:preview" pressed={previewEnabled} onEnter={() => setPreviewEnabled((v) => !v)}>Preview {previewEnabled ? 'on' : 'off'}</Chip>
           <Button focusKey="live:togglefav" icon="heart" disabled={!focused} pressed={!!focused?.is_favorite} onEnter={() => focused && toggleFav.mutate({ kind: 'channel', id: focused.id, on: !focused.is_favorite })}>{focused?.is_favorite ? 'Remove favorite' : 'Add favorite'}</Button>
+          {recordable && <Button focusKey="live:record" icon="record" disabled={!focused?.now && !focused?.next} onEnter={() => focused && setRecordingId(focused.id)} testId="live-record">Record</Button>}
         </FocusGroup>
       </aside>}
     </div>}
+    <RecordDialog target={recordingChannel ? { channel: recordingChannel, programmes: [recordingChannel.now, recordingChannel.next].filter((p) => !!p) } : null} onClose={() => setRecordingId(null)} />
   </div>
 }

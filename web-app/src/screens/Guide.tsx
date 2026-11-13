@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useChannels, useEpg, type ChannelFilters } from '../api/hooks'
+import { useChannels, useEpg, useRecordings, type ChannelFilters } from '../api/hooks'
 import type { Channel, Programme } from '../api/types'
 import { Button, Chip, Empty, ErrorState, LogoBlock, Modal, Skeleton } from '../components/ui'
 import { FocusGroup, Focusable } from '../nav/Focusable'
@@ -7,6 +7,11 @@ import { useGo, useRestoreFocus } from '../nav/back'
 import { useUi } from '../store/ui'
 import { useHistoryState } from '../nav/historyState'
 import { fmtTime, useNow } from '../lib/util'
+import { can } from '../lib/can'
+import { recordingOf, recordingStateLabel } from '../lib/recordings'
+import { RecordDialog } from '../recordings/RecordDialog'
+import { RecordingBadge } from '../recordings/RecordingBadge'
+import { useSession } from '../store/session'
 
 const COL_REM = 13 // 30-minute column width, see .epg --col
 const REM_PER_MIN = COL_REM / 30
@@ -37,6 +42,12 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
   const epg = useEpg(channels.map((c) => c.id), new Date(t0).toISOString(), new Date(t1).toISOString())
   const [catchup, setCatchup] = useState<{ ch: Channel; p: Programme } | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
+  // Recording: where the server has it on and this profile may schedule, OK on a programme that is on or still to come opens Record.
+  const profile = useSession((s) => s.profile)
+  const recordings = useRecordings(can(profile, 'recordings'), false)
+  const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
+  const [recording, setRecording] = useState<{ ch: Channel; id: string } | null>(null)
+  const recordingProgramme = recording && epg.data?.[recording.ch.id]?.find((x) => x.id === recording.id)
 
   useEffect(() => { if (ch.data) setChannelList(ch.data.list_id ?? null, ch.data.channels ?? []) }, [ch.data, setChannelList])
   useEffect(() => {
@@ -51,6 +62,8 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
   }, [channels, epg.data, selectedChannelId])
   useRestoreFocus(!!epg.data && channels.length > 0, firstNow)
 
+  // The focused programme as the guide has it now: its recording state changes while it stays selected.
+  const selState = (sel && epg.data?.[sel.channel_id]?.find((x) => x.id === sel.id)?.recording_state) ?? null
   const totalMin = (BACK_H + FWD_H) * 60
   const nowLeft = ((now - t0) / 60_000) * REM_PER_MIN
   const ticks = Array.from({ length: totalMin / 30 }, (_, i) => t0 + i * slot)
@@ -60,7 +73,8 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
     if (stop <= Date.now()) {
       if (p.catchup_available) setCatchup({ ch: c, p })
       else toast('Catch-up is not available for this programme.')
-    } else if (start <= Date.now()) go(`/play/${encodeURIComponent(c.id)}`)
+    } else if (recordable) setRecording({ ch: c, id: p.id })
+    else if (start <= Date.now()) go(`/play/${encodeURIComponent(c.id)}`)
     else toast(`${p.title} starts at ${fmtTime(p.start)}.`)
   }
 
@@ -118,12 +132,12 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
                           const isNow = Date.parse(p.start) <= now && Date.parse(p.stop) > now
                           const past = Date.parse(p.stop) <= now
                           return (
-                            <Focusable key={p.id} focusKey={`epg::${c.id}::${p.id}`} className="epg-cell fx-flat" label={`${c.name}: ${p.title}, ${fmtTime(p.start)}`}
+                            <Focusable key={p.id} focusKey={`epg::${c.id}::${p.id}`} className="epg-cell fx-flat" label={`${c.name}: ${p.title}, ${fmtTime(p.start)}${recordingStateLabel(p.recording_state) ? `, ${recordingStateLabel(p.recording_state)}` : ''}`}
                               data={{ now: isNow, past }} onEnter={() => open(c, p)} onFocus={() => { setSel(p); onSelectChannel(c.id) }}
                               style={{ left: `${((s - t0) / 60_000) * REM_PER_MIN}rem`, width: `calc(${((e - s) / 60_000) * REM_PER_MIN}rem - 0.25rem)`, position: 'absolute' }}>
                               <span className="epg-label">
                                 <span className="truncate" style={{ fontWeight: 600 }}>{p.title}</span>
-                                <span className="label truncate">{fmtTime(p.start)}{p.catchup_available && past ? ' · Catch-up' : ''}{isNow ? ' · On now' : ''}</span>
+                                <span className="flex items-center gap-2 min-w-0"><span className="label truncate">{fmtTime(p.start)}{p.catchup_available && past ? ' · Catch-up' : ''}{isNow ? ' · On now' : ''}</span><RecordingBadge state={p.recording_state} short /></span>
                               </span>
                             </Focusable>
                           )
@@ -141,12 +155,15 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
               <>
                 <h2 className="heading">{sel.title}</h2>
                 <p className="muted">{fmtTime(sel.start)} to {fmtTime(sel.stop)}{sel.category ? ` · ${sel.category}` : ''}</p>
+                {selState && <p className="label" data-testid="guide-recording">{recordingStateLabel(selState)}{selState === 'failed' || selState === 'missed' ? `: ${recordingOf(recordings.data?.recordings, sel)?.error ?? 'no reason was given.'}` : ''}</p>}
                 {sel.description && <p className="label clamp2">{sel.description}</p>}
               </>
-            ) : <p className="muted">Move over a programme for details. Press OK on a past programme to watch it again where catch-up is offered.</p>}
+            ) : <p className="muted">Move over a programme for details. Press OK on a past programme to watch it again where catch-up is offered{recordable ? ', or on a later one to record it' : ''}.</p>}
           </div>
         </>
       )}
+      <RecordDialog target={recording && recordingProgramme ? { channel: recording.ch, programmes: [recordingProgramme] } : null} onClose={() => setRecording(null)}
+        onWatch={() => recording && go(`/play/${encodeURIComponent(recording.ch.id)}`)} />
       <Modal open={!!catchup} onClose={() => setCatchup(null)} title="Watch from the start" firstFocusKey="cu:play">
         {catchup && (
           <>

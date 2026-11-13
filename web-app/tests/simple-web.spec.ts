@@ -264,7 +264,7 @@ test('More offers only what the profile may use, and closes back onto its opener
   await enter(page)
   await page.getByTestId('nav-more').click()
   const menu = page.getByTestId('more-menu')
-  // No Recordings or Users entry until those screens exist; Sources is the owner's.
+  // No Users entry until that screen exists; Recordings and Sources are the owner's.
   await expect(menu.getByRole('link')).toHaveText(['Sports', 'Requests', 'Settings'])
   await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Sports')
   await page.keyboard.press('ArrowDown')
@@ -284,7 +284,7 @@ test('More offers only what the profile may use, and closes back onto its opener
   const owner = await other(browser)
   await enter(owner.page, '/', 'owner')
   await owner.page.getByTestId('nav-more').click()
-  await expect(owner.page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Sources', 'Settings'])
+  await expect(owner.page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Recordings', 'Sources', 'Settings'])
   await owner.context.close()
 })
 

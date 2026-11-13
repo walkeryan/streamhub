@@ -9,6 +9,8 @@ import { can, type Capability } from '../lib/can'
 import { usePhone } from '../lib/layout'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
+import { JoinRoomDialog } from '../room/JoinRoomDialog'
+import { useRecordings } from '../api/hooks'
 
 interface Destination { to: string; label: string; icon: string; /** path prefixes that also count as being here */ at?: string[]; needs?: Capability }
 
@@ -30,6 +32,7 @@ const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: '
 const MORE: Destination[] = [
   { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' },
   { to: '/requests', label: 'Requests', icon: 'list', needs: 'requests' },
+  { to: '/recordings', label: 'Recordings', icon: 'record', needs: 'recordings' },
   { to: '/sources', label: 'Sources', icon: 'source', needs: 'sources' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
@@ -44,6 +47,7 @@ export function Rail() {
   const setPinned = useUi((s) => s.setRailPinned)
   const [hasFocus, setHasFocus] = useState(false)
   const [menu, setMenu] = useState(false)
+  const [joinRoom, setJoinRoom] = useState(false)
   const expanded = hasFocus || pinned
   // Back from the rail collapses it and returns focus to the screen content.
   useBackHandler(() => {
@@ -52,7 +56,10 @@ export function Rail() {
     void setFocus('MAIN')
   }, hasFocus || pinned)
   const here = (d: Destination) => (d.to === '/' ? loc.pathname === '/' : [d.to, ...(d.at ?? [])].some((p) => loc.pathname.startsWith(p)))
-  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => !d.needs || can(profile, d.needs))]
+  // Recordings: offered once the server says recording is on; an admin also sees it while it is off, to learn why.
+  const recordings = useRecordings(can(profile, 'recordings'), false)
+  const recordingsOffered = !!recordings.data?.enabled || (!!recordings.data && !!profile?.is_admin)
+  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (!d.needs || can(profile, d.needs)) && (d.to !== '/recordings' || recordingsOffered))]
   const open = (to: string) => { setPinned(false); setMenu(false); go(to) }
   return <>
     <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember onFocusChange={setHasFocus}
@@ -87,12 +94,17 @@ export function Rail() {
             <Icon name={d.icon} />{d.label}
           </Focusable>
         ))}
+        {/* watch rooms */}
+        <Focusable focusKey="more:join-room" className="menu-item fx-flat" label="Join a room" data-testid="nav-join-room" onEnter={() => { setPinned(false); setMenu(false); setJoinRoom(true) }}>
+          <Icon name="people" />Join a room
+        </Focusable>
         {phone && <Focusable focusKey="more:profile" className="menu-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`}
           data-testid="nav-profile" onEnter={() => open('/settings?tab=profiles')}>
           <Avatar name={profile?.name} />{profile?.name ?? 'Profile'}
         </Focusable>}
       </FocusGroup>
     </Modal>
+    <JoinRoomDialog open={joinRoom} onClose={() => setJoinRoom(false)} />
   </>
 }
 

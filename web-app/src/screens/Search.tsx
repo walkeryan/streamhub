@@ -11,6 +11,7 @@ import { useRestoreFocus, useGo } from '../nav/back'
 import { useUi } from '../store/ui'
 import { useDebounced } from '../lib/util'
 import type { LanguageCount, Tile } from '../api/types'
+import { JoinRoomDialog } from '../room/JoinRoomDialog'
 
 export function Search() {
   const profileId = useSession((s) => s.profile?.id ?? 'anonymous')
@@ -41,6 +42,7 @@ function ProfileSearch({ profileId }: { profileId: string }) {
   const clear = useUi((s) => s.clearSearches)
   const go = useGo()
   const input = useRef<HTMLInputElement>(null)
+  const [joinRoom, setJoinRoom] = useState(false)
   // wait for the (cached) results so the remembered result tile exists before focus is restored to it
   useRestoreFocus(dq.trim().length < 2 || !!data || !!error, 'search:input')
 
@@ -64,7 +66,10 @@ function ProfileSearch({ profileId }: { profileId: string }) {
   return (
     <div className="page-pad search-layout" data-testid="search">
       <FocusGroup focusKey="search:left" className="search-controls flex flex-col gap-4" data-testid="search-controls">
-        <h1 className="title-xl">Search</h1>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h1 className="title-xl">Search</h1>
+          <Button focusKey="search:join-room" icon="people" onEnter={() => setJoinRoom(true)} testId="search-join-room">Join a room</Button>
+        </div>
         <FocusableInput focusKey="search:input" label="Search titles and channels" placeholder="Titles, shows, channels" value={q} onChange={setQ}
           inputRef={input} inputMode="search" onSubmit={() => setQ((v) => v.trim())} />
         {scope.offered && <LanguageFilter scope="search" value={language} onChange={setLanguage} />}
@@ -84,6 +89,7 @@ function ProfileSearch({ profileId }: { profileId: string }) {
           </FocusGroup>
         </div>
       </FocusGroup>
+      <JoinRoomDialog open={joinRoom} onClose={() => setJoinRoom(false)} />
       <div className="min-w-0" data-testid="search-results" style={{ minHeight: '20rem' }}>
         {data?.discovery_note && <p className="label mb-4">{data.discovery_note}</p>}
         {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : none ? (

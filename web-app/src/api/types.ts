@@ -39,3 +39,15 @@ export type PlaybackOption = S['PlaybackOption']
 export type PlaybackOptions = S['PlaybackOptions']
 export type AudioTrack = S['AudioTrack']
 export type ActiveStream = S['ActiveStream']
+
+/* ---------- watch rooms ---------- */
+export type Room = S['Room']
+export type RoomJoin = S['RoomJoin']
+export type RoomJoined = S['RoomJoined']
+
+/* ---------- recordings ---------- */
+export type Recording = S['Recording']
+export type RecordingRule = S['RecordingRule']
+export type RecordingState = S['RecordingState']
+export type RecordingList = paths['/recordings']['get']['responses']['200']['content']['application/json']
+export type RecordingRuleList = paths['/recording-rules']['get']['responses']['200']['content']['application/json']
