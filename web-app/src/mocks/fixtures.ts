@@ -1,4 +1,4 @@
-import type { Channel, Programme, Source, SourceBadge, Tile, Profile, Row } from '../api/types'
+import type { Channel, Programme, Shelf, Source, SourceBadge, Tile, Profile, Row } from '../api/types'
 import { backdrop, logo, poster } from './art'
 
 export const DISCLAIMER = {
@@ -29,26 +29,26 @@ const xt: SourceBadge = { source_id: 's_xt', source_type: 'xtream', name: 'IPTV'
 const nf: SourceBadge = { source_id: 's_nf', source_type: 'streaming_service', name: 'Netflix', playable_in_app: false, kind: 'flatrate' }
 const dp: SourceBadge = { source_id: 's_dp', source_type: 'streaming_service', name: 'Disney+', playable_in_app: false, kind: 'flatrate' }
 
-interface Seed { n: number; title: string; year: number; kind: 'movie' | 'show'; overview: string; genres: string[]; runtime: number; sources: SourceBadge[]; rating: number }
+interface Seed { n: number; title: string; year: number; kind: 'movie' | 'show'; overview: string; genres: string[]; runtime: number; sources: SourceBadge[]; rating: number; shelf?: string }
 const seeds: Seed[] = [
-  { n: 101, title: 'Harbor Lights', year: 2024, kind: 'movie', overview: 'A lighthouse keeper on the last manned coast discovers that every ship she guides home is carrying a secret.', genres: ['Drama', 'Mystery'], runtime: 118, sources: [plex('4K')], rating: 7.8 },
-  { n: 102, title: 'The Quiet Meridian', year: 2023, kind: 'movie', overview: 'Two cartographers race across a frozen continent to redraw a border before the thaw.', genres: ['Adventure'], runtime: 131, sources: [plex(), nf], rating: 7.2 },
-  { n: 103, title: 'Neon Cartographers', year: 2025, kind: 'movie', overview: 'In a city that rewrites its own streets nightly, a courier learns the map is alive.', genres: ['Sci-Fi', 'Thriller'], runtime: 109, sources: [plex(), xt], rating: 8.1 },
-  { n: 104, title: 'Salt & Static', year: 2022, kind: 'movie', overview: 'A radio host on a drifting oil platform picks up a broadcast from tomorrow.', genres: ['Sci-Fi'], runtime: 97, sources: [plex()], rating: 6.9 },
-  { n: 105, title: 'Field Notes from Mars', year: 2021, kind: 'movie', overview: 'The first botanist on Mars keeps a diary that slowly becomes a love letter to Earth.', genres: ['Drama', 'Sci-Fi'], runtime: 124, sources: [nf], rating: 7.5 },
-  { n: 106, title: 'Paper Kingdoms', year: 2020, kind: 'movie', overview: 'An origami artist inherits a palace made entirely of folded maps.', genres: ['Fantasy'], runtime: 102, sources: [plex(), dp], rating: 7.0 },
-  { n: 107, title: 'Second Wind', year: 2024, kind: 'movie', overview: 'A retired sprinter coaches the slowest team in the county to a national final.', genres: ['Comedy', 'Sport'], runtime: 106, sources: [plex()], rating: 7.4 },
-  { n: 108, title: 'The Understudy', year: 2023, kind: 'movie', overview: 'On opening night the lead vanishes, and the understudy discovers why.', genres: ['Thriller'], runtime: 112, sources: [xt], rating: 6.6 },
-  { n: 109, title: 'Gilded Hour', year: 2019, kind: 'movie', overview: 'A clockmaker\'s final commission stops time in a single Venetian afternoon.', genres: ['Romance'], runtime: 98, sources: [plex(), nf], rating: 7.9 },
-  { n: 110, title: 'Ember Road', year: 2025, kind: 'movie', overview: 'Six strangers share one ride across a burning state.', genres: ['Action'], runtime: 121, sources: [plex('4K')], rating: 7.1 },
-  { n: 111, title: 'Coldframe', year: 2022, kind: 'movie', overview: 'An archivist restores a roll of film that predicts the next day.', genres: ['Mystery'], runtime: 104, sources: [plex()], rating: 7.3 },
-  { n: 112, title: 'Tidal Hymn', year: 2024, kind: 'movie', overview: 'A choir on a flooding island sings through the last service.', genres: ['Drama'], runtime: 115, sources: [dp], rating: 8.0 },
-  { n: 201, title: 'Low Tide', year: 2024, kind: 'show', overview: 'Every episode, one more thing washes ashore in a small harbor town, and someone local recognizes it.', genres: ['Drama', 'Mystery'], runtime: 48, sources: [plex(), nf], rating: 8.4 },
-  { n: 202, title: 'Orbit Street', year: 2023, kind: 'show', overview: 'Neighbors on a street that floats in low orbit run the world\'s strangest block association.', genres: ['Comedy', 'Sci-Fi'], runtime: 28, sources: [plex()], rating: 8.0 },
-  { n: 203, title: 'The Understudies', year: 2025, kind: 'show', overview: 'A touring company of backups, each convinced they are the real star.', genres: ['Comedy'], runtime: 32, sources: [plex(), xt], rating: 7.7 },
-  { n: 204, title: 'Signal Fire', year: 2022, kind: 'show', overview: 'Wildfire lookouts form a secret network that tracks more than smoke.', genres: ['Thriller'], runtime: 52, sources: [nf], rating: 7.9 },
-  { n: 205, title: 'Quarry', year: 2021, kind: 'show', overview: 'A rural detective reopens a cold case with the help of the quarry\'s oldest blaster.', genres: ['Crime'], runtime: 50, sources: [plex()], rating: 8.2 },
-  { n: 206, title: 'Moss & Marrow', year: 2024, kind: 'show', overview: 'A forest ranger and a chef trade recipes for survival.', genres: ['Documentary'], runtime: 40, sources: [plex(), dp], rating: 7.6 },
+  { n: 101, title: 'Harbor Lights', year: 2024, kind: 'movie', overview: 'A lighthouse keeper on the last manned coast discovers that every ship she guides home is carrying a secret.', genres: ['Drama', 'Mystery'], runtime: 118, sources: [plex('4K')], rating: 7.8, shelf: 'Drama' },
+  { n: 102, title: 'The Quiet Meridian', year: 2023, kind: 'movie', overview: 'Two cartographers race across a frozen continent to redraw a border before the thaw.', genres: ['Adventure'], runtime: 131, sources: [plex(), nf], rating: 7.2, shelf: 'Action' },
+  { n: 103, title: 'Neon Cartographers', year: 2025, kind: 'movie', overview: 'In a city that rewrites its own streets nightly, a courier learns the map is alive.', genres: ['Sci-Fi', 'Thriller'], runtime: 109, sources: [plex(), xt], rating: 8.1, shelf: 'New Releases' },
+  { n: 104, title: 'Salt & Static', year: 2022, kind: 'movie', overview: 'A radio host on a drifting oil platform picks up a broadcast from tomorrow.', genres: ['Sci-Fi'], runtime: 97, sources: [plex()], rating: 6.9, shelf: 'Thriller' },
+  { n: 105, title: 'Field Notes from Mars', year: 2021, kind: 'movie', overview: 'The first botanist on Mars keeps a diary that slowly becomes a love letter to Earth.', genres: ['Drama', 'Sci-Fi'], runtime: 124, sources: [nf], rating: 7.5, shelf: 'Drama' },
+  { n: 106, title: 'Paper Kingdoms', year: 2020, kind: 'movie', overview: 'An origami artist inherits a palace made entirely of folded maps.', genres: ['Fantasy'], runtime: 102, sources: [plex(), dp], rating: 7.0, shelf: 'Kids' },
+  { n: 107, title: 'Second Wind', year: 2024, kind: 'movie', overview: 'A retired sprinter coaches the slowest team in the county to a national final.', genres: ['Comedy', 'Sport'], runtime: 106, sources: [plex()], rating: 7.4, shelf: 'Comedy' },
+  { n: 108, title: 'The Understudy', year: 2023, kind: 'movie', overview: 'On opening night the lead vanishes, and the understudy discovers why.', genres: ['Thriller'], runtime: 112, sources: [xt], rating: 6.6, shelf: 'Thriller' },
+  { n: 109, title: 'Gilded Hour', year: 2019, kind: 'movie', overview: 'A clockmaker\'s final commission stops time in a single Venetian afternoon.', genres: ['Romance'], runtime: 98, sources: [plex(), nf], rating: 7.9, shelf: 'Drama' },
+  { n: 110, title: 'Ember Road', year: 2025, kind: 'movie', overview: 'Six strangers share one ride across a burning state.', genres: ['Action'], runtime: 121, sources: [plex('4K')], rating: 7.1, shelf: 'New Releases' },
+  { n: 111, title: 'Coldframe', year: 2022, kind: 'movie', overview: 'An archivist restores a roll of film that predicts the next day.', genres: ['Mystery'], runtime: 104, sources: [plex()], rating: 7.3, shelf: 'Thriller' },
+  { n: 112, title: 'Tidal Hymn', year: 2024, kind: 'movie', overview: 'A choir on a flooding island sings through the last service.', genres: ['Drama'], runtime: 115, sources: [dp], rating: 8.0, shelf: 'Drama' },
+  { n: 201, title: 'Low Tide', year: 2024, kind: 'show', overview: 'Every episode, one more thing washes ashore in a small harbor town, and someone local recognizes it.', genres: ['Drama', 'Mystery'], runtime: 48, sources: [plex(), nf], rating: 8.4, shelf: 'TV Shows' },
+  { n: 202, title: 'Orbit Street', year: 2023, kind: 'show', overview: 'Neighbors on a street that floats in low orbit run the world\'s strangest block association.', genres: ['Comedy', 'Sci-Fi'], runtime: 28, sources: [plex()], rating: 8.0, shelf: 'TV Shows' },
+  { n: 203, title: 'The Understudies', year: 2025, kind: 'show', overview: 'A touring company of backups, each convinced they are the real star.', genres: ['Comedy'], runtime: 32, sources: [plex(), xt], rating: 7.7, shelf: 'Comedy' },
+  { n: 204, title: 'Signal Fire', year: 2022, kind: 'show', overview: 'Wildfire lookouts form a secret network that tracks more than smoke.', genres: ['Thriller'], runtime: 52, sources: [nf], rating: 7.9, shelf: 'Netflix' },
+  { n: 205, title: 'Quarry', year: 2021, kind: 'show', overview: 'A rural detective reopens a cold case with the help of the quarry\'s oldest blaster.', genres: ['Crime'], runtime: 50, sources: [plex()], rating: 8.2, shelf: 'TV Shows' },
+  { n: 206, title: 'Moss & Marrow', year: 2024, kind: 'show', overview: 'A forest ranger and a chef trade recipes for survival.', genres: ['Documentary'], runtime: 40, sources: [plex(), dp], rating: 7.6, shelf: 'Documentaries' },
 ]
 
 export const progress: Record<string, { pos: number; dur: number }> = {
@@ -80,7 +80,42 @@ const unavailableSeeds: Seed[] = [
   { n: 302, title: 'The Tollgate Tapes', year: 2024, kind: 'show', overview: 'A toll collector keeps every dashcam tape handed in at her booth. One of them is evidence.', genres: ['Crime'], runtime: 45, sources: [], rating: 8.1 },
 ]
 export const unavailable = unavailableSeeds.map(tileOf)
-export const seedFor = (id: string) => [...seeds, ...unavailableSeeds].find((s) => idOf(s) === id)
+
+// Enough further titles to fill shelves the way a provider catalog does. Like the titles above they are
+// invented; they stay out of `titles` so the grid, search and discovery fixtures keep their small, known set.
+const shelved = (kind: Seed['kind'], first: number, shelf: string, year: number, names: string[]): Seed[] =>
+  names.map((title, i) => ({
+    n: first + i, title, year, kind, overview: `${title}: a fixture title on the ${shelf} shelf.`, genres: [shelf], runtime: kind === 'movie' ? 96 + i * 7 : 42,
+    sources: [i % 3 === 2 ? xt : plex()], rating: 6.4 + ((first + i) % 9) / 5, shelf,
+  }))
+const shelfSeeds: Seed[] = [
+  ...shelved('movie', 401, 'New Releases', 2025, ['Glass Estuary', 'The Last Semaphore', 'Winter Almanac', 'Copper Sky', 'Lantern District', 'A Field of Radios']),
+  ...shelved('movie', 411, 'Netflix', 2024, ['Midnight Ledger', 'The Paper Astronaut', 'Slow Thunder', 'Borrowed Summer', 'Nine Rooms North']),
+  ...shelved('movie', 421, 'Drama', 2022, ['Ashgrove', 'The Weight of Rain', 'Small Hours Diner']),
+  ...shelved('movie', 431, 'Action', 2023, ['Redline Ferry', 'Iron Monsoon', 'Vector Nine']),
+  ...shelved('movie', 441, 'Comedy', 2021, ['Two Left Shoes', 'The Wrong Wedding Band', 'Mostly Capable Dave']),
+  ...shelved('movie', 451, 'Kids', 2020, ['Captain Biscuit', 'The Puddle Pirates']),
+  ...shelved('movie', 461, 'Documentaries', 2023, ['Rivers Without Maps', 'The Honey Line', 'Ninety Days of Ice']),
+  ...shelved('show', 501, 'TV Shows', 2024, ['Pier Watch', 'Fifth Floor Walkup', 'The Long Table', 'Night Shift Radio', 'Gravel Roads']),
+  ...shelved('show', 511, 'Netflix', 2023, ['Paper Trail Club', 'Static Bloom', 'The Lamplighters Guild']),
+  ...shelved('show', 521, 'Kids', 2022, ['Tiny Tugboats', 'Professor Pickle']),
+]
+const shelfCatalog = [...seeds, ...shelfSeeds]
+export const seedFor = (id: string) => [...shelfCatalog, ...unavailableSeeds].find((s) => idOf(s) === id)
+
+/** Every title of one shelf, newest first: what "See all" lists. */
+export const shelfTiles = (kind: Seed['kind'], shelf: string): Tile[] =>
+  shelfCatalog.filter((s) => s.kind === kind && s.shelf === shelf).sort((a, b) => b.year - a.year || a.n - b.n).map(tileOf)
+
+/** Shelves of a section as the server ranks them: New Releases, then the fullest first. */
+export function shelvesOf(section: 'movies' | 'shows'): Shelf[] {
+  const kind = section === 'movies' ? 'movie' : 'show'
+  const names = [...new Set(shelfCatalog.filter((s) => s.kind === kind && s.shelf).map((s) => s.shelf!))]
+  return names
+    .map((name) => ({ name, items: shelfTiles(kind, name) }))
+    .sort((a, b) => Number(b.name === 'New Releases') - Number(a.name === 'New Releases') || b.items.length - a.items.length || a.name.localeCompare(b.name))
+    .map(({ name, items }) => ({ name, count: items.length, items: items.slice(0, 20), browse_path: `/browse/${section}?category=${encodeURIComponent(name)}` }))
+}
 
 export function episodesOf(show: number, season: number): Tile[] {
   const s = seeds.find((x) => x.n === show)
@@ -154,16 +189,29 @@ export function homeRows(): { hero: Tile[]; rows: Row[] } {
   const by = (ids: string[]) => ids.map((id) => all.find((t) => t.id === id)).filter((t): t is Tile => !!t)
   const favChannels = channels.filter((c) => fav.has(c.id)).map(withNowNext).map(channelTile)
   const moreFavs = channels.slice(0, 6).map(withNowNext).map(channelTile)
+  // Like the server: New Releases, then up to eight shelves alternating shows and movies.
+  const movies = shelvesOf('movies'), shows = shelvesOf('shows')
+  const onBoth = new Set(movies.map((s) => s.name).filter((name) => shows.some((s) => s.name === name)))
+  const shelfRow = (section: 'movies' | 'shows', shelf: Shelf): Row => ({
+    id: `shelf:${section}:${shelf.name}`, title: onBoth.has(shelf.name) ? `${shelf.name} · ${section === 'movies' ? 'Movies' : 'Shows'}` : shelf.name,
+    layout: 'poster', tiles: shelf.items, browse_path: shelf.browse_path,
+  })
+  const [newReleases, ...otherMovies] = movies
+  const picked: Row[] = []
+  for (let i = 0; picked.length < 8 && (shows[i] || otherMovies[i]); i++) {
+    if (shows[i]) picked.push(shelfRow('shows', shows[i]!))
+    if (otherMovies[i] && picked.length < 8) picked.push(shelfRow('movies', otherMovies[i]!))
+  }
   return {
-    hero: by(['tmdb:movie:103', 'tmdb:tv:201', 'tmdb:movie:101', 'tmdb:tv:205']),
+    hero: newReleases!.items.filter((t) => t.backdrop && (t.rating ?? 0) >= 6).slice(0, 8),
     rows: [
       { id: 'continue', title: 'Continue Watching', layout: 'landscape', tiles: by(['tmdb:movie:101', 'tmdb:movie:103']) },
-      { id: 'onnow', title: 'On Now', layout: 'channel', tiles: [...favChannels, ...moreFavs.filter((c) => !favChannels.some((f) => f.id === c.id))].slice(0, 8) },
+      { id: 'onnow', title: 'On Now', layout: 'channel', tiles: [...favChannels, ...moreFavs.filter((c) => !favChannels.some((f) => f.id === c.id))].slice(0, 8), browse_path: '/live' },
+      shelfRow('movies', newReleases!),
+      ...picked,
+      { id: 'watchlist', title: 'Watchlist', layout: 'poster', tiles: by([...watch]), browse_path: '/favorites?tab=watchlist' },
+      { id: 'favorites', title: 'Favorites', layout: 'poster', tiles: all.filter((t) => fav.has(t.id)), browse_path: '/favorites' },
       { id: 'recent', title: 'Recently Added', layout: 'poster', tiles: all.slice(0, 12) },
-      { id: 'watchlist', title: 'Watchlist', layout: 'poster', tiles: by([...watch]) },
-      { id: 'favorites', title: 'Favorites', layout: 'poster', tiles: all.filter((t) => fav.has(t.id)) },
-      { id: 'src:s_plex', title: 'From Den Plex', layout: 'poster', tiles: all.filter((t) => t.sources.some((s) => s.source_id === 's_plex')).slice(0, 14) },
-      { id: 'src:s_nf', title: 'On Netflix', layout: 'poster', tiles: all.filter((t) => t.sources.some((s) => s.source_id === 's_nf')) },
     ],
   }
 }

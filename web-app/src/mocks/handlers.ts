@@ -2,8 +2,8 @@ import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
 import type { PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
-  DISCLAIMER, channelTile, channels, episodesOf, fav, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, sources, tileOf, titles,
-  unavailable, watch, withNowNext,
+  DISCLAIMER, channelTile, channels, episodesOf, fav, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
+  sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 
@@ -195,6 +195,13 @@ export const handlers = [
       has_more:page*size<list.length, coverage_note:'Synthetic metadata fixture catalog. Availability is checked separately; this is not exhaustive coverage.',
     } satisfies components['schemas']['DiscoveryPage'])
   }),
+  http.get(`${B}/browse/:section/shelves`, async ({ params, request }) => {
+    const u = new URL(request.url)
+    const section = params.section === 'movies' || params.section === 'vod' ? 'movies' : 'shows'
+    const rows = Number(u.searchParams.get('limit_rows') ?? 12), items = Number(u.searchParams.get('limit_items') ?? 20)
+    await delay(80)
+    return HttpResponse.json({ shelves: shelvesOf(section).slice(0, rows).map((s) => ({ ...s, items: s.items.slice(0, items) })) } satisfies components['schemas']['ShelfList'])
+  }),
   http.get(`${B}/browse/:section/categories`, () => HttpResponse.json([])),
   http.get(`${B}/browse/:section/languages`, () => HttpResponse.json([{ code: 'eng', name: 'English', count: titles.length }])),
   http.get(`${B}/browse/:section`, async ({ params, request }) => {
@@ -204,7 +211,9 @@ export const handlers = [
     const sort = u.searchParams.get('sort')
     const query = u.searchParams.get('q')?.toLowerCase()
     const kind = params.section === 'movies' || params.section === 'vod' ? 'movie' : 'show'
-    let list = titles.filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
+    const category = u.searchParams.get('category')
+    // One shelf lists everything on it; the unfiltered grid stays the small, known title set.
+    let list = (category ? shelfTiles(kind, category) : titles).filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
     if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title))
     if (sort === 'year') list = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
     if (sort === 'rating') list = [...list].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
@@ -291,7 +300,7 @@ export const handlers = [
   http.get(`${B}/watchlist`, () => HttpResponse.json(titles.filter((t) => watch.has(t.id)))),
   http.put(`${B}/watchlist`, async ({ request }) => { watch.add(((await request.json()) as { id: string }).id); return new HttpResponse(null, { status: 204 }) }),
   http.delete(`${B}/watchlist`, ({ request }) => { watch.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
-  http.get(`${B}/history`, () => HttpResponse.json([])),
+  http.get(`${B}/history`, () => HttpResponse.json(Object.keys(progress).map(tileById).filter((t): t is Tile => !!t))),
   http.get(`${B}/themes`, () => HttpResponse.json([])),
   http.get(`${B}/settings`, () => HttpResponse.json({ ...settings, request_manager_configured: requestManagerConfigured() })),
   http.patch(`${B}/settings`, async ({ request }) => { settings = { ...settings, ...((await request.json()) as object) }; return HttpResponse.json(settings) }),

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
-import { useSearch } from '../api/hooks'
-import { LanguageFilter } from '../components/LanguageFilter'
+import { useBrowseLanguages, useLanguages, useSearch } from '../api/hooks'
+import { LanguageFilter, languageScope } from '../components/LanguageFilter'
 import { useSession } from '../store/session'
 import { Attribution, Button, Chip, Empty, ErrorState } from '../components/ui'
 import { MediaTile } from '../components/Tile'
@@ -10,7 +10,7 @@ import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { useRestoreFocus, useGo } from '../nav/back'
 import { useUi } from '../store/ui'
 import { useDebounced } from '../lib/util'
-import type { Tile } from '../api/types'
+import type { LanguageCount, Tile } from '../api/types'
 
 export function Search() {
   const profileId = useSession((s) => s.profile?.id ?? 'anonymous')
@@ -31,7 +31,11 @@ function ProfileSearch({ profileId }: { profileId: string }) {
       setParams({ q, language, profile: profileId }, { replace: true })
     }
   }, [q, language, profileId, storageKey, params, setParams])
-  const { data, error, isFetching, refetch } = useSearch(dq, { language: language === 'mine' ? preferred || 'all' : language })
+  // Search spans channels, movies and shows, so its language row counts the languages of all three.
+  const scopes = [useLanguages().data, useBrowseLanguages('movies').data, useBrowseLanguages('shows').data]
+  const known = scopes.every(Boolean) ? [...new Map(scopes.flatMap((list) => list ?? []).map((l): [string, LanguageCount] => [l.code, l])).values()] : undefined
+  const scope = languageScope(known, language, preferred)
+  const { data, error, isFetching, refetch } = useSearch(dq, { language: scope.language })
   const recents = useUi((s) => s.recentSearches)
   const addSearch = useUi((s) => s.addSearch)
   const clear = useUi((s) => s.clearSearches)
@@ -46,6 +50,9 @@ function ProfileSearch({ profileId }: { profileId: string }) {
   const openIn = data?.open_in_app ?? []
   const chans = data?.channels ?? []
   const ranked = data?.results
+  // A ranked list mixes the library with titles no source has; those are found here, not on a separate screen.
+  const matches = ranked?.filter((t) => t.sources.length > 0) ?? []
+  const missing = ranked?.filter((t) => t.sources.length === 0) ?? []
   const count = ranked ? ranked.length : playHere.length + openIn.length + chans.length
   const none = !!data && count === 0
   const tiles = (list: Tile[], scope: string) => (
@@ -60,7 +67,7 @@ function ProfileSearch({ profileId }: { profileId: string }) {
         <h1 className="title-xl">Search</h1>
         <FocusableInput focusKey="search:input" label="Search titles and channels" placeholder="Titles, shows, channels" value={q} onChange={setQ}
           inputRef={input} inputMode="search" onSubmit={() => setQ((v) => v.trim())} />
-        <LanguageFilter scope="search" value={language} onChange={setLanguage} />
+        {scope.offered && <LanguageFilter scope="search" value={language} onChange={setLanguage} />}
         {!q && recents.length > 0 && (
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between"><span className="label">Recent searches</span><Button focusKey="search:clear" ghost onEnter={clear}>Clear</Button></div>
@@ -68,6 +75,14 @@ function ProfileSearch({ profileId }: { profileId: string }) {
           </div>
         )}
         <p className="label" aria-live="polite">{isFetching ? 'Searching…' : dq.trim().length > 1 && data ? `${count} results` : 'Type at least 2 letters.'}</p>
+        {/* Titles no source has are found by searching, or by browsing what is popular. */}
+        <div className="flex flex-col gap-2">
+          <span className="label">Not in your library?</span>
+          <FocusGroup focusKey="search:discover" className="flex gap-2 flex-wrap">
+            <Button focusKey="search:discover:movies" onEnter={() => go('/discover/movies')}>Popular movies</Button>
+            <Button focusKey="search:discover:shows" onEnter={() => go('/discover/shows')}>Popular shows</Button>
+          </FocusGroup>
+        </div>
       </FocusGroup>
       <div className="min-w-0" data-testid="search-results" style={{ minHeight: '20rem' }}>
         {data?.discovery_note && <p className="label mb-4">{data.discovery_note}</p>}
@@ -78,7 +93,8 @@ function ProfileSearch({ profileId }: { profileId: string }) {
           </Empty>
         ) : (
           <>
-            {ranked && ranked.length > 0 && <section data-testid="group-relevance"><h2 className="heading">Best matches</h2>{tiles(ranked, 'relevance')}</section>}
+            {matches.length > 0 && <section data-testid="group-relevance"><h2 className="heading">Best matches</h2>{tiles(matches, 'relevance')}</section>}
+            {missing.length > 0 && <section data-testid="group-missing"><h2 className="heading">Not in your library</h2><p className="label">Open a title to see where it can be watched, or to request it.</p>{tiles(missing, 'missing')}</section>}
             {!ranked && playHere.length > 0 && <section data-testid="group-play"><h2 className="heading">Play here</h2>{tiles(playHere, 'play-here')}</section>}
             {!ranked && openIn.length > 0 && <section data-testid="group-open"><h2 className="heading">Open in app</h2>{tiles(openIn, 'open-in-app')}</section>}
             {!ranked && chans.length > 0 && (
