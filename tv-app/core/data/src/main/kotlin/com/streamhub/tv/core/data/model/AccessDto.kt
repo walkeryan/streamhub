@@ -77,3 +77,19 @@ data class Me(
 ) {
     override fun toString(): String = "Me(status=$status, user=${user.id}, role=${role?.name}, permissions=$permissions, sharedDevice=$sharedDevice, tokens=${if (tokens == null) "null" else "[REDACTED]"})"
 }
+
+/** One person who can be picked on this shared TV (GET /auth/switchable). */
+@Serializable
+data class SwitchableUser(
+    val id: String = "",
+    @SerialName("display_name") val displayName: String = "",
+    val avatar: String? = null,
+    val picture: String? = null,
+    @SerialName("role_name") val roleName: String? = null,
+    @SerialName("has_pin") val hasPin: Boolean = false,
+    /** The person this TV is signed in as right now. */
+    val current: Boolean = false,
+)
+
+@Serializable
+data class SwitchableUsers(val users: List<SwitchableUser> = emptyList())

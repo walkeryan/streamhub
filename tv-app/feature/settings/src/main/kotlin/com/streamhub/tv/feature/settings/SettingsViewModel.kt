@@ -11,8 +11,8 @@ import com.streamhub.tv.core.data.model.AuthConfig
 import com.streamhub.tv.core.data.model.AuthTokens
 import com.streamhub.tv.core.data.model.OwnerPinChallenge
 import com.streamhub.tv.core.data.model.OwnerPinCancel
-import com.streamhub.tv.core.data.repo.ChannelListCache
-import com.streamhub.tv.core.data.repo.PlaybackCoordinator
+import com.streamhub.tv.core.data.repo.MeRepository
+import com.streamhub.tv.core.data.repo.UserSwitchRepository
 import com.streamhub.tv.core.data.repo.ProfileSwitchPath
 import com.streamhub.tv.core.data.repo.profileSwitchPath
 import com.streamhub.tv.core.data.repo.AuthorizationCommitGate
@@ -87,6 +87,8 @@ data class SettingsState(
     val update: UpdateInfo? = null,
     val updateBusy: Boolean = false,
     val updateStatus: String? = null,
+    /** A household TV with a server that has users: "Who's watching?" is how people are switched. */
+    val sharedDevice: Boolean = false,
 )
 
 @HiltViewModel
@@ -95,8 +97,8 @@ class SettingsViewModel @Inject constructor(
     private val session: SessionStore,
     private val prefs: LocalPrefs,
     private val themes: ThemeRepository,
-    private val playback: PlaybackCoordinator,
-    private val channelCache: ChannelListCache,
+    private val switcher: UserSwitchRepository,
+    private val me: MeRepository,
     private val updates: UpdateRepository,
     private val installer: UpdateInstaller,
 ) : ViewModel() {
@@ -110,7 +112,10 @@ class SettingsViewModel @Inject constructor(
     private var switchJob: Job? = null
     private var ownerPinInput: Channel<String>? = null
     private val authorization=AuthorizationCommitGate { finishing -> _state.update{it.copy(authorizationFinishing=finishing)} }
-    init { load() }
+    init {
+        load()
+        viewModelScope.launch { me.state.collect { access -> _state.update { it.copy(sharedDevice = access.sharedDevice) } } }
+    }
 
     private fun pid() = _state.value.current?.id ?: "default"
 
@@ -224,7 +229,7 @@ class SettingsViewModel @Inject constructor(
                     ProfileSwitchPath.SameProfile -> Unit
                     ProfileSwitchPath.OwnerPin -> ownerPinSafely(original,p)
                     ProfileSwitchPath.Secure -> {
-                        loadJob?.cancel();playback.clearForProfileSwitch()
+                        loadJob?.cancel();switcher.releasePlayback()
                         authorization.finish {commitSwitch(original,p,api.switchProfile(LoginRequest(p.id)))}
                     }
                     ProfileSwitchPath.Legacy -> if(p.hasPin && pin==null) _state.update{it.copy(pinPromptFor=p)} else commitSwitch(original,p,api.login(LoginRequest(p.id,pin=pin)))
@@ -263,7 +268,7 @@ class SettingsViewModel @Inject constructor(
             if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
             // Verify revokes the initiating SID: release its playback lease while it is still valid.
             loadJob?.cancel()
-            playback.clearForProfileSwitch()
+            switcher.releasePlayback()
             val active=api.startOwnerPin(target.id)
             challenge=active
             currentCoroutineContext().ensureActive()
@@ -299,11 +304,10 @@ class SettingsViewModel @Inject constructor(
         if(!sameSwitchSession(original,session.current())) throw CancellationException("Profile changed")
         loadJob?.cancel()
         _state.update{it.copy(rows=emptyList(),groups=emptyList(),languages=emptyList(),pinPromptFor=null)}
-        playback.clearForProfileSwitch()
-        channelCache.clear()
         currentCoroutineContext().ensureActive()
-        session.saveSwitchedTokens(original,target.id,tokens)
-        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}")
+        // Tokens, session generation and per-user caches change hands in one place, shared with "Who's watching?".
+        switcher.commitProfileSwitch(original,target.id,tokens)
+        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}",sharedDevice=me.state.value.sharedDevice)
         themes.select(tokens.profile.themeId)
         load()
     }

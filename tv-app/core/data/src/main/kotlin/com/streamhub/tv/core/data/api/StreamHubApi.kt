@@ -26,6 +26,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -79,6 +81,24 @@ class StreamHubApi @Inject constructor(
 
     /** Who this TV is signed in as and what they may do. Servers without users and roles answer 404. */
     suspend fun me(): Me = get("/auth/me")
+
+    /** The people who can be picked on this shared TV. 404 = no such feature; 403 `not_shared_device` = a personal device. */
+    suspend fun switchableUsers(): SwitchableUsers = get("/auth/switchable")
+
+    /**
+     * Become another person on this TV. The usual 401 handling is kept out of this one call: here a
+     * 401 says the PIN is missing or wrong, and refreshing the session and sending the same PIN again
+     * would count as a second wrong attempt. `pin` is sent as an explicit null when there is none.
+     */
+    suspend fun switchUser(from: Session, userId: String, pin: String?): AuthTokens {
+        val base = from.apiBase ?: throw ApiException(0, null, "Server URL not set")
+        val token = from.accessToken ?: throw ApiException(401, null, "Not signed in")
+        return client.post("$base/auth/switch") {
+            attributes.put(AuthCircuitBreaker, Unit)
+            header(HttpHeaders.Authorization, "Bearer $token")
+            setBody(buildJsonObject { put("user_id", userId); put("pin", pin) })
+        }.ok()
+    }
 
     suspend fun login(req: LoginRequest): AuthTokens = client.post(url("/auth/login")) { setBody(req) }.ok()
     suspend fun startDevicePairing(): DeviceCode = client.post(url("/auth/device")).ok()
