@@ -140,6 +140,8 @@ class DeviceApprove(_M):
 
 class PinBody(_M):
     pin: str | None = None
+    current_pin: str | None = Field(default=None, max_length=8, repr=False)
+    current_password: str | None = Field(default=None, max_length=256, repr=False)
 
 
 class Disclaimer(_M):
@@ -949,6 +951,8 @@ class UserApprove(_M):
 
 class UserPin(_M):
     pin: str | None = _pin(default=None)
+    current_pin: str | None = Field(default=None, max_length=8, repr=False, description="to change one's own")
+    current_password: str | None = Field(default=None, max_length=256, repr=False, description="in its place")
 
 
 class Me(_M):

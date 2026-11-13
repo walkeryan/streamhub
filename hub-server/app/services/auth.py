@@ -1029,7 +1029,14 @@ class AuthService:
             raise NotFound("profile not found")
         await self.users.delete(principal, identity.user.id)
 
-    async def set_pin(self, principal: Principal, profile_id: str, pin: str | None) -> None:
+    async def set_pin(
+        self,
+        principal: Principal,
+        profile_id: str,
+        pin: str | None,
+        current_pin: str | None = None,
+        current_password: str | None = None,
+    ) -> None:
         manager = _can(principal, "users.manage")
         if self.content_policy is not None and self.content_policy.enabled and not manager:
             raise Forbidden("Only the owner can manage profile PINs")
@@ -1039,6 +1046,9 @@ class AuthService:
             prof = await s.get(Profile, profile_id)
             if prof is None:
                 raise NotFound("profile not found")
+            await self.users.prove_pin_holder(
+                s, principal, await ensure_user(s, prof), prof, current_pin, current_password
+            )
             prof.pin_hash = hash_secret(validate_pin(pin)) if pin else None
             prof.token_version += 1
             audit(s, getattr(principal, "user_id", None), "user.pin_set" if pin else "user.pin_clear", prof.user_id)

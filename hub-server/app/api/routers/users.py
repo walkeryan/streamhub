@@ -69,7 +69,7 @@ async def delete_user(id: str, c: C, p: UsersAdmin) -> Response:
 @router.put("/users/{id}/pin", status_code=204, tags=["users"])
 async def set_user_pin(id: str, body: S.UserPin, c: C, p: P) -> Response:
     """One's own PIN, or anyone's with ``users.manage``. Null clears it."""
-    await c.users.set_pin(p, id, body.pin)
+    await c.users.set_pin(p, id, body.pin, body.current_pin, body.current_password)
     return Response(status_code=204)
 
 

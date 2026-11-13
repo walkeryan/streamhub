@@ -16,13 +16,14 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infra.crypto import hash_secret
+from app.infra.crypto import hash_secret, verify_secret
 from app.infra.db import Database
 from app.infra.models import AuditLog, AuthSession, Profile, Progress, Role, User, utcnow
 from app.services.errors import Conflict, Forbidden, NotFound, PermissionDenied, ServiceError
@@ -43,6 +44,8 @@ from app.services.permissions import (
 log = logging.getLogger(__name__)
 
 STATUSES = ("pending", "active", "suspended")
+# How recent a sign-in still counts as proof of who is holding the device.
+FRESH_SIGN_IN_S = 10 * 60
 
 
 def audit(
@@ -613,14 +616,59 @@ class UsersService:
         await s.execute(delete(Profile).where(Profile.user_id == user.id))
         await s.delete(user)
 
-    async def set_pin(self, actor: Any, user_id: str, pin: str | None) -> None:
-        """Set or clear a user's PIN: one's own, or anyone's with ``users.manage``."""
+    async def prove_pin_holder(
+        self,
+        s: AsyncSession,
+        actor: Any,
+        user: User,
+        profile: Profile,
+        current_pin: str | None = None,
+        current_password: str | None = None,
+    ) -> None:
+        """Before one's own PIN is changed or removed: show this is still its owner.
+
+        A signed-in device is not proof. The current PIN is, or the account's password, or a
+        sign-in made in the last few minutes (the way back in for someone who forgot it).
+        Someone else's PIN is a manager's to set, and ``guard_identity`` is what bounds that.
+        """
+        if user.id != actor.user_id or not profile.pin_hash:
+            return
+        if current_pin:
+            if self._sessions is None:
+                raise Forbidden("That is not the current PIN", code="pin_invalid")
+            try:
+                # The same budget of guesses as a hand-over to this user: five in fifteen minutes.
+                await self._sessions._check_switch_pin(user.id, current_pin, profile.pin_hash)
+            except ServiceError as exc:
+                if exc.status == 429:
+                    raise
+                raise Forbidden("That is not the current PIN", code="pin_invalid") from exc
+            return
+        if current_password is not None:
+            if not await asyncio.to_thread(verify_secret, current_password, user.password_hash):
+                raise Forbidden("That is not your password", code="wrong_password")
+            return
+        row = await s.get(AuthSession, getattr(actor, "session_id", "") or "")
+        if row is not None and utcnow() - row.created_at <= timedelta(seconds=FRESH_SIGN_IN_S):
+            return
+        raise Forbidden("Enter the current PIN to change it", code="current_pin_required")
+
+    async def set_pin(
+        self,
+        actor: Any,
+        user_id: str,
+        pin: str | None,
+        current_pin: str | None = None,
+        current_password: str | None = None,
+    ) -> None:
+        """Set or clear a user's PIN: one's own (see ``prove_pin_holder``), or anyone's with ``users.manage``."""
         if user_id != actor.user_id and "users.manage" not in actor.permissions:
             raise NotFound("user not found")
         pin_hash = await asyncio.to_thread(hash_secret, validate_pin(pin)) if pin else None
         async with self._db.session() as s:
             user, profile, _ = await self._load(s, user_id)
             await self.guard_identity(s, actor, user)
+            await self.prove_pin_holder(s, actor, user, profile, current_pin, current_password)
             profile.pin_hash = pin_hash
             # A PIN that just changed must be proven again before the adult category reopens.
             await s.execute(update(AuthSession).where(AuthSession.user_id == user.id).values(adult_unlocked_until=None))

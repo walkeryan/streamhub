@@ -212,7 +212,7 @@ async def delete_profile(id: str, c: C, p: P) -> Response:
 
 @router.put("/profiles/{id}/pin", status_code=204, tags=["profiles"])
 async def set_pin(id: str, body: S.PinBody, c: C, p: P) -> Response:
-    await c.auth.set_pin(p, id, body.pin)
+    await c.auth.set_pin(p, id, body.pin, body.current_pin, body.current_password)
     return Response(status_code=204)
 
 
