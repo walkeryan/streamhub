@@ -142,6 +142,9 @@ data class PlayerScreenState(
  *  - Sleep timer → pause and exit.
  *  - Films and buffered history get a focusable control row (scrubber + buttons) instead of the live banner.
  *  - "Try again" resolves the accepted request again; it never replays the descriptor on screen.
+ *  - A stream that answers 403 `playback_paused` is resolved again once with a fresh generation before
+ *    anything is said: after a server restart that is all it takes. Only a second such answer, or a
+ *    server that refuses the fresh resolve, shows "Playback is stopped".
  *  - A refusal of the media URL itself (StreamRefusals: the session or account, the home network, the
  *    rating ceiling, the user's stream limit) is worded like the same refusal of a resolve. One about
  *    the session is first put to the server: refreshed and resolved again once, or, when the session
@@ -228,7 +231,7 @@ class PlayerViewModel @Inject constructor(
         }
         showOsd()
         viewModelScope.launch { player.state.map { it.refusal }.distinctUntilChanged().collect { refusal -> if (refusal != null) streamRefused(refusal) } }
-        viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) reauthorized = false } }
+        viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) { reauthorized = false; pausedRetry.reset() } } }
         viewModelScope.launch {
             sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
                 rewindJob?.cancel(); _state.update { it.copy(audioChoice=null) }; stopCurrentPlayback(); _exit.emit(Unit)
@@ -243,6 +246,7 @@ class PlayerViewModel @Inject constructor(
 
     private fun streamRefused(refusal: ApiException) {
         if (refusal.error?.code in StreamRefusals.ABOUT_THE_SESSION && !reauthorized) { reauthorize(); return }
+        if (refusal.error?.code == StreamRefusals.PLAYBACK_PAUSED) { resumeAfterPause(refusal); return }
         // Segments of a start of the room's stream that a seek has replaced, and this member missed the
         // `state` that said so: the room's descriptor is fetched again, a few times before the viewer is asked.
         if (refusal.error?.code == StreamRefusals.STREAM_EPOCH_STALE && seat != null && _state.value.roomEnded == null && autoRecoveries < MAX_AUTO_RECOVERIES) {
@@ -279,6 +283,53 @@ class PlayerViewModel @Inject constructor(
             }
             _state.update { it.copy(retrying = false) }
             retry()
+        }
+    }
+
+    /** One silent recovery per playback from 403 `playback_paused` on the stream (see [PausedRetry]). */
+    private val pausedRetry = PausedRetry()
+
+    /**
+     * The stream answered `playback_paused`. After a server restart every stream issued before it
+     * answers so, though nothing was stopped: the first such answer for a playback is resolved again
+     * with a fresh generation, without a dialog. If the server really is stopped it refuses the
+     * generation (or the resolve) the same way, and that, like a second refusal of the stream, is shown.
+     */
+    private fun resumeAfterPause(refusal: ApiException) {
+        val held = seat
+        val stale = _state.value.descriptor
+        val request = currentRequest ?: stale?.let { PlaybackRequest(it.id) }
+        attachJob?.cancel(); rewindJob?.cancel()
+        if (!pausedRetry.claim() || (held == null && request == null)) {
+            _state.update { it.copy(failure = ApiErrors.describe(refusal), failureKeepsPlaying = false, retrying = false, roomCatchUp = false) }
+            return
+        }
+        // A film resumes where it stopped; live and archive streams restart where the server puts them.
+        val resumeAt = if (stale != null && !stale.live) player.exoPlayer.currentPosition.takeIf { it > 0 } else null
+        val mine = ++recoverySeq
+        _state.update { it.copy(failure = null, retrying = true, roomCatchUp = false, message = null) }
+        attachJob = viewModelScope.launch {
+            val owner = sessions.current().catalogScope()
+            val outcome = try {
+                resumeWithFreshGeneration({ api.playbackGeneration().generation }) { generation ->
+                    if (held != null) reloadRoom(held, rejoin = false)
+                    else {
+                        // Give back this player's own connection first: a one-stream source would answer source_busy.
+                        releaseCurrentBuffer()
+                        val fresh = coordinator.resolveAgain(checkNotNull(request).copy(recoveryGeneration = generation))
+                        currentCoroutineContext().ensureActive()
+                        if (sessions.current().catalogScope() != owner) throw CancellationException("Playback scope changed")
+                        start(fresh, resumeAt)
+                        if (fresh.live) loadChannelList(fresh)
+                    }
+                }
+            } catch (e: CancellationException) {
+                if (recoverySeq == mine) _state.update { it.copy(retrying = false) }
+                throw e
+            }
+            if (recoverySeq != mine) return@launch
+            _state.update { it.copy(retrying = false) }
+            outcome.onSuccess { showOsd() }.onFailure { e -> _state.update { it.copy(failure = ApiErrors.describe(e), failureKeepsPlaying = false) } }
         }
     }
 
@@ -745,6 +796,8 @@ class PlayerViewModel @Inject constructor(
                     is AudioPlaybackAttempt.Ready -> {
                         val descriptor=result.descriptor
                         currentRequest=result.request; failedRequest=null
+                        // Another channel is another playback: its first stop is a first one.
+                        pausedRetry.reset()
                         if(previousId != descriptor.id) lastChannelId=previousId
                         val idx=_state.value.channels.indexOfFirst { it.id == descriptor.id }
                         _state.update { it.copy(index=idx, osdChannel=it.channels.getOrNull(idx), rewindLoading=false, overlay=Overlay.Osd) }
@@ -908,31 +961,7 @@ class PlayerViewModel @Inject constructor(
         _state.update { it.copy(failure = null, retrying = true, roomCatchUp = auto, message = null) }
         attachJob = viewModelScope.launch {
             try {
-                releaseCurrentBuffer()
-                var current = held
-                var fresh = if (rejoin) null else try { rooms.descriptor(held) } catch (e: ApiException) { if (roomSeatLost(e.error?.code)) null else throw e }
-                if (fresh == null) {
-                    // No close frame: the seat stays for the join to keep.
-                    roomClient?.keepSeatOnExit()
-                    roomJob?.let { it.cancel(); it.join() }
-                    current = rooms.rejoin(key, held)
-                    currentCoroutineContext().ensureActive()
-                    seat = current
-                    playingStream = current.descriptor.roomStream()
-                    startRoom(current)
-                    fresh = current.descriptor
-                }
-                var chases = 0
-                while (true) {
-                    val d = checkNotNull(fresh)
-                    start(d)
-                    if (d.live) loadChannelList(d)
-                    // The room may have been seeked again while this one was loading.
-                    val behind = RoomSync.streamStep(playingStream, roomClient?.state?.value?.stream) == StreamStep.Reload
-                    epochMisses = if (behind) epochMisses + 1 else 0
-                    if (!behind || ++chases >= MAX_EPOCH_CHASES) break
-                    fresh = rooms.descriptor(current)
-                }
+                reloadRoom(held, rejoin)
                 _state.update { it.copy(retrying = false, roomCatchUp = false) }
                 showOsd()
             } catch (e: CancellationException) {
@@ -948,6 +977,39 @@ class PlayerViewModel @Inject constructor(
                     else -> _state.update { it.copy(failure = ApiErrors.describe(e), failureKeepsPlaying = false) }
                 }
             }
+        }
+    }
+
+    /**
+     * The work of [recoverRoom]: the member's descriptor as it is now (or, when the seat is gone or
+     * [rejoin] is set, a join with the member token), loaded and positioned, chasing a room that was
+     * seeked again meanwhile a few times. Failures are the caller's to word.
+     */
+    private suspend fun reloadRoom(held: RoomSeat, rejoin: Boolean) {
+        releaseCurrentBuffer()
+        var current = held
+        var fresh = if (rejoin) null else try { rooms.descriptor(held) } catch (e: ApiException) { if (roomSeatLost(e.error?.code)) null else throw e }
+        if (fresh == null) {
+            // No close frame: the seat stays for the join to keep.
+            roomClient?.keepSeatOnExit()
+            roomJob?.let { it.cancel(); it.join() }
+            current = rooms.rejoin(key, held)
+            currentCoroutineContext().ensureActive()
+            seat = current
+            playingStream = current.descriptor.roomStream()
+            startRoom(current)
+            fresh = current.descriptor
+        }
+        var chases = 0
+        while (true) {
+            val d = checkNotNull(fresh)
+            start(d)
+            if (d.live) loadChannelList(d)
+            // The room may have been seeked again while this one was loading.
+            val behind = RoomSync.streamStep(playingStream, roomClient?.state?.value?.stream) == StreamStep.Reload
+            epochMisses = if (behind) epochMisses + 1 else 0
+            if (!behind || ++chases >= MAX_EPOCH_CHASES) break
+            fresh = rooms.descriptor(current)
         }
     }
 

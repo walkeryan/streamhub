@@ -476,6 +476,12 @@ data class PlaybackRequest(
     @SerialName("variant_id") val variantId: String? = null,
     @SerialName("allow_unverified_audio") val allowUnverifiedAudio: Boolean = false,
     @SerialName("rewind_at") val rewindAt: String? = null,
+    /**
+     * Set only on the one silent re-resolve after a stream answered 403 `playback_paused`: the
+     * generation GET /playback/generation gave just before. Left out otherwise.
+     */
+    @SerialName("recovery_generation") val recoveryGeneration: String? = null,
+    // No max_height: the quality cap is for the web player and is ignored for android_tv, so it is never sent.
 )
 
 @Serializable
@@ -536,6 +542,49 @@ data class PlaybackDescriptor(
      * stream [startPositionMs] describes. Null for every other descriptor.
      */
     @SerialName("stream_epoch") val streamEpoch: Int? = null,
+    /** What is playing and how it reaches this TV, for the player's stream information; null for a hand-off. Informational only. */
+    @SerialName("media_info") val mediaInfo: MediaInfo? = null,
+)
+
+/**
+ * What is playing and how it is delivered (PlaybackDescriptor.media_info). The file's facts come from
+ * the server's media probe, the delivery from what it planned for this stream. A field the server
+ * does not know is left out. Never a URL, a host name or a credential.
+ */
+@Serializable
+data class MediaInfo(
+    /** The owner's name for the source; for a recording, the channel it was recorded from. */
+    @SerialName("source_name") val sourceName: String? = null,
+    /** ffprobe format name of the file, e.g. matroska, mov, mpegts. */
+    val container: String? = null,
+    @SerialName("bitrate_kbps") val bitrateKbps: Int? = null,
+    val video: MediaInfoVideo? = null,
+    val audio: MediaInfoAudio? = null,
+    /** direct | remux | transcode */
+    val delivery: String = "direct",
+    /** transcode only: hardware | software. */
+    val encoder: String? = null,
+    @SerialName("output_width") val outputWidth: Int? = null,
+    @SerialName("output_height") val outputHeight: Int? = null,
+    @SerialName("max_height") val maxHeight: Int? = null,
+)
+
+@Serializable
+data class MediaInfoVideo(
+    val codec: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    @SerialName("frame_rate") val frameRate: Double? = null,
+    /** sdr | hdr10 | hlg */
+    @SerialName("dynamic_range") val dynamicRange: String? = null,
+)
+
+@Serializable
+data class MediaInfoAudio(
+    /** Codec in the file; a remux or a transcode delivers it as AAC stereo. */
+    val codec: String? = null,
+    val channels: Int? = null,
+    val language: String? = null,
 )
 
 @Serializable

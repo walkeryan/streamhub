@@ -96,6 +96,8 @@ object ApiErrors {
             )
             "room_full" -> UserError("The room is full", "This room already has as many people as it can hold. Try again when someone has left.", canRetry = true)
             "room_limit" -> UserError("Too many rooms", "The server is already running as many watch rooms as it allows. Try again when one has closed.", canRetry = true)
+            // Shown only when it is true: a stream that merely outlived a server restart is resolved again silently first (see the player).
+            "playback_paused" -> UserError("Playback is stopped", "Playback was stopped on the server by an administrator. Try again once it has been resumed.", canRetry = true)
             // Reached only when fetching the room's descriptor again did not settle it (see the player).
             "stream_epoch_stale" -> UserError("Out of step with the room", "The room's stream was moved and this TV couldn't follow it. Try again, or leave and join again with the room's code.", canRetry = true)
             "room_unsupported" -> UserError("Can't be watched together", "This title can't be played in a watch room on this TV.", canRetry = false)

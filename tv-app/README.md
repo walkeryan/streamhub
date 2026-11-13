@@ -84,8 +84,12 @@ Cleartext HTTP is allowed (`network_security_config.xml`) because the server and
 Everything is driven with the D-pad, Select and Back.
 
 - **Home, Movies, Shows, Discover, Sports, My List, Search**: browse and play what the server's
-  sources have; titles that live in another app are handed off to it.
-- **Live TV and Guide**: channel list with number keys, groups and languages; EPG grid with catch-up.
+  sources have; titles that live in another app are handed off to it. *Search* is one field and
+  three rows (On TV, Channels, Movies & Shows): the hub's own answer (`discover=false`) is shown
+  first and the metadata provider's titles join the end. *Sports* lists live games, what is coming
+  by day, game feeds and sports channels.
+- **Live TV and Guide**: channel list with number keys, top-level group chips (a parent opens a
+  list of its children) and languages; EPG grid with catch-up.
 - **Who's watching?** on shared TVs: pick a person, with their PIN (below).
 - **Watch together**: start a room on a film, a series, an episode or a live channel, or join one
   with its six-character code (below).
@@ -135,7 +139,7 @@ watching … on another device" for a per-person stream limit.
 
 | The server says | What the TV does |
 |---|---|
-| 401 `token_expired`, `session_stale` | exchanges the token pair and repeats the call once, silently |
+| 401 `token_expired`, `session_stale` | exchanges the token pair and repeats the call once, silently. Refresh tokens rotate: the answered refresh token replaces the stored one in the same write as the access token, before either is used (`refreshedSession`), and a request that used an older pair takes the stored one instead of presenting the old token again (`rotatedSince`) |
 | 401 `session_revoked` (signed out elsewhere, or the session changed hands) | drops the tokens, keeps the server address, explains in a dialog and goes back to pairing |
 | 401 `user_suspended` | keeps the pairing and explains once. A shared TV then returns to the picker, which offers *Pair this TV again* while nobody can be picked; a personal TV stays where it is |
 
@@ -193,7 +197,7 @@ the list is shown with *Try again*. That 404 is the only allowance left for olde
   - an **episode tile**: hold Select on it for its actions (*Play*, *Watch together*);
   - a **live channel**, among its actions on Live TV: a live room, with no position.
   One launcher and one dialog serve all of them (`WatchTogetherLauncher`, `WatchTogetherDialog`).
-- **Joining one**: *Join a room* (rail, or the top of Search) has six slots and a picker of the code
+- **Joining one**: *Join a room* (rail) has six slots and a picker of the code
   alphabet for the D-pad; the remote's 2–9 keys and a keyboard's letters type directly. Once the code
   is complete the room is shown (title, host, who is there) with *Join*.
 - **In the room** the player works on the room's clock, not its own:
@@ -269,8 +273,11 @@ Shown to someone with `recordings.schedule` on a server that has a recordings fo
 
 - A title the server marks `requestable` gets **Request** as its first button: a film or a whole
   series at once, or chosen seasons when the detail lists `request_seasons`. While a request is open
-  the page says where it stands instead of offering Request again.
-- Search tiles with no in-app source carry **Not available**, or the state of their request.
+  the page shows its status instead of offering Request again: a chip per phase (Requested,
+  Approved, Searching, Downloading, Importing, Partly available, Available, Declined, Failed,
+  Stalled, Status unknown) and, while downloading, a bar with the percent and the time left.
+- Posters carry the same chip (and a thin bar) while a request is in progress; in Search a title
+  that plays here carries a tick and one that does not carries nothing else.
 - **Home** shows unread notices ("your request is ready", "your request was declined") as a row above
   the hero: Select opens the title, *Mark read* beside it (or holding Select) dismisses it.
 - **Requests** (rail, for someone with `requests.create`) lists *My requests*; someone who may
@@ -290,10 +297,26 @@ at once, without the usual load retries or a live reconnect loop:
 | 403 `remote_access_denied` | "This account can only be used on the home network" |
 | 403 `content_restricted` (the rating ceiling changed) | "Not available for this profile" |
 | 401 `session_stale` | nothing to read: the session is refreshed and playback resolved again, once (in a room: the descriptor) |
+| 403 `playback_paused` (a stream issued before a server restart, or an administrator's stop) | the first one for a playback: `GET /playback/generation`, then one resolve carrying it as `recovery_generation`, with no dialog (`PausedRetry`). A server that really is stopped refuses that, and then, or on a second such answer, "Playback is stopped" with *Try again* |
+| 403 `stream_epoch_stale` (a room segment of a start the room has left) | the room's descriptor is fetched again, twice at most before the viewer is asked |
 | 401 `session_revoked`, `user_suspended` | the session is put to the server first. If it still stands, playback is resolved again once; if not, playback ends and the shell explains (see "When the session ends") |
 
 Anything else (a provider's own 403 on a direct stream, `source_busy` on a live channel) is handled
-as before.
+as before. The player treats the descriptor's URL as opaque: it never assumes an upstream address,
+so a server that hands everyone without `sources.manage` its own stream URLs changes nothing here.
+
+**Stream info** (player menu) shows the descriptor's `media_info` (source, container, codecs,
+resolution, delivery, encoder) and Media3's own numbers (resolution, dropped frames, buffered
+seconds, bandwidth estimate), refreshed every second (`streamInfoLines`). `max_height` is the web
+player's quality cap and is never sent.
+
+### Sign-in away from home
+
+Pairing is by device code only (`POST /auth/device`, `/auth/device/poll`) and works from anywhere;
+it never asks `GET /profiles` or `POST /auth/login`, which answer only on the home network. The
+per-profile switch in Settings does use that login: when `/auth/config` says `profiles_enabled`
+false, or the login answers 403 `home_network_only`, it is not tried and the TV says to sign out and
+pair with a code. Changing or removing a PIN asks for the current one first and sends `current_pin`.
 
 ## Module map
 
@@ -311,13 +334,14 @@ as before.
 :core:player            StreamHubPlayer (Media3) · MediaItemMapper · VideoSurface · StreamRefusalErrors
 :feature:onboarding     server URL → disclaimer gate → device-code pairing · "Who's watching?" picker
 :feature:home           hero + rows; Movies/Shows as category shelves with a "See all" grid
-:feature:search         debounced search, Play here / Open in app / Channels · Join a room
+:feature:search         one search field, rows On TV / Channels / Movies & Shows · Join a room (its own screen)
 :feature:livetv         channel list + details pane (no auto-preview: it would use a source connection),
-                        number keys, language chips, groups, favorites filter, Watch together
+                        number keys, language chips, nested group chips, favorites filter, Watch together
 :feature:guide          EPG grid (30-min columns, now-line, catch-up, recording marks and Record actions)
 :feature:details        title detail, resume label, source picker, seasons/episodes (hold Select: episode
                         actions), Available on, Watch together, Request
-:feature:player         full-screen player overlays; watch-room mode (stream epochs, recovery); stream refusals
+:feature:player         full-screen player overlays; watch-room mode (stream epochs, recovery); stream refusals;
+                        one silent re-resolve after playback_paused; Stream info
 :feature:recordings     Upcoming / Recorded (Play) / Rules
 :feature:requests       My requests / All requests
 :feature:favorites      favorites by kind ("My List" in the rail)
@@ -409,6 +433,10 @@ up by reflection (`EXTENSION_RENDERER_MODE_PREFER`); check FFmpeg's licence for 
 
 ## What is stubbed / known gaps
 
+- The browsing screens are due to be replaced by the web app in a WebView, with playback staying
+  native: the Live TV group chips, the Sports screen, the one-field Search and the request status
+  were brought up to the server's contract but not polished further, and a series with many
+  seasons or a film with many audio tracks still lists them as a row of chips.
 - Not run on real hardware or an emulator yet. Only the build and JVM unit tests have been verified.
   That includes everything above: the picker, rooms, recordings, requests and the handling of
   refused streams follow `contracts/openapi.yaml` and are unit-tested against fakes, not exercised

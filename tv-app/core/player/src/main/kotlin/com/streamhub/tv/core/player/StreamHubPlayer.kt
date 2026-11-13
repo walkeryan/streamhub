@@ -15,6 +15,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
@@ -73,6 +74,21 @@ data class PlayerUiState(
      * ceiling or the user's stream limit. Never reconnected; the screen decides what to do about it.
      */
     val refusal: ApiException? = null,
+)
+
+/**
+ * The player's own numbers for the stream information panel, as plain values: the picture being
+ * decoded, how it is keeping up, and what the network is estimated to carry.
+ */
+data class PlayerStats(
+    val width: Int = 0,
+    val height: Int = 0,
+    val frameRate: Float? = null,
+    val videoCodec: String? = null,
+    val audioCodec: String? = null,
+    val droppedFrames: Int = 0,
+    val bufferedMs: Long = 0,
+    val bitrateEstimateBps: Long = 0,
 )
 
 /**
@@ -254,6 +270,23 @@ class StreamHubPlayer(
     }
 
     val currentDescriptor: PlaybackDescriptor? get() = current
+
+    /** A snapshot of Media3's own numbers. Call on the main thread, like every other player call. */
+    fun stats(): PlayerStats {
+        val size = exoPlayer.videoSize
+        val video = exoPlayer.videoFormat
+        return PlayerStats(
+            width = size.width.takeIf { it > 0 } ?: video?.width?.takeIf { it > 0 } ?: 0,
+            height = size.height.takeIf { it > 0 } ?: video?.height?.takeIf { it > 0 } ?: 0,
+            frameRate = video?.frameRate?.takeIf { it > 0 },
+            videoCodec = video?.sampleMimeType?.substringAfter('/'),
+            audioCodec = exoPlayer.audioFormat?.sampleMimeType?.substringAfter('/'),
+            droppedFrames = exoPlayer.videoDecoderCounters?.let { it.ensureUpdated(); it.droppedBufferCount } ?: 0,
+            bufferedMs = exoPlayer.totalBufferedDuration.coerceAtLeast(0),
+            // The meter the player was built with: Media3's process-wide default.
+            bitrateEstimateBps = DefaultBandwidthMeter.getSingletonInstance(context).bitrateEstimate,
+        )
+    }
 
     private fun enforceAudioLanguage(): Boolean {
         if(updatingMedia) return false
