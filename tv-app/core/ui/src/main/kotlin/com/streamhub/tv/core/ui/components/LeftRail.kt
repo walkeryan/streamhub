@@ -46,7 +46,50 @@ import com.streamhub.tv.core.ui.theme.LocalReducedMotion
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 
-data class RailItem(val route: String, val label: String, val icon: ImageVector)
+/** The three stretches of the rail, top to bottom; a thin line separates one from the next. */
+enum class RailGroup {
+    /** The places most visits start from. */
+    Primary,
+    /** Everything else there is to open, each only for someone who may use it. */
+    Secondary,
+    /** Settings; the avatar sits below it. */
+    System,
+}
+
+data class RailItem(val route: String, val label: String, val icon: ImageVector, val group: RailGroup = RailGroup.Primary)
+
+/** The rail's destinations, by what they are rather than where they lead (the shell maps them to routes). */
+enum class RailSlot { Home, Search, LiveTv, Movies, Shows, MyList, Sports, Discover, JoinRoom, Recordings, Requests, Sources, Settings }
+
+/** What decides which secondary destinations the signed-in user is shown. */
+data class RailAccess(
+    /** `rooms.join` */
+    val joinRoom: Boolean = false,
+    /** `recordings.view`, on a server that records */
+    val recordings: Boolean = false,
+    /** `requests.create` */
+    val requests: Boolean = false,
+)
+
+/**
+ * The rail from top to bottom, which is also its D-pad order: Home, Search, Live TV, Movies, Shows,
+ * My List; then the secondary destinations; then Settings (the avatar follows it). A destination
+ * the user may not use is absent, never greyed out. Pure, so the order and the gating are unit-tested.
+ */
+object RailOrder {
+    private val PRIMARY = listOf(RailSlot.Home, RailSlot.Search, RailSlot.LiveTv, RailSlot.Movies, RailSlot.Shows, RailSlot.MyList)
+
+    fun slots(access: RailAccess): List<Pair<RailSlot, RailGroup>> = buildList {
+        PRIMARY.forEach { add(it to RailGroup.Primary) }
+        add(RailSlot.Sports to RailGroup.Secondary)
+        add(RailSlot.Discover to RailGroup.Secondary)
+        if (access.joinRoom) add(RailSlot.JoinRoom to RailGroup.Secondary)
+        if (access.recordings) add(RailSlot.Recordings to RailGroup.Secondary)
+        if (access.requests) add(RailSlot.Requests to RailGroup.Secondary)
+        add(RailSlot.Sources to RailGroup.Secondary)
+        add(RailSlot.Settings to RailGroup.System)
+    }
+}
 
 /**
  * Rail geometry. Items are inset to the TV safe area (BRIEF UAT #3: nothing interactive outside
@@ -118,6 +161,10 @@ fun LeftRail(
         // Keep every destination reachable at TV logical heights as the menu grows.
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement=Arrangement.spacedBy(6.dp)) {
         items.forEachIndexed { i, item ->
+            // Where one stretch of the rail ends and the next begins: a line, not a gap that looks like a missing item.
+            if (i > 0 && items[i - 1].group != item.group) {
+                Box(Modifier.fillMaxWidth().padding(vertical = 2.dp).height(1.dp).background(t.textMuted.copy(alpha = 0.3f)))
+            }
             val req = if (i == selectedIndex) firstItemRequester else requesters[i]
             RailButton(
                 item = item,
