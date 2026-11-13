@@ -13,9 +13,11 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, func, or_, select, tuple_
+from sqlalchemy import and_, case, func, or_, select, tuple_
+from sqlalchemy.orm import aliased
 
 from app.adapters.language.country import channel_country, group_country
+from app.domain.groups import GROUP_SEPARATOR, group_path, split_group_path
 from app.infra.db import Database
 from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Progress, Setting, Source
 from app.services import ids
@@ -30,7 +32,7 @@ from app.services.event_slots import (
     parse_event_slot,
     slot_programme_id,
 )
-from app.services.sources import SourceService, apply_overrides
+from app.services.sources import SourceService, apply_overrides, group_id
 from app.services.sports import sport_facts
 from app.services.tiles import ImageFn
 
@@ -163,6 +165,31 @@ async def now_next(
                     nxt = p
                 out[(p.feed, p.epg_channel)] = (cur, nxt)
     return out
+
+
+def named_group_ids(rows: Sequence[Any], group: str) -> list[str]:
+    """Ids of the stored groups (rows of id, source_id, name, hidden) that a ``group`` filter names.
+
+    A group is named by its id or its full name. A top-level group brings its children, except
+    those hidden on their own: the group asked for is shown even when hidden, as it always was.
+    A child may also be named by its bare name while only one path ends in it.
+    """
+    wanted = group_path(group)
+    parent_of = {row.id: split_group_path(row.name)[0] for row in rows}
+    named = [row for row in rows if row.id == group] or [row for row in rows if row.name == wanted]
+    parents = {(row.source_id, row.name) for row in named if parent_of[row.id] is None}
+    # A parent need not have a row of its own (see ``ChannelService.groups``): its name and its id still name it.
+    parents |= {
+        (row.source_id, parent)
+        for row in rows
+        if (parent := parent_of[row.id]) is not None and (parent == wanted or group_id(row.source_id, parent) == group)
+    }
+    children = [row for row in rows if not row.hidden and (row.source_id, parent_of[row.id]) in parents]
+    if not named and not children:
+        leaves = [row for row in rows if parent_of[row.id] is not None and split_group_path(row.name)[1] == wanted]
+        if len({row.name for row in leaves}) == 1:
+            named = leaves
+    return list(dict.fromkeys(row.id for row in (*named, *children)))
 
 
 class ChannelService:
@@ -300,6 +327,9 @@ class ChannelService:
         )
         if not group and not include_hidden:
             query = query.where(ChannelGroup.hidden.is_(False))
+            under_hidden = await self._under_hidden_parent()
+            if under_hidden:
+                query = query.where(Channel.group_id.not_in(under_hidden))
         if country and country.lower() != "all":
             codes = [code.strip().upper() for code in country.split(",") if code.strip()]
             known = [code for code in codes if code not in ("UND", "UNKNOWN")]
@@ -318,9 +348,12 @@ class ChannelService:
         if source_id:
             query = query.where(Channel.source_id == source_id)
         if group:
-            query = query.where(
-                or_(ChannelGroup.id == group, ChannelGroup.name == group, Channel.group_override == group)
-            )
+            async with self._db.session() as session:
+                stored = select(ChannelGroup.id, ChannelGroup.source_id, ChannelGroup.name, ChannelGroup.hidden)
+                if source_id:
+                    stored = stored.where(ChannelGroup.source_id == source_id)
+                named = named_group_ids((await session.execute(stored)).all(), group)
+            query = query.where(or_(ChannelGroup.id.in_(named), Channel.group_override == group))
         if langs:
             query = query.where(Channel.language.in_(langs))
         if q and q.strip():
@@ -356,6 +389,33 @@ class ChannelService:
                 .exists()
             )
         return query, langs
+
+    async def _under_hidden_parent(self) -> list[str]:
+        """Ids of the groups that are not hidden themselves but whose parent is.
+
+        Hiding a parent hides its children without touching their own flag, so showing the
+        parent again leaves a child that was hidden alone as it was. Usually there are none.
+        """
+        parent = aliased(ChannelGroup)
+        prefix = parent.name + GROUP_SEPARATOR
+        async with self._db.session() as s:
+            return list(
+                (
+                    await s.execute(
+                        select(ChannelGroup.id)
+                        .join(
+                            parent,
+                            and_(
+                                parent.source_id == ChannelGroup.source_id,
+                                parent.hidden.is_(True),
+                                func.instr(parent.name, GROUP_SEPARATOR) == 0,
+                                func.substr(ChannelGroup.name, 1, func.length(prefix)) == prefix,
+                            ),
+                        )
+                        .where(ChannelGroup.hidden.is_(False))
+                    )
+                ).scalars()
+            )
 
     async def context_for_channel(self, profile_id: str, channel_id: int) -> dict[str, Any] | None:
         """Resolve zap order without serializing thousands of channels or querying programme rows."""
@@ -532,23 +592,49 @@ class ChannelService:
                     )
                 ).scalars()
             )
-        return [
-            {
-                "id": g.id,
-                "source_id": g.source_id,
-                "name": g.name,
-                "channel_count": int(counts.get(g.id, 0)),
-                "hidden": g.hidden,
-                "language_override": g.language_override,
-                "sort": g.sort,
-            }
-            for g in rows
-            if counts.get(g.id, 0) or profile_id is None
-        ]
+        # The stored name is the hierarchy. A parent has a row once a sync has seen one of its
+        # children; a catalog synced before that is given the row here, under the id it will have.
+        stored = {(g.source_id, g.name): g for g in rows}
+        children: dict[tuple[str, str], list[ChannelGroup]] = {}
+        top: list[ChannelGroup] = []
+        for g in rows:
+            parent = split_group_path(g.name)[0]
+            if parent is None:
+                top.append(g)
+                continue
+            if (g.source_id, parent) not in stored and (g.source_id, parent) not in children:
+                top.append(
+                    ChannelGroup(
+                        id=group_id(g.source_id, parent), source_id=g.source_id, name=parent, hidden=False, sort=g.sort
+                    )
+                )
+            children.setdefault((g.source_id, parent), []).append(g)
+        out: list[dict[str, Any]] = []
+        for g in top:
+            below = sorted(children.get((g.source_id, g.name), []), key=lambda c: (c.sort, c.name))
+            total = int(counts.get(g.id, 0)) + sum(int(counts.get(c.id, 0)) for c in below)
+            listed: list[tuple[ChannelGroup, ChannelGroup | None, int]] = [(g, None, total)]
+            listed += [(c, g, int(counts.get(c.id, 0))) for c in below]
+            for row, above, count in listed:
+                if count or profile_id is None:
+                    out.append(
+                        {
+                            "id": row.id,
+                            "source_id": row.source_id,
+                            "name": split_group_path(row.name)[1] if above else row.name,
+                            "parent": above.name if above else None,
+                            "path": row.name,
+                            "channel_count": count,
+                            "hidden": bool(row.hidden or (above and above.hidden)),
+                            "language_override": row.language_override,
+                            "sort": row.sort,
+                        }
+                    )
+        return out
 
     async def update_group(self, group_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         async with self._db.session() as s:
-            g = await s.get(ChannelGroup, group_id)
+            g = await s.get(ChannelGroup, group_id) or await self._adopt_parent(s, group_id)
             if g is None:
                 raise NotFound("group not found")
             if "hidden" in patch and patch["hidden"] is not None:
@@ -567,13 +653,20 @@ class ChannelService:
                     g.language_override = None
                     clear_lang = True
             source_id = g.source_id
+            # A parent's language reaches the children that set none, so clearing it clears theirs.
+            lifted = [group_id]
+            if clear_lang and split_group_path(g.name)[0] is None:
+                siblings = (await s.execute(select(ChannelGroup).where(ChannelGroup.source_id == source_id))).scalars()
+                lifted += [
+                    c.id for c in siblings if c.language_override is None and split_group_path(c.name)[0] == g.name
+                ]
             await s.commit()
         if clear_lang:
             # restore inferred languages for channels in the group without their own override
             async with self._db.session() as s:
                 chans = (
                     await s.execute(
-                        select(Channel).where(Channel.group_id == group_id, Channel.language_override.is_(None))
+                        select(Channel).where(Channel.group_id.in_(lifted), Channel.language_override.is_(None))
                     )
                 ).scalars()
                 for c in chans:
@@ -583,6 +676,24 @@ class ChannelService:
         await apply_overrides(self._db, source_id)
         return next(x for x in await self.groups() if x["id"] == group_id)
 
+    @staticmethod
+    async def _adopt_parent(session: Any, parent_id: str) -> ChannelGroup | None:
+        """Store the parent that ``groups`` listed without a row, so a setting on it has somewhere to live.
+
+        ``parent_id`` is the id its name gives it in one source; it takes its place before its
+        first child and that child's sync generation, so the next sync's sweep keeps it.
+        """
+        rows = list((await session.execute(select(ChannelGroup).order_by(ChannelGroup.sort))).scalars())
+        for child in rows:
+            parent = split_group_path(child.name)[0]
+            if parent is not None and group_id(child.source_id, parent) == parent_id:
+                adopted = ChannelGroup(
+                    id=parent_id, source_id=child.source_id, name=parent, sort=child.sort, sync_gen=child.sync_gen
+                )
+                session.add(adopted)
+                return adopted
+        return None
+
     async def languages(self) -> list[dict[str, Any]]:
         async with self._db.session() as s:
             rows = (
@@ -590,7 +701,11 @@ class ChannelService:
                     select(Channel.language, func.count(Channel.id))
                     .join(ChannelGroup, ChannelGroup.id == Channel.group_id)
                     .join(Source, Source.id == Channel.source_id)
-                    .where(ChannelGroup.hidden.is_(False), Source.enabled.is_(True))
+                    .where(
+                        ChannelGroup.hidden.is_(False),
+                        Channel.group_id.not_in(await self._under_hidden_parent()),
+                        Source.enabled.is_(True),
+                    )
                     .group_by(Channel.language)
                     .order_by(func.count(Channel.id).desc())
                 )

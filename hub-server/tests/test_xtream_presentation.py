@@ -6,7 +6,8 @@ from typing import Any
 
 import pytest
 
-from app.adapters.xtream.presentation import Presented, present_group, present_title
+from app.adapters.xtream.presentation import PresentationConfig, Presented, present_group, present_title
+from app.domain.groups import group_path, split_group_path
 
 
 def present(name: str, category: str = "", **kw: Any) -> Presented:
@@ -128,7 +129,7 @@ def test_adult_from_panel_flag_or_configured_category() -> None:
 @pytest.mark.parametrize(
     "raw,group",
     [
-        ("US| SPORT ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ", "Sport"),
+        ("US| SPORT ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ", "Sports"),
         ("US| NEWS ᴴᴰ/ᴿᴬᵂ ⁶⁰ᶠᵖˢ", "News"),
         ("US| NFL PPV", "NFL PPV"),
         ("UK | News", "News"),
@@ -136,6 +137,37 @@ def test_adult_from_panel_flag_or_configured_category() -> None:
         ("News", "News"),
         ("Uncategorized", "Uncategorized"),
         ("US| ⁴ᴷ", "US| ⁴ᴷ"),
+        # Network acronyms and abbreviations keep their capitals.
+        ("US| ABC ᴴᴰ", "ABC"),
+        ("US| CBS", "CBS"),
+        ("US| FOX", "FOX"),
+        ("US| NCAAF PPV", "NCAAF PPV"),
+        ("US| ESPN+", "ESPN+"),
+        ("US| BTN+ EVENTS", "BTN+ Events"),
+        ("UK| BBC HD", "BBC HD"),
+        ("US| TNT2 EXTRA", "TNT2 Extra"),
+        # Two or three letters with no vowel cannot be a word.
+        ("US| ZRT SHOPPING", "ZRT Shopping"),
+        ("US| DJ MIXES", "DJ Mixes"),
+        ("US| SKY HIGH", "Sky High"),
+        ("US| ART FILMS", "Art Films"),
+        ("US| BRRR", "Brrr"),
+        # Mixed case was written deliberately and is kept.
+        ("US| Abc", "Abc"),
+        # The words providers leave singular.
+        ("US| MOVIE", "Movies"),
+        ("US| KID", "Kids"),
+        ("US| DOCUMENTARY", "Documentaries"),
+        ("UK| NORTHFIELD SPORT", "Northfield Sports"),
+        ("UK | Sport", "Sports"),
+        ("US| SPORT PPV", "Sports PPV"),
+        ("US| MOVIE 2", "Movies 2"),
+        ("US| SPORTS", "Sports"),
+        ("US| MOVIE NIGHT", "Movie Night"),
+        ("US| KID FRIENDLY SPORT", "Kid Friendly Sports"),
+        # Only an operator nests groups: a provider's own slash never makes a second level.
+        ("US| FILM / SERIES", "Film/Series"),
+        ("US| 24/7 CHANNELS", "24/7 Channels"),
     ],
 )
 def test_channel_group_rules(raw: str, group: str) -> None:
@@ -148,3 +180,78 @@ def test_channel_group_map_and_hidden_groups() -> None:
     assert present_group(raw, group_map={}, hidden_groups=[raw]) is None
     assert present_group("US| NFL PPV", group_map={}, hidden_groups=["NFL PPV"]) is None
     assert present_group("US| NEWS", group_map={}, hidden_groups=[raw]) == "News"
+
+
+@pytest.mark.parametrize("key", ["US| SPORT ᴴᴰ", "us| sport ᴴᴰ", "Sport", "sport", "Sports", "SPORTS"])
+def test_group_map_matches_the_raw_the_old_and_the_new_name(key: str) -> None:
+    # A config written when the group was shown as "Sport" keeps working now that it reads "Sports".
+    assert present_group("US| SPORT ᴴᴰ", group_map={key: "Live Games"}) == "Live Games"
+    assert present_group("US| SPORT ᴴᴰ", group_map={}, hidden_groups=[key]) is None
+    assert present_group("US|  SPORT   ᴴᴰ", group_map={key: "Live Games"}) == "Live Games"  # spacing is not a name
+
+
+def test_group_map_prefers_the_most_specific_key() -> None:
+    keys = {"US| NETWORK-A ᴴᴰ": "By Raw Name", "Network-a": "By Old Name", "NETWORK-A": "By Another Case"}
+    assert present_group("US| NETWORK-A ᴴᴰ", group_map=keys) == "By Raw Name"
+    del keys["US| NETWORK-A ᴴᴰ"]
+    assert present_group("US| NETWORK-A ᴴᴰ", group_map=keys) == "By Old Name"
+    assert present_group("US| ABC", group_map={"Abc": "Locals"}) == "Locals"
+    assert present_group("US| ABC", group_map={"abc": "Locals", "Other": "Elsewhere"}) == "Locals"
+    assert present_group("US| NEWS", group_map={"Sport": "Live Games"}) == "News"
+
+
+@pytest.mark.parametrize(
+    "written,path,parent,name",
+    [
+        ("Sports / League One", "Sports / League One", "Sports", "League One"),
+        ("  Sports   /   League One  ", "Sports / League One", "Sports", "League One"),
+        ("Sports /League One", "Sports / League One", "Sports", "League One"),
+        ("Sports/ League One", "Sports / League One", "Sports", "League One"),
+        ("Sports\t/\tLeague  One", "Sports / League One", "Sports", "League One"),
+        # Two levels only: later separators belong to the child.
+        ("Sports / League One / Replays", "Sports / League One / Replays", "Sports", "League One / Replays"),
+        ("Sports  /  League One/ Replays", "Sports / League One / Replays", "Sports", "League One / Replays"),
+        # A slash with no space beside it is part of a name.
+        ("Film/Series", "Film/Series", None, "Film/Series"),
+        ("24/7 Channels", "24/7 Channels", None, "24/7 Channels"),
+        ("Sports", "Sports", None, "Sports"),
+        # Half a path is the half that is there.
+        ("Sports / ", "Sports", None, "Sports"),
+        (" / League One", "League One", None, "League One"),
+        (" / ", "", None, ""),
+    ],
+)
+def test_group_paths(written: str, path: str, parent: str | None, name: str) -> None:
+    assert group_path(written) == path
+    assert split_group_path(path) == (parent, name)
+
+
+def test_group_map_writes_paths() -> None:
+    mapping = {
+        "US| NETWORK-A ᴴᴰ": "Locals",
+        "US| NETWORK-B ᴴᴰ": "Locals",
+        "US| SPORT ᴴᴰ": "Sports",
+        "US| LEAGUE-ONE PPV": "Sports / League One",
+        "US| LEAGUE-ONE REPLAY": "Sports  /League One Replays",
+        "US| COLLEGE HOOPS PPV": "Sports / College Basketball",
+    }
+    shown = {raw: present_group(raw, group_map=mapping) for raw in mapping}
+    assert shown == {
+        "US| NETWORK-A ᴴᴰ": "Locals",
+        "US| NETWORK-B ᴴᴰ": "Locals",
+        "US| SPORT ᴴᴰ": "Sports",
+        "US| LEAGUE-ONE PPV": "Sports / League One",
+        "US| LEAGUE-ONE REPLAY": "Sports / League One Replays",
+        "US| COLLEGE HOOPS PPV": "Sports / College Basketball",
+    }
+    assert present_group("US| NEWS", group_map={"US| NEWS": " / "}) == "News"  # an empty name maps nothing
+
+
+def test_config_remembers_each_group() -> None:
+    config = PresentationConfig.from_config({"group_map": {"sport": "Sports / Everything"}, "hidden_groups": ["Kid"]})
+    assert [config.group("US| SPORT ᴴᴰ") for _ in range(2)] == ["Sports / Everything"] * 2
+    assert [config.group("US| KID") for _ in range(2)] == [None, None]
+    assert config.group("US| NEWS") == "News"
+    assert config == PresentationConfig.from_config(
+        {"group_map": {"sport": "Sports / Everything"}, "hidden_groups": ["Kid"]}
+    )

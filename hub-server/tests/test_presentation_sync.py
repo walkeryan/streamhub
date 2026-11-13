@@ -110,11 +110,11 @@ async def test_sync_stores_presentation_fields(api: Api) -> None:
 
     async with api.c.db.session() as session:
         channels = list((await session.execute(select(Channel).where(Channel.source_id == sid))).scalars())
-    assert [(c.name, c.group_name) for c in channels] == [("Sport One", "Sport")]  # the hidden group is not stored
+    assert [(c.name, c.group_name) for c in channels] == [("Sport One", "Sports")]  # the hidden group is not stored
     # The tag that was stripped from the group still drives language and country.
     assert (channels[0].language, channels[0].language_source, channels[0].country) == ("eng", "group", "US")
     listed = (await api.get("/channels", params={"language": "eng", "country": "US"})).json()["channels"]
-    assert [(c["name"], c["group"], c["country"]) for c in listed] == [("Sport One", "Sport", "US")]
+    assert [(c["name"], c["group"], c["country"]) for c in listed] == [("Sport One", "Sports", "US")]
 
     # Lazily fetched children inherit what only the series row knows.
     await api.patch(f"/sources/{sid}", json={"config": {"default_language": "de"}})

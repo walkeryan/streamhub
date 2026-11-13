@@ -366,6 +366,8 @@ class ChannelGroup(_M):
     id: str
     source_id: str
     name: str
+    parent: str | None = None
+    path: str
     channel_count: int
     hidden: bool
     language_override: str | None = None

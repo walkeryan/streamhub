@@ -80,6 +80,36 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
   in `extra`. Per-source config: `default_language`, `shelf_map` and `group_map` (raw name → display name),
   `hidden_groups` (live groups not stored), `adult_categories`. `default_language` also applies to Plex/Jellyfin sources.
   Title language filters read `title.language`; it is a hint, never audio evidence.
+- **Channel groups** have two levels. Without config a live group's name is the provider's with its country tag and
+  quality marks removed, in title case: listed abbreviations (`ABC`, `NFL`, `PPV`, `ESPN`, …) and any two or three
+  letters with no vowel stay in capitals, and a final `Sport`, `Movie`, `Kid` or `Documentary` reads in the plural.
+  `group_map` renames a group, merges groups (several raw names → one display name → one group) and nests them: a
+  value written `Parent / Child` puts the group under a parent. Only the first ` / ` separates; anything after it is
+  part of the child's name, and a slash with no space beside it is part of a name.
+
+  ```json
+  {"group_map": {
+    "US| NETWORK-A ᴴᴰ": "Locals",
+    "US| NETWORK-B ᴴᴰ": "Locals",
+    "US| SPORT ᴴᴰ": "Sports",
+    "US| LEAGUE-ONE PPV": "Sports / League One",
+    "US| LEAGUE-ONE REPLAY": "Sports / League One Replays",
+    "US| COLLEGE HOOPS PPV": "Sports / College Basketball"
+  }}
+  ```
+
+  gives two top-level groups: `Locals` (both networks) and `Sports`, which holds its own channels and three children.
+  A `group_map` or `hidden_groups` key names a group by the provider's name or by its default name, whatever the
+  case; the default name from before abbreviations and plurals were handled (`Sport`, `Abc`) still matches. The mapping
+  is applied at sync, so a change shows after the source's next sync. A provider's own ` / ` never nests (it is shown as
+  `/`); an M3U playlist's `group-title` is used as written, so `Parent / Child` there nests too.
+  `GET /channels/groups` lists each top-level group followed by its children (`parent`, `path`); a parent is listed
+  even when nothing is mapped to it directly, and its `channel_count` includes its children's. `GET /channels?group=`
+  takes an id or a path: a parent brings its children, a child is named by `Parent / Child` or by its bare name while
+  only one path ends in it. The name is the hierarchy: there is no parent column. A parent is a stored group like any
+  other (a sync creates its row with the first child), so `PATCH /channels/groups/{id}` works on it unchanged: hiding
+  a parent hides its children without touching their own setting, a child can be hidden alone, and a parent's
+  `language_override` reaches the children that set none.
 - **Event slots** (`services/event_slots.py`): a sports panel renames numbered channels for each game instead of
   sending a guide (`XX (NETWORK 001) | Sport: Away at Home (2026-10-02 14:50:00)`, or dateless
   `LEAGUE | 02 - 1pm Away at Home`). Such a channel is shown as `NETWORK 001`, and the game in its name is its programme

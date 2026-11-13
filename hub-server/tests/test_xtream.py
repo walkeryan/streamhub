@@ -494,7 +494,7 @@ def test_mapping_applies_presentation(client: XtreamClient) -> None:
     assert unknown is not None and unknown.group is None and unknown.language == "und"
 
     sport = map_live({"stream_id": 10, "name": "Sport One", "category_id": "4"}, cats, "ts", client, config)
-    assert sport is not None and sport.group == "Sport" and sport.extra["raw_group"] == cats["4"]
+    assert sport is not None and sport.group == "Sports" and sport.extra["raw_group"] == cats["4"]
     game = map_live({"stream_id": 11, "name": "Game One", "category_id": "6"}, cats, "ts", client, config)
     assert game is not None and game.group == "Game Day"
     assert map_live({"stream_id": 12, "name": "News One", "category_id": "5"}, cats, "ts", client, config) is None
