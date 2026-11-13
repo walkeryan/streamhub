@@ -5990,7 +5990,9 @@ export interface components {
         };
         PlexPin: {
             pin_id: number;
+            /** @description The four-character code to type at link_url */
             code: string;
+            /** @description https://plex.tv/link */
             link_url: string;
         };
         /** @enum {string} */

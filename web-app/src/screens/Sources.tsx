@@ -188,7 +188,7 @@ function PlexLink({ onDone }: { onDone: () => void }) {
           const { response } = await api.GET('/sources/plex/pin/{pin_id}', { params: { path: { pin_id: p.pin_id } } })
           if (!live) return
           if (response.status === 200) { toast('Plex linked. Your libraries are syncing.', 'success'); void qc.invalidateQueries({ queryKey: qk.sources }); onDone(); return }
-          if (response.status !== 428) { setErr('Plex linking failed. Close this and try again.'); return }
+          if (response.status !== 428) { setErr(response.status === 404 || response.status === 410 ? 'That code has expired. Close this and start again for a new one.' : 'Plex linking failed. Close this and try again.'); return }
           timer = window.setTimeout(() => void poll(), 2000)
         }
         timer = window.setTimeout(() => void poll(), 2000)
@@ -202,7 +202,7 @@ function PlexLink({ onDone }: { onDone: () => void }) {
         <div className="flex gap-6 flex-wrap items-center">
           {qr && <img src={qr} alt="QR code to link Plex" width={160} height={160} style={{ borderRadius: 8, background: '#fff', padding: 4 }} />}
           <div className="flex flex-col gap-2">
-            <p>Go to <strong>plex.tv/link</strong> and enter this code, or scan the QR code.</p>
+            <p>Go to <strong>plex.tv/link</strong> (or scan the QR code to open it) and enter this code.</p>
             <p className="display" style={{ letterSpacing: '0.2em' }} data-testid="plex-code">{pin.code}</p>
             <p className="label" aria-live="polite">Waiting for you to approve it in Plex…</p>
           </div>

@@ -353,7 +353,7 @@ components:
     PlexPin:
       type: object
       required: [pin_id, code, link_url]
-      properties: { pin_id: {type: integer}, code: {type: string}, link_url: {type: string} }
+      properties: { pin_id: {type: integer}, code: {type: string, description: "The four-character code to type at link_url"}, link_url: {type: string, description: "https://plex.tv/link"} }
 
     MediaKind: { type: string, enum: [movie, show, season, episode, channel, vod, series] }
     SourceBadge:

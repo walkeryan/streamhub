@@ -144,7 +144,7 @@ export const handlers = [
   }),
   http.post(`${B}/sources/:id/sync`, () => { sourceSynced(); return new HttpResponse(null, { status: 202 }) }),
   http.post(`${B}/sources/:id/test`, () => HttpResponse.json({ ok: true, message: 'Connection works.' })),
-  http.post(`${B}/sources/plex/pin`, () => { pinPolls = 0; return HttpResponse.json({ pin_id: 4242, code: 'K7QP', link_url: 'https://app.plex.tv/auth#?code=K7QP' }) }),
+  http.post(`${B}/sources/plex/pin`, () => { pinPolls = 0; return HttpResponse.json({ pin_id: 4242, code: 'K7QP', link_url: 'https://plex.tv/link' }) }),
   http.get(`${B}/sources/plex/pin/:id`, () => {
     if (++pinPolls < 3) return new HttpResponse(null, { status: 428 })
     const s: Source = { id: 's_plex2', type: 'plex', name: 'Linked Plex', enabled: true, priority: 9, region: 'US', status: 'syncing', last_sync: null, counts: {}, service_key: null, config_summary: {} }
