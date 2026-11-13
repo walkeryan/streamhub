@@ -71,7 +71,7 @@ def test_integration_fields_are_published_as_the_backend_sends_them() -> None:
     published = spec["components"]["schemas"]
     for model, fields in {
         "Programme": ["is_sport", "teams"],
-        "Recording": ["is_sport", "teams"],
+        "Recording": ["is_sport", "teams", "has_file"],
         "RoomJoin": ["member_token", "client"],
         "Settings": ["home_networks", "home_shelves", "home_shelves_unknown"],
     }.items():

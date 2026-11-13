@@ -773,7 +773,7 @@ components:
     RecordingState: { type: string, enum: [scheduled, recording, done, failed, missed, cancelled] }
     Recording:
       type: object
-      description: "One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file it plays with POST /playback/resolve {id: \"rec:<id>\"}."
+      description: "One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file (has_file) it plays with POST /playback/resolve {id: \"rec:<id>\"}."
       required: [id, profile_id, channel_id, title, starts_at, ends_at, state, created_at, updated_at]
       properties:
         id: {type: string}
@@ -794,7 +794,8 @@ components:
         pad_after_s: {type: integer}
         state: { $ref: '#/components/schemas/RecordingState' }
         error: {type: string, nullable: true, description: "why it failed or was missed"}
-        size_bytes: {type: integer, nullable: true}
+        size_bytes: {type: integer, nullable: true, description: "what the capture wrote. Not whether it can be played: see has_file"}
+        has_file: {type: boolean, description: "There is a file that POST /playback/resolve {id: \"rec:<id>\"} would play now: the recording is done, or failed and kept what it had captured, and that file is still on the server. False while scheduled or recording, and for a file since removed. Always sent."}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
     RecordingRule:

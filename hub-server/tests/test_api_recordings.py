@@ -106,6 +106,7 @@ async def test_schedule_a_programme_and_see_it_on_the_guide(api: Api) -> None:
     assert datetime.fromisoformat(made["starts_at"]) == start
     assert datetime.fromisoformat(made["ends_at"]) == start + timedelta(hours=1)
     assert (made["pad_before_s"], made["pad_after_s"], made["error"], made["size_bytes"]) == (120, 300, None, None)
+    assert made["has_file"] is False
     assert "path" not in made and "programme_key" not in made
 
     again = await api.post("/recordings", json={"programme_id": pid})

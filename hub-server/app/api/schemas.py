@@ -1029,6 +1029,7 @@ class Recording(_M):
     state: RecordingStateL
     error: str | None = None
     size_bytes: int | None = None
+    has_file: bool = False
     created_at: datetime
     updated_at: datetime
 
