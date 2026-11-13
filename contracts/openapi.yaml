@@ -119,6 +119,31 @@ components:
         created_at: {type: string, format: date-time}
         last_seen_at: {type: string, format: date-time}
         current: {type: boolean, description: The session making this request}
+    SwitchableUser:
+      type: object
+      required: [id, display_name, avatar, picture, role_name, has_pin, current]
+      properties:
+        id: {type: string}
+        display_name: {type: string}
+        avatar: {type: string, nullable: true}
+        picture: {type: string, nullable: true}
+        role_name: {type: string}
+        has_pin: {type: boolean}
+        current: {type: boolean, description: The user this device is signed in as}
+    Switched:
+      allOf:
+        - $ref: '#/components/schemas/AuthTokens'
+        - type: object
+          required: [user]
+          properties:
+            user:
+              description: The user now on the device. Every field of a picker entry and of /auth/me's user.
+              allOf:
+                - $ref: '#/components/schemas/User'
+                - type: object
+                  required: [current]
+                  properties:
+                    current: {type: boolean, enum: [true]}
     UserDetail:
       allOf:
         - $ref: '#/components/schemas/UserListItem'
@@ -190,7 +215,7 @@ components:
       properties:
         id: {type: integer}
         at: {type: string, format: date-time}
-        action: {type: string, description: "user.approve, user.role_change, user.suspend, role.update, invite.create, session.revoke, ..."}
+        action: {type: string, description: "user.approve, user.role_change, user.suspend, role.update, invite.create, session.revoke, session.switch, session.update, ..."}
         actor_user_id: {type: string, nullable: true}
         actor_name: {type: string, nullable: true}
         target_user_id: {type: string, nullable: true}
@@ -1007,10 +1032,45 @@ paths:
       parameters: [{ name: user_id, in: query, schema: {type: string}, description: Another user's sessions; needs users.manage }]
       responses: { '200': { description: live sessions, most recently seen first, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AuthSession' } } } } } }
   /auth/sessions/{sid}:
+    patch:
+      summary: Relabel a device, or mark it a shared household device
+      description: >-
+        A label is its user's to change (anyone's with users.manage). shared_device needs users.manage,
+        on one's own device too; marking records the caller as the device's owner, unmarking clears it.
+      parameters: [{name: sid, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { shared_device: {type: boolean}, label: {type: string, maxLength: 128, description: empty clears it} } } } } }
+      responses:
+        '200': { description: the session as it now is, content: { application/json: { schema: { $ref: '#/components/schemas/AuthSession' } } } }
+        '403': { description: "forbidden (shared_device without users.manage) | owner_required" }
+        '404': { description: not found }
     delete:
       summary: Sign a device out (one's own; anyone's with users.manage)
       parameters: [{name: sid, in: path, required: true, schema: {type: string}}]
       responses: { '204': { description: revoked; its next request answers 401 }, '404': { description: not found } }
+  /auth/switchable:
+    get:
+      summary: "Who's watching? The users a shared device can be handed to"
+      description: >-
+        Active users whose role (or own override) has on_shared_devices, owners and family first,
+        then by name. Only a shared-device session may ask.
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [users], properties: { users: { type: array, items: { $ref: '#/components/schemas/SwitchableUser' } } } } } } }
+        '403': { description: not_shared_device }
+  /auth/switch:
+    post:
+      summary: Hand a shared device to another user
+      description: >-
+        Keeps the device's session and re-binds it to the target, with fresh tokens; the previous
+        user's tokens for this device stop working. A target with a PIN needs it. A target with
+        more access than the current user must have one. Switching to oneself changes nothing.
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
+      responses:
+        '200': { description: switched, content: { application/json: { schema: { $ref: '#/components/schemas/Switched' } } } }
+        '401': { description: "pin_required | pin_invalid" }
+        '403': { description: not_shared_device }
+        '404': { description: not a user this device can switch to }
+        '409': { description: "pin_setup_required (the target has more access and no PIN) | switch_conflict (retry)" }
+        '429': { description: Five wrong PINs for this target in 15 minutes; respect Retry-After }
   /auth/adult-unlock:
     post:
       summary: Open the adult category on this session for four hours
@@ -1075,7 +1135,7 @@ paths:
   /auth/device/poll:
     post: { security: [], requestBody: { content: { application/json: { schema: { type: object, properties: { device_code: {type: string} } } } } }, responses: { '200': { description: approved, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } }, '428': { description: pending } } }
   /auth/device/approve:
-    post: { summary: Logged-in user approves a TV code (web), requestBody: { content: { application/json: { schema: { type: object, properties: { user_code: {type: string}, profile_id: {type: string} } } } } }, responses: { '204': { description: ok } } }
+    post: { summary: Logged-in user approves a TV code (web), requestBody: { content: { application/json: { schema: { type: object, properties: { user_code: {type: string}, profile_id: {type: string}, shared_device: {type: boolean, default: false, description: "Pair it as a shared household device (Who's watching?). true needs users.manage"} } } } } }, responses: { '204': { description: ok }, '403': { description: forbidden (shared_device without users.manage) } } }
 
   /profiles:
     get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } } } } }

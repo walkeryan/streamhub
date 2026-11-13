@@ -7,7 +7,7 @@ import math
 import secrets
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
@@ -170,6 +170,7 @@ class AuthService:
         owner_pin_version: int = 0,
         google_subject: str = "",
         user: User | None = None,
+        generation: int = 0,
     ) -> str:
         now = int(time.time())
         payload = {
@@ -189,6 +190,9 @@ class AuthService:
         if user is not None:
             payload["uid"] = user.id
             payload["uv"] = user.version
+        if generation:
+            # Which hand-over of a shared device this token belongs to; absent means the first.
+            payload["sg"] = generation
         if owner_auth_time is not None:
             payload["oat"] = owner_auth_time
         return jwt.encode(payload, self._key, algorithm=ALG)
@@ -230,22 +234,24 @@ class AuthService:
                 raise Unauthorized("Session revoked; sign in again", code="session_revoked")
             user = await ensure_user(s, row)
             self._require_active(user)
-            await self.sessions.attach(s, session_id, user, row, meta)
+            generation = (await self.sessions.attach(s, session_id, user, row, meta)).generation
             await s.commit()
+        return self._pair(profile, user, session_id, generation, owner_auth_time, owner_pin_version, google_subject)
+
+    def _pair(
+        self,
+        profile: Profile,
+        user: User,
+        session_id: str,
+        generation: int,
+        owner_auth_time: float | None = None,
+        owner_pin_version: int = 0,
+        google_subject: str = "",
+    ) -> dict[str, str]:
+        args = (session_id, owner_auth_time, owner_pin_version, google_subject, user, generation)
         return {
-            "access_token": self._encode(
-                profile, "access", self.access_ttl, session_id, owner_auth_time, owner_pin_version, google_subject, user
-            ),
-            "refresh_token": self._encode(
-                profile,
-                "refresh",
-                self.refresh_ttl,
-                session_id,
-                owner_auth_time,
-                owner_pin_version,
-                google_subject,
-                user,
-            ),
+            "access_token": self._encode(profile, "access", self.access_ttl, *args),
+            "refresh_token": self._encode(profile, "refresh", self.refresh_ttl, *args),
         }
 
     @staticmethod
@@ -318,7 +324,14 @@ class AuthService:
             permissions &= BUILTIN_ROLES["kid"].permissions
         return permissions, limits
 
-    async def validate(self, profile_id: str, version: int, session_id: str, user_version: int | None) -> SessionState:
+    async def validate(
+        self,
+        profile_id: str,
+        version: int,
+        session_id: str,
+        user_version: int | None,
+        generation: int | None = None,
+    ) -> SessionState:
         """Unconditional session check: profile, user, role and session row, on every request.
 
         One short transaction of primary-key reads, so a role change, a suspension or a
@@ -336,6 +349,9 @@ class AuthService:
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
         self._require_active(user)
         if row is None or row.revoked_at is not None or row.profile_id != profile.id or row.user_id != user.id:
+            raise Unauthorized("Session revoked; sign in again", code="session_revoked")
+        if generation is not None and generation != row.generation:
+            # A shared device changed hands since this token was minted.
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
         if user_version is None or user_version != user.version:
             # Role, overrides or limits changed: the client refreshes and carries on.
@@ -365,6 +381,12 @@ class AuthService:
         value = claims.get("uv")
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
+    @staticmethod
+    def _generation(claims: dict[str, Any]) -> int:
+        """The ``sg`` claim. Absent (every token of a session that never changed hands) is 0; junk matches nothing."""
+        value = claims.get("sg", 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
     async def resolve_principal(self, token: str, *, owner_entry: bool = True) -> Principal:
         claims = self._claims(token)
         if claims.get("typ") == "pending":
@@ -376,6 +398,7 @@ class AuthService:
             int(claims.get("ver", -1)),
             str(claims.get("sid") or ""),
             self._user_version(claims),
+            self._generation(claims),
         )
         if owner_entry:
             await self.check_owner_entry(state.identity.profile, int(claims.get("opv", 0)))
@@ -562,6 +585,31 @@ class AuthService:
             google_subject=principal.google_subject,
         )
 
+    async def switch_user(
+        self, principal: Principal, user_id: str, pin: str | None
+    ) -> tuple[Profile, dict[str, str], dict[str, Any]]:
+        """ "Who's watching?": hand a shared device to another user and mint their tokens for it.
+
+        Returns the target's profile, the new token pair and the user as ``/auth/me`` shows them.
+        Switching to oneself changes nothing and hands back a fresh pair for the same session.
+        """
+        if self.content_policy is not None and self.content_policy.enabled:
+            # The owner-PIN regime has its own, stricter way between profiles.
+            raise Conflict("Use the owner PIN to switch profiles", code="owner_pin_required")
+        user, profile, role, row = await self.sessions.switch(principal, user_id, pin)
+        if user.id == principal.user_id:
+            tokens = await self.issue(
+                profile,
+                principal.session_id,
+                principal.owner_auth_time,
+                principal.owner_pin_version,
+                principal.google_subject,
+            )
+        else:
+            # Nothing of the previous user's sign-in (their Google subject, their proofs) carries over.
+            tokens = self._pair(profile, user, row.sid, row.generation)
+        return profile, tokens, {**self.users.user_out(user, profile, role), "current": True}
+
     async def refresh(self, refresh_token: str, meta: SessionMeta | None = None) -> tuple[Profile, dict[str, str]]:
         p = self._decode(refresh_token, "refresh")
         sid = str(p.get("sid") or "")
@@ -573,7 +621,7 @@ class AuthService:
         # A token minted before sessions had rows carries no ``uid``; its first refresh adopts
         # the ``sid`` (issue() creates the row) so an upgrade signs nobody out. Every later
         # token has a row, and a missing one means the session is gone.
-        if row is None and "uid" in p:
+        if (row is None and "uid" in p) or (row is not None and row.generation != self._generation(p)):
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
         # Checks the profile version, the deny-list, the row when present, and the user's status.
         await self.session_valid(prof.id, int(p.get("ver", -1)), sid)
@@ -693,6 +741,16 @@ class AuthService:
             )
             if result.scalar_one_or_none() is None:
                 raise NotFound("device code already consumed")
+            if row.shared_device:
+                # Shared only if whoever ticked the box may still decide that as the TV claims the code.
+                approver_user = await s.get(User, row.approved_by_user_id) if row.approved_by_user_id else None
+                approver_role = (
+                    await s.get(Role, approver_user.role_id) if approver_user and approver_user.role_id else None
+                )
+                if "users.manage" in access(approver_user, approver_role)[0]:
+                    meta = replace(
+                        meta or SessionMeta(kind="tv"), shared_device=True, device_owner_user_id=row.approved_by_user_id
+                    )
             await s.commit()
         return prof, await self.issue(
             prof, owner_auth_time=proof, owner_pin_version=pin_version, google_subject=google_subject, meta=meta
@@ -705,9 +763,14 @@ class AuthService:
                 "Fresh owner Google authentication is required for this pairing", code="owner_reauth_required"
             )
 
-    async def approve_device(self, principal: Principal, user_code: str, profile_id: str | None) -> None:
+    async def approve_device(
+        self, principal: Principal, user_code: str, profile_id: str | None, shared_device: bool = False
+    ) -> None:
         code = (user_code or "").strip().upper().replace("-", "").replace(" ", "")
         target = profile_id or principal.profile_id
+        if shared_device and not _can(principal, "users.manage"):
+            # A shared device offers every household user at its picker: a manager's decision.
+            raise PermissionDenied(["users.manage"])
         if target != principal.profile_id:
             # The paired device will act as that user: users.manage, and never upward.
             await self.users.guard_profile_identity(principal, target)
@@ -735,6 +798,8 @@ class AuthService:
                 row.approved_by_version = principal.token_version
                 row.approved_by_session_id = principal.session_id
             row.approved_profile_id = target
+            row.shared_device = bool(shared_device)
+            row.approved_by_user_id = principal.user_id or None
             await s.commit()
 
     # ------------------------------------------------------------------ profiles

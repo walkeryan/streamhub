@@ -87,6 +87,7 @@ class DevicePoll(_M):
 class DeviceApprove(_M):
     user_code: str = ""
     profile_id: str | None = None
+    shared_device: bool = Field(default=False, description="a shared household device; needs users.manage")
 
 
 class PinBody(_M):
@@ -766,6 +767,40 @@ class AuthSession(_M):
     created_at: datetime
     last_seen_at: datetime
     current: bool = False
+
+
+class AuthSessionPatch(_M):
+    shared_device: bool | None = Field(default=None, description="needs users.manage")
+    label: str | None = Field(default=None, max_length=128, description="empty clears it")
+
+
+class SwitchableUser(_M):
+    id: str
+    display_name: str
+    avatar: str | None = None
+    picture: str | None = None
+    role_name: str
+    has_pin: bool
+    current: bool
+
+
+class SwitchableUsers(_M):
+    users: list[SwitchableUser]
+
+
+class SwitchRequest(_M):
+    user_id: str = Field(min_length=1, max_length=32)
+    pin: str | None = _pin(default=None)
+
+
+class SwitchedUser(User):
+    """The user now on the device: every field of a picker entry, and of ``/auth/me``'s user."""
+
+    current: bool = True
+
+
+class Switched(AuthTokens):
+    user: SwitchedUser
 
 
 class HistoryEntry(_M):

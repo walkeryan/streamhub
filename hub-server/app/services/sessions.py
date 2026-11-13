@@ -8,22 +8,23 @@ stop honouring the session too.
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.crypto import verify_secret
 from app.infra.db import Database
-from app.infra.models import AuthSession, Profile, RevokedSession, User, utcnow
+from app.infra.models import AuthSession, Profile, RevokedSession, Role, User, utcnow
 from app.services.errors import Conflict, Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
-from app.services.permissions import OWNER_ROLE
-from app.services.users import audit
+from app.services.permissions import OWNER_ROLE, is_wider
+from app.services.users import access, audit
 
 SESSION_KINDS = ("browser", "tv", "api")
 TOUCH_INTERVAL_S = 60
@@ -197,6 +198,147 @@ class SessionsService:
         for sid in sids:
             await self.revoke_in(s, sid, self._ttl_s)
         return len(sids)
+
+    # ------------------------------------------------------------------ shared devices
+    async def update(self, actor: Any, sid: str, patch: dict[str, Any]) -> dict[str, Any]:
+        """Relabel a device, or mark it shared (or personal again).
+
+        A label is its user's to change, or a manager's. What kind of device it is, shared
+        or personal, is only ever a ``users.manage`` holder's call, their own device included.
+        """
+        manager = "users.manage" in actor.permissions
+        async with self._db.session() as s:
+            row = await s.get(AuthSession, sid)
+            # Someone else's session is indistinguishable from a missing one without users.manage.
+            if row is None or row.revoked_at is not None or (row.user_id != actor.user_id and not manager):
+                raise NotFound("session not found")
+            if "shared_device" in patch and not manager:
+                raise PermissionDenied(["users.manage"])
+            if row.user_id != actor.user_id:
+                # An owner's devices are only ever changed by an owner.
+                owner, me = await s.get(User, row.user_id), await s.get(User, actor.user_id)
+                if owner is not None and owner.role_id == OWNER_ROLE and (me is None or me.role_id != OWNER_ROLE):
+                    raise Forbidden("Only an owner can change an owner", code="owner_required")
+            changed: dict[str, Any] = {}
+            if "shared_device" in patch and bool(patch["shared_device"]) != row.shared_device:
+                row.shared_device = changed["shared_device"] = bool(patch["shared_device"])
+                # Whoever marked it answers for it; a personal device has no such person.
+                row.device_owner_user_id = actor.user_id if row.shared_device else None
+            if "label" in patch:
+                label = _clip(str(patch["label"] or "").strip(), 128)
+                if label != row.label:
+                    row.label = changed["label"] = label
+            if changed:
+                audit(s, actor.user_id, "session.update", row.user_id, kind=row.kind, **changed)
+                await s.commit()
+            return self.to_api(row, actor.session_id)
+
+    @staticmethod
+    async def _switchable(s: AsyncSession, *where: Any) -> builtins.list[tuple[User, Profile, Role]]:
+        """Active users who appear on shared devices: by their role, unless their own override says otherwise."""
+        rows = await s.execute(
+            select(User, Profile, Role)
+            .join(Profile, Profile.user_id == User.id)
+            .join(Role, Role.id == User.role_id)
+            .where(User.status == "active", func.coalesce(User.on_shared_devices, Role.on_shared_devices), *where)
+        )
+        return [(u, p, r) for u, p, r in rows.all()]
+
+    @staticmethod
+    def picker_out(user: User, profile: Profile, role: Role, current_user_id: str) -> dict[str, Any]:
+        """One face on the "Who's watching?" screen. Nothing here is worth hiding from the household."""
+        return {
+            "id": user.id,
+            "display_name": user.display_name,
+            "avatar": profile.avatar,
+            "picture": user.picture,
+            "role_name": role.name,
+            "has_pin": bool(profile.pin_hash),
+            "current": user.id == current_user_id,
+        }
+
+    async def switchable(self, actor: Any) -> builtins.list[dict[str, Any]]:
+        """Who this shared device can be handed to: owners and family first, then by name."""
+        if not actor.shared_device:
+            raise Forbidden("This is not a shared device", code="not_shared_device")
+        async with self._db.session() as s:
+            rows = await self._switchable(s)
+        first = {OWNER_ROLE: 0, "family": 1}
+        rows.sort(key=lambda r: (first.get(r[2].id, 2), r[0].display_name.casefold(), r[0].id))
+        return [self.picker_out(user, profile, role, actor.user_id) for user, profile, role in rows]
+
+    def _switch_budget(self, target_user_id: str) -> str:
+        """Five wrong PINs in fifteen minutes close a target to every device, right PIN or not."""
+        key = f"switch:{target_user_id}"
+        now = time.monotonic()
+        recent = [t for t in self._pin_failures.get(key, []) if now - t < PIN_WINDOW_S]
+        self._pin_failures[key] = recent
+        if len(recent) >= PIN_FAILURES:
+            raise RateLimited(int(PIN_WINDOW_S - (now - recent[0])) + 1)
+        return key
+
+    async def switch(self, actor: Any, target_user_id: str, pin: str | None) -> tuple[User, Profile, Role, AuthSession]:
+        """Hand this shared device to another user: the same ``auth_session`` row, re-bound.
+
+        A target with a PIN is only reached with it. A target with more access than the
+        current user must have one, so a child cannot step into a parent. The re-bind is a
+        compare-and-set on the row as this request saw it, and bumps its generation, so the
+        previous user's tokens for this device are dead from the commit on.
+        """
+        if not actor.shared_device:
+            raise Forbidden("This is not a shared device", code="not_shared_device")
+        async with self._db.session() as s:
+            row = await s.get(AuthSession, actor.session_id)
+            if row is None or row.revoked_at is not None or row.user_id != actor.user_id or not row.shared_device:
+                raise Unauthorized("Session revoked; sign in again", code="session_revoked")
+            found = await self._switchable(s, User.id == target_user_id)
+            if not found:
+                raise NotFound("user not found")
+            user, profile, role = found[0]
+            if user.id == actor.user_id:
+                return user, profile, role, row
+            if profile.pin_hash:
+                key = self._switch_budget(user.id)
+                if not pin:
+                    raise Unauthorized("Enter this user's PIN", code="pin_required")
+                if not await asyncio.to_thread(verify_secret, pin, profile.pin_hash):
+                    self._pin_failures.setdefault(key, []).append(time.monotonic())
+                    raise Unauthorized("Wrong PIN", code="pin_invalid")
+                self._pin_failures.pop(key, None)
+            elif is_wider(*access(user, role), frozenset(actor.permissions), actor.limits):
+                raise Conflict("That user needs a PIN before this device can switch to them", code="pin_setup_required")
+            claimed = await s.execute(
+                update(AuthSession)
+                .where(
+                    AuthSession.sid == row.sid,
+                    AuthSession.revoked_at.is_(None),
+                    AuthSession.shared_device.is_(True),
+                    AuthSession.user_id == actor.user_id,
+                    AuthSession.generation == row.generation,
+                    # The target as it was judged above: still active, same access, same PIN.
+                    select(User.id)
+                    .where(User.id == user.id, User.status == "active", User.version == user.version)
+                    .exists(),
+                    select(Profile.id)
+                    .where(Profile.id == profile.id, Profile.pin_hash.is_not_distinct_from(profile.pin_hash))
+                    .exists(),
+                )
+                .values(
+                    user_id=user.id,
+                    profile_id=profile.id,
+                    generation=row.generation + 1,
+                    adult_unlocked_until=None,
+                    last_seen_at=utcnow(),
+                )
+                .returning(AuthSession.sid)
+            )
+            if claimed.scalar_one_or_none() is None:
+                raise Conflict("This device or that user just changed; try again", code="switch_conflict")
+            await s.execute(update(User).where(User.id == user.id).values(last_seen_at=utcnow()))
+            audit(s, actor.user_id, "session.switch", user.id, kind=row.kind, label=row.label)
+            await s.commit()
+            await s.refresh(row)
+        return user, profile, role, row
 
     # ------------------------------------------------------------------ adult unlock
     def _pin_budget(self, user_id: str) -> None:
