@@ -49,7 +49,7 @@ Three layers, each with one job.
                    Dispatcharr                     Plex                Radarr / Sonarr
               (IPTV engine + organizer)     (owned-library server)      (downloads)
                         │
-              provider lines · antenna tuner
+              provider lines
 ```
 
 - **Dispatcharr is the IPTV engine and the organizer.** It owns the provider lines,
@@ -321,13 +321,12 @@ Phases 5, 6 and 7 are independent of one another.
 | 5 | Watch rooms | Acceptance scenario 3 |
 | 6 | Recording | Acceptance scenario 5, plus pause/rewind live |
 | 7 | Requests | Acceptance scenario 6 |
-| 8 | Cutover | Antenna tuner in Dispatcharr, friends moved, Jellyfin stack retired |
+| 8 | Cutover | Friends moved, Jellyfin stack retired |
 
-**Phase 8 detail.** The antenna tuner bridge gains an M3U endpoint so Dispatcharr ingests
-it as an account with its own two-tuner limit; its channels get guide data and fail over
-to the IPTV affiliates. Then the Jellyfin server, its web skin and bridge, the stream-link
-generator and its folder tree, and the Plex-to-Jellyfin history sync are stopped, kept for
-two weeks, and deleted.
+**Phase 8 detail.** Local channels come from the IPTV affiliates; the antenna tuner bridge
+is not carried into the new system. The Jellyfin server, its web skin and bridge, the
+stream-link generator and its folder tree, and the Plex-to-Jellyfin history sync are
+stopped, kept for two weeks, and deleted.
 
 ## 12. Testing
 
