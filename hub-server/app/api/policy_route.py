@@ -20,7 +20,7 @@ class PolicyCatalogRoute(APIRoute):
             response = await original(request)
             c = request.app.state.container
             principal = getattr(request.state, "principal", None)
-            if not c.content_policy.enabled or principal is None or response.status_code != 200:
+            if principal is None or not c.content_policy.applies_to(principal) or response.status_code != 200:
                 return response
             if "application/json" not in response.headers.get("content-type", ""):
                 return response

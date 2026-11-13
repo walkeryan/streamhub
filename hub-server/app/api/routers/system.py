@@ -1,4 +1,4 @@
-"""/themes, /settings, /settings/tmdb_key, /health, /about."""
+"""/themes, /settings, /settings/tmdb_key, /settings/classification/run, /health, /about."""
 
 from __future__ import annotations
 
@@ -43,6 +43,12 @@ async def patch_settings(body: S.SettingsPatch, c: C, p: Admin) -> dict[str, Any
 async def put_tmdb_key(body: S.TmdbKey, c: C, p: Admin) -> Response:
     await c.app_settings.set_tmdb_key(body.api_key)
     return Response(status_code=204)
+
+
+@router.post("/settings/classification/run", response_model=S.ClassificationRun, tags=["system"])
+async def run_classification(c: C, p: Admin) -> dict[str, int]:
+    """Run one batch of the rating lookups now instead of waiting for the schedule."""
+    return await c.classifier.run_batch()
 
 
 @router.get("/health", response_model=S.Health, tags=["system"])

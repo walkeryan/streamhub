@@ -485,6 +485,12 @@ class SettingsPatch(_M):
     notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
 
 
+class ClassificationRun(_M):
+    classified: int
+    failed: int
+    remaining: int = Field(description="titles with a TMDB id still lacking fresh rating evidence")
+
+
 class TmdbKey(_M):
     api_key: str = ""
 

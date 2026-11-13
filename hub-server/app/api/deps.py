@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
@@ -81,11 +82,13 @@ async def current_principal(
     request.state.principal = principal
     from app.services.content_policy import active_policy, active_principal
 
-    if c.content_policy is None:
+    policy = c.content_policy
+    if policy is None:
         raise Forbidden("Content policy service is unavailable.", code="content_policy_unavailable")
-    profile = await c.content_policy.profile(principal.profile_id) if c.content_policy.enabled else None
+    # The engine scopes every catalog read of this request, for a caller it applies to.
+    profile = await policy.profile(principal.profile_id, principal.limits) if policy.applies_to(principal) else None
     principal_token = active_principal.set(principal)
-    token = active_policy.set((c.content_policy, profile) if profile is not None else None)
+    token = active_policy.set((policy, profile) if profile is not None else None)
     watch_token = set_watch(principal.permissions)
     try:
         yield principal
@@ -124,7 +127,7 @@ _PLAYBACK_REFS = {
 
 
 async def playback_watch_gate(request: Request, c: C) -> None:
-    """Refuse playback of anything the caller's watch.* permissions do not cover.
+    """Refuse playback of anything the caller's watch.* permissions or rating limits do not cover.
 
     Mounted on the playback router as a whole, so the resolver itself stays unaware of
     permissions. Routes that carry no bearer (signed stream and image URLs) pass through;
@@ -138,6 +141,10 @@ async def playback_watch_gate(request: Request, c: C) -> None:
         return  # the route's own principal dependency answers 401
     principal = await _resolve(request, c, token)
     refs: list[tuple[str, str | None]] = []
+    # Channel ids asked for at a past moment (rewind): the policy judges what aired then.
+    moments: dict[str, datetime] = {}
+    # Channels asked for as the carrier of a past programme: that programme is what is judged.
+    carriers: set[str] = set()
     if request.method == "GET":
         refs.append((request.query_params.get("id", ""), request.query_params.get("source_id")))
     else:
@@ -154,6 +161,25 @@ async def playback_watch_gate(request: Request, c: C) -> None:
                     for key in ("id", "catchup_programme_id"):
                         if isinstance(pane.get(key), str):
                             refs.append((pane[key], source))
+                    if isinstance(pane.get("id"), str):
+                        moment = _moment(pane.get("rewind_at"))
+                        if pane.get("catchup_programme_id"):
+                            carriers.add(pane["id"])
+                        elif moment is not None:
+                            moments[pane["id"]] = moment
+    policy = c.content_policy
+    # Under the legacy flag the resolver makes these checks itself, with the same arguments.
+    rated = not policy.enabled and policy.applies_to(principal)
     for ref, source in refs:
         if ref:
             await require_watch(c.db, principal.permissions, ref, source)
+            if rated and ref not in carriers:
+                await policy.require(principal.profile_id, ref.removeprefix("trailer:"), at=moments.get(ref))
+
+
+def _moment(value: Any) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None  # request validation reports the malformed timestamp
+    return moment if moment is not None and moment.tzinfo is not None else None

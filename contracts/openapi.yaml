@@ -1519,6 +1519,15 @@ paths:
     patch: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } }, responses: { '200': { description: ok } } }
   /settings/tmdb_key:
     put: { requestBody: { content: { application/json: { schema: { type: object, properties: { api_key: {type: string} } } } } }, responses: { '204': { description: ok } } }
+  /settings/classification/run:
+    post:
+      summary: Run one batch of rating lookups now (system.manage)
+      description: >-
+        A background job looks up TMDB certifications for catalog titles a batch at a time, so a
+        user with a rating ceiling is not waiting on first views. This runs the next batch at once.
+        Without a TMDB key it does nothing.
+      responses:
+        '200': { description: what the batch did, content: { application/json: { schema: { type: object, required: [classified, failed, remaining], properties: { classified: {type: integer}, failed: {type: integer}, remaining: {type: integer, description: Titles with a TMDB id still lacking fresh rating evidence} } } } } }
   /settings/request_manager:
     get: { summary: The API key is write-only (system.manage), responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RequestManagerSettings' } } } } } }
     put:

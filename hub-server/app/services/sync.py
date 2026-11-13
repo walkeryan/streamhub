@@ -322,10 +322,12 @@ class SyncScheduler:
         sync: SyncService,
         reconcile_requests: Callable[[], Awaitable[Any]] | None = None,
         recorder_tick: Callable[[], Awaitable[Any]] | None = None,
+        classify: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         self._sync = sync
         self._reconcile_requests = reconcile_requests
         self._recorder_tick = recorder_tick
+        self._classify = classify
         self._sched: Any = None
 
     def start(self) -> None:
@@ -370,6 +372,17 @@ class SyncScheduler:
                 max_instances=1,
                 coalesce=True,
                 next_run_time=datetime.now(UTC) + timedelta(seconds=30),
+            )
+        if self._classify is not None:
+            # One small batch of rating lookups a run; see ``ClassificationJob``.
+            sched.add_job(
+                self._classify,
+                "interval",
+                minutes=2,
+                id="classification",
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(UTC) + timedelta(minutes=3),
             )
         sched.start()
         self._sched = sched

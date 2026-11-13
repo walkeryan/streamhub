@@ -30,10 +30,15 @@ def _room(c: Container, code: str) -> Room:
     return room
 
 
+async def _require_rated(c: Container, p: Principal, ref: str) -> None:
+    """A room is no way around a rating ceiling: the title must be one this caller may watch."""
+    if c.content_policy.applies_to(p):
+        await c.content_policy.require(p.profile_id, ref)
+
+
 async def _title(c: Container, p: Principal, ref: str) -> dict[str, Any]:
     """What the join screen shows of the title, and only to a profile that may watch it."""
-    if c.content_policy.enabled:
-        await c.content_policy.require(p.profile_id, ref)
+    await _require_rated(c, p, ref)
     detail = await c.catalog.detail(ref, p.profile_id)
     return {k: detail.get(k) for k in TITLE_FIELDS}
 
@@ -89,6 +94,7 @@ async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
     room = _room(c, code)
     if not room_policy.can_join(p):
         raise Forbidden("You are not allowed to join watch rooms.")
+    await _require_rated(c, p, room.ref)
     room.require_space()
     # The member token outlives this request, so it is only minted for a session that is valid now.
     profile = await c.auth.session_valid(p.profile_id, p.token_version, p.session_id)

@@ -430,7 +430,7 @@ class CatalogService:
         policy = self.content_policy
         if policy is None:
             raise Forbidden("Content policy service is unavailable.", code="content_policy_unavailable")
-        restricted = policy.is_restricted(await policy.profile(profile_id))
+        restricted = policy.restricts(await policy.profile(profile_id))
         ctx = await self.tile_context(profile_id)
         enabled = self._enabled(ctx)
         if source_id:

@@ -19,12 +19,14 @@ def _owned_by(ref: Any, source_id: str) -> bool:
 
 
 def image_payload(source_id: str, url: str, ref: str | None, policy: Any) -> dict[str, Any] | None:
+    """What an artwork URL is signed over. Bound to the caller's session and the exact title
+    whenever the content policy applies to them, so the fetch can be checked against it."""
     payload: dict[str, Any] = {"s": source_id, "u": url}
-    if policy is None or not policy.enabled:
-        return payload
     from app.services.content_policy import active_principal
 
     principal = active_principal.get()
+    if policy is None or not policy.applies_to(principal):
+        return payload
     if principal is None or not principal.session_id or not _owned_by(ref, source_id):
         return None
     payload.update(
@@ -38,7 +40,9 @@ def image_payload(source_id: str, url: str, ref: str | None, policy: Any) -> dic
 
 
 async def validate_image_grant(payload: dict[str, Any], policy: Any, auth: Any) -> None:
-    if not policy.enabled:
+    # An unbound grant was minted for a caller the policy did not apply to. Under the legacy
+    # flag there is no such caller; otherwise it is an unrestricted user's artwork.
+    if not policy.enabled and "profile" not in payload:
         return
     source, ref = payload.get("s"), payload.get("ref")
     profile, version, session = payload.get("profile"), payload.get("version"), payload.get("session")

@@ -17,7 +17,7 @@ from app.services.image_grants import image_payload, validate_image_grant
 
 @pytest.fixture
 def ctx() -> Any:
-    policy = SimpleNamespace(enabled=True, require=AsyncMock())
+    policy = SimpleNamespace(enabled=True, applies_to=lambda principal: True, require=AsyncMock())
     ptoken = active_principal.set(Principal("kid", False, True, 4, "kid-session"))
     payload = image_payload("plex", "https://fixture.invalid/art", "lib:plex:17", policy)
     active_principal.reset(ptoken)
