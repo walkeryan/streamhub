@@ -16,7 +16,7 @@ import { bootTheme, useTheme } from './lib/theme'
 import { useSession } from './store/session'
 import { useReturnToRoom } from './room/returnToRoom'
 import { useWho } from './store/who'
-import { DisclaimerGate } from './screens/Gate'
+import { AwayFromHome, DisclaimerGate } from './screens/Gate'
 import { LoginGate } from './screens/GoogleLogin'
 import { InviteLanding } from './screens/Invite'
 import { Home } from './screens/Home'
@@ -58,6 +58,7 @@ export function App() {
   const profile = useSession((s) => s.profile)
   const setProfile = useSession((s) => s.setProfile)
   const signOut = useSession((s) => s.clear)
+  const away = useSession((s) => s.away)
   const me = useMe()
   // A shared household device asks who is watching before it shows anything. No list (an older server,
   // or the server calls this a personal device) means no picker.
@@ -96,6 +97,8 @@ export function App() {
   // An invitation is answered before anything else, whoever is or is not signed in.
   if (invite !== undefined && !googleComplete) body = <InviteLanding token={invite} />
   else if (!profile || googleComplete) body = <LoginGate />
+  // Away from home without remote.access the server answers nothing else: say so in one place.
+  else if (away) body = <AwayFromHome name={profile.name} onSignOut={signOut} />
   // Nothing is offered before the server has said what this user may do.
   else if (current.isPending || me.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
   else if (current.error || me.error) body = (

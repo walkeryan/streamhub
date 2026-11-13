@@ -199,7 +199,8 @@ export const channelTile = (c: Channel): Tile => ({
   sources: [{ source_id: c.source_id, source_type: 'xtream', name: 'IPTV', playable_in_app: true, kind: 'live' }], now_playing: c.now,
 })
 
-export function homeRows(): { hero: Tile[]; rows: Row[] } {
+/** `chosen`: the home_shelves setting (Name, movies:Name, shows:Name). Empty: Home chooses, as below. */
+export function homeRows(chosen: string[] = []): { hero: Tile[]; rows: Row[] } {
   const all: Tile[] = titles.map((t) => ({ ...t, is_favorite: fav.has(t.id), progress_pct: progress[t.id] ? (progress[t.id]!.pos / progress[t.id]!.dur) * 100 : null }))
   const by = (ids: string[]) => ids.map((id) => all.find((t) => t.id === id)).filter((t): t is Tile => !!t)
   const favChannels = channels.filter((c) => fav.has(c.id)).map(withNowNext).map(channelTile)
@@ -213,7 +214,16 @@ export function homeRows(): { hero: Tile[]; rows: Row[] } {
   })
   const [newReleases, ...otherMovies] = movies
   const picked: Row[] = []
-  for (let i = 0; picked.length < 8 && (shows[i] || otherMovies[i]); i++) {
+  if (chosen.length) {
+    // The owner's list, in order, at most twelve; a name no shelf has is skipped.
+    for (const entry of chosen) {
+      const sided = /^(movies|shows):(.+)$/.exec(entry)
+      for (const section of sided ? [sided[1] as 'movies' | 'shows'] : (['movies', 'shows'] as const)) {
+        const shelf = (section === 'movies' ? movies : shows).find((s) => s.name === (sided ? sided[2] : entry))
+        if (shelf && picked.length < 12 && !(section === 'movies' && shelf === newReleases)) picked.push(shelfRow(section, shelf))
+      }
+    }
+  } else for (let i = 0; picked.length < 8 && (shows[i] || otherMovies[i]); i++) {
     if (shows[i]) picked.push(shelfRow('shows', shows[i]!))
     if (otherMovies[i] && picked.length < 8) picked.push(shelfRow('movies', otherMovies[i]!))
   }

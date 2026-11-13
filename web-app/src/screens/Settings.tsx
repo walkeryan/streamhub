@@ -1,8 +1,8 @@
 import { useAuthCapabilities } from '../api/contentPolicy'
 import { useCan, useMe } from '../api/me'
 import { absent } from '../api/client'
-import { people, useAbsent, usePeopleChange, useSessions, type AuthSession } from '../api/people'
-import { DeviceRow } from '../components/DeviceRow'
+import { people, usePeopleChange, useSessions, type AuthSession } from '../api/people'
+import { DEVICE_GONE, DeviceRow } from '../components/DeviceRow'
 import { deviceName } from '../lib/people'
 import { OwnerPinSettings } from '../components/OwnerPinSettings'
 import { ProfileSwitch } from '../components/ProfileSwitch'
@@ -10,6 +10,7 @@ import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
 import { StreamRecovery } from '../components/StreamRecovery'
 import { RequestManagerSettings } from '../components/RequestManagerSettings'
+import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -205,6 +206,8 @@ function LanguagesTab() {
 
 /* ------------------------------ home rows ------------------------------ */
 function RowsTab() {
+  // Which shelves Home has is the server's, for everyone; their order and visibility here is this browser's own.
+  const admin = useCan('settings.admin')
   const home = useHome()
   const prefs = useUi((s) => s.homePrefs)
   const setPrefs = useUi((s) => s.setHomePrefs)
@@ -220,8 +223,10 @@ function RowsTab() {
   }
   const hide = (id: string) => setPrefs({ ...prefs, hidden: prefs.hidden.includes(id) ? prefs.hidden.filter((h) => h !== id) : [...prefs.hidden, id] })
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="heading">Home rows</h2>
+    <div className="flex flex-col gap-8">
+    {admin && <HomeShelvesSettings />}
+    <section className="flex flex-col gap-3">
+      <h2 className="heading">{admin ? 'Home rows in this browser' : 'Home rows'}</h2>
       <p className="muted">Reorder or hide rows on Home. This is saved in this browser.</p>
       <FocusGroup focusKey="rows:list" className="flex flex-col gap-2">
         {rows.map((r) => (
@@ -235,6 +240,7 @@ function RowsTab() {
         {!home.data && <p className="muted">Loading rows…</p>}
       </FocusGroup>
       <div><Button focusKey="rows:reset" onEnter={() => setPrefs({ order: [], hidden: [] })}>Reset to default</Button></div>
+    </section>
     </div>
   )
 }
@@ -315,7 +321,6 @@ function DevicesTab() {
   const toast = useUi((s) => s.toast)
   const signOut = useSession((s) => s.clear)
   const qc = useQueryClient()
-  const markAbsent = useAbsent((a) => a.markSessionEdit)
   const [renaming, setRenaming] = useState<AuthSession | null>(null)
   const [label, setLabel] = useState('')
   const rename = usePeopleChange((v: { sid: string; label: string }) => people.patchSession(v.sid, { label: v.label }))
@@ -324,7 +329,7 @@ function DevicesTab() {
     if (!s || !label.trim()) return
     rename.mutate({ sid: s.sid, label: label.trim() }, {
       onSuccess: () => { toast('Device renamed.', 'success'); setRenaming(null) },
-      onError: (e) => { if (absent(e)) markAbsent(); toast(absent(e) ? 'This server cannot rename devices yet.' : e.message, 'error'); setRenaming(null) },
+      onError: (e) => { toast(absent(e) ? DEVICE_GONE : e.message, 'error'); setRenaming(null); if (absent(e)) void refetch() },
     })
   }
   if (error) return <ErrorState error={error} onRetry={() => void refetch()} />

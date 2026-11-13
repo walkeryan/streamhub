@@ -19,6 +19,7 @@ import { useUi } from '../store/ui'
 type Permission = components['schemas']['Permission']
 type Change = Parameters<typeof people.patch>[1]
 const HISTORY_SHOWN = 8
+const LIMIT_KEYS = ['max_streams', 'rating_ceiling_movie', 'rating_ceiling_tv', 'allow_unrated'] as const
 
 /**
  * One person: role, permissions, limits, PIN, devices, history, and the ways to stop them. Every
@@ -60,8 +61,9 @@ export function UserDetail() {
     if (!on && inherited.includes(p)) next.denials.push(p)
     apply(next)
   }
-  // The overrides are sent whole: the fields present are the ones that stay overridden.
-  const overrides = u.limit_overrides as Partial<Limits>
+  // The overrides are sent whole: the fields present are the ones that stay overridden (an empty object clears
+  // them all), and null in one lifts that limit for this person. Only the four fields the contract takes are sent.
+  const overrides: Partial<Limits> = Object.fromEntries(LIMIT_KEYS.filter((k) => k in u.limit_overrides).map((k) => [k, u.limit_overrides[k]]))
   const resetLimit = (key: keyof Limits) => apply({ limits: Object.fromEntries(Object.entries(overrides).filter(([k]) => k !== key)) })
   const sharedOverridden = u.on_shared_devices_override !== null && u.on_shared_devices_override !== undefined
 
@@ -169,9 +171,12 @@ export function UserDetail() {
 
 function HistoryRow({ entry: h }: { entry: Detail['history'][number] }) {
   const go = useGo()
-  const title = useTitle(h.ref_id)
+  // The contract's history rows carry an id, not a title. A row that does bring one is taken at its word;
+  // otherwise the title is looked up as this viewer may see it.
+  const given = 'title' in h && typeof h.title === 'string' && h.title ? h.title : null
+  const title = useTitle(given ? undefined : h.ref_id)
   const done = h.completed ? 'Finished' : h.duration_ms ? `${Math.round((h.position_ms / h.duration_ms) * 100)}% watched` : null
-  const name = title.data?.title ?? h.ref_id
+  const name = given ?? title.data?.title ?? h.ref_id
   return (
     <Focusable focusKey={`ud:history:${h.ref_id}`} className="person-row person-link history-row fx-flat" role="link" label={`${name}, ${ago(h.updated_at)}`} data-testid="history-row"
       onEnter={() => go(`/title/${encodeURIComponent(h.ref_id)}`)}>

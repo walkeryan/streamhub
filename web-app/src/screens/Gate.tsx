@@ -75,6 +75,30 @@ export function DisclaimerGate({ onAccepted, onExit, overlay }: { onAccepted: ()
   )
 }
 
+/* ------------------------------ away from home ------------------------------ */
+/**
+ * A user without remote.access, away from the home network: the server answers nothing but /auth/me,
+ * so this stands in for the whole app. Try again asks once more (the device may be home by now).
+ */
+export function AwayFromHome({ name, onSignOut }: { name: string; onSignOut: () => void }) {
+  const setAway = useSession((s) => s.setAway)
+  const qc = useQueryClient()
+  useEffect(() => { const id = window.setTimeout(() => void setFocus('away:retry'), 50); return () => window.clearTimeout(id) }, [])
+  return (
+    <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="away-from-home">
+      <FocusGroup focusKey="away" boundary className="flex flex-col gap-5" style={{ width: 'min(38rem, 100%)' }}>
+        <h1 className="display">Only on the home network</h1>
+        <p role="alert">This account can only be used on the home network, and this device is somewhere else.</p>
+        <p className="muted">Signed in as {name}. Connect to the home network and try again, or ask the person who runs this StreamHub to let you watch away from home.</p>
+        <div className="flex gap-3 flex-wrap">
+          <Button focusKey="away:retry" primary icon="refresh" onEnter={() => { setAway(false); void qc.invalidateQueries() }} testId="away-retry">Try again</Button>
+          <Button focusKey="away:out" onEnter={() => { onSignOut(); qc.clear() }}>Sign out</Button>
+        </div>
+      </FocusGroup>
+    </main>
+  )
+}
+
 /* ------------------------------ profile picker / login ------------------------------ */
 export function ProfilePicker() {
   const { data: profiles, error, refetch } = useProfiles()

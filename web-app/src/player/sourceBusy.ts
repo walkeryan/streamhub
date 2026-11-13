@@ -33,3 +33,22 @@ export function busyLines(busy: SourceBusy): string[] {
   if (busy.own) return busy.active.map((a) => `${a.title?.trim() || 'Another title'} is playing on another device`)
   return busy.active.map((a) => `${a.profile_name?.trim() || 'Someone'} is watching ${a.title?.trim() || 'something else'}`)
 }
+
+/** The 401 codes that are about the session a stream URL or a room seat was issued to. */
+export const SESSION_CODES: ReadonlySet<string> = new Set(['session_revoked', 'user_suspended', 'session_stale'])
+export const AWAY_FROM_HOME = 'This account can only be used on the home network. Connect to it, or ask the person who runs this StreamHub to allow watching away from home.'
+
+/**
+ * What one of our stream URLs said when it would not play. `busy`: the source or the viewer's own
+ * limit (409). `denied`: it will not play for this user here, and asking again changes nothing (403).
+ * `session`: the session the URL was issued to no longer stands (401), which the API has to confirm.
+ */
+export type StreamRefusal = { busy: SourceBusy } | { denied: string } | { session: true }
+export function streamRefusal(body: unknown): StreamRefusal | null {
+  const busy = parseSourceBusy(body)
+  if (busy) return { busy }
+  const { code, message } = (typeof body === 'object' && body !== null ? body : {}) as { code?: unknown; message?: unknown }
+  if (code === 'remote_access_denied') return { denied: AWAY_FROM_HOME }
+  if (code === 'content_restricted') return { denied: typeof message === 'string' && message ? message : 'This is no longer available to this account.' }
+  return typeof code === 'string' && SESSION_CODES.has(code) ? { session: true } : null
+}

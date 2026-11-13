@@ -1,6 +1,7 @@
-import { ApiError } from '../api/client'
+import { ApiError, sessionStands } from '../api/client'
 import { joinRoom, roomDescriptor } from '../api/hooks'
 import type { PlaybackDescriptor, Room, RoomJoined } from '../api/types'
+import { SESSION_CODES } from '../player/sourceBusy'
 import { prefersHls } from '../player/usePlayback'
 import { RoomClock } from './roomClock.ts'
 import { positionAt } from './roomSync.ts'
@@ -117,6 +118,8 @@ export class RoomSession {
         // Without the seat there is nothing to play: the room ends here, with Rejoin where that can help.
         const lost = e instanceof ApiError ? SEAT_LOST[e.code ?? ''] : undefined
         if (lost) this.socket.end(lost)
+        // The call carries no bearer token, so nothing has looked at what this says about the session the seat was taken with.
+        else if (e instanceof ApiError && SESSION_CODES.has(e.code ?? '')) void sessionStands()
         throw e
       } finally { this.refreshing = null }
     })()

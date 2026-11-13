@@ -32,6 +32,8 @@ interface Db {
   invites: Array<Omit<S['Invite'], 'state'> & { token: string; revoked: boolean }>; audit: S['AuditEntry'][]
   /** Profiles whose token predates a change to their access: their next call answers 401 session_stale. */
   stale: string[]
+  /** Profiles whose session on this device was signed out elsewhere: every call, and the refresh, answers 401 session_revoked. */
+  revoked?: string[]
   fails: Record<string, { count: number; until: number }>
   adult: Record<string, number>
   /** This browser stands in for one device; these are its auth_session's own fields. */
@@ -110,7 +112,7 @@ function load(): Db {
   return db
 }
 const save = (db: Db) => localStorage.setItem(KEY, JSON.stringify(db))
-/** Stand-ins for a server that lacks these calls: `legacy` has no users at all, `no-switch` lacks the three newest. */
+/** Stand-ins for a server that lacks these calls: `legacy` has no users at all, `no-switch` lacks the two that hand a shared device over. */
 const mode = () => localStorage.getItem('mock.people.mode')
 
 const error = (status: number, code: string, message: string, more: Record<string, unknown> = {}, headers?: Record<string, string>) =>
@@ -244,6 +246,7 @@ export const peopleHandlers = [
     const me = callerOf(db, request)
     if (!me) return undefined
     if (me.status === 'suspended') return error(401, 'user_suspended', 'This account is suspended')
+    if (me.profile_id && db.revoked?.includes(me.profile_id)) return error(401, 'session_revoked', 'Session revoked; sign in again')
     if (me.profile_id && db.stale.includes(me.profile_id)) return error(401, 'session_stale', 'Session is out of date; refresh it')
     return undefined
   }),
@@ -253,6 +256,7 @@ export const peopleHandlers = [
     const user = db.users.find((u) => `mock-refresh-${u.profile_id}` === refresh)
     if (!user || mode() === 'legacy') return undefined
     if (user.status !== 'active') return error(401, 'user_suspended', 'This account is suspended')
+    if (user.profile_id && db.revoked?.includes(user.profile_id)) return error(401, 'session_revoked', 'Session revoked; sign in again')
     db.stale = db.stale.filter((id) => id !== user.profile_id)
     save(db)
     return HttpResponse.json(tokensFor(profileOf(db, user.profile_id)!))
@@ -315,7 +319,6 @@ export const peopleHandlers = [
     return none()
   })),
   http.patch(`${B}/auth/sessions/:sid`, as(null, ({ db, me, params, body }) => {
-    if (mode() === 'no-switch') return gone()
     const session = params.sid === 'local' ? null : db.sessions.find((s) => s.sid === params.sid)
     const manages = permissionsOf(db, me).includes('users.manage')
     if (params.sid !== 'local' && (!session || (session.user_id !== me.id && !manages))) return gone()
@@ -342,7 +345,8 @@ export const peopleHandlers = [
     const to = switchable(db).find((u) => u.id === body.user_id)
     if (!to) return gone()
     const fails = db.fails[to.id] ?? { count: 0, until: 0 }
-    const locked = () => error(429, 'too_many_attempts', 'Too many wrong PINs. Try again later.', {}, { 'Retry-After': String(Math.max(1, Math.ceil((fails.until - Date.now()) / 1000))) })
+    // Retry-After is whole seconds, as on every 429.
+    const locked = () => error(429, 'rate_limited', 'Too many wrong PINs. Try again later.', {}, { 'Retry-After': String(Math.max(1, Math.ceil((fails.until - Date.now()) / 1000))) })
     if (fails.until > Date.now()) return locked()
     if (to.pin) {
       if (!body.pin) return error(401, 'pin_required', 'Enter the PIN for this user')
@@ -358,7 +362,7 @@ export const peopleHandlers = [
     delete db.fails[to.id]
     to.last_seen_at = ago(0)
     save(db)
-    return HttpResponse.json({ ...tokensFor(profileOf(db, to.profile_id)!), user: out(db, to) })
+    return HttpResponse.json({ ...tokensFor(profileOf(db, to.profile_id)!), user: { ...out(db, to), current: true } } satisfies S['Switched'])
   }),
   http.post(`${B}/auth/adult-unlock`, as('watch.adult', ({ db, me, body }) => {
     if (!me.pin) return error(409, 'pin_setup_required', 'Set a PIN before opening the adult category')

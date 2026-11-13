@@ -260,6 +260,95 @@ test('Home is composed from shelves: New Releases, shelves with See all, Recentl
   await expect(page).toHaveURL(/\/live$/)
 })
 
+test('Settings, Home rows: the owner chooses the shelves on Home and their order; an unknown name is flagged; Automatic resets', async ({ page, browser }) => {
+  const shelfRows = () => page.getByTestId('row').evaluateAll((all) => all.map((row) => row.getAttribute('data-row')).filter((id) => id?.startsWith('shelf:')))
+  await enter(page, '/', 'owner')
+  await expect(page.getByTestId('row').first()).toBeVisible()
+  const automatic = await shelfRows()
+  // What the app last saved to the settings, read before the fake server answers.
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      if (request.method === 'PATCH' && new URL(request.url).pathname === '/api/v1/settings') (window as unknown as { saved: unknown }).saved = await request.clone().json()
+      return original(request)
+    }
+  })
+  const saved = () => page.evaluate(() => (window as unknown as { saved?: unknown }).saved)
+
+  await page.goto('/settings?tab=rows')
+  const section = page.getByTestId('home-shelves')
+  const entries = section.getByTestId('home-shelf')
+  await expect(section.getByTestId('home-shelves-auto')).toContainText('Automatic. Home chooses its shelves.')
+  await expect(page.getByTestId('home-shelves-reset')).toHaveAttribute('aria-disabled', 'true')
+  // New Releases always leads Home, so it is not on offer. A shelf one side has goes in by name; one both have, per side.
+  await expect(section.getByRole('button', { name: 'Add New Releases from Movies', exact: true })).toHaveCount(0)
+  await section.getByRole('button', { name: 'Add Thriller from Movies', exact: true }).click()
+  await expect(entries).toHaveCount(1)
+  await section.getByRole('button', { name: 'Add Comedy from Shows', exact: true }).click()
+  await expect(entries).toHaveCount(2)
+  await expect(section.getByRole('button', { name: 'Add Comedy from Shows', exact: true })).toHaveCount(0)
+  await expect(section.getByRole('button', { name: 'Add Comedy from Movies', exact: true })).toBeVisible()
+  // A name typed by hand that no source has (yet).
+  await page.getByLabel('Shelf name', { exact: true }).fill(' Westerns ')
+  await page.keyboard.press('Enter')
+  await expect(entries).toHaveCount(3)
+  await expect(entries.nth(0)).toContainText('1. Thriller')
+  await expect(entries.nth(0)).toContainText('Movies')
+  await expect(entries.nth(1)).toContainText('2. Comedy')
+  await expect(entries.nth(1)).toContainText('Shows only')
+  await expect(entries.nth(2)).toContainText('3. Westerns')
+  await expect(entries.nth(2).getByTestId('home-shelf-unknown')).toContainText('No such shelf')
+  await expect(section.getByTestId('home-shelf-unknown')).toHaveCount(1)
+
+  // Reordering by remote: the focused arrow goes with its shelf, so it can be pressed again.
+  await section.getByRole('button', { name: 'Move Westerns up', exact: true }).click()
+  await expect(entries.nth(1)).toContainText('2. Westerns')
+  await expect(section.getByRole('button', { name: 'Move Westerns up', exact: true })).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Enter')
+  await expect(entries.nth(0)).toContainText('1. Westerns')
+  await expect(entries.nth(0).getByTestId('home-shelf-unknown')).toBeVisible()
+  await expect.poll(saved).toEqual({ home_shelves: ['Westerns', 'Thriller', 'shows:Comedy'] })
+
+  // Home shows New Releases, then the list in its order; the unknown name is skipped.
+  await page.getByTestId('nav-home').click()
+  await expect(page.getByTestId('row').first()).toBeVisible()
+  await expect.poll(shelfRows).toEqual(['shelf:movies:New Releases', 'shelf:movies:Thriller', 'shelf:shows:Comedy'])
+
+  // Automatic: asked first, then Home chooses again.
+  await page.goto('/settings?tab=rows')
+  await entries.nth(0).getByTestId('home-shelf-remove').click()
+  await expect(entries).toHaveCount(2)
+  await expect(section.getByTestId('home-shelf-unknown')).toHaveCount(0)
+  await page.getByTestId('home-shelves-reset').click()
+  await expect(page.getByTestId('home-shelves-reset-confirm')).toContainText('Your list of 2 shelves is cleared')
+  await expect(page.getByRole('button', { name: 'Keep my list', exact: true })).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Enter')
+  await expect(section.getByTestId('home-shelves-auto')).toBeVisible()
+  await expect.poll(saved).toEqual({ home_shelves: [] })
+  await page.getByTestId('nav-home').click()
+  await expect(page.getByTestId('row').first()).toBeVisible()
+  await expect.poll(shelfRows).toEqual(automatic)
+
+  // Someone without system.manage has only this browser's own row order.
+  const guest = await other(browser)
+  await enter(guest.page, '/settings?tab=rows')
+  await expect(guest.page.getByRole('heading', { name: 'Home rows', exact: true })).toBeVisible()
+  await expect(guest.page.getByTestId('home-shelves')).toHaveCount(0)
+  await guest.context.close()
+
+  // On a phone the list and its three buttons fit.
+  const phone = await other(browser, PHONE)
+  await enter(phone.page, '/settings?tab=rows', 'owner')
+  await phone.page.getByRole('button', { name: 'Add Documentaries from Shows', exact: true }).tap()
+  await expect(phone.page.getByTestId('home-shelf')).toHaveCount(1)
+  expect(await fits(phone.page)).toBe(true)
+  const row = (await phone.page.getByTestId('home-shelf').boundingBox())!
+  expect(row.x + row.width).toBeLessThanOrEqual(390)
+  await phone.context.close()
+})
+
 test('More offers only what the profile may use, and closes back onto its opener', async ({ page, browser }) => {
   await enter(page)
   await page.getByTestId('nav-more').click()

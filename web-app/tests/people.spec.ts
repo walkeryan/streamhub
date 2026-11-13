@@ -84,12 +84,95 @@ test.describe('refusals read the same everywhere', () => {
     await expect(page.getByRole('alert')).toContainText("You don't have permission to do this")
   })
 
-  test('an account that only works at home can still sign out', async ({ page }) => {
-    await refuse(page, '/api/v1/auth/me', 403, { code: 'remote_access_denied', message: 'remote access is not allowed for this user' })
+  test('away from home without remote.access: one explanation instead of the app, with Try again and Sign out', async ({ page }) => {
+    // The server answers /auth/me and nothing else that needs a session.
+    await page.addInitScript(() => {
+      const original = window.fetch.bind(window)
+      const w = window as unknown as { away?: boolean }
+      w.away = true
+      window.fetch = async (input, init) => {
+        const request = new Request(input, init)
+        const path = new URL(request.url).pathname
+        return w.away && request.headers.has('authorization') && path.startsWith('/api/v1/') && path !== '/api/v1/auth/me'
+          ? Response.json({ code: 'remote_access_denied', message: 'remote access is not allowed for this user' }, { status: 403 }) : original(request)
+      }
+    })
     await enter(page, '/', { who: 'guest' })
-    await expect(page.getByRole('alert')).toContainText('This account can only be used on the home network')
-    await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+    const gate = page.getByTestId('away-from-home')
+    await expect(gate.getByRole('alert')).toContainText('This account can only be used on the home network')
+    await expect(gate).toContainText('Signed in as Guest')
+    await expect(page.getByTestId('rail')).toHaveCount(0)
+    // Still away: asking again ends in the same place.
+    await expect(page.getByTestId('away-retry')).toHaveAttribute('data-focused', 'true')
+    await page.keyboard.press('Enter')
+    await expect(gate).toBeVisible()
+    // Back on the home network.
+    await page.evaluate(() => { (window as unknown as { away?: boolean }).away = false })
+    await page.getByTestId('away-retry').click()
+    await expect(page.getByTestId('home')).toBeVisible()
+    // Away again, and out.
+    await page.evaluate(() => { (window as unknown as { away?: boolean }).away = true })
+    await page.getByTestId('nav-live-tv').click()
+    await expect(gate).toBeVisible()
+    await gate.getByRole('button', { name: 'Sign out', exact: true }).click()
     await expect(page.getByTestId('profile-picker')).toBeVisible()
+  })
+
+  test('a device that was signed out elsewhere is told why, also when only the refresh says so', async ({ page, context }) => {
+    await enter(page, '/', { who: 'guest' })
+    await expect(page.getByTestId('home')).toBeVisible()
+    await page.evaluate(() => {
+      const db = JSON.parse(localStorage.getItem('mock.people.v1')!) as { revoked?: string[] }
+      db.revoked = ['p2']
+      localStorage.setItem('mock.people.v1', JSON.stringify(db))
+    })
+    await page.getByTestId('nav-live-tv').click()
+    await expect(page.getByTestId('signed-out-notice')).toHaveText('This device was signed out. Sign in again to keep watching.')
+    expect(await page.evaluate(() => localStorage.getItem('sh.session.v1'))).toBeNull()
+
+    // The access token had merely run out; it is the refresh that learns the session is gone.
+    const other = await second(context)
+    await refuse(other, '/api/v1/channels', 401, { code: 'token_expired', message: 'token expired' })
+    await refuse(other, '/api/v1/auth/refresh', 401, { code: 'session_revoked', message: 'session revoked' })
+    await enter(other, '/', { who: 'kids' })
+    await expect(other.getByTestId('home')).toBeVisible()
+    await other.getByTestId('nav-live-tv').click()
+    await expect(other.getByTestId('signed-out-notice')).toHaveText('This device was signed out. Sign in again to keep watching.')
+  })
+
+  /** Resolve answers with one of our own stream URLs, which the test then refuses; later resolves get the fixture clip. */
+  const ownStream = async (page: Page, status: number, body: unknown) => {
+    await page.addInitScript(() => {
+      const original = window.fetch.bind(window)
+      const w = window as unknown as { resolves: number }
+      w.resolves = 0
+      window.fetch = async (input, init) => {
+        const request = new Request(input, init)
+        if (new URL(request.url).pathname !== '/api/v1/playback/resolve') return original(request)
+        w.resolves++
+        return Response.json({ id: 'tmdb:movie:101', mode: 'proxy', url: w.resolves === 1 ? `${location.origin}/api/v1/stream/refused-token` : '/mock/sample.webm', mime: 'video/webm', live: false, title: 'Harbor Lights', resume_position_ms: 0, duration_ms: 30_000 })
+      }
+    })
+    await page.context().route('**/api/v1/stream/refused-token*', (route) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) }))
+  }
+
+  test('a stream refused away from home says so in the player and does not knock again', async ({ page }) => {
+    await ownStream(page, 403, { code: 'remote_access_denied', message: 'remote access is not allowed for this user' })
+    await enter(page, '/play/tmdb%3Amovie%3A101', { who: 'guest' })
+    await expect(page.getByTestId('player-error')).toContainText('This account can only be used on the home network')
+    await page.waitForTimeout(1500)
+    expect(await page.evaluate(() => (window as unknown as { resolves: number }).resolves)).toBe(1)
+  })
+
+  test('a stream whose session went stale has the session checked and is asked for again, once', async ({ page }) => {
+    await ownStream(page, 401, { code: 'session_stale', message: 'session is out of date' })
+    const asked: string[] = []
+    page.on('request', (r) => { if (r.url().endsWith('/api/v1/auth/me')) asked.push(r.url()) })
+    await enter(page, '/play/tmdb%3Amovie%3A101', { who: 'guest' })
+    await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+    expect(await page.evaluate(() => (window as unknown as { resolves: number }).resolves)).toBe(2)
+    // Once at the start of the app, once because the stream said the session no longer stood.
+    expect(asked.length).toBeGreaterThanOrEqual(2)
   })
 
   test('a stream limit names what is already playing, like a busy source', async ({ page }) => {
@@ -653,6 +736,43 @@ test.describe("who's watching", () => {
     await expect(page.getByTestId('home')).toBeVisible()
   })
 
+  test('choosing yourself checks your PIN with the switch call and keeps you where you were', async ({ page }) => {
+    const sent = await record(page)
+    await enter(page, '/', { who: 'kids', shared: true })
+    await card(page, 'Kids').click()
+    await page.keyboard.type('1234')
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('home')).toBeVisible()
+    await page.getByTestId('nav-search').click()
+    await expect(page.getByTestId('search')).toBeVisible()
+    await page.getByTestId('nav-profile').click()
+    await expect(card(page, 'Kids')).toContainText('Watching now')
+    await card(page, 'Kids').click()
+    // The server verifies the PIN of the person staying, like anyone else's.
+    await page.keyboard.type('0000')
+    await page.keyboard.press('Enter')
+    await expect(pin(page).getByTestId('pin-error')).toHaveText('That PIN is not right. Try again.')
+    await page.keyboard.type('1234')
+    await page.keyboard.press('Enter')
+    await expect(picker(page)).toHaveCount(0)
+    await expect(page).toHaveURL(/\/search(\?|$)/)
+    await expect(page.getByTestId('search')).toBeVisible()
+    expect((await sent('/auth/switch')).filter((s) => s[0] === 'POST').map((s) => s[2])).toEqual([{ user_id: 'u3', pin: '1234' }, { user_id: 'u3', pin: '0000' }, { user_id: 'u3', pin: '1234' }])
+  })
+
+  test('someone taken off shared devices since the picker opened can no longer be chosen, and leaves the list', async ({ page }) => {
+    await enter(page, '/', { who: 'guest', shared: true })
+    await expect(card(page, 'Priya')).toBeVisible()
+    expect(await asOwner(page, 'PATCH', '/users/u4', { on_shared_devices: false })).toBe(200)
+    await card(page, 'Priya').click()
+    await page.keyboard.type('4321')
+    await page.keyboard.press('Enter')
+    await expect(pin(page).getByTestId('pin-error')).toHaveText('Priya can no longer be chosen on this device.')
+    await pin(page).getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(card(page, 'Priya')).toHaveCount(0)
+    await expect(card(page, 'Guest')).toBeVisible()
+  })
+
   test('five wrong PINs lock the keypad and count the wait down', async ({ page }) => {
     await enter(page, '/', { who: 'guest', shared: true })
     await card(page, 'Priya').click()
@@ -780,15 +900,16 @@ test.describe('devices', () => {
     await expect(page.getByTestId('who-is-watching')).toHaveAttribute('data-mandatory', 'true')
   })
 
-  test('older servers: no rename or shared switch once the call answers 404, no Devices tab without users', async ({ page, context }) => {
-    await enter(page, '/settings?tab=devices', { who: 'owner', mode: 'no-switch' })
+  test('a device signed out since the list was read says so and leaves the list; no Devices tab without users', async ({ page, context }) => {
+    await enter(page, '/settings?tab=devices', { who: 'owner' })
+    await expect(page.getByTestId('device-row')).toHaveCount(3)
     await device(page, 'Living room TV').getByTestId('device-rename').click()
+    expect(await asOwner(page, 'DELETE', '/auth/sessions/tv-den')).toBe(204)
     await page.getByLabel('Device name', { exact: true }).fill('Den TV')
     await page.getByTestId('device-rename-save').click()
-    await expect(page.locator('.toast').last()).toHaveText('This server cannot rename devices yet.')
-    await expect(page.getByTestId('device-rename')).toHaveCount(0)
-    await expect(page.getByTestId('device-shared')).toHaveCount(0)
-    await expect(page.getByTestId('device-revoke')).toHaveCount(3)
+    await expect(page.locator('.toast').last()).toHaveText('That device is no longer signed in.')
+    await expect(page.getByTestId('device-row')).toHaveCount(2)
+    await expect(page.getByTestId('device-rename')).toHaveCount(2)
 
     const legacy = await second(context)
     await enter(legacy, '/settings', { who: 'owner', mode: 'legacy' })

@@ -5,11 +5,21 @@ import { useSession } from '../store/session'
 
 export type ContentPolicy = components['schemas']['ContentPolicy']
 export type ContentPolicyInput = components['schemas']['ContentPolicyInput']
-export interface AuthCapabilities { google_enabled: boolean; google_required: boolean; content_policy_enabled?: boolean; owner_pin_configured?: boolean; owner_pin_setup_required?: boolean }
+export interface AuthCapabilities {
+  google_enabled: boolean; google_required: boolean; content_policy_enabled?: boolean; owner_pin_configured?: boolean; owner_pin_setup_required?: boolean
+  /** Whether a new Google account waits for approval or needs an invite. */
+  signup_mode?: 'approval' | 'invite_only'
+}
+/**
+ * What the sign-in screen has to know before anyone is signed in. GET /auth/config is the server's one
+ * unauthenticated answer to that; contracts/openapi.yaml does not describe it, so its shape is kept here
+ * and every field beyond the two Google flags is optional. (The contract's own signup_mode is on
+ * GET /settings, which needs a session.)
+ */
 export function useAuthCapabilities() {
   return useQuery({ queryKey: ['auth-config'], queryFn: async ({ signal }) => {
     const r = await fetch('/api/v1/auth/config', { signal })
-    if (!r.ok) throw new Error('Cannot load sign-in capabilities.')
+    if (!r.ok) throw new Error('Cannot load sign-in settings. Please retry.')
     return await r.json() as AuthCapabilities
   } })
 }

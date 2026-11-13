@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { create } from 'zustand'
-import { absent, api, call, ok, refreshMe, unwrap } from './client'
+import { ApiError, absent, api, ok, refreshMe, unwrap } from './client'
 import type { components } from './schema'
 import { useSession } from '../store/session'
 
@@ -16,8 +15,8 @@ export type AuditEntry = S['AuditEntry']
 export type AuthSession = S['AuthSession']
 export type LimitsInput = S['LimitsInput']
 /** One user on a shared device's "Who's watching?" picker. */
-export interface Switchable { id: string; display_name: string; avatar: string | null; picture: string | null; role_name: string | null; has_pin: boolean; current: boolean }
-export type Switched = S['AuthTokens'] & { user?: User }
+export type Switchable = S['SwitchableUser']
+export type Switched = S['Switched']
 
 const useScope = () => useSession((s) => s.profile?.id ?? null)
 const path = (id: string) => ({ params: { path: { id } } })
@@ -34,21 +33,29 @@ export const useAudit = (userId: string | undefined) =>
 export const useSessions = () => useQuery({ queryKey: ['sessions', useScope()], staleTime: 0, queryFn: () => unwrap<AuthSession[]>(api.GET('/auth/sessions')) })
 /**
  * Who this shared device can switch to. `null`: there is no picker to show, because the server has
- * no such call yet (404) or says this is a personal device (403 not_shared_device).
+ * no such call (404, a server from before users) or says this is a personal device (403 not_shared_device).
  */
 export const useSwitchable = (enabled: boolean) =>
   useQuery({
     queryKey: ['switchable', useScope()], enabled, staleTime: 30_000, retry: false,
     queryFn: async ({ signal }): Promise<Switchable[] | null> => {
-      try { return (await call<{ users: Switchable[] }>('GET', '/auth/switchable', undefined, signal)).users } catch (e) {
+      try { return (await unwrap<{ users: Switchable[] }>(api.GET('/auth/switchable', { signal }))).users } catch (e) {
         if (absent(e) || (e as { code?: string }).code === 'not_shared_device') return null
         throw e
       }
     },
   })
 
-/** Every call that changes people, roles, invites or devices. The contract types the bodies it knows;
- *  `plex_account_linked`, a session's `shared_device`/`label` and the switch are newer than it. */
+/** POST /auth/switch. A switch that collided with another change to the session (409 switch_conflict) is asked once more. */
+async function switchTo(user_id: string, pin?: string): Promise<Switched> {
+  const ask = () => unwrap<Switched>(api.POST('/auth/switch', { body: pin === undefined ? { user_id } : { user_id, pin } }))
+  try { return await ask() } catch (e) {
+    if (e instanceof ApiError && e.code === 'switch_conflict') return ask()
+    throw e
+  }
+}
+
+/** Every call that changes people, roles, invites or devices. */
 export const people = {
   create: (body: { name: string; avatar?: string | null; role_id?: string; pin?: string | null }) => unwrap<User>(api.POST('/users', { body })),
   patch: (id: string, body: { name?: string; avatar?: string | null; role_id?: string; grants?: S['Permission'][]; denials?: S['Permission'][]; limits?: LimitsInput; on_shared_devices?: boolean | null; plex_account_linked?: boolean }) =>
@@ -65,14 +72,11 @@ export const people = {
   invite: (body: { role_id: string; expires_in_hours: number; max_uses: number }) => unwrap<InviteCreated>(api.POST('/invites', { body })),
   revokeInvite: (id: string) => ok(api.DELETE('/invites/{id}', path(id))),
   revokeSession: (sid: string) => ok(api.DELETE('/auth/sessions/{sid}', { params: { path: { sid } } })),
-  patchSession: (sid: string, body: { shared_device?: boolean; label?: string }) => call<unknown>('PATCH', `/auth/sessions/${encodeURIComponent(sid)}`, body),
-  switchTo: (user_id: string, pin?: string) => call<Switched>('POST', '/auth/switch', pin === undefined ? { user_id } : { user_id, pin }),
+  patchSession: (sid: string, body: { shared_device?: boolean; label?: string }) => unwrap<AuthSession>(api.PATCH('/auth/sessions/{sid}', { params: { path: { sid } }, body })),
+  switchTo,
   adultUnlock: (pin: string) => unwrap<{ adult_unlocked_until: string }>(api.POST('/auth/adult-unlock', { body: { pin } })),
   adultLock: () => ok(api.POST('/auth/adult-lock')),
 }
-
-/** Calls an older server turned out not to have (404), remembered so their controls stay hidden. */
-export const useAbsent = create<{ sessionEdit: boolean; markSessionEdit: () => void }>((set) => ({ sessionEdit: false, markSessionEdit: () => set({ sessionEdit: true }) }))
 
 const TOUCHED = [['users'], ['roles'], ['invites'], ['audit'], ['sessions'], ['switchable']] as const
 /** Runs one of the calls above, then re-reads everything it can have changed, the caller's own access included. */
