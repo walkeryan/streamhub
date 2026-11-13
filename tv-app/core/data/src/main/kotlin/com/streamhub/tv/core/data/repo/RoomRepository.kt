@@ -88,6 +88,18 @@ class RoomRepository internal constructor(
     }
 
     /**
+     * Takes up a seat the web app joined (the shell hands over the room's code and the seat's member
+     * token): the room keeps that seat and answers with this TV's own descriptor (`client=android_tv`).
+     * Returns the player key it is parked under, as [join] does.
+     */
+    suspend fun joinHeld(code: String, memberToken: String, allowUnverifiedAudio: Boolean): String {
+        val seat = seatIn(code, allowUnverifiedAudio, memberToken)
+        val key = coordinator.put(seat.descriptor)
+        seats[key] = seat
+        return key
+    }
+
+    /**
      * Joins again for a player that is already open, with the member token of the seat it holds: the
      * room keeps that seat (and hands out a fresh token) while it still honours the old one, and
      * gives a new seat otherwise. Either way the descriptor is the room's stream as it is now.

@@ -5,6 +5,7 @@ import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -18,7 +19,10 @@ enum class AspectMode(val label: String, val resizeMode: Int) {
     fun next(): AspectMode = entries[(ordinal + 1) % entries.size]
 }
 
-/** PlayerView with built-in controller disabled (our Compose overlays handle D-pad). Not focusable. */
+/**
+ * PlayerView with built-in controller disabled (our Compose overlays handle D-pad). Not focusable.
+ * It keeps the screen awake while the picture plays and lets it sleep when paused or stopped.
+ */
 @OptIn(UnstableApi::class)
 @Composable
 fun VideoSurface(player: StreamHubPlayer, modifier: Modifier = Modifier, aspect: AspectMode = AspectMode.FIT) {
@@ -30,16 +34,25 @@ fun VideoSurface(player: StreamHubPlayer, modifier: Modifier = Modifier, aspect:
                 useController = false
                 isFocusable = false
                 isFocusableInTouchMode = false
-                keepScreenOn = true
+                keepScreenOn = player.exoPlayer.isPlaying
                 setKeepContentOnPlayerReset(true)
                 setShutterBackgroundColor(android.graphics.Color.BLACK)
                 this.player = player.exoPlayer
+                val awake = object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) { keepScreenOn = isPlaying }
+                }
+                player.exoPlayer.addListener(awake)
+                tag = awake
             }
         },
         update = {
             it.player = player.exoPlayer
             it.resizeMode = aspect.resizeMode
         },
-        onRelease = { it.player = null },
+        onRelease = {
+            (it.tag as? Player.Listener)?.let(player.exoPlayer::removeListener)
+            it.keepScreenOn = false
+            it.player = null
+        },
     )
 }
