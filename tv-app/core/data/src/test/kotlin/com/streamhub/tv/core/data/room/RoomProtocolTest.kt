@@ -3,6 +3,7 @@ package com.streamhub.tv.core.data.room
 import android.view.KeyEvent
 import com.streamhub.tv.core.data.api.StreamHubJson
 import com.streamhub.tv.core.data.model.Room
+import com.streamhub.tv.core.data.model.RoomJoinRequest
 import com.streamhub.tv.core.data.model.RoomJoined
 import com.streamhub.tv.core.data.model.RoomMember
 import org.junit.Assert.assertEquals
@@ -43,6 +44,40 @@ class RoomProtocolTest {
         assertTrue(m.clock.live)
         assertNull(m.by)
         assertFalse(m.controlsLocked)
+    }
+
+    @Test fun aSharedStreamRoomsStateCarriesItsEpochAndTimeZero() {
+        val m = RoomProtocol.decode("""{"type":"state","playing":true,"position_ms":3602000,"as_of_ms":99000,"by":"m1","controls_locked":false,"stream_epoch":2,"stream_start_ms":3600000}""") as RoomMessage.State
+        assertEquals(RoomStream(2, 3_600_000), m.stream)
+        assertEquals(3_602_000L, m.clock.positionMs)
+        // Other rooms send neither field.
+        val own = RoomProtocol.decode("""{"type":"state","playing":true,"position_ms":3602000,"as_of_ms":99000,"by":"m1","controls_locked":false}""") as RoomMessage.State
+        assertNull(own.stream)
+        // Half of the pair positions nothing, and a null epoch is no epoch.
+        for (half in listOf(""""stream_epoch":2""", """"stream_start_ms":5000""", """"stream_epoch":null,"stream_start_ms":5000""")) {
+            assertNull(half, (RoomProtocol.decode("""{"type":"state","playing":false,"position_ms":0,"as_of_ms":1,$half}""") as RoomMessage.State).stream)
+        }
+        // What the tests' own encoder writes reads back the same.
+        val clock = RoomClock(false, 600_000, 5)
+        assertEquals(RoomMessage.State(clock, null, false, RoomStream(7, 600_000)), RoomProtocol.decode(RoomProtocol.stateJson(clock, stream = RoomStream(7, 600_000)).toString()))
+    }
+
+    @Test fun onlyALostSeatOrConnectionIsJoinedAgain() {
+        for (reason in listOf("silent", "slow", "unauthorized", "not_a_member", ROOM_CONNECTION_LOST)) assertTrue(reason, roomSeatRecoverable(reason))
+        // The room is over, or another connection took this seat on purpose.
+        for (reason in listOf("deleted", "expired", "shutdown", "not_found", "replaced", "closed", "something_new", null)) assertFalse("$reason", roomSeatRecoverable(reason))
+        // The descriptor call's refusals a join with the member token can mend.
+        assertTrue(roomSeatLost("room_unauthorized"))
+        assertTrue(roomSeatLost("not_a_member"))
+        for (code in listOf("room_not_found", "session_revoked", "user_suspended", "content_restricted", "user_stream_limit", null)) assertFalse("$code", roomSeatLost(code))
+    }
+
+    @Test fun aRejoinNamesTheSeatItHoldsAndAFirstJoinDoesNot() {
+        val first = StreamHubJson.encodeToString(RoomJoinRequest.serializer(), RoomJoinRequest())
+        assertEquals("""{"client":"android_tv","allow_unverified_audio":false}""", first)
+        val again = RoomJoinRequest(allowUnverifiedAudio = true, memberToken = "seat-token")
+        assertEquals("""{"client":"android_tv","allow_unverified_audio":true,"member_token":"seat-token"}""", StreamHubJson.encodeToString(RoomJoinRequest.serializer(), again))
+        assertFalse(again.toString().contains("seat-token"))
     }
 
     @Test fun whatIsNotUnderstoodIsIgnored() {

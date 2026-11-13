@@ -16,8 +16,11 @@ import kotlinx.serialization.json.put
 /** A message from the room's WebSocket. */
 sealed interface RoomMessage {
     data class Pong(val t: Long, val serverMs: Long) : RoomMessage
-    /** The room clock. [by] is the member who caused it, or null when the room did. */
-    data class State(val clock: RoomClock, val by: String?, val controlsLocked: Boolean) : RoomMessage
+    /**
+     * The room clock. [by] is the member who caused it, or null when the room did. [stream] is set
+     * only in a room that plays one shared stream: which start of it the room is on now.
+     */
+    data class State(val clock: RoomClock, val by: String?, val controlsLocked: Boolean, val stream: RoomStream? = null) : RoomMessage
     data class Members(val members: List<RoomMember>) : RoomMessage
     /** The room is paused for this member while they buffer. */
     data class Waiting(val name: String) : RoomMessage
@@ -53,6 +56,8 @@ object RoomProtocol {
                 RoomClock(bool("playing") ?: false, long("position_ms"), long("as_of_ms") ?: return RoomMessage.Unknown),
                 by = string("by"),
                 controlsLocked = bool("controls_locked") ?: false,
+                // Both or neither: an epoch without its time zero cannot position anything.
+                stream = long("stream_epoch")?.let { epoch -> long("stream_start_ms")?.let { start -> RoomStream(epoch.toInt(), start.coerceAtLeast(0)) } },
             )
             "members" -> RoomMessage.Members(
                 runCatching { StreamHubJson.decodeFromJsonElement(ListSerializer(RoomMember.serializer()), o["members"] ?: return RoomMessage.Unknown) }
@@ -66,9 +71,10 @@ object RoomProtocol {
     }
 
     /** `position_ms` of a state as a JSON object, for tests and logs. */
-    internal fun stateJson(clock: RoomClock, controlsLocked: Boolean = false): JsonObject = buildJsonObject {
+    internal fun stateJson(clock: RoomClock, controlsLocked: Boolean = false, stream: RoomStream? = null): JsonObject = buildJsonObject {
         put("type", "state"); put("playing", clock.playing); put("position_ms", clock.positionMs); put("as_of_ms", clock.asOfMs)
         put("by", null as String?); put("controls_locked", controlsLocked)
+        if (stream != null) { put("stream_epoch", stream.epoch); put("stream_start_ms", stream.startMs) }
     }
 }
 
@@ -89,6 +95,20 @@ fun roomClosedMessage(reason: String?): UserError = when (reason) {
     ROOM_CONNECTION_LOST -> UserError("Lost the room", "This TV couldn't reach the room for too long. Check the network, then join again with the room's code.", canRetry = false)
     else -> UserError("The room has ended", "This watch room was closed.", canRetry = false)
 }
+
+/**
+ * Whether a closed room connection is worth one more join with the stored member token: the room is
+ * still there as far as this TV knows, and only its seat or its connection went (20 s of silence, a
+ * member token past its two hours, a connection that could not keep up or was out of reach).
+ * Not when the room itself is over, nor when another connection took this seat over on purpose.
+ */
+fun roomSeatRecoverable(reason: String?): Boolean = reason in setOf("silent", "slow", "unauthorized", "not_a_member", ROOM_CONNECTION_LOST)
+
+/**
+ * A refusal of GET /rooms/{code}/descriptor that a join with the member token can mend: the token
+ * is past its two hours (401 `room_unauthorized`) or the room dropped the seat (404 `not_a_member`).
+ */
+fun roomSeatLost(code: String?): Boolean = code == "room_unauthorized" || code == "not_a_member"
 
 /** Text for a command the room refused (`error {code}`); null for refusals the viewer cannot act on. */
 fun roomRefusalText(code: String): String? = when (code) {

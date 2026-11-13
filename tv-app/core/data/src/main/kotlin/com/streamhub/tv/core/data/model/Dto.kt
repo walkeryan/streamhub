@@ -414,6 +414,17 @@ data class PlaybackDescriptor(
     @SerialName("buffer_available") val bufferAvailable: Boolean = false,
     @SerialName("preferred_audio_languages") val preferredAudioLanguages: List<String> = emptyList(),
     @SerialName("audio_language_required") val audioLanguageRequired: Boolean = false,
+    /**
+     * Set for a stream that starts part-way into its title: media time zero of the stream is this
+     * position in the title, and [durationMs] is the title's full length. On this TV that is a watch
+     * room's one shared stream (see [streamEpoch]).
+     */
+    @SerialName("start_position_ms") val startPositionMs: Long? = null,
+    /**
+     * Room descriptors only, and only when the room plays one shared stream: which start of that
+     * stream [startPositionMs] describes. Null for every other descriptor.
+     */
+    @SerialName("stream_epoch") val streamEpoch: Int? = null,
 )
 
 @Serializable

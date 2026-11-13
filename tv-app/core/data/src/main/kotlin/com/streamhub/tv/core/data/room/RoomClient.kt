@@ -31,6 +31,8 @@ data class RoomUiState(
     val closedReason: String? = null,
     /** The room clock; null until the first `state` message. */
     val clock: RoomClock? = null,
+    /** The shared stream the last `state` named; null in a room without one (and until the first `state`). */
+    val stream: RoomStream? = null,
 )
 
 /** One open room WebSocket, reduced to what [RoomClient] needs so tests can stand in for the network. */
@@ -78,6 +80,14 @@ class RoomClient(
 
     @Volatile private var socket: RoomSocket? = null
     @Volatile private var lastHeardMs = 0L
+    @Volatile private var keepSeat = false
+
+    /**
+     * From now on cancelling [run] drops the connection without a close frame, so the room keeps this
+     * seat (for 20 s) instead of giving it up at once. Called before joining again with the member
+     * token, which is how the same seat is taken up by a new connection.
+     */
+    fun keepSeatOnExit() { keepSeat = true }
 
     suspend fun run() {
         var attempt = 0
@@ -126,7 +136,7 @@ class RoomClient(
                         when (val m = RoomProtocol.decode(text)) {
                             is RoomMessage.Pong -> clock.onPong(m.t, nowMs(), m.serverMs)
                             // Any state clears a waiting notice.
-                            is RoomMessage.State -> _state.update { it.copy(clock = m.clock, controlsLocked = m.controlsLocked, waitingFor = null) }
+                            is RoomMessage.State -> _state.update { it.copy(clock = m.clock, stream = m.stream, controlsLocked = m.controlsLocked, waitingFor = null) }
                             is RoomMessage.Members -> _state.update { st ->
                                 st.copy(members = m.members, isHost = m.members.firstOrNull { it.id == memberId }?.host ?: st.isHost)
                             }
@@ -143,8 +153,12 @@ class RoomClient(
             graceful = true
         } finally {
             socket = null
-            // Cancelled from outside (the viewer left, or the screen closed): give the seat back at once.
-            if (!graceful) withContext(NonCancellable) { withTimeoutOrNull(CLOSE_WAIT_MS) { runCatching { s.close(CLOSE_NORMAL) } }; s.abort() }
+            // Cancelled from outside. The viewer left or the screen closed: give the seat back at once.
+            // About to join again with the member token: no close frame, so the seat is still there to keep.
+            if (!graceful) withContext(NonCancellable) {
+                if (!keepSeat) withTimeoutOrNull(CLOSE_WAIT_MS) { runCatching { s.close(CLOSE_NORMAL) } }
+                s.abort()
+            }
         }
         closed?.let { return it }
         return when (withTimeoutOrNull(CLOSE_WAIT_MS) { runCatching { s.closeCode() }.getOrNull() }) {

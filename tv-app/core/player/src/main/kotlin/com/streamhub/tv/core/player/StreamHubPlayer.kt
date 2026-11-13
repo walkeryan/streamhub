@@ -204,7 +204,12 @@ class StreamHubPlayer(
         }
     }
 
-    /** Start playing a descriptor (replaces whatever was playing). */
+    /**
+     * Start playing a descriptor (replaces whatever was playing). [startPositionMs] is a position of
+     * the stream: for a room's shared stream that is the title position minus the stream's time zero
+     * (RoomSync.playerPosition), and it is honoured exactly, 0 included. [PlayerUiState.positionMs]
+     * and [seekTo] are on the same stream timeline; progress is reported in title time.
+     */
     fun play(d: PlaybackDescriptor, owner:Session?=null, startPositionMs: Long = d.resumePositionMs) {
         reportJobs.retainFor(owner)
         if (current != null && current?.id != d.id) report(PlaybackState.STOPPED)
@@ -223,7 +228,9 @@ class StreamHubPlayer(
         httpFactory.setDefaultRequestProperties(d.headers.filterKeys { !it.equals("User-Agent", true) })
         httpFactory.setUserAgent(d.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: DEFAULT_UA)
         val item = MediaItemMapper.toMediaItem(d)
-        if (d.live || startPositionMs <= 0) exoPlayer.setMediaItem(item) else exoPlayer.setMediaItem(item, startPositionMs)
+        // A growing playlist started without a position would open at its newest end.
+        if (MediaItemMapper.pinsPosition(d)) exoPlayer.setMediaItem(item, startPositionMs.coerceAtLeast(0))
+        else if (d.live || startPositionMs <= 0) exoPlayer.setMediaItem(item) else exoPlayer.setMediaItem(item, startPositionMs)
         exoPlayer.prepare()
         updatingMedia=false
         exoPlayer.playWhenReady = !waitingForAudio
@@ -298,8 +305,11 @@ class StreamHubPlayer(
         val owner=progressOwner ?: return
         val d = current ?: return
         if (!reportProgress || d.live) return
-        val pos = exoPlayer.currentPosition
-        val dur = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: d.durationMs
+        // A room's shared stream starts part-way into the title and its own length is only what has been
+        // produced so far: the report is in title time, against the title's length.
+        val pinned = MediaItemMapper.pinsPosition(d)
+        val pos = exoPlayer.currentPosition.coerceAtLeast(0) + MediaItemMapper.timeZeroMs(d)
+        val dur = if (pinned) d.durationMs else exoPlayer.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: d.durationMs
         val job=scope.launch(start=CoroutineStart.LAZY) {
             runCatching {api.reportProgress(ProgressReport(id=d.id,expectedProfileId=owner.profile?.id,positionMs=pos,durationMs=dur,state=state),owner)}
         }

@@ -22,6 +22,8 @@ class RoomSeat internal constructor(
     val descriptor: PlaybackDescriptor,
     val memberId: String,
     internal val socketUrl: String,
+    /** Valid two hours, for this room and member only: opens the socket, fetches the descriptor, keeps the seat on a rejoin. */
+    internal val memberToken: String,
 ) {
     override fun toString(): String = "RoomSeat(code=$code, memberId=$memberId)"
 }
@@ -59,17 +61,34 @@ class RoomRepository internal constructor(
         return key
     }
 
-    /** A new seat for a player that is already open ("Try again" after its stream failed). */
-    suspend fun rejoin(key: String, code: String): RoomSeat = seatIn(code, allowUnverifiedAudio = true).also { seats[key] = it }
+    /**
+     * Joins again for a player that is already open, with the member token of the seat it holds: the
+     * room keeps that seat (and hands out a fresh token) while it still honours the old one, and
+     * gives a new seat otherwise. Either way the descriptor is the room's stream as it is now.
+     */
+    suspend fun rejoin(key: String, held: RoomSeat): RoomSeat =
+        seatIn(held.code, allowUnverifiedAudio = true, memberToken = held.memberToken).also { seats[key] = it }
 
-    private suspend fun seatIn(code: String, allowUnverifiedAudio: Boolean): RoomSeat {
+    /**
+     * This member's descriptor as it is now (GET /rooms/{code}/descriptor); seat and socket are
+     * untouched. For a member that lost its place: a player error, a stream address that expired, or
+     * a shared stream the room has started again since (a new `stream_epoch`).
+     */
+    suspend fun descriptor(seat: RoomSeat): PlaybackDescriptor =
+        playable(api.roomDescriptor(seat.code, seat.memberToken, allowUnverifiedAudio = true))
+
+    private suspend fun seatIn(code: String, allowUnverifiedAudio: Boolean, memberToken: String? = null): RoomSeat {
         val server = session.current().serverUrl ?: throw ApiException(0, null, "Server URL not set")
-        val joined = api.joinRoom(code, allowUnverifiedAudio)
-        // A room plays inside this app or not at all: there is no handing a shared clock to another app.
-        if (joined.descriptor.mode == PlaybackMode.HANDOFF || joined.descriptor.url.isNullOrBlank()) {
+        val joined = api.joinRoom(code, allowUnverifiedAudio, memberToken)
+        return RoomSeat(code, playable(joined.descriptor), joined.memberId, roomSocketUrl(server, joined.wsPath, joined.memberToken), joined.memberToken)
+    }
+
+    /** A room plays inside this app or not at all: there is no handing a shared clock to another app. */
+    private fun playable(d: PlaybackDescriptor): PlaybackDescriptor {
+        if (d.mode == PlaybackMode.HANDOFF || d.url.isNullOrBlank()) {
             throw ApiException(409, ApiError("room_unsupported", "This title cannot be played in a room on this device"), "room_unsupported")
         }
-        return RoomSeat(code, joined.descriptor, joined.memberId, roomSocketUrl(server, joined.wsPath, joined.memberToken))
+        return d
     }
 
     /** Opens the player on a seat taken with [join]. */

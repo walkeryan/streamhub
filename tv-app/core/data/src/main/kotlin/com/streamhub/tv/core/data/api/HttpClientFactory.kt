@@ -37,6 +37,8 @@ val StreamHubJson = Json {
 private val PUBLIC_PATHS = listOf(
     "/auth/login", "/auth/refresh", "/auth/device", "/auth/device/poll",
     "/disclaimer", "/themes", "/health",
+    // GET /rooms/{code}/descriptor: the member token in the query is the credential.
+    "/descriptor",
 )
 
 /**
