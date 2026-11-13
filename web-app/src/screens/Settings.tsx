@@ -9,6 +9,7 @@ import { SignInMethods } from '../components/SignInMethods'
 import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
+import { inShell } from '../shell'
 import { StreamRecovery } from '../components/StreamRecovery'
 import { RequestManagerSettings } from '../components/RequestManagerSettings'
 import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
@@ -347,12 +348,13 @@ function AboutTab() {
   return (
     <div className="flex flex-col gap-5" data-testid="about">
       <section className="flex flex-col gap-1"><h2 className="heading">StreamHub 1.0.0</h2><p className="muted">A self-hosted hub for your own media and IPTV sources.</p></section>
-      <section className="flex flex-col gap-3 panel">
+      {/* Inside the Android TV app the TV updates itself (TV settings on its error screen). */}
+      {!inShell() && <section className="flex flex-col gap-3 panel">
         <h2 className="heading">Android TV app</h2>
         <p>Debug build 1b991e9 · Android 7 or newer · 29 MB. The webpage may include newer features than this APK.</p>
         <AndroidDownload focusKey="about:android" />
         <p className="muted">If Android reports a signing conflict, this APK cannot update that installation. Keep your existing app and data; do not uninstall to work around it.</p>
-      </section>
+      </section>}
       <section className="flex flex-col gap-3 panel" data-testid="attribution">
         <div className="flex items-center gap-3"><AttrLogo src="/attribution/tmdb.svg" fallback="TMDB" /><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p></div>
         <div className="flex items-center gap-3"><AttrLogo src="/attribution/justwatch.svg" fallback="JustWatch" /><p>Availability data by JustWatch.</p></div>

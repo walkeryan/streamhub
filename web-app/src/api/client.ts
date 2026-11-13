@@ -2,6 +2,7 @@ import createClient from 'openapi-fetch'
 import type { paths, AuthTokens, ProgressReport } from './types'
 import { queryClient } from './queryClient'
 import { storedSession, useSession } from '../store/session'
+import { expiresSoon } from '../shellProtocol'
 
 export const API_BASE = '/api/v1'
 
@@ -88,6 +89,18 @@ async function refreshTokens(): Promise<boolean> {
   })()
   refreshes.set(refresh, pending)
   return pending
+}
+
+/**
+ * For the Android TV app's player (shell.ts): the current access token, refreshed first when it has
+ * expired or is the one the server just refused (`rejected`). This page stays the only owner of the
+ * session: the TV never refreshes, it asks here. Null when there is no session.
+ */
+export async function currentAccessToken(rejected: string | null): Promise<string | null> {
+  const access = useSession.getState().access
+  if (!access) return null
+  if (access === rejected || expiresSoon(access, Date.now())) await refreshTokens()
+  return useSession.getState().access
 }
 
 function withAuth(req: Request): Request {

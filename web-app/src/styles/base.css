@@ -753,3 +753,8 @@ h1, h2, h3, p { margin: 0; }
 .channel-copy { min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; color: #fff; }
 .channel-name { font-size: var(--text-label); font-weight: 700; }
 .channel-now { font-size: var(--text-label); font-weight: 500; line-height: 1.3; }
+
+/* Inside the Android TV app (shell.ts): a remote, no pointer. Nothing to select, no callouts, no pointer
+   or tap affordances; text fields still take the caret. */
+html[data-shell] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; cursor: none; }
+html[data-shell] input, html[data-shell] textarea { -webkit-user-select: text; user-select: text; }

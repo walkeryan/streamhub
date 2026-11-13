@@ -29,6 +29,8 @@ import { Favorites } from './screens/Favorites'
 import { Requests } from './screens/Requests'
 import { Sources } from './screens/Sources'
 import { Pair } from './screens/Pair'
+import { ShellPlay } from './screens/ShellPlay'
+import { inShell } from './shell'
 
 const Player = lazy(() => import('./screens/Player').then((m) => ({ default: m.Player })))
 const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
@@ -118,7 +120,8 @@ export function App() {
     body = (
       <Suspense fallback={null}>
         <Routes key={profile.id}>
-          <Route path="/play/:id" element={<Player />} />
+          {/* Inside the Android TV app the TV's own player plays (shell.ts). */}
+          <Route path="/play/:id" element={inShell() ? <ShellPlay /> : <Player />} />
           <Route path="/room/:code" element={<RoomScreen />} />
           <Route element={<Shell />}>
             <Route index element={<Home />} />

@@ -34,6 +34,7 @@ import { useCan } from '../api/me'
 import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
 import { usePhone } from '../lib/layout'
+import { inShell } from '../shell'
 import '../styles/player.css'
 
 type Overlay = null | 'menu' | 'list' | 'bar'
@@ -70,6 +71,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     else navigate('/live', {replace:true})
   }
   const videoRef = useRef<HTMLVideoElement>(null)
+  // The Android TV app plays with its own player; should this one ever show there, it has no window to leave.
+  const tv = inShell()
   const isChannel = id.startsWith('ch:')
   // A finished recording (rec:<id>) plays like a title, but has no title page to choose a source on.
   const isRecording = id.startsWith('rec:')
@@ -696,8 +699,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
                 <Button focusKey="pb:audio" ghost iconOnly icon="tracks" label="Audio" title="Audio (A)" onEnter={() => openMenu('audio')} testId="player-audio-btn" />
                 <Button focusKey="pb:menu" ghost iconOnly icon="settings" label="Settings" title="Settings (S)" onEnter={() => openMenu('settings')} testId="player-menu-btn" />
                 {!(phone && room) && <Button focusKey="pb:info" ghost iconOnly icon="info" pressed={info} label="Stream information" title="Stream information (I)" onEnter={() => setInfo((shown) => !shown)} testId="player-info-btn" />}
-                {!(phone && room) && <Button focusKey="pb:pip" ghost iconOnly icon="pip" label="Picture in picture" title="Picture in picture (P)" onEnter={() => void pip()} testId="player-pip" />}
-                <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" title="Full screen (F)" onEnter={fullscreen} />
+                {!(phone && room) && !tv && <Button focusKey="pb:pip" ghost iconOnly icon="pip" label="Picture in picture" title="Picture in picture (P)" onEnter={() => void pip()} testId="player-pip" />}
+                {!tv && <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" title="Full screen (F)" onEnter={fullscreen} />}
                 {roomCtl?.bar}
               </div>
             </div>

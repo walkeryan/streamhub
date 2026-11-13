@@ -5,6 +5,7 @@ import { grantAudioConsent } from '../player/audioConsent'
 import { resolve } from '../player/usePlayback'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
+import { handOff, inShell } from '../shell'
 import type { SourceBadge, Tile } from '../api/types'
 
 /** Start playback for a tile. In-app sources open the player directly; hand-off sources open the service's web URL. */
@@ -15,6 +16,8 @@ export function usePlayAction() {
   const toast = useUi((s) => s.toast)
   return async (t: Pick<Tile, 'id' | 'kind'>, source?: SourceBadge | null, opts?: { catchup?: string; variantId?: string; allowUnverifiedAudio?: boolean; audioTrack?: number | null }) => {
     if (source && !source.playable_in_app) {
+      // Inside the Android TV app the TV opens the service's own app (it resolves the hand-off itself).
+      if (inShell()) { handOff({ v: 1, kind: 'title', id: t.id, source_id: source.source_id }); return }
       try {
         const d = await resolve({ id: t.id, sourceId: source.source_id })
         const url = d.handoff?.web_url
