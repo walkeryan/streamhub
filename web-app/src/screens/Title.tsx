@@ -18,7 +18,7 @@ import { useSession } from '../store/session'
 import { audioDescription } from '../player/channelAudio'
 import { initialTrack, trackLabel } from '../player/audioTracks'
 import { usePhone } from '../lib/layout'
-import { LANG_NAMES } from '../lib/util'
+import { languageName } from '../lib/util'
 import { isOpenRequest, requestStateLabel, tmdbRef } from '../lib/requests'
 import { useUi } from '../store/ui'
 import { ShareSheet } from '../room/ShareSheet'
@@ -27,6 +27,8 @@ import { useGo } from '../nav/back'
 
 /** Seasons shown as chips; a series with more gets one drop-down. */
 const MAX_SEASON_CHIPS = 8
+/** Audio tracks shown as chips; a file with more gets one drop-down. */
+const MAX_AUDIO_CHIPS = 4
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', series: 'Series', vod: 'Movie', episode: 'Episode', season: 'Season' }
 
 export function TitleScreen() {
@@ -151,9 +153,13 @@ function TitleDetails({ id }: { id: string }) {
     <section className="flex flex-col gap-2" aria-label="Audio" data-testid="title-audio-tracks">
       <h2 className="label">Audio</h2>
       <FocusGroup focusKey="title:audio" className="flex gap-2 flex-wrap">
-        {tracks.map((track) => (
-          <Chip key={track.index} focusKey={`title:audio:${track.index}`} pressed={track.index === shownTrack} onEnter={() => setPickedTrack(track.index)}>{trackLabel(track)}</Chip>
-        ))}
+        {/* A file dubbed into many languages gets one control, like a long list of seasons. */}
+        {tracks.length > MAX_AUDIO_CHIPS
+          ? <CatalogPicker scope="title:audio-pick" label="Audio" search={false} testId="audio-picker" value={String(shownTrack ?? '')}
+              options={tracks.map((track) => ({ id: String(track.index), label: trackLabel(track) }))} onChange={(picked) => setPickedTrack(Number(picked))} />
+          : tracks.map((track) => (
+            <Chip key={track.index} focusKey={`title:audio:${track.index}`} pressed={track.index === shownTrack} onEnter={() => setPickedTrack(track.index)}>{trackLabel(track)}</Chip>
+          ))}
       </FocusGroup>
     </section>
   )
@@ -257,11 +263,13 @@ function TitleDetails({ id }: { id: string }) {
           </> : canPlay ? <>
             {phone && audioChips}
             {phone && tracks.length > 0 && <h2 className="label">Version</h2>}
-            <p className="label">Provider title labels are hints, not proof of spoken audio. Unverified or other-language sources require confirmation.</p>
             {audio.isPending && <p role="status">Checking available sources…</p>}
             {audio.error && <ErrorState error={audio.error} onRetry={() => void audio.refetch()} />}
-            {audio.data?.options.map((option, i) => <Button key={option.variant_id} focusKey={`pick:${i}`} onEnter={() => chooseVariant(option)}>
-              <span>{option.source_name} · {audioDescription(option)}{option.language_hint ? ` · Provider hint: ${LANG_NAMES[option.language_hint] ?? option.language_hint}` : ''}<br /><span className="label">{option.provider_label}</span></span>
+            {/* Two short lines per source, each cut with an ellipsis: a long label must never widen the sheet. */}
+            {audio.data?.options.map((option, i) => <Button key={option.variant_id} focusKey={`pick:${i}`} className="source-choice" onEnter={() => chooseVariant(option)}
+              label={`${option.source_name}. ${audioDescription(option)}. ${option.provider_label}`}>
+              <span className="truncate"><strong>{option.source_name}</strong>{option.provider_label && option.provider_label !== option.source_name ? ` · ${option.provider_label}` : ''}</span>
+              <span className="label truncate">{audioDescription(option)}{!option.audio_verified && option.language_hint ? ` · Listed as ${languageName(option.language_hint)}` : ''}</span>
             </Button>)}
             {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}
           </> : handoff.map((s, i) => <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>{s.name}</Button>)}

@@ -78,3 +78,24 @@ export const LANG_NAMES: Record<string, string> = {
   eng: 'English', spa: 'Spanish', fra: 'French', deu: 'German', ita: 'Italian', por: 'Portuguese',
   hin: 'Hindi', ara: 'Arabic', rus: 'Russian', zho: 'Chinese', jpn: 'Japanese', kor: 'Korean', tur: 'Turkish', und: 'Unknown',
 }
+
+/** ISO 639-2 "bibliographic" codes some files carry, mapped to the terminology code a browser knows. */
+const LANG_ALIASES: Record<string, string> = {
+  cze: 'ces', ger: 'deu', fre: 'fra', chi: 'zho', dut: 'nld', gre: 'ell', rum: 'ron', per: 'fas', slo: 'slk', ice: 'isl',
+  mac: 'mkd', may: 'msa', arm: 'hye', baq: 'eus', geo: 'kat', alb: 'sqi', bur: 'mya', tib: 'bod', wel: 'cym',
+}
+let languageNames: Intl.DisplayNames | null | undefined
+
+/**
+ * A language code as a name a viewer recognises ("ces" is Czech). The short table above covers
+ * the common ones; the rest come from the browser, and a code nothing knows is shown as it is.
+ */
+export function languageName(code: string): string {
+  const key = code.toLowerCase()
+  const known = LANG_NAMES[key] ?? LANG_NAMES[LANG_ALIASES[key] ?? '']
+  if (known) return known
+  if (languageNames === undefined) {
+    try { languageNames = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' }) } catch { languageNames = null }
+  }
+  try { return languageNames?.of(LANG_ALIASES[key] ?? key) ?? code.toUpperCase() } catch { return code.toUpperCase() }
+}

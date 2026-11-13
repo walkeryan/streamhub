@@ -408,6 +408,12 @@ h1, h2, h3, p { margin: 0; }
 /* Play, Watch together, My List and More share the one row. */
 .title-actions[data-together='true'] { grid-template-columns: minmax(0, 1fr) auto auto auto; }
 .title-choice { justify-content: space-between; min-height: 3.25rem; text-align: left; white-space: normal; }
+/* One source in the audio and version sheet: a name line and a detail line, each truncated. */
+.source-choice { flex-direction: column; align-items: stretch; justify-content: center; gap: 0.125rem; height: auto; min-height: 3.5rem; padding-block: 0.5rem; text-align: left; min-width: 0; }
+.source-choice > span { display: block; min-width: 0; max-width: 100%; }
+/* A dialog scrolls down, never sideways: content that is too wide is the content's bug to truncate. */
+.dialog { overflow-x: hidden; }
+.dialog .btn { max-width: 100%; }
 @media (max-width: 720px) {
   .title-page { padding-top: 1.5rem; }
   .title-top { justify-content: stretch; grid-template-columns: max-content minmax(0, 1fr); grid-template-areas: 'poster head' 'body body'; grid-template-rows: auto auto; gap: 1rem; align-items: end; }
