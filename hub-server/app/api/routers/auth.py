@@ -55,7 +55,9 @@ async def login(body: S.LoginRequest, request: Request, c: C) -> dict[str, Any]:
     if not at_home(request, c):
         # Before anything is looked up: the same answer for every profile, real or not.
         raise Forbidden("Profile sign-in is only available on the home network", code="home_network_only")
-    prof, tokens = await c.auth.login(body.profile_id, body.pin, body.password, session_meta(request))
+    prof, tokens = await c.auth.login(
+        body.profile_id, body.pin, body.password, session_meta(request), address=client_ip(request)
+    )
     return await tokens_out(c, prof, tokens)
 
 

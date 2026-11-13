@@ -273,7 +273,9 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         google_auth=google_auth,
         plex_auth=plex_auth,
         limiter=RateLimiter(),
-        passwords=PasswordAuth(db, auth, app_settings.get, available=lambda: not content_policy.enabled),
+        passwords=PasswordAuth(
+            db, auth, app_settings.get, available=lambda: not content_policy.enabled, throttle=auth.throttle
+        ),
         language=language,
         tmdb=tmdb,
         sources=sources,
