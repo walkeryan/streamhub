@@ -91,7 +91,7 @@ for (const key of ['Backspace', 'Escape', 'BrowserBack'] as const) {
     await expect.poll(() => new URL(page.url()).pathname).toBe(key === 'Backspace' ? first : '/live')
     if (key === 'Backspace') {
       await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
-      await page.keyboard.press('m')
+      await page.keyboard.press('s') // the settings menu (M is mute)
       await expect(page.getByTestId('player-menu')).toBeVisible()
       await page.keyboard.press('Backspace')
       await expect(page.getByTestId('player-menu')).toHaveCount(0)

@@ -47,6 +47,15 @@ const P: Record<string, string> = {
   exit: 'M10 4H5v16h5M15 8l4 4-4 4M19 12H9',
   users: 'M9 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zM2.5 20a6.5 6.5 0 0113 0M16 5.2a3.5 3.5 0 010 6.6M18 14.3a6.5 6.5 0 013.5 5.7',
   delete: 'M21 5H9l-6 7 6 7h12zM12 9.5l5 5M17 9.5l-5 5',
+  tracks: 'M4 10v4M8 6v12M12 9v6M16 4v16M20 10v4',
+  mute: 'M4 9v6h4l5 4V5L8 9zM16.5 9.5l5 5M21.5 9.5l-5 5',
+  back10: 'M12 6a7.5 7.5 0 11-7.5 7.5M12 6l3-3M12 6l3 3',
+  fwd10: 'M12 6a7.5 7.5 0 107.5 7.5M12 6L9 3M12 6L9 9',
+}
+// A finer second stroke for what the main one cannot draw legibly: the "10" inside the skip arrows.
+const DETAIL: Record<string, string> = {
+  back10: 'M9.6 11.2v4.8M12.6 12.4a1.2 1.2 0 012.4 0v2.4a1.2 1.2 0 01-2.4 0z',
+  fwd10: 'M9.6 11.2v4.8M12.6 12.4a1.2 1.2 0 012.4 0v2.4a1.2 1.2 0 01-2.4 0z',
 }
 const FILLED = new Set(['play', 'pause', 'record'])
 
@@ -56,6 +65,7 @@ export function Icon({ name, size = 22, className, filled }: { name: keyof typeo
     <svg width={size} height={size} viewBox="0 0 24 24" fill={f ? 'currentColor' : 'none'} stroke="currentColor"
       strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
       <path d={P[name] ?? P.info} />
+      {DETAIL[name] && <path d={DETAIL[name]} strokeWidth={1.4} />}
     </svg>
   )
 }

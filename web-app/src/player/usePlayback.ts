@@ -61,6 +61,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const selectedAudio = useRef<number | null>(null)
   const wantedAudio = useRef<number | null>(null)
   const wantsPlayback = useRef(true)
+  // The viewer paused. A seek or a track change that needs a new stream then starts it paused, as a seek
+  // inside the old one would have left it. A room decides for its members whether they play.
+  const pausedByViewer = useRef(false)
+  // The viewer's own mute. Unmuting is asked of checkAudio, never done here: a stream whose audio is
+  // not allowed for this profile stays silent whatever the mute button says.
+  const silenced = useRef(false)
   const [bufferWindow, setBufferWindow] = useState<BufferWindow | null>(null)
   const [bufferIssue, setBufferIssue] = useState<string | null>(null)
   const buffer = useRef<BufferSession | null>(null)
@@ -204,11 +210,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       intent.current = { key }
       terminal.current = false
       restart.current = {}
+      pausedByViewer.current = false
     }
     consent.current = null
     selectedAudio.current = null
     wantedAudio.current = null
-    wantsPlayback.current = true
+    wantsPlayback.current = !pausedByViewer.current || !!descriptorSource.current
     setAudioBlocked(false)
     let cancelled = false
     const ownsSession = () => { const session = useSession.getState(); return session.profile?.id === profileId && session.generation === sessionGeneration }
@@ -285,8 +292,10 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
               return false
             }
             setAudioBlocked(false)
-            video.muted = !!opts.muted
+            video.muted = !!opts.muted || silenced.current
             if (wantsPlayback.current && video.paused) void video.play().catch(() => { if (!cancelled) setState('paused') })
+            // A stream that is meant to stay paused has arrived: it is not still starting.
+            else if (!wantsPlayback.current) setState((s) => (s === 'loading' ? 'paused' : s))
             return true
           }
           const next = await attachSource(video, descriptor, {
@@ -481,19 +490,28 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
 
   return {
     desc, state, error, busy, tracks, audioBlocked,
-    pause: () => { wantsPlayback.current = false; videoRef.current?.pause() },
-    resume: () => { wantsPlayback.current = true; checkAudio.current() },
-    consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; checkAudio.current() },
+    pause: () => { wantsPlayback.current = false; pausedByViewer.current = true; videoRef.current?.pause() },
+    resume: () => { wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
+    consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
     bufferWindow, bufferIssue, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
     setAudio: (i: number) => {
       if (!handle.current?.audioTracks().some(t => t.id === i)) return
       const video = videoRef.current
       if (video) { video.muted = true; video.pause() }
-      consent.current = null; selectedAudio.current = i; wantsPlayback.current = true
+      consent.current = null; selectedAudio.current = i; wantsPlayback.current = true; pausedByViewer.current = false
       handle.current.setAudio(i); setTracksVersion((v) => v + 1); checkAudio.current()
     },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
-    retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
+    /** The viewer's mute button. */
+    setSilenced: (on: boolean) => {
+      silenced.current = on
+      const video = videoRef.current
+      if (!video) return
+      if (on) video.muted = true
+      // Every start of playback goes through checkAudio, which applies this; only a stream already playing needs telling.
+      else if (!video.paused) checkAudio.current()
+    },
+    retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; pausedByViewer.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
     /** Restart-at-offset streams: start a new stream at this position in the title. */
     seekTo: (ms: number) => {
       if (descRef.current?.start_position_ms == null || terminal.current) return

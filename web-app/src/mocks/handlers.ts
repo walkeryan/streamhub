@@ -299,7 +299,7 @@ export const handlers = [
 
   http.get(`${B}/playback/generation`, () => HttpResponse.json({ generation: 'fixture-generation' })),
   http.post(`${B}/playback/resolve`, async ({ request }) => {
-    const b = (await request.json()) as { id: string; source_id?: string | null }
+    const b = (await request.json()) as { id: string; source_id?: string | null; start_position_ms?: number | null }
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
@@ -308,6 +308,16 @@ export const handlers = [
       const d: PlaybackDescriptor = {
         ...base, mode: 'handoff', url: null, live: false, resume_position_ms: 0,
         handoff: { service_key: 'netflix', android_package: 'com.netflix.ninja', android_uri: null, android_extras: {}, web_url: 'https://www.netflix.com/', supports_title_link: false },
+      }
+      return HttpResponse.json(d)
+    }
+    // A film only the provider has is converted for a browser: a restart-at-offset stream whose media time zero
+    // is where it was asked to start (on the server's 5 s grid) and which knows only its own clip beyond that.
+    if (t && !chan && t.sources.filter((s) => s.playable_in_app).every((s) => s.source_type === 'xtream')) {
+      const start = Math.floor((b.start_position_ms ?? 0) / 5000) * 5000
+      const d: PlaybackDescriptor = {
+        ...base, mode: 'proxy', url: `/mock/room.webm?start=${start}`, mime: 'video/webm', live: false,
+        resume_position_ms: start, duration_ms: 112 * 60_000, start_position_ms: start,
       }
       return HttpResponse.json(d)
     }

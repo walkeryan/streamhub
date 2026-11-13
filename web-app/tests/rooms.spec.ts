@@ -192,8 +192,9 @@ test('two browsers in one room stay within a second across play, pause and seek'
   await together(host, guest, true)
   const playing = (await clock(guest)).time
   await guest.keyboard.press('ArrowLeft')
+  // The press becomes a seek once the presses pause: wait for it to reach the host, then compare.
+  await expect.poll(async () => (await clock(host)).time).toBeLessThan(playing)
   await together(host, guest, true)
-  expect((await clock(host)).time).toBeLessThan(playing)
 
   // Only I can control: the guest's controls explain themselves and change nothing.
   await host.mouse.move(300, 300)
@@ -285,7 +286,10 @@ test('a member joining a library-title room starts at the room position, not at 
   expect(await apart(host, guest)).toBeLessThan(2)
 
   // A seek in such a room is a state and nothing else: each player moves in the file it has.
+  const before = (await clock(guest)).time
   await host.keyboard.press('ArrowLeft')
+  // The press becomes the room's seek once the presses pause: wait until it has reached the guest.
+  await expect.poll(async () => (await clock(guest)).time).toBeLessThan(before)
   await together(host, guest, true)
   expect(await loads(guest)).toBe(1)
   expect(seen.host.joins).toBe(1)
@@ -335,7 +339,7 @@ test('a channel is watched together from the player menu: play and pause, no see
   await signIn(page)
   await page.goto(`/play/${encodeURIComponent('ch:s_xt:1002')}`)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
-  await page.keyboard.press('m')
+  await page.keyboard.press('s')
   await expect(page.getByTestId('player-together')).toBeVisible()
   await page.getByTestId('player-together').click()
   await expect(page.getByTestId('room-share')).toBeVisible()
@@ -351,6 +355,12 @@ test('a channel is watched together from the player menu: play and pause, no see
   await expect(page).toHaveURL(new RegExp(`/room/${code}`))
   await expect(page.getByTestId('player-list-btn')).toHaveCount(0)
   await expect(page.getByTestId('scrub-track')).toHaveCount(0)
+  // A room plays at one speed for everyone: its settings offer none.
+  await page.keyboard.press('s')
+  await expect(page.getByTestId('player-menu')).toHaveAttribute('data-section', 'settings')
+  await expect(page.getByTestId('player-speed')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('player-menu')).toHaveCount(0)
   // The control bar has focus on Pause: the room pauses, and with it this player.
   await expect(page.getByRole('button', { name: 'Pause', exact: true })).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
@@ -413,7 +423,7 @@ test('Watch together needs rooms.create and Join a room needs rooms.join', async
   await expect(kid.getByTestId('title-together')).toHaveCount(0)
   await kid.getByTestId('title-play').click()
   await expect(kid.getByTestId('player')).toHaveAttribute('data-state', 'playing')
-  await kid.keyboard.press('m')
+  await kid.keyboard.press('s')
   await expect(kid.getByTestId('player-menu')).toBeVisible()
   await expect(kid.getByTestId('player-together')).toHaveCount(0)
   await kid.goto('/search')
@@ -509,6 +519,11 @@ test('on a phone the room player keeps back and title on one row; the members ar
   expect(Math.abs((title!.y + title!.height / 2) - (chip!.y + chip!.height / 2))).toBeLessThan(24)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   await expect(page.getByTestId('room-members')).toHaveCount(0)
+  // The control bar, with the room's own buttons in it, is still two rows of finger-sized targets inside the screen.
+  const buttons = await page.locator('[data-testid="player-bar"] .pbar-row .fx').evaluateAll((all) => all.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), width: r.width, height: r.height, right: r.right } }))
+  expect(new Set(buttons.map((b) => b.top)).size).toBe(2)
+  expect(buttons.every((b) => b.width >= 44 && b.height >= 44 && b.right <= 390)).toBe(true)
+  await expect(page.getByTestId('room-leave')).toHaveAttribute('aria-label', 'Leave room')
 
   await count.tap()
   const list = page.getByTestId('room-member-list')
