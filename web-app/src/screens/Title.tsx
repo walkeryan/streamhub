@@ -202,7 +202,7 @@ function TitleDetails({ id }: { id: string }) {
             <p>{confirmation.audio_verified ? audioDescription(confirmation) : 'Audio language is unverified.'} This source is not automatically selected for your language preferences.</p>
             <p className="label">{confirmation.provider_label}</p>
             <Button focusKey="audio:cancel" onEnter={() => setConfirmation(null)}>Back to sources</Button>
-            <Button focusKey="audio:confirm" onEnter={() => { const selected = confirmation; setConfirmation(null); setPicker(null); void play(t, null, { variantId: selected.variant_id, allowUnverifiedAudio: true }) }}>Play this source anyway</Button>
+            <Button focusKey="audio:confirm" onEnter={() => { const selected = confirmation; setConfirmation(null); setPicker(null); void play(t, null, { variantId: selected.variant_id, allowUnverifiedAudio: true, audioTrack: selected.variant_id === trackOption?.variant_id ? pickedTrack : null }) }}>Play this source anyway</Button>
           </> : canPlay ? <>
             <p className="label">Provider title labels are hints, not proof of spoken audio. Unverified or other-language sources require confirmation.</p>
             {audio.isPending && <p role="status">Checking available sources…</p>}
