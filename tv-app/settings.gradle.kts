@@ -18,17 +18,5 @@ rootProject.name = "streamhub-tv"
 
 include(":app")
 include(":core:ui", ":core:data", ":core:player")
-include(
-    ":feature:onboarding",
-    ":feature:home",
-    ":feature:search",
-    ":feature:livetv",
-    ":feature:guide",
-    ":feature:details",
-    ":feature:player",
-    ":feature:favorites",
-    ":feature:sources",
-    ":feature:settings",
-    ":feature:recordings",
-    ":feature:requests",
-)
+// Browsing is the web app, shown by the shell (app); natively there is only pairing and playback.
+include(":feature:onboarding", ":feature:player")
