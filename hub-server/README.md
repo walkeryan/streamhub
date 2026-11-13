@@ -35,6 +35,7 @@ export ADMIN_PASSWORD=change-me     # optional; otherwise generated and logged O
 | `WEB_DIST` | `/app/web-dist` | built web client |
 | `TRANSCODE_DIR` | `/transcode` if present, else `CONFIG_DIR/transcode` | ffmpeg HLS output |
 | `CORS_ORIGINS` | `http://localhost:5173,…` | comma separated (dev) |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | reverse proxies (addresses or CIDRs) whose `X-Forwarded-For` names the real client; the variable uvicorn reads too |
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | `text` for dev |
 | `ENABLE_SCHEDULER` | `true` | catalog refresh (5 min tick) + EPG refresh (30 min tick) |
 | `FFMPEG_PATH`, `VAAPI_DEVICE` | `ffmpeg`, `/dev/dri/renderD128` | remux / transcode |
@@ -80,6 +81,19 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
   Title language filters read `title.language`; it is a hint, never audio evidence.
 - **Adult rows** (`services/adult.py`) are left out of home, search, browse and suggestions unless the admin profile
   passes `include_adult=true`. This hides; it does not authorize access by id.
+- **Rating ceilings** (`services/content_policy.py`): a user's limits (`rating_ceiling_movie`, `rating_ceiling_tv`,
+  `allow_unrated`, from the role or per-user overrides) run the content-policy engine for that user's requests, whatever
+  `CONTENT_POLICY_ENABLED` says; that flag only keeps the older owner-PIN regime. Ratings are US certifications from
+  TMDB. A background job (`services/classifier.py`, every 2 minutes, 60 titles a run, no-op without a TMDB key) keeps
+  them fresh for every title with a TMDB id; `POST /api/v1/settings/classification/run` runs one batch on demand.
+- **Remote access** (`services/network.py`): a user without `remote.access` is served only from the `home_networks`
+  setting (private, loopback, link-local and `100.64.0.0/10` ranges by default); elsewhere every call but
+  `GET /auth/me` answers 403 `remote_access_denied`. The client address is the connection's peer, or the
+  `X-Forwarded-For` hop a proxy listed in `FORWARDED_ALLOW_IPS` appended. Behind a reverse proxy or tunnel that is
+  **not** listed there, every client appears to come from the proxy's own address, which is usually a home one.
+- **TV app release**: `GET /api/v1/app/tv` (no sign-in) answers from `tv-release.json` in `WEB_DIST/downloads/`, next
+  to the APK, which is served at `/downloads/<file>`. See "TV app release manifest" below. No manifest, or an invalid
+  one, is a 404, which the TV app reads as "no update service".
 - **Disclaimer gate**: `POST /sources` with `xtream`/`m3u` → 412 until the profile accepted version 1.0 (`docs/LEGAL.md`).
 - **Secrets**: source configs are Fernet-encrypted at rest; Xtream credentials are never stored in catalog rows
   (URLs rebuilt at play time); Plex artwork goes through `/api/v1/images/{signed}` so tokens never reach clients
@@ -98,6 +112,29 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
   it again (zapping). Channel numbers = per-source offset (+1000 per IPTV source) + tvg-chno/position; user override wins.
 - **Progress**: `stopped` with `position_ms >= duration_ms` (or ≥95%) marks watched; forwarded to Plex `/:/timeline`
   and Jellyfin `/Sessions/Playing/*`.
+
+## TV app release manifest
+
+`WEB_DIST/downloads/tv-release.json`, written when an APK is published:
+
+```json
+{
+  "version_code": 14,
+  "version_name": "1.4.0",
+  "apk": "streamhub-tv-1.4.0.apk",
+  "sha256": "<the APK's SHA-256, 64 hex digits>"
+}
+```
+
+| field | |
+|---|---|
+| `version_code` | integer ≥ 1, the build's Android `versionCode`; a TV offers the update when it is higher than its own |
+| `version_name` | what to call the build, 1–64 characters |
+| `apk` | file name of the APK in the same directory: letters, digits, `.`, `_`, `-`, ending in `.apk`. A name, not a path or a URL, and the file must exist |
+| `sha256` | SHA-256 of that file (`sha256sum <file>`); the TV refuses a download that does not match |
+
+Other fields are ignored. The response is `{"version_code", "version_name", "apk_url": "/downloads/<apk>", "sha256"}`.
+The manifest is read on each request, so publishing is two file writes: the APK first, then the manifest.
 
 ## Quality
 

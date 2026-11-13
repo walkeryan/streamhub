@@ -480,6 +480,8 @@ class UsersService:
             if "on_shared_devices" in patch:
                 value = patch["on_shared_devices"]
                 user.on_shared_devices = None if value is None else bool(value)
+            if patch.get("plex_account_linked") is not None:
+                await self._link_plex(s, actor, user, bool(patch["plex_account_linked"]), is_owner)
             after = _snapshot(user)
             self._changed(user, profile, role)
             if before["role_id"] != after["role_id"]:
@@ -493,6 +495,22 @@ class UsersService:
                 audit(s, actor.user_id, "user.update", user.id, fields=profile_fields)
             await s.commit()
         return await self.get(user_id)
+
+    async def _link_plex(self, s: AsyncSession, actor: Any, user: User, linked: bool, is_owner: bool) -> None:
+        """Say whose Plex account the server's Plex token belongs to. One user at most: linking
+        one unlinks whoever held it, and each change is its own audit row."""
+        if user.plex_account_linked == linked:
+            return
+        if linked:
+            holders = (
+                await s.execute(select(User).where(User.plex_account_linked.is_(True), User.id != user.id))
+            ).scalars()
+            for holder in holders:
+                self._owner_only(is_owner, holder)
+                holder.plex_account_linked = False
+                audit(s, actor.user_id, "user.plex_unlink", holder.id, moved_to=user.id)
+        user.plex_account_linked = linked
+        audit(s, actor.user_id, "user.plex_link" if linked else "user.plex_unlink", user.id)
 
     async def approve(self, actor: Any, user_id: str, role_id: str) -> dict[str, Any]:
         async with self._db.session() as s:

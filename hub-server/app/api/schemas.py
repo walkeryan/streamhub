@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool
 
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
@@ -493,6 +493,13 @@ class ClassificationRun(_M):
     remaining: int = Field(description="titles with a TMDB id still lacking fresh rating evidence")
 
 
+class TvAppRelease(_M):
+    version_code: int
+    version_name: str
+    apk_url: str = Field(description="a path on this server")
+    sha256: str = Field(description="64 lower-case hex digits")
+
+
 class TmdbKey(_M):
     api_key: str = ""
 
@@ -846,6 +853,9 @@ class UserPatch(_M):
     denials: list[str] | None = None
     limits: LimitsWrite | None = None
     on_shared_devices: bool | None = None
+    plex_account_linked: StrictBool | None = Field(
+        default=None, description="whose Plex account the server's token is; setting it on one user clears the rest"
+    )
 
 
 class UserApprove(_M):

@@ -1466,7 +1466,7 @@ paths:
         Owner role, grants users.manage / sources.manage / system.manage, or changes an owner (403
         owner_required). The last active owner cannot be demoted (409 last_owner).
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { name: {type: string}, avatar: {type: string, nullable: true}, role_id: {type: string}, grants: {type: array, items: {$ref: '#/components/schemas/Permission'}}, denials: {type: array, items: {$ref: '#/components/schemas/Permission'}}, limits: {$ref: '#/components/schemas/LimitsInput'}, on_shared_devices: {type: boolean, nullable: true, description: "null follows the role"} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: {type: string}, avatar: {type: string, nullable: true}, role_id: {type: string}, grants: {type: array, items: {$ref: '#/components/schemas/Permission'}}, denials: {type: array, items: {$ref: '#/components/schemas/Permission'}}, limits: {$ref: '#/components/schemas/LimitsInput'}, on_shared_devices: {type: boolean, nullable: true, description: "null follows the role"}, plex_account_linked: {type: boolean, description: "This user is the owner of the Plex account behind the server's Plex token. At most one user: setting it on one clears it on the others (each change is audited)"} } } } } }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } } }
     delete:
       summary: Remove a user and their viewer state (users.manage)
@@ -1635,6 +1635,16 @@ paths:
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }, '409': { description: recording_unavailable } }
     delete: { summary: Remove a rule and the upcoming recordings it scheduled; finished ones stay, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
 
+  /app/tv:
+    get:
+      security: []
+      summary: The newest TV app build this server hands out
+      description: >-
+        Read from tv-release.json beside the APK in the web client's downloads directory (format in
+        hub-server/README.md). apk_url is a path on this server.
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [version_code, version_name, apk_url, sha256], properties: { version_code: {type: integer}, version_name: {type: string}, apk_url: {type: string, description: "/downloads/<file>"}, sha256: {type: string, description: 64 lower-case hex digits} } } } } }
+        '404': { description: No release is published here (no manifest, or an invalid one) }
   /health:
     get: { security: [], responses: { '200': { description: ok } } }
   /about:

@@ -1,7 +1,8 @@
-"""/themes, /settings, /settings/tmdb_key, /settings/classification/run, /health, /about."""
+"""/themes, /settings, /settings/tmdb_key, /settings/classification/run, /app/tv, /health, /about."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Query, Response
@@ -11,7 +12,8 @@ from app.adapters.tmdb.client import JUSTWATCH_ATTRIBUTION, TMDB_ATTRIBUTION
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.infra.settings import APP_VERSION
-from app.services.errors import ServiceError
+from app.services.errors import NotFound, ServiceError
+from app.services.tv_release import read_release
 
 router = APIRouter()
 
@@ -53,6 +55,16 @@ async def put_tmdb_key(body: S.TmdbKey, c: C, p: Admin) -> Response:
 async def run_classification(c: C, p: Admin) -> dict[str, int]:
     """Run one batch of the rating lookups now instead of waiting for the schedule."""
     return await c.classifier.run_batch()
+
+
+@router.get("/app/tv", response_model=S.TvAppRelease, tags=["system"])
+async def tv_app_release(c: C, response: Response) -> dict[str, Any]:
+    """The newest TV build this server hands out. Public: a TV asks before anyone has signed in."""
+    release = await asyncio.to_thread(read_release, c.settings.web_dist / "downloads")
+    if release is None:
+        raise NotFound("no TV app release is published here")
+    response.headers["Cache-Control"] = "no-cache"
+    return release
 
 
 @router.get("/health", response_model=S.Health, tags=["system"])
