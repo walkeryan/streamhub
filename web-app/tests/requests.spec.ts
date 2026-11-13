@@ -53,12 +53,13 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   await expect(page.getByTestId('notices')).toHaveCount(0)
 
-  // Search finds a title no source has; its tile says so and opens the title page.
+  // Search finds a title no source has; its tile carries no tick and opens the title page.
   await bar(page, 'nav-search')
   await expect(searchBox(page)).toBeFocused()
   await page.keyboard.type('velvet')
   const result = page.getByTestId('search-titles').getByTestId('tile')
-  await expect(result).toContainText('Not available', { timeout: 8000 })
+  await expect(result).toHaveAttribute('aria-label', MOVIE, { timeout: 8000 })
+  await expect(result.getByTestId('tile-available')).toHaveCount(0)
   await page.keyboard.press('ArrowDown')
   await expect(result).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')

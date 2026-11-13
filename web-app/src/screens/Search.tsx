@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
-import { useRecordings, useSearch } from '../api/hooks'
+import { searchView, useRecordings, useSearch } from '../api/hooks'
 import { useCan } from '../api/me'
 import type { Channel, SearchProgramme, SearchResult, SearchSectionName, Tile } from '../api/types'
 import { Attribution, Button, Chip, Empty, ErrorState, LogoBlock, Skeleton } from '../components/ui'
@@ -68,14 +68,23 @@ function SearchPage() {
   // "Show more": the sections shown in full, and those of them the server was asked for in full.
   const [opened, setOpened] = useHistoryState<SearchSectionName[]>('search:opened', [])
   const [expanded, setExpanded] = useHistoryState<SearchSectionName[]>('search:expanded', [])
-  const { data, error, isPlaceholderData, refetch } = useSearch(q, expanded)
-  // The query the results on screen answer: while the next one loads they stay up, dimmed.
-  const [settled, setSettled] = useState<string | null>(null)
-  if (asked && data && !isPlaceholderData && settled !== q) setSettled(q)
-  const shown = asked ? data : undefined
-  const stale = !!shown && isPlaceholderData && settled !== q
+  // Every query is asked twice. What the hub holds answers at once and is shown as soon as it lands;
+  // what the metadata provider knows comes when it comes, and its titles join the end of the grid.
+  const local = useSearch(q, expanded, false)
+  const full = useSearch(q, expanded, true)
+  const current = useMemo(() => (local.data ? searchView(local.data, full.data) : local.error ? full.data : undefined), [local.data, local.error, full.data])
+  const error = local.error && full.error
+  // The answer on screen: while the next query (or a fuller page of this one) loads, the last stays up,
+  // dimmed when it answers another query. An answer to an older query never replaces a newer one.
+  const [last, setLast] = useState<{ q: string; view: SearchResult } | null>(null)
+  if (asked && current && last?.view !== current) setLast({ q, view: current })
+  const shown = asked ? (current ?? last?.view) : undefined
+  const loading = !current
+  const stale = loading && !!shown && last?.q !== q
   const found = shown ? shown.results.length + shown.channels.length + shown.programmes.length : 0
-  const ready = !asked || !!data || !!error
+  // More titles may still be on their way: the page says so where they will go, and is not "empty" yet.
+  const discovering = !!local.data && !!local.data.metadata_available && full.isPending
+  const ready = !asked || !!shown || !!error
   useRestoreFocus(ready, asked ? 'search:results' : phone ? SEARCH_BOX.page : 'search:idle')
 
   // A new query starts at the top; Back to these results returns to where they were left.
@@ -106,12 +115,12 @@ function SearchPage() {
     if (r.sections[name].more) setExpanded((e) => (e.includes(name) ? e : [...e, name]))
   }
   useEffect(() => {
-    if (!grown || !shown || isPlaceholderData) return
+    if (!grown || !shown || loading) return
     const rows = shown[FIELD[grown.name]] as Array<SearchProgramme & Channel & Tile>
     const row = rows[Math.min(grown.from, rows.length - 1)]
     setGrown(null)
     if (row) void setFocus((itemKey[grown.name] as (r: typeof row) => string)(row))
-  }, [grown, shown, isPlaceholderData])
+  }, [grown, shown, loading])
 
   const recordings = useRecordings(useCan('recordings'), false)
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
@@ -126,7 +135,8 @@ function SearchPage() {
 
   const section = (name: SearchSectionName, r: SearchResult): ReactNode => {
     const rows = r[FIELD[name]]
-    if (!rows.length) return null
+    const coming = name === 'titles' && discovering && !loading
+    if (!rows.length && !coming) return null
     const count = visible(name, r)
     return (
       <section key={name} className="search-section" data-testid={`search-${name}`} aria-label={HEADINGS[name]}>
@@ -135,9 +145,9 @@ function SearchPage() {
           {r.programmes.slice(0, count).map((p) => <BroadcastRow key={p.id} p={p} live={onNow(p)} when={startLabel(p.start, now)} onEnter={() => openBroadcast(p)} />)}
         </FocusGroup> : name === 'channels' ? <FocusGroup focusKey="search:channels" className="search-rows">
           {r.channels.slice(0, count).map((c) => <ChannelResult key={c.id} channel={c} onEnter={() => go(play(c.id))} />)}
-        </FocusGroup> : <SearchTitles tiles={r.results} onOpen={(t) => go(openPath(t))} />}
+        </FocusGroup> : <SearchTitles tiles={r.results} coming={coming} onOpen={(t) => go(openPath(t))} />}
         {(count < rows.length || (r.sections[name].more && !expanded.includes(name))) && <FocusGroup focusKey={`search:more:${name}:group`} className="search-more">
-          <Button focusKey={`search:more:${name}`} ghost disabled={isPlaceholderData} testId={`search-more-${name}`} onEnter={() => more(name, r)}>Show more</Button>
+          <Button focusKey={`search:more:${name}`} ghost disabled={loading} testId={`search-more-${name}`} onEnter={() => more(name, r)}>Show more</Button>
         </FocusGroup>}
       </section>
     )
@@ -148,9 +158,10 @@ function SearchPage() {
       {phone && <PageSearchField />}
       <div data-testid="search-results" aria-busy={stale || (asked && !shown && !error) || undefined} data-stale={stale || undefined}>
         {!asked ? <SearchIdle />
-          : error && !shown ? <ErrorState error={error} onRetry={() => void refetch()} />
-          // Nothing to keep on screen while this query loads (the last one found nothing): skeletons.
-          : !shown || (found === 0 && isPlaceholderData) ? <SearchSkeleton />
+          : error && !shown ? <ErrorState error={error} onRetry={() => { void local.refetch(); void full.refetch() }} />
+          // Nothing to keep on screen while this query loads (the last one found nothing, or the hub
+          // has nothing and the provider has not answered): skeletons, not "No results" too soon.
+          : !shown || (found === 0 && (loading || discovering)) ? <SearchSkeleton />
           : found === 0 ? <Empty title={`No results for “${q}”`} hint="Check the spelling, or try fewer words. Channels are also found by number." />
           : <FocusGroup focusKey="search:results" className="search-sections">
             {shown.order.map((name) => section(name, shown))}
@@ -169,7 +180,7 @@ function SearchPage() {
  * the one place to change when request status gets a component of its own. Movie or Series is said
  * only where two results share a name.
  */
-function SearchTitles({ tiles, onOpen }: { tiles: Tile[]; onOpen: (t: Tile) => void }) {
+function SearchTitles({ tiles, coming, onOpen }: { tiles: Tile[]; coming: boolean; onOpen: (t: Tile) => void }) {
   const names = new Map<string, Set<string>>()
   const kindOf = (t: Tile) => (t.kind === 'movie' || t.kind === 'vod' ? 'Movie' : 'Series')
   for (const t of tiles) names.set(t.title.toLowerCase(), (names.get(t.title.toLowerCase()) ?? new Set()).add(kindOf(t)))
@@ -181,6 +192,8 @@ function SearchTitles({ tiles, onOpen }: { tiles: Tile[]; onOpen: (t: Tile) => v
           {names.get(t.title.toLowerCase())!.size > 1 && <span className="badge search-kind" data-testid="search-kind">{kindOf(t)}</span>}
         </div>
       ))}
+      {/* Where the titles only the metadata provider knows will go; the first of them takes this place. */}
+      {coming && <div className="search-tile" role="status" aria-label="Looking for more titles" data-testid="search-discovering"><Skeleton style={{ aspectRatio: '2/3' }} /></div>}
     </FocusGroup>
   )
 }

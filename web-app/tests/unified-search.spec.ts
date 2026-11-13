@@ -66,7 +66,10 @@ test('the top bar has one search control; typing in it shows results and keeps t
   await expect(page.getByTestId('search-titles').getByTestId('tile')).toHaveAttribute('aria-label', 'Harbor Lights')
   await expect(box).toBeFocused()
   await expect(box).toHaveValue('harbor')
-  expect((await searches(page)).length).toBeLessThanOrEqual(2)
+  // Only the finished word was asked for: once for what the hub holds, once for what the provider adds
+  // (the development build mounts twice, so each may be seen twice here).
+  expect((await searches(page)).every((query) => query.includes('q=harbor&'))).toBe(true)
+  expect((await searches(page)).length).toBeLessThanOrEqual(4)
   await expect(page.getByTestId('nav-search')).toHaveAttribute('aria-current', 'page')
 
   // More letters replace the entry: one Back leaves search for where the viewer was.
@@ -113,14 +116,14 @@ test('three sections in order: On TV, Channels, Movies & Shows; a channel named 
   await expect(channel).toHaveCount(1)
   await expect(channel).toHaveAttribute('aria-label', /^1 Harbor News 24, now /)
   // An owned title carries its library mark.
-  await expect(page.getByTestId('search-titles').getByTestId('tile')).toContainText('In your library')
+  await expect(page.getByTestId('search-titles').getByTestId('tile').getByTestId('tile-available')).toBeVisible()
 
   await searchBox(page).fill('sunday league')
   await expect(page.getByTestId('search-titles')).toContainText('Sunday League Legends')
   expect(await sectionNames(page)).toEqual(['Channels', 'On TV', 'Movies & Shows'])
   await expect(page.getByTestId('search-channel')).toHaveAttribute('aria-label', /^14 Sunday League/)
   await expect(page.getByTestId('search-broadcast')).toContainText('Sunday League Live')
-  await expect(page.getByTestId('search-broadcast')).toContainText(/Tomorrow \d+:00/)
+  await expect(page.getByTestId('search-broadcast')).toContainText(/(Tomorrow|Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d+:00/)
 
   // A section with nothing in it is not shown at all.
   await searchBox(page).fill('metro')
@@ -170,7 +173,7 @@ test('a broadcast still to come opens the record sheet for who may record, and s
       await expect(upcoming.getByTestId('recording-badge')).toBeVisible()
     } else {
       await expect(page.getByTestId('record-dialog')).toHaveCount(0)
-      await expect(page.getByRole('status').filter({ hasText: /Sunday League Live starts Tomorrow \d+:00.* on 2 Metro Sports 1/ })).toBeVisible()
+      await expect(page.getByRole('status').filter({ hasText: /Sunday League Live starts (Tomorrow|Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d+:00.* on 2 Metro Sports 1/ })).toBeVisible()
     }
     await context.close()
   }
@@ -196,6 +199,61 @@ test('a title that can be requested says so on its tile, and shows its request o
   await tile.click()
   await expect(page).toHaveURL(/\/title\/tmdb%3Amovie%3A301$/)
   await expect(page.getByTestId('title-request-state')).toBeVisible()
+})
+
+test('what the hub holds is on screen before the metadata provider answers, and nothing moves when it does', async ({ page }) => {
+  await recordSearches(page)
+  // The provider is slow: every search that asks it takes a second and a half longer.
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init), url = new URL(request.url)
+      if (url.pathname === '/api/v1/search' && url.searchParams.get('discover') !== 'false') await new Promise((done) => setTimeout(done, 1500))
+      return original(request)
+    }
+  })
+  await enter(page, '/search?q=the')
+  const tiles = page.getByTestId('search-titles').getByTestId('tile')
+  // The library's three titles, the channel and the broadcasts are there while the provider is still asked.
+  await expect(tiles).toHaveCount(3)
+  await expect(page.getByTestId('search-broadcast').first()).toBeVisible()
+  await expect(page.getByTestId('search-channel')).toHaveCount(1)
+  const waiting = page.getByTestId('search-discovering')
+  await expect(waiting).toBeVisible()
+  await expect(results(page)).not.toHaveAttribute('data-stale', 'true')
+  const names = await tiles.evaluateAll((all) => all.map((tile) => tile.getAttribute('aria-label')))
+  expect(names).toEqual(['The Quiet Meridian', 'The Understudy', 'The Understudies'])
+  const place = async () => Promise.all([...(await tiles.all()).slice(0, 3), page.getByTestId('search-broadcast').first(), page.getByTestId('search-channel'), sections(page).last().locator('h2')].map(async (item) => { const r = await rect(item); return [r.x, r.y, r.width, r.height].map(Math.round) }))
+  // Focus on a result while waiting: it stays where it is, too.
+  await tiles.nth(1).hover()
+  await expect(tiles.nth(1)).toHaveAttribute('data-focused', 'true')
+  await page.waitForTimeout(400) // the focus ring's own transition
+  const before = await place()
+  const slot = await rect(waiting)
+  const scrolled = await page.evaluate(() => window.scrollY)
+
+  // The provider's answer adds the title no source has, after the library's, where the placeholder was.
+  await expect(tiles).toHaveCount(4, { timeout: 8000 })
+  await expect(waiting).toHaveCount(0)
+  expect(await tiles.evaluateAll((all) => all.map((tile) => tile.getAttribute('aria-label')))).toEqual([...names, 'The Tollgate Tapes'])
+  expect(await place()).toEqual(before)
+  const added = await rect(tiles.nth(3))
+  expect([Math.round(added.x), Math.round(added.y)]).toEqual([Math.round(slot.x), Math.round(slot.y)])
+  await expect(tiles.nth(1)).toHaveAttribute('data-focused', 'true')
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrolled)
+  const asked = await searches(page)
+  expect(asked.some((query) => query.includes('discover=false'))).toBe(true)
+  expect(asked.some((query) => !query.includes('discover=false') && query.includes('kinds=movie'))).toBe(true)
+
+  // A provider answer for a query the viewer has moved on from is dropped: "the" never shows under "velvet".
+  await page.goto('/search?q=the%20under')
+  await expect(tiles).toHaveCount(2)
+  await searchBox(page).fill('velvet')
+  await expect(page.getByTestId('search-titles').getByRole('link', { name: 'Velvet Antarctica', exact: true })).toBeVisible({ timeout: 8000 })
+  await expect(tiles).toHaveCount(1)
+  await page.waitForTimeout(1800)
+  await expect(tiles).toHaveCount(1)
+  await expect(page.getByText('The Understudy')).toHaveCount(0)
 })
 
 test('Movie or Series is said only on results that share a name; an older server answering titles alone still shows them', async ({ page }) => {

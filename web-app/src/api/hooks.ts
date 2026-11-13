@@ -56,17 +56,35 @@ function completeSearch(r: Partial<SearchResult>): SearchResult {
 }
 
 /** One search across titles, channels and guide broadcasts. `expand` names the sections asked for in full
- *  ("Show more"); the page shown so far stays up while the fuller one, or the next query, loads. */
-export const useSearch = (q: string, expand: readonly SearchSectionName[] = []) => {
+ *  ("Show more"). Asked twice for every query (see `searchView`): `discover: false` is what the hub itself
+ *  holds and answers at once; with discovery the server also asks the metadata provider, which takes as
+ *  long as that provider does, and only the titles are needed from it. */
+export const useSearch = (q: string, expand: readonly SearchSectionName[], discover: boolean) => {
   const profile = useProfileId()
   const key = q.trim().toLowerCase().replace(/\s+/g, ' ')
+  const full = [...expand].sort().join(',')
   return useQuery<SearchResult>({
-    queryKey: ['search', profile, key, [...expand].sort().join(','), useSession((s) => s.profile?.languages.join(','))],
+    queryKey: ['search', profile, key, full, discover, useSession((s) => s.profile?.languages.join(','))],
     enabled: key.length >= MIN_QUERY,
     staleTime: 30_000,
-    placeholderData: useProfilePlaceholder<SearchResult>(),
-    queryFn: async ({ signal }) => completeSearch(await unwrap<Partial<SearchResult>>(api.GET('/search', { signal, params: { query: { q: q.trim(), ...(expand.length ? { expand: [...expand].sort().join(',') } : {}) } } }))),
+    queryFn: async ({ signal }) => completeSearch(await unwrap<Partial<SearchResult>>(api.GET('/search', {
+      signal, params: { query: { q: q.trim(), ...(full ? { expand: full } : {}), ...(discover ? { kinds: 'movie,show' } : { discover: false }) } },
+    }))),
   })
+}
+
+/**
+ * What a search shows from its two answers. The hub's own comes first and is the page: its titles keep
+ * their places. The titles discovery adds (the ones the server names in `discovered`, or, from a server
+ * that names none, the ones the first answer did not have) go after them, so nothing on screen moves.
+ */
+export function searchView(local: SearchResult, full: SearchResult | undefined): SearchResult {
+  if (!full) return local
+  const have = new Set(local.results.map((t) => t.id))
+  const named = full.discovered ? new Set(full.discovered) : null
+  const added = full.results.filter((t) => !have.has(t.id) && (!named || named.has(t.id)))
+  const titles = { count: Math.max(full.sections.titles.count, local.results.length + added.length), more: local.sections.titles.more || full.sections.titles.more }
+  return { ...local, results: [...local.results, ...added], sections: { ...local.sections, titles }, metadata_available: full.metadata_available, attribution: full.attribution }
 }
 
 export const useTitle = (id: string | undefined) =>
