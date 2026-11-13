@@ -26,21 +26,21 @@ def settings(settings: AppSettings, tmp_path: Path) -> AppSettings:
 @pytest.mark.parametrize(
     ("title", "category", "expected"),
     [
-        ("NBA: Lakers vs Celtics", None, ["Lakers", "Celtics"]),
-        ("Lakers vs. Celtics", "Basketball", ["Lakers", "Celtics"]),
-        ("Arsenal v Chelsea", "Soccer", ["Arsenal", "Chelsea"]),
-        ("Rugby - Harbour Town versus North End", None, ["Harbour Town", "North End"]),
-        ("NFL Football: Giants at Cowboys", None, ["Giants", "Cowboys"]),
-        ("Yankees @ Red Sox", "Baseball", ["Yankees", "Red Sox"]),
-        ("MLB Baseball: Yankees at Red Sox (Live)", None, ["Yankees", "Red Sox"]),
-        ("UEFA Champions League: Milan vs Porto - Matchday 5", None, ["Milan", "Porto"]),
+        ("NBA: Northside vs Lakeview", None, ["Northside", "Lakeview"]),
+        ("Northside vs. Lakeview", "Basketball", ["Northside", "Lakeview"]),
+        ("Eastfield v Westbrook", "Soccer", ["Eastfield", "Westbrook"]),
+        ("Rugby - Mill Lane versus North End", None, ["Mill Lane", "North End"]),
+        ("NFL Football: Rivermen at Highlanders", None, ["Rivermen", "Highlanders"]),
+        ("Harbour Town @ Red Rock", "Baseball", ["Harbour Town", "Red Rock"]),
+        ("MLB Baseball: Harbour Town at Red Rock (Live)", None, ["Harbour Town", "Red Rock"]),
+        ("UEFA Champions League: Oldport vs Newbridge - Matchday 5", None, ["Oldport", "Newbridge"]),
         ("LIVE: Tennis | Rivers vs Stone", None, ["Rivers", "Stone"]),
         # Not a matchup, or not a sports listing at all: nothing is guessed.
         ("Golf Central", "Golf", []),
-        ("PGA Tour: Live at the Masters", None, []),
+        ("PGA Tour: Live at the Links", None, []),
         ("Tennis at night", "Sports", []),
         ("Football Tonight", "Sports", []),
-        ("Kramer vs. Kramer", "Drama", []),
+        ("Harbour vs. Lighthouse", "Drama", []),
         ("Live at the Harbour", "Comedy", []),
         ("Boxing: Red vs Blue vs Green", None, []),
         ("Hockey: vs Rivals", None, []),
@@ -56,7 +56,7 @@ async def test_guide_now_next_and_recordings_carry_the_sport_fields(api: Api) ->
     bbc = await channel(api, await add_source(api))
     async with api.c.db.session() as s:
         for title, category, hours in [
-            ("NBA: Lakers vs Celtics", None, -0.5),
+            ("NBA: Northside vs Lakeview", None, -0.5),
             ("Evening News", "News", 0.5),
             ("Highlights", "Tennis", 1.5),
         ]:
@@ -77,19 +77,19 @@ async def test_guide_now_next_and_recordings_carry_the_sport_fields(api: Api) ->
     r = await api.get("/epg", params={"channel_ids": hub(bbc), "from": soon(-1).isoformat(), "to": soon(4).isoformat()})
     assert r.status_code == 200, r.text
     assert [(p["title"], p["is_sport"], p["teams"]) for p in r.json()[hub(bbc)]] == [
-        ("NBA: Lakers vs Celtics", True, ["Lakers", "Celtics"]),
+        ("NBA: Northside vs Lakeview", True, ["Northside", "Lakeview"]),
         ("Evening News", False, []),
         ("Highlights", True, []),
     ]
     listed = (await api.get("/channels", params={"language": "all"})).json()["channels"]
     row = next(c for c in listed if c["id"] == hub(bbc))
-    assert (row["now"]["is_sport"], row["now"]["teams"]) == (True, ["Lakers", "Celtics"])
+    assert (row["now"]["is_sport"], row["now"]["teams"]) == (True, ["Northside", "Lakeview"])
     assert (row["next"]["is_sport"], row["next"]["teams"]) == (False, [])
 
     made = await api.post("/recordings", json={"programme_id": f"prog:{game.id}"})
     assert made.status_code == 201, made.text
-    assert (made.json()["is_sport"], made.json()["teams"]) == (True, ["Lakers", "Celtics"])
+    assert (made.json()["is_sport"], made.json()["teams"]) == (True, ["Northside", "Lakeview"])
     news = next(p for p in await guide(api, bbc) if p["title"] == "Evening News")
     plain = (await api.post("/recordings", json={"programme_id": news["id"]})).json()
     assert (plain["is_sport"], plain["teams"]) == (False, [])
-    assert [x["teams"] for x in (await api.get("/recordings")).json()["recordings"]] == [["Lakers", "Celtics"], []]
+    assert [x["teams"] for x in (await api.get("/recordings")).json()["recordings"]] == [["Northside", "Lakeview"], []]
