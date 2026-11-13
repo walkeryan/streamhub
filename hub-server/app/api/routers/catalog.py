@@ -141,6 +141,11 @@ async def search(
     source_id: str | None = None,
     include_adult: IncludeAdult = False,
     expand: str | None = Query(None, pattern="^(titles|channels|programmes)(,(titles|channels|programmes))*$"),
+    discover: bool = Query(
+        True,
+        description="false: only what the hub holds (its titles, channels, broadcasts); no remote provider "
+        "is asked, so the answer is quick. A client shows that first and the full answer when it arrives.",
+    ),
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
     kind_set = {k.strip() for k in kinds.split(",") if k.strip()} if kinds else None
@@ -154,9 +159,16 @@ async def search(
             c.db,
             p.profile_id,
             "search",
-            (q, tuple(sorted(kind_set or [])), limit, language, source_id, tuple(sorted(expanded))),
+            (q, tuple(sorted(kind_set or [])), limit, language, source_id, tuple(sorted(expanded)), discover),
             lambda: c.catalog.search(
-                q, p.profile_id, kind_set, limit, language=language, source_id=source_id, expand=expanded
+                q,
+                p.profile_id,
+                kind_set,
+                limit,
+                language=language,
+                source_id=source_id,
+                expand=expanded,
+                discover=discover,
             ),
         )
     return await c.recorder.annotate(p, await c.requests.annotate(p, result))

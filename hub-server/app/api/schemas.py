@@ -446,6 +446,8 @@ class SearchResults(_M):
     open_in_app: list[Tile]
     channels: list[Channel]
     programmes: list[SearchProgramme] = Field(default_factory=list)
+    # Ids of the results that metadata discovery added: titles the library's own search did not list.
+    discovered: list[str] = Field(default_factory=list)
     sections: SearchSections = Field(default_factory=SearchSections)
     order: list[SearchSectionL] = Field(default_factory=list)
     attribution: str

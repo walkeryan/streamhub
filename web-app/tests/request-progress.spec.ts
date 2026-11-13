@@ -222,16 +222,14 @@ test('requested, approved, declined and unknown: the phases nobody is downloadin
 
 test('a poster carries the same status: a chip in its corner, a thin bar along its foot while downloading', async ({ page }) => {
   expect((await request(page, 301)).status).toBe(201)
-  await page.goto('/search')
-  await page.getByLabel('Search titles and channels').fill('velvet')
-  const tile = page.getByTestId('group-missing').getByTestId('tile')
+  await page.goto('/search?q=velvet')
+  const tile = page.getByTestId('search-titles').getByTestId('tile')
   // Sent a moment ago: Searching, never Downloading, and no bar.
   await expect(tile.getByTestId('request-phase')).toHaveText('Searching')
   await expect(tile.getByTestId('request-bar')).toHaveCount(0)
 
   await setClock(page, 25)
   await page.reload()
-  await page.getByLabel('Search titles and channels').fill('velvet')
   await expect(tile.getByTestId('request-phase')).toHaveText('Downloading 50%')
   const bar = tile.getByTestId('request-bar')
   await expect(bar).toHaveAttribute('aria-valuenow', '50')

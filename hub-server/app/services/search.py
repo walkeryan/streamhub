@@ -38,7 +38,7 @@ PROGRAMME_HORIZON = timedelta(hours=48)
 # not a broadcast someone can tune in to at its start.
 MAX_BROADCAST = timedelta(hours=8)
 # Guide rows read for one query before grouping; a query that matches more says so with ``more``.
-PROGRAMME_SCAN = 2000
+PROGRAMME_SCAN = 600
 SLOT_SCAN = 200
 SECTIONS = ("programmes", "channels", "titles")
 # A channel found by its number or its whole name is what was asked for: its section leads.
@@ -110,6 +110,7 @@ def empty_search() -> dict[str, Any]:
         "open_in_app": [],
         "channels": [],
         "programmes": [],
+        "discovered": [],
         "sections": empty_sections(),
         "order": list(SECTIONS),
         "attribution": ATTRIBUTION,
