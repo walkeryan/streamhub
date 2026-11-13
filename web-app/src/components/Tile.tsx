@@ -46,6 +46,11 @@ function Fallback({ title }: { title: string }) {
 
 export const MediaTile = memo(function MediaTile(p: {
   tile: TileT; scope: string; layout?: TileLayout; onFocusTile?: (t: TileT) => void; onOpen?: (t: TileT) => void; titleAlways?: boolean
+  /**
+   * Search mixes what can be watched here with what is only known about. There a tile says one thing:
+   * a green tick when it plays here, nothing when it does not (a request in progress still shows itself).
+   */
+  mark?: 'availability'
 }) {
   const open = useOpenTile()
   const layout = p.layout ?? 'poster'
@@ -68,7 +73,9 @@ export const MediaTile = memo(function MediaTile(p: {
           <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} fallback={<Fallback title={p.tile.title} />} />
           <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
           {/* A request on its way says where it is, in place of where the title plays. */}
-          {request ? <RequestTileStatus progress={request} of={p.tile.title} /> : <div className="tile-badges">{p.tile.sources.length ? <TileBadge sources={p.tile.sources} /> : <span className="badge">Not available here</span>}</div>}
+          {request ? <RequestTileStatus progress={request} of={p.tile.title} /> : p.mark === 'availability' ? (
+            p.tile.sources.some((s) => s.playable_in_app) && <span className="tile-check" role="img" aria-label="Available to watch" data-testid="tile-available"><Icon name="check" size={14} /></span>
+          ) : <div className="tile-badges">{p.tile.sources.length ? <TileBadge sources={p.tile.sources} /> : <span className="badge">Not available here</span>}</div>}
           {p.tile.is_favorite && <span style={{ position: 'absolute', top: 6, left: 6, color: 'var(--t-accent)' }}><Icon name="heart" size={16} filled /></span>}
           {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && (
             <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}><ProgressBar pct={p.tile.progress_pct} /></div>

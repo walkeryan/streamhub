@@ -165,7 +165,7 @@ function SearchPage() {
 /**
  * The poster grid of a search. A tile says where its title stands in its badge row: "In your library"
  * (or its sources) for one the household has, the state of its request for one that was asked for,
- * "Not available here" otherwise. That row is `MediaTile`'s, drawn from `sources` and `request_state`:
+ * nothing otherwise (a green tick when the title plays here). That row is `MediaTile`'s, drawn from `sources` and `request_state`:
  * the one place to change when request status gets a component of its own. Movie or Series is said
  * only where two results share a name.
  */
@@ -177,7 +177,7 @@ function SearchTitles({ tiles, onOpen }: { tiles: Tile[]; onOpen: (t: Tile) => v
     <FocusGroup focusKey="search:titles" className="grid-tiles search-grid">
       {tiles.map((t) => (
         <div key={t.id} className="search-tile">
-          <MediaTile tile={t} scope="search" titleAlways onOpen={onOpen} />
+          <MediaTile tile={t} scope="search" titleAlways mark="availability" onOpen={onOpen} />
           {names.get(t.title.toLowerCase())!.size > 1 && <span className="badge search-kind" data-testid="search-kind">{kindOf(t)}</span>}
         </div>
       ))}

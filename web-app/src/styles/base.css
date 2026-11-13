@@ -259,6 +259,9 @@ h1, h2, h3, p { margin: 0; }
 .badge-play { background: var(--t-accent); color: var(--t-accent-text); }
 .tile-badges { position: absolute; right: 0.375rem; top: 0.375rem; max-width: calc(100% - 0.75rem); display: flex; gap: 0.25rem; }
 .tile-badges .badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Search results: a title that plays here carries a tick, like the status mark of a request manager. */
+.tile-check { position: absolute; right: 0.375rem; top: 0.375rem; width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: 50%; background: var(--t-success); color: #06210f; box-shadow: 0 0.0625rem 0.25rem rgba(0, 0, 0, .45); }
+.tile-check svg { stroke-width: 3; }
 /* A request's status (components/RequestStatus.tsx): the phase chip, and while downloading a bar that fills. */
 .request-status { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
 .request-status-line { display: flex; align-items: center; gap: 0.25rem 0.5rem; flex-wrap: wrap; min-width: 0; }

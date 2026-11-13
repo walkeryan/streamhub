@@ -227,6 +227,18 @@ async def test_placeholder_programmes_are_never_results(api: Api) -> None:
     assert names(found, "channels") == ["Halden One HD"]
 
 
+async def test_an_all_day_label_is_not_a_broadcast(api: Api) -> None:
+    """A guide row that spans half a day is a sign on the channel, not a programme to tune in to."""
+    await seed(
+        api,
+        channel("one", "Halden Game Feed 1", 1),
+        programme("one", "Tessel Regional", timedelta(minutes=-10), minutes=12 * 60),
+        programme("one", "Tessel Regional Tonight", timedelta(hours=13), minutes=60),
+    )
+    found = await search(api, "tessel regional")
+    assert names(found, "programmes") == ["Tessel Regional Tonight"]
+
+
 async def test_one_entry_per_title_and_start_with_every_channel_as_a_feed(api: Api) -> None:
     await seed(
         api,

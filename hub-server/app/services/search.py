@@ -34,6 +34,9 @@ PROGRAMME_CAP = 24
 EXPANDED_CAP = 100
 # A broadcast is a result while it is on, or starts within this long.
 PROGRAMME_HORIZON = timedelta(hours=48)
+# A guide row longer than this is a label hung on a channel for the day (a game feed's "on network X"),
+# not a broadcast someone can tune in to at its start.
+MAX_BROADCAST = timedelta(hours=8)
 # Guide rows read for one query before grouping; a query that matches more says so with ``more``.
 PROGRAMME_SCAN = 2000
 SLOT_SCAN = 200
@@ -213,6 +216,7 @@ async def search_programmes(
             Programme.start < until,
             or_(plain, accented),
             func.lower(func.trim(Programme.title)) != func.lower(func.trim(Channel.name)),
+            func.julianday(Programme.stop) - func.julianday(Programme.start) <= MAX_BROADCAST / timedelta(days=1),
         )
         .with_only_columns(
             Programme.id,

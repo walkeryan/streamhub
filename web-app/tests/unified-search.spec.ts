@@ -180,7 +180,9 @@ test('a title that can be requested says so on its tile, and shows its request o
   await enter(page, '/search?q=velvet')
   const tile = page.getByTestId('search-titles').getByTestId('tile')
   await expect(tile).toHaveAttribute('aria-label', 'Velvet Antarctica')
-  await expect(tile.locator('.tile-badges')).toHaveText('Not available here')
+  // A title that does not play here carries no mark in search; one that does carries the tick.
+  await expect(tile.getByTestId('tile-available')).toHaveCount(0)
+  await expect(tile.locator('.tile-badges')).toHaveCount(0)
   // An admin connects a request manager and the viewer asks for the title, as on its page.
   const api = (who: string, method: string, path: string, body: unknown) => page.evaluate(async ({ who, method, path, body }) => {
     const res = await fetch(`/api/v1${path}`, { method, headers: { authorization: `Bearer mock-access-${who}`, 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -189,7 +191,7 @@ test('a title that can be requested says so on its tile, and shows its request o
   expect(await api('p1', 'PUT', '/settings/request_manager', { url: 'http://requests.example.test:5055', api_key: 'fixture-manager-key' })).toBe(200)
   expect(await api('p2', 'POST', '/requests', { media_type: 'movie', tmdb_id: 301 })).toBeLessThan(300)
   await page.reload()
-  await expect(tile.locator('.tile-badges')).toHaveText(/Requested|On its way/)
+  await expect(tile).toContainText(/Requested|Approved|Searching/)
   // Its page is where it is asked for and followed.
   await tile.click()
   await expect(page).toHaveURL(/\/title\/tmdb%3Amovie%3A301$/)
