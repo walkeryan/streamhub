@@ -156,6 +156,10 @@ async def test_channels_match_on_clean_name_and_number_with_the_exact_number_fir
     assert names(await search(api, "sport"), "channels") == ["Tessel Sport"]
     # Part of a word inside a name is found too.
     assert names(await search(api, "alden"), "channels") == ["Halden News"]
+    # Digits that cannot be a channel number are only text, never an error.
+    assert (await search(api, "9" * 40))["channels"] == []
+    assert names(await search(api, "²³"), "channels") == ["Movie Box 235"]
+    assert names(await search(api, "٢٣٥"), "channels")[0] == "Halden News"
 
 
 async def test_event_slot_channels_are_found_by_their_shown_name(api: Api) -> None:
@@ -233,6 +237,7 @@ async def test_one_entry_per_title_and_start_with_every_channel_as_a_feed(api: A
         programme("b", "Regatta Live", timedelta(minutes=-5)),
         programme("c", "Regatta Live", timedelta(hours=4)),
         programme("c", "regatta  LIVE", timedelta(hours=8)),
+        programme("c", "Regatta Live", timedelta(hours=8)),  # the guide lists it twice
     )
     found = await search(api, "regatta")
     assert [len(entry["feeds"]) for entry in found["programmes"]] == [2, 1, 1]

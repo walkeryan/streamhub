@@ -147,7 +147,8 @@ async def search_channels(
     named: list[Any] = [_contains(Channel.name, raw)]
     exact: list[Any] = [func.lower(Channel.name) == raw.lower()]
     ranks: list[tuple[Any, int]] = []
-    if raw.isdigit():
+    # A channel number, not any run of digits: nothing a guide numbers its channels with is longer.
+    if raw.isdecimal() and len(raw) <= 6:
         named.append(Channel.number == int(raw))
         ranks.append((Channel.number == int(raw), 0))
     if norm:
@@ -294,7 +295,9 @@ async def _grouped(
 
     out = []
     for (_, start), members in shown:
-        members = sorted(members, key=lambda member: (member[1].number, member[1].id))
+        # A guide that lists the same programme twice on a channel still names the channel once.
+        carried = {ch.id: (entry, ch) for entry, ch in reversed(members)}
+        members = sorted(carried.values(), key=lambda member: (member[1].number, member[1].id))
         feeds = [feed(entry, ch) for entry, ch in members]
         first = members[0][0]
         lead = {key: value for key, value in feeds[0].items() if key != "programme_id"}
