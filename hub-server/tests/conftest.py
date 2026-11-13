@@ -38,7 +38,7 @@ def http_factory(**kw: Any) -> httpx.AsyncClient:
 def settings(tmp_path: Path) -> AppSettings:
     return AppSettings(
         config_dir=tmp_path / "config",
-        secret_key="test-secret-key-0123456789",
+        secret_key="test-secret-key-0123456789-abcdefghij",
         admin_password=ADMIN_PASSWORD,
         web_dist=tmp_path / "web-dist",
         transcode_dir=tmp_path / "transcode",

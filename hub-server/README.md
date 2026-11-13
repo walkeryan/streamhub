@@ -29,12 +29,12 @@ export ADMIN_PASSWORD=change-me     # optional; otherwise generated and logged O
 | var | default | |
 |---|---|---|
 | `CONFIG_DIR` | `/config` | SQLite DB (WAL), secret key, playlists, caches |
-| `SECRET_KEY` | generated → `CONFIG_DIR/secret.key` | derives Fernet / JWT / signing keys |
+| `SECRET_KEY` | generated → `CONFIG_DIR/secret.key` | derives Fernet / JWT / signing keys; at least 32 characters when set, or the server does not start (`SECRET_KEY_ALLOW_SHORT=true` keeps a shorter one an existing install already encrypted with) |
 | `ADMIN_PASSWORD` | generated | admin profile password on first boot |
 | `TMDB_API_KEY` | – | v3 key or v4 read token |
 | `WEB_DIST` | `/app/web-dist` | built web client |
 | `TRANSCODE_DIR` | `/transcode` if present, else `CONFIG_DIR/transcode` | ffmpeg HLS output |
-| `CORS_ORIGINS` | `http://localhost:5173,…` | comma separated (dev) |
+| `CORS_ORIGINS` | none | comma separated origins, other than the server's own, allowed to call the API with credentials |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | reverse proxies (addresses or CIDRs) whose `X-Forwarded-For` names the real client; the variable uvicorn reads too |
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | `text` for dev |
 | `ENABLE_SCHEDULER` | `true` | catalog refresh (5 min tick) + EPG refresh (30 min tick) |
