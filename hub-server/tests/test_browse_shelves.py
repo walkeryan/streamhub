@@ -20,6 +20,12 @@ async def shelves(api: Api, section: str = "movies", **params: Any) -> list[dict
     return listed
 
 
+async def unlock_adult(api: Api) -> None:
+    me = (await api.get("/auth/me")).json()["user"]["id"]
+    assert (await api.put(f"/users/{me}/pin", json={"pin": "1357"})).status_code == 204
+    assert (await api.post("/auth/adult-unlock", json={"pin": "1357"})).status_code == 200
+
+
 async def test_shelves_are_ranked_and_carry_their_first_titles(api: Api) -> None:
     drama = rows_for("Drama", 5)
     drama[0]["poster"] = None  # the newest Drama title has no artwork
@@ -85,6 +91,9 @@ async def test_shelves_respect_language_and_adult_scope(api: Api) -> None:
     assert [s["name"] for s in await shelves(api)] == ["Drama"]
     assert [s["name"] for s in await shelves(api, language="all")] == ["Cinema", "Drama"]
     assert [s["name"] for s in await shelves(api, language="fra")] == ["Cinema"]
+    # Adult rows need the permission and a session unlocked with the user's own PIN.
+    assert [s["name"] for s in await shelves(api, include_adult="true")] == ["Drama"]
+    await unlock_adult(api)
     assert [s["name"] for s in await shelves(api, include_adult="true")] == ["Late Night", "Drama"]
     # The opt-in is per request: the general listing that follows is not served from its cache.
     assert [s["name"] for s in await shelves(api)] == ["Drama"]
@@ -106,7 +115,7 @@ async def test_shelves_follow_the_profile_content_policy(api: Api) -> None:
     async with api.c.db.session() as s:
         await s.execute(update(Title).where(Title.kind == "movie").values(group_name="Family"))
         await s.commit()
-    child = {"Authorization": "Bearer " + api.c.auth.issue(await policy.profile("child"))["access_token"]}
+    child = {"Authorization": "Bearer " + (await api.c.auth.issue(await policy.profile("child")))["access_token"]}
     restricted = await api.client.get("/api/v1/browse/movies/shelves", params={"language": "all"}, headers=child)
     assert restricted.status_code == 200, restricted.text
     [family] = restricted.json()["shelves"]
