@@ -502,6 +502,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       handle.current.setAudio(i); setTracksVersion((v) => v + 1); checkAudio.current()
     },
     setSubtitle: (i: number) => { handle.current?.setSubtitle(i); setTracksVersion((v) => v + 1) },
+    /** What the engine measures of its download, in kbit/s; null when it measures nothing. */
+    downloadKbps: () => handle.current?.downloadKbps?.() ?? null,
     /** The viewer's mute button. */
     setSilenced: (on: boolean) => {
       silenced.current = on

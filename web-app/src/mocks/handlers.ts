@@ -318,6 +318,13 @@ export const handlers = [
       const d: PlaybackDescriptor = {
         ...base, mode: 'proxy', url: `/mock/room.webm?start=${start}`, mime: 'video/webm', live: false,
         resume_position_ms: start, duration_ms: 112 * 60_000, start_position_ms: start,
+        // As the server describes an HDR film it transcodes for a browser; fields it does not know are absent.
+        media_info: {
+          source_name: 'IPTV', container: 'matroska', bitrate_kbps: 18_250,
+          video: { codec: 'hevc', width: 3840, height: 1600, frame_rate: 23.976, dynamic_range: 'hdr10' },
+          audio: { codec: 'eac3', channels: 6, language: 'eng' },
+          delivery: 'transcode', encoder: 'hardware', output_width: 1920, output_height: 800,
+        },
       }
       return HttpResponse.json(d)
     }
@@ -325,6 +332,9 @@ export const handlers = [
       ...base, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: chan,
       resume_position_ms: progress[b.id]?.pos ? Math.min(progress[b.id]!.pos, 20_000) : 0, duration_ms: chan ? null : 30_000,
       channel_context: chan ? { list_id: 'mock', index: channels.findIndex((c) => c.id === b.id), count: channels.length } : null,
+      media_info: chan
+        ? { source_name: 'IPTV', delivery: 'remux' }
+        : { source_name: t?.sources.find((s) => s.playable_in_app)?.name ?? null, container: 'mov', video: { codec: 'h264', width: 1920, height: 1080 }, audio: { codec: 'aac', channels: 2 }, delivery: 'direct', output_width: 1920, output_height: 1080 },
     }
     return HttpResponse.json(d)
   }),

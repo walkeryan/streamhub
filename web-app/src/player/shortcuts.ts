@@ -100,6 +100,7 @@ export const SHORTCUT_HELP: ReadonlyArray<{ title: string; lines: ShortcutLine[]
     { keys: ['P'], does: 'Picture in picture' },
   ] },
   { title: 'More', lines: [
+    { keys: ['I'], does: 'Stream information' },
     { keys: ['?'], does: 'This list' },
     { keys: ['Esc'], does: 'Cancel a seek, close what is open, hide the controls, then leave' },
   ] },

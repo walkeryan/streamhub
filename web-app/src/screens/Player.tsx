@@ -14,6 +14,7 @@ import { usePlayback } from '../player/usePlayback'
 import { trackLabel } from '../player/audioTracks'
 import { seekableRanges } from '../player/restartSeek'
 import { Scrubber } from '../player/Scrubber'
+import { InfoPanel } from '../player/InfoPanel'
 import { ShortcutHelp } from '../player/ShortcutHelp'
 import { endTarget, fractionTarget, seekHint } from '../player/seekSteps'
 import { shortcutFor, type MenuSection, type ShortcutAction } from '../player/shortcuts'
@@ -131,6 +132,10 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   // The menu opens on what its button named: audio, subtitles, settings, or everything (the remote's Menu key).
   const [menuSection, setMenuSection] = useState<MenuSection>('all')
   const [help, setHelp] = useState(false)
+  // Stream information: a panel beside the picture, not a dialog. Playback and the keys carry on.
+  const [info, setInfo] = useState(false)
+  const infoRef = useRef(false)
+  infoRef.current = info
   // Volume, mute, speed: this browser's, kept across titles.
   const [prefs, setPrefsState] = useState<PlayerPrefs>(loadPrefs)
   const prefsRef = useRef(prefs)
@@ -339,7 +344,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       case 'menu': openMenu(action.section); break
       case 'fullscreen': fullscreen(); break
       case 'pip': void pip(); break
-      case 'info': showOsd(); break
+      // On a channel I has always shown what is on; it still does, beside how it is delivered.
+      case 'info': setInfo((shown) => !shown); showOsd(); break
       case 'help': setHelp(true); break
     }
   }
@@ -474,8 +480,11 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     if (audio.blocked || activeId.current !== id) { cancelPending(); return true }
     // A seek that has not been made yet is the first thing Back takes away.
     if (seek.cancel()) return true
+    // Then whatever is open, topmost first: a menu, the information panel, the control bar.
     const o = overlayRef.current
-    if (o) { closeOverlay(); if (o === 'bar') hideChrome(); return true }
+    if (o === 'menu' || o === 'list') { closeOverlay(); return true }
+    if (infoRef.current) { setInfo(false); return true }
+    if (o) { closeOverlay(); hideChrome(); return true }
     if (chromeRef.current && !pausedRef.current) { hideChrome(); return true }
     // Back out of a room asks first: leaving gives the seat up.
     if (roomCtl) { roomCtl.askLeave(); return true }
@@ -661,6 +670,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
                 <Button focusKey="pb:subs" ghost iconOnly icon="cc" pressed={tr.subs.some((t) => t.active)} label="Subtitles" title="Subtitles (C turns them on or off)" onEnter={() => openMenu('subs')} testId="player-subs-btn" />
                 <Button focusKey="pb:audio" ghost iconOnly icon="tracks" label="Audio" title="Audio (A)" onEnter={() => openMenu('audio')} testId="player-audio-btn" />
                 <Button focusKey="pb:menu" ghost iconOnly icon="settings" label="Settings" title="Settings (S)" onEnter={() => openMenu('settings')} testId="player-menu-btn" />
+                {!(phone && room) && <Button focusKey="pb:info" ghost iconOnly icon="info" pressed={info} label="Stream information" title="Stream information (I)" onEnter={() => setInfo((shown) => !shown)} testId="player-info-btn" />}
                 {!(phone && room) && <Button focusKey="pb:pip" ghost iconOnly icon="pip" label="Picture in picture" title="Picture in picture (P)" onEnter={() => void pip()} testId="player-pip" />}
                 <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" title="Full screen (F)" onEnter={fullscreen} />
                 {roomCtl?.bar}
@@ -756,8 +766,9 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
               )}
               {shows('settings') && (
                 <MenuSection title="More">
+                  {phone && room && <Button focusKey="pm:info" icon="info" onEnter={() => { closeOverlay(); setInfo(true) }}>Stream information</Button>}
                   {phone && room && <Button focusKey="pm:pip" icon="pip" onEnter={() => { closeOverlay(); void pip() }}>Picture in picture</Button>}
-                  <Button focusKey="pm:keys" icon="info" onEnter={() => { closeOverlay(); setHelp(true) }} testId="player-keys-btn">Keyboard shortcuts</Button>
+                  <Button focusKey="pm:keys" icon="list" onEnter={() => { closeOverlay(); setHelp(true) }} testId="player-keys-btn">Keyboard shortcuts</Button>
                 </MenuSection>
               )}
             </FocusGroup>
@@ -765,6 +776,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
         )
       })()}
       <ShortcutHelp open={help} live={live} onClose={() => setHelp(false)} />
+      {info && desc?.id === id && <InfoPanel info={desc.media_info} videoRef={videoRef} streamStartS={restartable ? offset : null} downloadKbps={pb.downloadKbps} onClose={() => setInfo(false)} />}
 
       {roomCtl?.layers}
       <ShareSheet room={together} onClose={() => setTogether(null)}

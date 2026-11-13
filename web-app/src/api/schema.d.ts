@@ -6165,6 +6165,51 @@ export interface components {
             /** @default false */
             default: boolean;
         };
+        /** @description What is playing and how it reaches this client, for a player's stream information panel. The file's facts come from the media probe (the one that finds its audio tracks), the delivery from what the server planned for this stream. A field the server does not know is left out, not sent as null. Never a URL, a host name or a credential: the source is named as its owner named it. */
+        MediaInfo: {
+            /** @description The owner's name for the source; for a recording, the channel it was recorded from. */
+            source_name?: string | null;
+            /** @description ffprobe format name of the file, e.g. matroska, mov, mpegts */
+            container?: string | null;
+            /** @description Overall bit rate of the file. */
+            bitrate_kbps?: number | null;
+            /** @description The file's video stream. */
+            video?: {
+                /** @description ffmpeg codec name, e.g. h264, hevc, av1 */
+                codec?: string | null;
+                width?: number | null;
+                height?: number | null;
+                /** @description Frames per second. */
+                frame_rate?: number | null;
+                /**
+                 * @description From the stream's transfer characteristic.
+                 * @enum {string|null}
+                 */
+                dynamic_range?: "sdr" | "hdr10" | "hlg" | null;
+            } | null;
+            /** @description The audio track that plays: the one the server encoded (audio_track), else the file's default. */
+            audio?: {
+                /** @description Codec in the file; a remux or a transcode delivers it as AAC stereo. */
+                codec?: string | null;
+                channels?: number | null;
+                /** @description ISO 639-2 code. */
+                language?: string | null;
+            } | null;
+            /**
+             * @description direct: the file or feed as it is (played from the source or passed through this server). remux: repackaged as HLS with the video copied; a film's audio track is encoded to AAC. transcode: the video is encoded as well.
+             * @enum {string}
+             */
+            delivery: "direct" | "remux" | "transcode";
+            /**
+             * @description transcode only: what the server planned to encode the video with. A hardware encoder that fails to start falls back to software for that session without this changing.
+             * @enum {string|null}
+             */
+            encoder?: "hardware" | "software" | null;
+            /** @description Width of the picture as delivered. */
+            output_width?: number | null;
+            /** @description Height of the picture as delivered. */
+            output_height?: number | null;
+        };
         PlaybackOption: {
             variant_id: string;
             source_id: string;
@@ -6313,6 +6358,8 @@ export interface components {
             start_position_ms?: number | null;
             /** @description Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor. */
             stream_epoch?: number | null;
+            /** @description What is playing and how it is delivered; null for mode=handoff. Informational: nothing in playback depends on it. */
+            media_info?: components["schemas"]["MediaInfo"] | null;
             id: string;
             /** @enum {string} */
             mode: "direct" | "proxy" | "hls" | "handoff";

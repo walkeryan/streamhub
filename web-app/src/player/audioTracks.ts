@@ -2,10 +2,10 @@ import type { AudioTrack } from '../api/types'
 // The explicit extension lets the node tests import this module without a bundler.
 import { LANG_NAMES } from '../lib/util.ts'
 
-const CODECS: Record<string, string> = {
+export const CODECS: Record<string, string> = {
   ac3: 'AC-3', eac3: 'E-AC-3', aac: 'AAC', mp3: 'MP3', mp2: 'MP2', dts: 'DTS', truehd: 'TrueHD', flac: 'FLAC', opus: 'Opus', vorbis: 'Vorbis',
 }
-const LAYOUTS: Record<number, string> = { 1: 'Mono', 2: 'Stereo', 6: '5.1', 7: '6.1', 8: '7.1' }
+export const LAYOUTS: Record<number, string> = { 1: 'Mono', 2: 'Stereo', 6: '5.1', 7: '6.1', 8: '7.1' }
 
 /** "English · 5.1 · AC-3": what a viewer needs to tell two tracks of one file apart. */
 export function trackLabel(track: AudioTrack): string {

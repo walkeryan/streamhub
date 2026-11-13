@@ -187,3 +187,55 @@ test('stored preferences survive anything a browser might hand back', () => {
   assert.deepEqual(parsePrefs(JSON.stringify({ volume: 7, muted: 'yes', speed: 1.3, remaining: true, subtitle: 'English' })), { volume: 1, muted: false, speed: 1.25, remaining: true, subtitle: 'English' })
   assert.deepEqual(parsePrefs(JSON.stringify({ volume: 0.35, muted: true, speed: 0.1 })), { volume: 0.35, muted: true, speed: 0.5, remaining: false, subtitle: null })
 })
+
+// ---- stream information ----
+const { bufferedAhead, containerLabel, deliveryLabel, frameRateLabel, infoSections, rateLabel, sizeLabel, videoCodecLabel } = await import('../src/player/mediaInfo.ts')
+
+test('stream information labels read like a spec sheet', () => {
+  assert.equal(containerLabel('matroska'), 'MKV')
+  assert.equal(containerLabel('mov'), 'MP4')
+  assert.equal(containerLabel('nut'), 'NUT')
+  assert.equal(videoCodecLabel('hevc'), 'HEVC (H.265)')
+  assert.equal(videoCodecLabel('prores'), 'PRORES')
+  assert.equal(rateLabel(18_250), '18 Mbit/s')
+  assert.equal(rateLabel(4_600), '4.6 Mbit/s')
+  assert.equal(rateLabel(850), '850 kbit/s')
+  assert.equal(sizeLabel(3840, 1600), '3840 × 1600')
+  assert.equal(frameRateLabel(23.976), '23.976 fps')
+  assert.equal(frameRateLabel(25), '25 fps')
+  assert.equal(deliveryLabel({ delivery: 'direct' }), 'Direct: the file as it is')
+  assert.equal(deliveryLabel({ delivery: 'remux' }), 'Remux: video copied, not re-encoded')
+  assert.equal(deliveryLabel({ delivery: 'transcode', encoder: 'software' }), 'Transcode: video re-encoded in software')
+  assert.equal(deliveryLabel({ delivery: 'transcode' }), 'Transcode: video re-encoded')
+})
+
+test('the panel has a row only for what is known', () => {
+  const full = infoSections({
+    source_name: 'Library', container: 'matroska', bitrate_kbps: 9_400,
+    video: { codec: 'h264', width: 1920, height: 1080, frame_rate: 25, dynamic_range: 'sdr' },
+    audio: { codec: 'ac3', channels: 6, language: 'fra' },
+    delivery: 'remux', output_width: 1920, output_height: 1080,
+  }, null)
+  assert.deepEqual(full.map((s) => s.title), ['Source', 'Video', 'Audio', 'Delivery'])
+  assert.deepEqual(full[3].rows, [['Method', 'Remux: video copied, not re-encoded'], ['Audio sent as', 'AAC stereo'], ['Picture sent', '1920 × 1080']])
+  assert.deepEqual(full[2].rows, [['Codec', 'AC-3'], ['Channels', '5.1'], ['Language', 'French']])
+  // A channel: the source and the delivery, no empty Video or Audio heading.
+  assert.deepEqual(infoSections({ source_name: 'Antenna', delivery: 'direct' }, null), [
+    { title: 'Source', rows: [['From', 'Antenna']] },
+    { title: 'Delivery', rows: [['Method', 'Direct: the file as it is']] },
+  ])
+  assert.deepEqual(infoSections(null, null), [])
+  const live = { bufferedAheadS: 12.34, droppedFrames: 3, totalFrames: 4200, downloadKbps: null, positionS: 3725, streamStartS: 3600, decodedWidth: 1920, decodedHeight: 800, speed: 1 }
+  assert.deepEqual(infoSections(null, live), [{ title: 'Player', rows: [
+    ['Position', '1:02:05'], ['Stream starts at', '1:00:00'], ['Buffered ahead', '12.3 s'], ['Dropped frames', '3 of 4200'], ['Decoding', '1920 × 800'],
+  ] }])
+  const measured = infoSections(null, { ...live, downloadKbps: 24_100, streamStartS: null, speed: 1.5, droppedFrames: null })[0].rows
+  assert.deepEqual(measured, [['Position', '1:02:05'], ['Buffered ahead', '12.3 s'], ['Download', '24 Mbit/s'], ['Decoding', '1920 × 800'], ['Speed', '1.5×']])
+})
+
+test('buffered ahead is counted in the range the playhead is in', () => {
+  assert.equal(bufferedAhead([[0, 30], [60, 90]], 10), 20)
+  assert.equal(bufferedAhead([[0, 30], [60, 90]], 75), 15)
+  assert.equal(bufferedAhead([[0, 30], [60, 90]], 45), 0)
+  assert.equal(bufferedAhead([], 0), 0)
+})

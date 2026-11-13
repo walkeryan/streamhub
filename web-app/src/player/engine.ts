@@ -15,6 +15,8 @@ export interface PlayerHandle {
   subtitleTracks: () => TrackInfo[]
   /** -1 turns subtitles off */
   setSubtitle: (id: number) => void
+  /** The engine's measured download rate in kbit/s, when it keeps one (the stream information panel shows it). */
+  downloadKbps?: () => number | null
 }
 
 export interface AttachOptions {
@@ -98,6 +100,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
       setAudio: (id) => { hls.audioTrack = id },
       subtitleTracks: () => hls.subtitleTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Subtitles ${i + 1}`, active: hls.subtitleTrack === i })),
       setSubtitle: (id) => { hls.subtitleTrack = id; hls.subtitleDisplay = id >= 0 },
+      downloadKbps: () => (Number.isFinite(hls.bandwidthEstimate) && hls.bandwidthEstimate > 0 ? hls.bandwidthEstimate / 1000 : null),
     }
   }
 
@@ -111,9 +114,12 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
       { enableStashBuffer: true, liveBufferLatencyChasing: false, isLive: live, lazyLoad: false },
     )
     p.on(mpegts.Events.ERROR, (type: string, detail: string) => opt.onFatal(`${type}: ${detail}`))
+    // The library reports its loader speed in KB/s.
+    let speed: number | null = null
+    p.on(mpegts.Events.STATISTICS_INFO, (info: { speed?: number }) => { speed = typeof info.speed === 'number' && info.speed > 0 ? info.speed * 8 : null })
     p.attachMediaElement(video)
     p.load()
-    return { kind: 'mpegts', destroy: () => { try { p.unload(); p.detachMediaElement(); p.destroy() } catch { /* already gone */ } }, ...noTracks, ...nativeTextTracks(video) }
+    return { kind: 'mpegts', destroy: () => { try { p.unload(); p.detachMediaElement(); p.destroy() } catch { /* already gone */ } }, ...noTracks, ...nativeTextTracks(video), downloadKbps: () => speed }
   }
 
   if (kind === 'dash') {
@@ -139,6 +145,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
       setAudio: (id) => { const t = player.getAudioTracks()[id]; if (t) player.selectAudioTrack(t) },
       subtitleTracks: () => player.getTextTracks().map((t, i) => ({ id: i, label: t.label || t.language || `Subtitles ${i + 1}`, active: t.active })),
       setSubtitle: (id) => { player.selectTextTrack(player.getTextTracks()[id] ?? null) },
+      downloadKbps: () => { const rate = player.getStats().estimatedBandwidth; return Number.isFinite(rate) && rate > 0 ? rate / 1000 : null },
     }
   }
 

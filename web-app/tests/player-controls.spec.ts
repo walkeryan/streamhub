@@ -65,7 +65,7 @@ test('the control bar is one row of named controls; the time readout can count d
   await play(page, CONVERTED)
   await page.mouse.move(600, 300)
   const bar = page.getByTestId('player-bar')
-  for (const name of ['Pause', 'Back 10 seconds', 'Forward 10 seconds', 'Mute', 'Subtitles', 'Audio', 'Settings', 'Picture in picture', 'Full screen']) {
+  for (const name of ['Pause', 'Back 10 seconds', 'Forward 10 seconds', 'Mute', 'Subtitles', 'Audio', 'Settings', 'Stream information', 'Picture in picture', 'Full screen']) {
     await expect(bar.getByRole('button', { name, exact: true })).toBeVisible()
   }
   for (const size of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
@@ -302,8 +302,8 @@ test('a remote: OK pauses onto the scrubber, the arrows reach every control, and
     if (seen.at(-1) === label) break
     seen.push(label)
   }
-  expect(seen.map((label) => label.replace(/^\d.*/, 'time'))).toEqual(['Back 10 seconds', 'Forward 10 seconds', 'Mute', 'time', 'Subtitles', 'Audio', 'Settings', 'Picture in picture', 'Full screen'])
-  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowLeft')
+  expect(seen.map((label) => label.replace(/^\d.*/, 'time'))).toEqual(['Back 10 seconds', 'Forward 10 seconds', 'Mute', 'time', 'Subtitles', 'Audio', 'Settings', 'Stream information', 'Picture in picture', 'Full screen'])
+  for (let i = 0; i < 6 && (await focusLabel(page)) !== 'Audio'; i++) await page.keyboard.press('ArrowLeft')
   await expect.poll(() => focusLabel(page)).toBe('Audio')
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('Enter')
@@ -363,6 +363,42 @@ test('Media Session: title for the lock screen, and its play, pause and seek con
   await expect(page.getByTestId('seek-hint')).toHaveText('+10 s')
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'MediaStop', bubbles: true })))
   await expect(page.getByTestId('player')).toHaveCount(0)
+})
+
+test('stream information: what is playing, how it is delivered, and what the player measures', async ({ page }) => {
+  await enter(page)
+  await play(page, CONVERTED)
+  await page.keyboard.press('Shift+ArrowRight')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-stream-start', '60000')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await page.keyboard.press('i')
+  const panel = page.getByTestId('player-info')
+  await expect(panel).toBeVisible()
+  const rows = (section: string) => panel.locator(`[data-section="${section}"] dl > div`).evaluateAll((all) => all.map((row) => [row.querySelector('dt')!.textContent, row.querySelector('dd')!.textContent]))
+  expect(await rows('Source')).toEqual([['From', 'IPTV'], ['Container', 'MKV'], ['Bit rate', '18 Mbit/s']])
+  expect(await rows('Video')).toEqual([['Codec', 'HEVC (H.265)'], ['Resolution', '3840 × 1600'], ['Frame rate', '23.976 fps'], ['Range', 'HDR10']])
+  expect(await rows('Audio')).toEqual([['Codec', 'E-AC-3'], ['Channels', '5.1'], ['Language', 'English']])
+  expect(await rows('Delivery')).toEqual([['Method', 'Transcode: video re-encoded by hardware'], ['Audio sent as', 'AAC stereo'], ['Picture sent', '1920 × 800']])
+  // The player's own numbers: where it is, where this stream began, what it has ahead, what it dropped.
+  await expect.poll(async () => Object.fromEntries(await rows('Player'))).toMatchObject({ Position: expect.stringMatching(/^1:0\d$/), 'Stream starts at': '1:00', 'Buffered ahead': expect.stringMatching(/^\d+\.\d s$/), 'Dropped frames': expect.stringMatching(/^\d+ of \d+$/) })
+  const first = Object.fromEntries(await rows('Player')).Position
+  await expect.poll(async () => Object.fromEntries(await rows('Player')).Position).not.toBe(first)
+  // It is a panel, not a dialog: playback and the keys carry on behind it, and the button says it is open.
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+  await page.mouse.move(600, 300)
+  await expect(page.getByTestId('player-info-btn')).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.press('k')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'paused')
+  // Back closes it before anything else; the player stays.
+  await page.keyboard.press('Escape')
+  await expect(panel).toHaveCount(0)
+  await expect(page.getByTestId('player')).toBeVisible()
+  await page.getByTestId('player-info-btn').click()
+  await expect(panel).toBeVisible()
+  await panel.getByRole('button', { name: 'Close stream information' }).click()
+  await expect(panel).toHaveCount(0)
+  // Nothing the server sends for it is an address.
+  expect(JSON.stringify(await page.evaluate(() => document.querySelector('[data-testid="player"]')!.textContent))).not.toMatch(/https?:|\/mock\//)
 })
 
 test('a live channel keeps its keys: Up and Down zap, digits are channel numbers, and nothing offers a speed', async ({ page }) => {

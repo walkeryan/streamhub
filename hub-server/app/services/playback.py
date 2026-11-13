@@ -47,6 +47,7 @@ from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
 from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError
+from app.services.media_info import media_info
 from app.services.media_probe import cached_probe
 from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
@@ -1071,6 +1072,8 @@ class PlaybackResolver:
             kind=row.kind,
             private=bool(row.adult),
             room=room.code if room is not None and room.shared else None,
+            # Whatever a probe has already learned; nothing is probed for the sake of this.
+            probe=cached_probe(row.extra),
         )
 
         desc.update(await self._runtime_audio(profile_id, row.extra or {}, audio_consent))
@@ -1228,6 +1231,14 @@ class PlaybackResolver:
             "audio_tracks": vod.tracks if vod is not None else [],
             "audio_track": plan.audio_track if plan else None,
             "start_position_ms": plan.start_s * 1000 if plan else None,
+            "media_info": media_info(
+                source_name=row.channel_name or None,
+                probe=probe,
+                audio_track=vod.audio_track if vod is not None else None,
+                mode=mode.value,
+                video_plan=plan.video if plan else None,
+                hw=str(self._settings.get("transcode_hw") or "none"),
+            ),
             "title": row.title,
             "subtitle": row.subtitle or row.channel_name or None,
             "poster": None,
@@ -1389,6 +1400,7 @@ class PlaybackResolver:
         kind: str | None = None,
         private: bool = False,
         room: str | None = None,
+        probe: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         mode = decide_mode(
             client=client,
@@ -1473,6 +1485,15 @@ class PlaybackResolver:
             "audio_tracks": vod.tracks if vod is not None else [],
             "audio_track": plan.audio_track if plan else None,
             "start_position_ms": plan.start_s * 1000 if plan else None,
+            "media_info": media_info(
+                source_name=src.name,
+                probe=probe,
+                audio_track=vod.audio_track if vod is not None else None,
+                mode=mode.value,
+                video_plan=plan.video if plan else None,
+                hw=str(self._settings.get("transcode_hw") or "none"),
+                live_transcode=transcode and plan is None,
+            ),
             "title": title,
             "subtitle": subtitle,
             "poster": poster,
