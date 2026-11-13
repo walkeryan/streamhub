@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -13,7 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import ColumnElement, Select, String, case, cast, func, literal, or_, select, text, true
 
 from app.adapters.language.inferrer import normalise_code
-from app.domain.entities import CatalogItem, MediaKind
+from app.domain.entities import CatalogItem, MediaKind, MetaTitle, SourceType
 from app.domain.ports import DetailProvider, ImageAuthProvider, MetadataProvider
 from app.infra.crypto import Crypto
 from app.infra.db import Database
@@ -51,6 +52,14 @@ NEW_RELEASES = "New Releases"
 # A shelf that received nothing for this long counts half when shelves are ranked.
 SHELF_FRESH = timedelta(days=30)
 HOME_SHELVES = "home_shelves"
+# All the remote lookups of one search may take this long together; the answer then goes out without the rest.
+DISCOVERY_BUDGET = 2.5
+# How long the metadata provider's answer for a query is kept, and for how many queries.
+DISCOVERY_TTL = 300.0
+DISCOVERY_KEPT = 256
+# One-typo matches join a title search only when it found fewer than this, for a query at least this long.
+TYPO_BELOW = 5
+TYPO_MIN_LENGTH = 4
 
 
 def _escape_like(s: str) -> str:
@@ -82,6 +91,11 @@ class CatalogService:
         self.availability = availability
         self.meta = meta
         self._metadata_slots = asyncio.Semaphore(6)
+        # What the metadata provider answered for a query, for a few minutes; and the searches still
+        # in flight, so that one outliving its budget is waited on, not asked again.
+        self._discovered: dict[str, tuple[float, list[MetaTitle]]] = {}
+        self._discovering: dict[str, asyncio.Task[list[MetaTitle]]] = {}
+        self._late: set[asyncio.Future[Any]] = set()
 
     content_policy: Any = None
 
@@ -965,10 +979,13 @@ class CatalogService:
         language: str | None = None,
         source_id: str | None = None,
         expand: frozenset[str] = frozenset(),
+        discover: bool = True,
     ) -> dict[str, Any]:
         """Titles, channels and guide broadcasts for one query; each section capped and counted.
 
         ``expand`` names the sections to return in full (up to ``EXPANDED_CAP``): "Show more".
+        Without ``discover`` the answer is what the hub holds, and no remote provider is asked:
+        what a client shows at once, while the full answer is on its way.
         """
         from app.services.channels import ChannelService
 
@@ -1008,7 +1025,7 @@ class CatalogService:
             (found_channels, channel_total, channel_rank),
             (broadcasts, broadcast_total, more),
         ) = await asyncio.gather(
-            self._search_titles(q, profile_id, want, limit, language, source_id), channels(), programmes()
+            self._search_titles(q, profile_id, want, limit, language, source_id, discover), channels(), programmes()
         )
         count = titles.pop("count")
         return {
@@ -1024,10 +1041,76 @@ class CatalogService:
             "attribution": ATTRIBUTION,
         }
 
+    async def _provider_search(self, query: str) -> list[MetaTitle]:
+        """The metadata provider's answer for a query: asked once, kept for ``DISCOVERY_TTL``.
+
+        Concurrent callers share the one search in flight, and it is never cancelled with its
+        caller: an answer that comes after the caller's budget is there for the next request.
+        """
+        key = " ".join(query.split()).casefold()
+        kept = self._discovered.get(key)
+        if kept is not None and kept[0] > time.monotonic():
+            return kept[1]
+        task = self._discovering.get(key)
+        if task is None:
+
+            async def ask() -> list[MetaTitle]:
+                try:
+                    metas = await self.meta.search(query, limit=40)
+                finally:
+                    self._discovering.pop(key, None)
+                self._discovered.pop(key, None)
+                while len(self._discovered) >= DISCOVERY_KEPT:
+                    self._discovered.pop(next(iter(self._discovered)))
+                self._discovered[key] = (time.monotonic() + DISCOVERY_TTL, metas)
+                return metas
+
+            task = self._discovering[key] = asyncio.create_task(ask())
+            # A failure nobody is left waiting for is not an unhandled one.
+            task.add_done_callback(lambda done: done.cancelled() or done.exception())
+        return await asyncio.shield(task)
+
+    async def _in_time(self, work: dict[Any, Any], seconds: float) -> tuple[dict[Any, Any], bool]:
+        """Run remote lookups side by side for at most ``seconds``: ``(what finished, all finished)``.
+
+        A lookup still running is left to finish, so that its provider-side cache holds the
+        answer next time; one that failed is simply absent.
+        """
+        if not work:
+            return {}, True
+        tasks = {key: asyncio.ensure_future(job) for key, job in work.items()}
+        _, pending = await asyncio.wait(tasks.values(), timeout=max(seconds, 0.0))
+        for task in pending:
+            self._late.add(task)
+            task.add_done_callback(self._finished_late)
+        finished = {
+            key: task.result()
+            for key, task in tasks.items()
+            if task not in pending and not task.cancelled() and task.exception() is None
+        }
+        return finished, not pending
+
+    def _finished_late(self, task: asyncio.Future[Any]) -> None:
+        self._late.discard(task)
+        if not task.cancelled():
+            task.exception()  # looked at, so a failure nobody waited for is not reported as unhandled
+
     async def _search_titles(
-        self, q: str, profile_id: str, want: set[str], limit: int, language: str | None, source_id: str | None
+        self,
+        q: str,
+        profile_id: str,
+        want: set[str],
+        limit: int,
+        language: str | None,
+        source_id: str | None,
+        discover: bool = True,
     ) -> dict[str, Any]:
-        """The titles of a search, ranked: the library's own rows and what metadata discovery adds."""
+        """The titles of a search, ranked: the library's own rows and what metadata discovery adds.
+
+        The library half is one bounded SQL pass and never leaves the hub. Discovery asks the
+        metadata provider, within ``DISCOVERY_BUDGET`` in all: past it the answer goes out with
+        what has arrived, marked incomplete so that it is not cached as the whole of it.
+        """
         ctx = await self.tile_context(profile_id)
         enabled = self._enabled(ctx)
         # "the mill 2023": the year narrows, and is not part of the name that is matched.
@@ -1044,6 +1127,7 @@ class CatalogService:
         tokens = search_tokens(norm)
         words = anchors(tokens) or norm.split()[:8]
         rows: list[Title] = []
+        unlisted = 0  # library matches counted but not built into tiles: beyond what a page can use
         if norm and lib_kinds and words and enabled:
             # FTS supplies candidate IDs only. The ORM scope below still enforces
             # enabled sources, profile classifications, kinds and language filters.
@@ -1064,14 +1148,6 @@ class CatalogService:
             if year:
                 query = query.where(or_(Title.year == year, Title.title.like(f"%{year}%")))
             query = self._filter_title_languages(query, languages)
-            normalized = func.canonical_title_key(Title.title)
-            phrase_rank = case(
-                (normalized == norm, 0),
-                (normalized.like(_escape_like(norm) + "%", escape="\\"), 1),
-                (normalized.like("% " + _escape_like(norm) + "%", escape="\\"), 2),
-                (normalized.like("%" + _escape_like(norm) + "%", escape="\\"), 3),
-                else_=4,
-            )
             score: ColumnElement[int] = literal(0)
             for word in words:
                 score = score + case((Title.norm_title.like("%" + _escape_like(word) + "%", escape="\\"), 1), else_=0)
@@ -1079,71 +1155,82 @@ class CatalogService:
                 ((Title.tmdb_id > 0) & Title.kind.in_(("movie", "vod", "show", "series")), self._canonical_key()),
                 else_=literal("lib:") + Title.source_id + ":" + Title.ext_id,
             )
-            # Bound expensive canonical-title UDF work after a cheap SQL pass.
-            # Budget distinct works so duplicate editions cannot crowd them out.
-            cheap_phrase = case(
+            # Ranked in SQL on the stored normalised title: exact, the whole title after a provider's
+            # prefix (which the stored form keeps: it is the exact title once shown), title prefix,
+            # word prefix, contains. Two letters can start a word in a fifth of a catalog, so the
+            # work is bounded at every step: a plain top-N of the matches first, then one row per
+            # work among those (duplicate editions cannot crowd others out), then only as many
+            # full rows as a page can use reach Python, where the shown title decides the order.
+            phrase = case(
                 (Title.norm_title == norm, 0),
                 (Title.norm_title.like("% " + _escape_like(norm), escape="\\"), 1),
                 (Title.norm_title.like("% " + _escape_like(norm) + " " + cast(Title.year, String), escape="\\"), 1),
-                (Title.norm_title.like(_escape_like(norm) + "%", escape="\\"), 1),
-                (Title.norm_title.like("% " + _escape_like(norm) + "%", escape="\\"), 2),
-                (Title.norm_title.like("%" + _escape_like(norm) + "%", escape="\\"), 3),
-                else_=4,
+                (Title.norm_title.like(_escape_like(norm) + "%", escape="\\"), 2),
+                (Title.norm_title.like("% " + _escape_like(norm) + "%", escape="\\"), 3),
+                (Title.norm_title.like("%" + _escape_like(norm) + "%", escape="\\"), 4),
+                else_=5,
             )
-            cheap_order = (cheap_phrase, score.desc(), func.length(Title.norm_title), Title.id)
-            preliminary = query.with_only_columns(
-                Title.id.label("id"),
-                cheap_phrase.label("phrase"),
-                score.label("score"),
-                func.length(Title.norm_title).label("length"),
-                func.row_number().over(partition_by=work, order_by=cheap_order).label("edition"),
-            ).subquery()
-            candidate_ids = (
-                select(preliminary.c.id)
-                .where(preliminary.c.edition == 1)
-                .order_by(preliminary.c.phrase, preliminary.c.score.desc(), preliminary.c.length, preliminary.c.id)
-                .limit(CANDIDATE_LIMIT * 4)
-            )
-            query = select(Title).where(Title.id.in_(candidate_ids))
-            ranked = query.with_only_columns(
-                Title.id.label("id"),
-                phrase_rank.label("phrase_rank"),
-                score.label("score"),
-                func.length(normalized).label("title_length"),
-                func.row_number()
-                .over(partition_by=work, order_by=(phrase_rank, score.desc(), func.length(normalized), Title.id))
-                .label("edition_rank"),
-            ).subquery()
-            representatives = (
-                select(ranked.c.id)
-                .where(ranked.c.edition_rank == 1)
-                .order_by(
-                    ranked.c.phrase_rank,
-                    ranked.c.score.desc(),
-                    ranked.c.title_length,
-                    ranked.c.id,
+            length = func.length(Title.norm_title)
+            best = (
+                query.with_only_columns(
+                    Title.id.label("id"),
+                    phrase.label("phrase"),
+                    score.label("score"),
+                    length.label("length"),
+                    work.label("work"),
                 )
+                .order_by(phrase, score.desc(), length, Title.id)
+                .limit(CANDIDATE_LIMIT * 4)
+                .subquery()
+            )
+            order = (best.c.phrase, best.c.score.desc(), best.c.length, best.c.id)
+            ranked = select(
+                best.c.id,
+                best.c.phrase,
+                best.c.score,
+                best.c.length,
+                func.row_number().over(partition_by=best.c.work, order_by=order).label("edition"),
+            ).subquery()
+            named_rows = (
+                select(Title.id, Title.title)
+                .join(ranked, ranked.c.id == Title.id)
+                .where(ranked.c.edition == 1)
+                .order_by(ranked.c.phrase, ranked.c.score.desc(), ranked.c.length, ranked.c.id)
                 .limit(CANDIDATE_LIMIT)
             )
             async with self._db.session() as session:
-                rows = list((await session.execute(select(Title).where(Title.id.in_(representatives)))).scalars())
-            rows = [
-                row
-                for row in rows
-                if norm in ids.normalise_title(ids.clean_display_title(row.title))
-                or token_match_rank(tokens, ids.normalise_title(ids.clean_display_title(row.title))) is not None
-            ]
+                candidates = (await session.execute(named_rows)).all()
+                shown = {pk: ids.normalise_title(ids.clean_display_title(name)) for pk, name in candidates}
+                loose = {pk: token_match_rank(tokens, shown[pk]) for pk in shown if norm not in shown[pk]}
+                found = [pk for pk in shown if norm in shown[pk] or loose[pk] in (0, 1)]
+                # A word one typo away is a guess: offered only when little else was found, and
+                # never for a query too short to tell a typo from another word.
+                if len(found) < TYPO_BELOW and len(norm) >= TYPO_MIN_LENGTH:
+                    found += [pk for pk in shown if loose.get(pk) == 2]
+                # Three pages' worth is enough to choose one page from: the SQL order above and
+                # the final one differ only in how a provider's decorations are read.
+                page = found[: max(limit * 3, 120)]
+                unlisted = len(found) - len(page)
+                loaded = {
+                    row.id: row for row in (await session.execute(select(Title).where(Title.id.in_(page)))).scalars()
+                }
+            rows = [loaded[pk] for pk in page if pk in loaded]
         local_tiles = ctx.merge(ctx.title_tile(r) for r in rows)
         combined = {tile["id"]: tile for tile in local_tiles}
-        metadata_available = False
+        discoverable = self.meta.enabled and bool({"movie", "show", "vod", "series"} & want)
+        metadata_available = discoverable and not discover
         metadata_incomplete = False
+        discovered: list[str] = []
         popularity: dict[str, float] = {}
         note = "Metadata discovery is not configured; searching your sources only."
-        if self.meta.enabled and ({"movie", "show", "vod", "series"} & want):
+        if discoverable:
+            note = "Metadata coverage varies. Language and source filters limit availability, not discovery."
+        if discoverable and discover:
+            clock = asyncio.get_running_loop().time
+            deadline = clock() + DISCOVERY_BUDGET
             try:
-                metas = await self.meta.search(named if year else q, limit=40)
+                metas = await asyncio.wait_for(self._provider_search(named if year else q), DISCOVERY_BUDGET)
                 metadata_available = True
-                note = "Metadata coverage varies. Language and source filters limit availability, not discovery."
                 metas = [
                     m
                     for m in metas
@@ -1161,12 +1248,17 @@ class CatalogService:
                     for r in rows
                     if r.tmdb_id and ids.tmdb_type_for_kind(r.kind) and hub_id_for_title(r) not in by_id
                 ]
-                missing = list(dict.fromkeys(missing))[:20]
-                details = await asyncio.gather(
-                    *(self.meta.details(kind, tid) for kind, tid in missing if kind is not None), return_exceptions=True
+                details, whole = await self._in_time(
+                    {
+                        (kind, tid): self.meta.details(kind, tid)
+                        for kind, tid in list(dict.fromkeys(missing))[:20]
+                        if kind is not None
+                    },
+                    deadline - clock(),
                 )
-                for detail in details:
-                    if detail is not None and not isinstance(detail, BaseException):
+                metadata_incomplete = not whole
+                for detail in details.values():
+                    if detail is not None:
                         by_id[ids.tmdb_id(detail.media_type, detail.tmdb_id)] = detail
                 matched = await self.availability.library_matches_many(
                     list(by_id.values()), candidates=rows, general=True
@@ -1179,6 +1271,21 @@ class CatalogService:
                     )
                     async with self._db.session() as session:
                         eligible_ids = {r.id for r in (await session.execute(eligible_query)).scalars()}
+                scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
+                # Where else a title streams is a lookup per title, and only a household with a
+                # streaming service among its sources has any use for it.
+                handoffs: dict[str, list[dict[str, Any]]] = {}
+                if any(src.type == SourceType.STREAMING_SERVICE.value for src in scoped_sources.values()):
+
+                    async def elsewhere(meta: MetaTitle) -> list[dict[str, Any]]:
+                        async with self._metadata_slots:
+                            return await self.availability.handoff_badges(meta.media_type, meta.tmdb_id, scoped_sources)
+
+                    handoffs, whole = await self._in_time(
+                        {hub: elsewhere(meta) for hub, meta in by_id.items()}, deadline - clock()
+                    )
+                    metadata_incomplete = metadata_incomplete or not whole
+                local_ids, local_rows = set(combined), {r.id for r in rows}
                 for hub, meta in by_id.items():
                     popularity[hub] = meta.popularity
                     eligible = [r for r in matched[hub] if r.id in eligible_ids]
@@ -1190,13 +1297,20 @@ class CatalogService:
                         )
                         for r in eligible
                     ]
-                    scoped_sources = {sid: src for sid, src in ctx.sources.items() if sid in enabled}
-                    badges += await self.availability.handoff_badges(meta.media_type, meta.tmdb_id, scoped_sources)
+                    badges += handoffs.get(hub, [])
+                    # What discovery adds, as opposed to a library title it only gave its proper name.
+                    if hub not in local_ids and not any(r.id in local_rows for r in eligible):
+                        discovered.append(hub)
                     for row in eligible:
                         combined.pop(hub_id_for_title(row), None)
                     combined[hub] = meta_tile(
                         meta, sort_badges(badges, ctx.sources), ctx.favorites, ctx.progress_pct(hub)
                     )
+            except TimeoutError:
+                # Still being asked (see ``_provider_search``): the library's own answer goes out now.
+                note = "Metadata discovery is taking a while; showing source matches."
+                metadata_available = True
+                metadata_incomplete = True
             except Exception:
                 log.warning("Metadata discovery unavailable", exc_info=False)
                 note = "Metadata discovery is temporarily unavailable; showing source matches."
@@ -1220,8 +1334,9 @@ class CatalogService:
 
         if not combined and language is None and languages:
             # Nothing at all in the profile's languages: the same search in every language.
-            return await self._search_titles(q, profile_id, want, limit, "all", source_id)
+            return await self._search_titles(q, profile_id, want, limit, "all", source_id, discover)
         ordered = sorted(combined.values(), key=relevance)[:limit]
+        listed = {tile["id"] for tile in ordered}
         return {
             "results": ordered,
             "metadata_available": metadata_available,
@@ -1231,7 +1346,8 @@ class CatalogService:
             "open_in_app": [
                 tile for tile in ordered if tile["sources"] and not any(b["playable_in_app"] for b in tile["sources"])
             ],
-            "count": len(combined),
+            "discovered": [hub for hub in discovered if hub in listed],
+            "count": len(combined) + unlisted,
         }
 
     # ------------------------------------------------------------------ lists used by home

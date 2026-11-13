@@ -2379,6 +2379,8 @@ export interface paths {
                     language?: string;
                     source_id?: string;
                     expand?: string;
+                    /** @description false = only what the hub holds (its own titles, channels and broadcasts): no remote metadata provider is asked, so the answer is quick, and metadata_available still says whether discovery exists. A client shows that answer first and adds the titles named in the full answer's discovered list when it arrives. With discovery, all remote lookups of one search share a budget of about 2.5 s; past it the answer goes out with what has arrived. A provider's answer for a query is kept for a few minutes. */
+                    discover?: boolean;
                 };
                 header?: never;
                 path?: never;
@@ -6877,6 +6879,8 @@ export interface components {
             channels: components["schemas"]["Channel"][];
             /** @description Guide broadcasts whose title matches, on now first, then by start. Placeholder programmes (a title that repeats the channel's name) are never listed. */
             programmes: components["schemas"]["SearchProgramme"][];
+            /** @description Ids of the results that metadata discovery added: titles the hub's own search (discover=false) does not list. Always empty without discovery. */
+            discovered?: string[];
             /** @description How many each section found, and whether it has more than were returned (ask again with expand). */
             sections: {
                 titles: components["schemas"]["SearchSection"];
