@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.adapters.language.data import ISO1_TO_3, ISO2B_TO_3, LANG_KEYWORDS, LANG_NAMES
 from app.adapters.language.inferrer import lang_from_category, lang_from_token, normalise_code
+from app.domain.groups import GROUP_SEPARATOR, group_path
 
 UNKNOWN_LANGUAGE = "und"
 
@@ -56,6 +57,8 @@ class PresentationConfig:
     default_language: str | None = None
     hidden_groups: frozenset[str] = frozenset()
     adult_categories: frozenset[str] = frozenset()
+    # A panel has a few hundred groups and tens of thousands of channels: each group is worked out once.
+    _groups: dict[str, str | None] = field(default_factory=dict, compare=False, repr=False)
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> PresentationConfig:
@@ -80,7 +83,11 @@ class PresentationConfig:
         )
 
     def group(self, raw_group: str) -> str | None:
-        return present_group(raw_group, group_map=self.group_map, hidden_groups=self.hidden_groups)
+        if raw_group not in self._groups:
+            self._groups[raw_group] = present_group(
+                raw_group, group_map=self.group_map, hidden_groups=self.hidden_groups
+            )
+        return self._groups[raw_group]
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -138,6 +145,15 @@ _ACRONYMS = frozenset(
     {"TV", "PPV", "VIP", "VOD", "HD", "FHD", "UHD", "SD", "3D", "4K", "IMAX", "UK", "US", "USA", "EU", "DC"}
     | {"NFL", "NBA", "NHL", "MLB", "MLS", "NCAA", "UFC", "WWE", "MMA", "F1", "UEFA", "FIFA"}
 )
+# Channel groups are named after networks and leagues far more often than shelves are.
+_GROUP_ACRONYMS = _ACRONYMS | frozenset(
+    {"ABC", "CBS", "NBC", "FOX", "CW", "PBS", "ESPN", "BTN", "TNT", "TBS", "HBO", "AMC", "MTV", "BET", "CNN", "BBC"}
+    | {"NCAAF", "NCAAB"}
+)
+_CONSONANTS = frozenset("BCDFGHJKLMNPQRSTVWXZ")  # not Y: SKY and MY are words
+_LETTERS_THEN_DIGITS = re.compile(r"([^\W\d_]+)\d*")
+# Providers name a group after one of its channels; a viewer reads it as the kind of channel.
+_PLURALS = {"sport": "sports", "movie": "movies", "kid": "kids", "documentary": "documentaries"}
 _SMALL_WORDS = frozenset({"a", "an", "and", "for", "in", "of", "on", "or", "the", "to"})
 _NAME_TO_CODE = {name.upper(): code for code, name in LANG_NAMES.items() if code != UNKNOWN_LANGUAGE}
 
@@ -164,14 +180,25 @@ def _strip_noise(text: str) -> tuple[str, bool]:
     return " ".join(plain.split()).strip(_EDGE_PUNCTUATION), four_k
 
 
-def _title_case(text: str) -> str:
+def _is_group_acronym(part: str) -> bool:
+    """Upper-case letters (a channel number may follow: ``TNT2``) that are an abbreviation, not a word."""
+    found = _LETTERS_THEN_DIGITS.fullmatch(part)
+    letters = found.group(1) if found else part
+    return (
+        part in _GROUP_ACRONYMS
+        or letters in _GROUP_ACRONYMS
+        or (len(letters) in (2, 3) and _CONSONANTS.issuperset(letters))
+    )
+
+
+def _title_case(text: str, is_acronym: Callable[[str], bool] = _ACRONYMS.__contains__) -> str:
     def cased(match: re.Match[str]) -> str:
         part = match.group(0)
-        return part if part in _ACRONYMS else part.capitalize()
+        return part if is_acronym(part) else part.capitalize()
 
     out: list[str] = []
     for word in text.split():
-        if not word.isupper() or word in _ACRONYMS:
+        if not word.isupper() or is_acronym(word):
             out.append(word)  # mixed case was written deliberately
         elif out and word.lower() in _SMALL_WORDS:
             out.append(word.lower())
@@ -269,19 +296,51 @@ def present_title(
     )
 
 
+def _group_name(cleaned: str) -> str:
+    """The default display name of a group: title case, abbreviations kept, the kind of channel in the plural."""
+    words = _title_case(cleaned, _is_group_acronym).split()
+    for index in range(len(words) - 1, -1, -1):
+        word = words[index]
+        if word.isdigit() or _is_group_acronym(word):
+            continue  # "SPORT PPV", "MOVIE 2": the word being described comes before these
+        plural = _PLURALS.get(word.lower())
+        if plural:
+            words[index] = plural.capitalize() if word[0].isupper() else plural
+        break
+    # Nesting is an operator's decision (``group_map``); a provider's own " / " must not make a second level.
+    return " ".join(words).replace(GROUP_SEPARATOR, "/")
+
+
+def _keyed(names: Collection[str], candidates: Collection[str]) -> str | None:
+    """The first configured name that is one of ``candidates``: as written first, then whatever its case."""
+    for candidate in candidates:
+        if candidate in names:
+            return candidate
+    folded = {name.casefold(): name for name in reversed(list(names))}
+    for candidate in candidates:
+        found = folded.get(candidate.casefold())
+        if found is not None:
+            return found
+    return None
+
+
 def present_group(raw_group: str, *, group_map: Mapping[str, str], hidden_groups: Collection[str] = ()) -> str | None:
-    """Display name for a live channel group; ``None`` means the group is hidden."""
+    """Display name for a live channel group; ``None`` means the group is hidden.
+
+    A ``group_map`` value may be a path of two levels, ``Parent / Child``. Config keys name a group
+    by the provider's name, by the name this function gives it, or by the name it gave before
+    abbreviations and plurals were handled ("Sport", "Abc"): configs written then keep working.
+    """
     group = " ".join((raw_group or "").split())
-    if raw_group in hidden_groups or group in hidden_groups:
-        return None
-    mapped = group_map.get(raw_group) or group_map.get(group)
-    if mapped:
-        return mapped
     remainder = group
     tag = _LEADING_TAG.match(group)
     # "XX| " is a country tag whatever the letters; other separators need a known code.
     if tag and ("|" in tag.group("sep") or lang_from_token(tag.group("tag"))):
         remainder = group[tag.end() :]
     cleaned, _ = _strip_noise(remainder)
-    name = _title_case(cleaned) or group or "Uncategorized"
-    return None if name in hidden_groups else name
+    name = _group_name(cleaned) or group or "Uncategorized"
+    known_as = (raw_group, group, _title_case(cleaned) or group or "Uncategorized", name)
+    if _keyed(hidden_groups, known_as) is not None:
+        return None
+    key = _keyed(group_map.keys(), known_as)
+    return (group_path(group_map[key]) if key is not None else "") or name
