@@ -7,10 +7,13 @@ export const API_BASE = '/api/v1'
 export class ApiError extends Error {
   status: number
   code?: string
-  constructor(status: number, message: string, code?: string) {
+  /** The whole error body, for errors that say more than code and message (source_busy). */
+  body?: unknown
+  constructor(status: number, message: string, code?: string, body?: unknown) {
     super(message)
     this.status = status
     this.code = code
+    this.body = body
   }
 }
 
@@ -72,7 +75,7 @@ export async function unwrap<T>(p: Promise<{ data?: unknown; error?: unknown; re
   const { data, error, response } = await p
   if (!response.ok) {
     const e = error as { message?: string; code?: string } | undefined
-    throw new ApiError(response.status, e?.message ?? response.statusText ?? 'Request failed', e?.code)
+    throw new ApiError(response.status, e?.message ?? response.statusText ?? 'Request failed', e?.code, error)
   }
   return data as T
 }
@@ -82,7 +85,7 @@ export async function ok(p: Promise<{ error?: unknown; response: Response }>): P
   const { error, response } = await p
   if (!response.ok) {
     const e = error as { message?: string; code?: string } | undefined
-    throw new ApiError(response.status, e?.message ?? response.statusText ?? 'Request failed', e?.code)
+    throw new ApiError(response.status, e?.message ?? response.statusText ?? 'Request failed', e?.code, error)
   }
 }
 

@@ -8,6 +8,8 @@
   (or libx264 / VAAPI when enabled) into ``<transcode>/<id>/``; idle sessions are reaped.
 - **Web VOD** (``VodPlan``): a file a browser cannot decode becomes an HLS session of its own,
   with the video copied or transcoded and one audio track encoded to AAC stereo.
+- Every session carries the ``Viewer`` its grant named, so a profile turned away by a source's
+  connection limit can be told who holds the connections (``active_viewers``).
 
 Seeking in a web VOD session is restart-at-offset. A session starts at ``start_s`` (``-ss`` before
 ``-i``) and its playlist only ever lists what ffmpeg has produced since, as an ``EVENT`` playlist
@@ -33,6 +35,7 @@ import shutil
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -69,6 +72,29 @@ UPSTREAM_STATUS = re.compile(rb"Server returned (\d[\dX]{2})")
 
 class HlsSourceBusy(Exception):
     """Another recently polled HLS channel occupies this source’s connection budget."""
+
+
+class UpstreamRefused(ConnectionError):
+    """The source answered a stream open with an HTTP error, or hung up before answering.
+
+    ``status`` is the code as text ("403"; ffmpeg names some only by class, "4XX" or "5XX"),
+    or ``None`` when the connection closed without a response.
+    """
+
+    def __init__(self, status: str | None) -> None:
+        super().__init__(f"upstream {status or 'closed'}")
+        self.status = status
+
+
+@dataclass(frozen=True, slots=True)
+class Viewer:
+    """Who a stream is for, as its playback grant said; named in a ``source_busy`` answer."""
+
+    profile_id: str
+    title: str | None = None
+    kind: str | None = None
+    ref: str | None = None  # content id, so the answer can hide what the refused profile may not see
+    since: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 HOP_HEADERS = {"content-type", "content-length", "accept-ranges", "content-range", "last-modified", "etag"}
@@ -137,6 +163,7 @@ class SharedUpstream:
         self.failed: str | None = None
         self.closed = False
         self.source_id: str | None = None
+        self.viewers: dict[asyncio.Queue[bytes | None], Viewer] = {}
 
     @property
     def subscribers(self) -> int:
@@ -156,6 +183,7 @@ class SharedUpstream:
 
     def unsubscribe(self, q: asyncio.Queue[bytes | None]) -> None:
         self._subs.discard(q)
+        self.viewers.pop(q, None)
         if not self.closed and not self._subs and self._linger is None:
             loop = asyncio.get_running_loop()
             self._linger = loop.call_later(LINGER_S, self._close_if_idle)
@@ -183,6 +211,7 @@ class SharedUpstream:
             except asyncio.QueueFull:
                 # slow client: drop it rather than stall everyone
                 self._subs.discard(q)
+                self.viewers.pop(q, None)
                 with contextlib.suppress(asyncio.QueueFull):
                     q.get_nowait()
                     q.put_nowait(None)
@@ -242,6 +271,8 @@ class HlsSession:
     label: str = ""
     fallbacks: list[tuple[str, list[str]]] = field(default_factory=list)
     upstream_status: str | None = None
+    # profile id -> (viewer, when it last asked for the playlist); a live channel can have several.
+    viewers: dict[str, tuple[Viewer, float]] = field(default_factory=dict)
 
     @property
     def complete(self) -> bool:
@@ -280,6 +311,7 @@ class HttpSession:
     source_id: str | None = None
     counted: bool = False
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    viewer: Viewer | None = None
 
 
 def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
@@ -698,6 +730,33 @@ class StreamProxy:
                 raise Forbidden("Multiview lease belongs to another session.")
             await self._release_pair_locked(lease_id)
 
+    def active_viewers(self, source_id: str) -> list[Viewer]:
+        """Whose streams hold this source's connections right now, longest-running first."""
+        now = self._clock()
+        found: list[Viewer] = []
+        for hls in self._hls.values():
+            if hls.source_id == source_id and not hls.complete:
+                found += [viewer for viewer, seen in hls.viewers.values() if now - seen <= HLS_IDLE_S]
+        found += [s.viewer for s in self._http if s.source_id == source_id and s.viewer is not None]
+        for up in self._shared.values():
+            if up.source_id == source_id:
+                found += up.viewers.values()
+        # A player opens several connections for one title (ranges, segments): name it once.
+        unique: dict[tuple[str, str | None], Viewer] = {}
+        for viewer in sorted(found, key=lambda v: v.since):
+            unique.setdefault((viewer.profile_id, viewer.ref or viewer.title), viewer)
+        return list(unique.values())
+
+    def refused_at_limit(self, source_id: str, maximum: int | None) -> bool:
+        """Was a stream the source just refused its last free connection, with other streams on the rest?
+
+        Then the limit is the likely cause: something this server does not track holds a connection.
+        Without another stream of ours the refusal says nothing about the limit (a source that
+        allows one connection refuses for every other reason too) and stays an upstream error.
+        """
+        others = self._source_use(source_id)
+        return bool(maximum) and others >= 1 and others + 1 >= (maximum or 0)
+
     def _admit_source(self, source_id: str | None, maximum: int | None) -> None:
         if maximum and maximum > 0 and self._source_use(source_id) >= maximum:
             raise Conflict("Source connection limit is occupied.", code="source_busy")
@@ -754,6 +813,7 @@ class StreamProxy:
         *,
         generation: int | None = None,
         max_connections: int | None = None,
+        viewer: Viewer | None = None,
     ) -> tuple[str, AsyncIterator[bytes]]:
         self.ensure_running(generation)
         generation = self.generation
@@ -768,6 +828,8 @@ class StreamProxy:
             if up.closed:
                 raise Conflict("Previous source connection is still closing.", code="source_busy")
             q = up.subscribe()
+            if viewer is not None:
+                up.viewers[q] = viewer
         try:
             await up.wait_ready()
             self.ensure_running(generation)
@@ -776,7 +838,8 @@ class StreamProxy:
             raise
         if up.failed:
             up.unsubscribe(q)
-            raise ConnectionError(up.failed)
+            status = up.failed.removeprefix("upstream ")
+            raise UpstreamRefused(status) if status.isdigit() else ConnectionError(up.failed)
 
         async def gen() -> AsyncIterator[bytes]:
             self.ensure_running(generation)
@@ -808,6 +871,7 @@ class StreamProxy:
         live: bool = False,
         generation: int | None = None,
         max_connections: int | None = None,
+        viewer: Viewer | None = None,
     ) -> tuple[int, dict[str, str], AsyncIterator[bytes]]:
         """Single-client passthrough (VOD with Range support; live with reconnect)."""
         self.ensure_running(generation)
@@ -819,19 +883,23 @@ class StreamProxy:
             self.ensure_running(generation)
             self._admit_source(source_id, max_connections)
             client = self._client_factory(timeout=httpx.Timeout(30.0, connect=10.0, read=None), headers=req_headers)
-            sess = HttpSession(client, asyncio.current_task(), source_id=source_id)
+            sess = HttpSession(client, asyncio.current_task(), source_id=source_id, viewer=viewer)
             self._http.add(sess)
         try:
             req = client.build_request("GET", url)
             resp = await client.send(req, stream=True)
             sess.response = resp
             self.ensure_running(generation)
+        except (httpx.RemoteProtocolError, httpx.ReadError) as exc:
+            # Accepted, then closed without an answer: how some panels turn a connection away.
+            await self._close_http(sess)
+            raise UpstreamRefused(None) from exc
         except BaseException:
             await self._close_http(sess)
             raise
         if resp.status_code >= 400:
             await self._close_http(sess)
-            raise ConnectionError(f"upstream {resp.status_code}")
+            raise UpstreamRefused(str(resp.status_code))
         out_headers = {k: v for k, v in resp.headers.items() if k.lower() in HOP_HEADERS}
         status = resp.status_code
 
@@ -891,7 +959,7 @@ class StreamProxy:
             sess.response = resp
             self.ensure_running(generation)
             if resp.status_code >= 400:
-                raise ConnectionError(f"upstream {resp.status_code}")
+                raise UpstreamRefused(str(resp.status_code))
             return str(resp.url), resp.text
         finally:
             await self._close_http(sess)
@@ -993,6 +1061,7 @@ class StreamProxy:
         buffered: bool = False,
         pair_lease_id: str | None = None,
         vod: VodPlan | None = None,
+        viewer: Viewer | None = None,
     ) -> HlsSession:
         self.ensure_running(generation)
         generation = self.generation
@@ -1074,6 +1143,9 @@ class StreamProxy:
             # Crucially release the lock so the existing viewer can refresh its lease.
             await self._sleep(min(0.25, max(0, admission_deadline - self._clock())))
 
+        if viewer is not None:
+            first = sess.viewers.get(viewer.profile_id)
+            sess.viewers[viewer.profile_id] = (first[0] if first else viewer, self._clock())
         deadline = self._clock() + HLS_READY_TIMEOUT
         playlist = sess.workdir / "index.m3u8"
         while self._clock() < deadline:
@@ -1089,7 +1161,7 @@ class StreamProxy:
                 return sess
             if sess.proc.returncode is not None:
                 code = sess.proc.returncode
-                if sess.fallbacks and sess.stderr_task is not None:
+                if sess.stderr_task is not None:
                     # Let the drain read ffmpeg's last words: an upstream refusal is not an encoder failure.
                     with contextlib.suppress(Exception):
                         await asyncio.wait_for(asyncio.shield(sess.stderr_task), 0.5)
@@ -1104,11 +1176,15 @@ class StreamProxy:
                             "transcode fallback", extra={"from": sess.label, "to": sess.fallbacks[0][0], "code": code}
                         )
                         sess.workdir.mkdir(parents=True, exist_ok=True)
+                        watching = sess.viewers
                         sess = await self._spawn_hls(
                             key, sess.sid, sess.workdir, sess.fallbacks, source_id=source_id, family=sess.family
                         )
+                        sess.viewers = watching
                         deadline = self._clock() + HLS_READY_TIMEOUT
                         continue
+                if sess.upstream_status is not None:
+                    raise UpstreamRefused(sess.upstream_status)
                 raise ConnectionError(f"ffmpeg exited (code {code}; stderr bytes {sess.stderr_bytes})")
             await self._sleep(0.25)
         async with self._hls_lock:
@@ -1161,6 +1237,7 @@ class StreamProxy:
         source_id: str,
         max_connections: int | None,
         generation: int | None,
+        viewer: Viewer | None = None,
     ) -> dict[str, Any]:
         if not self.dvr.enabled:
             raise Conflict("Local recording is disabled.", code="recording_disabled")
@@ -1180,6 +1257,7 @@ class StreamProxy:
                 max_connections=max_connections,
                 generation=generation,
                 buffered=True,
+                viewer=viewer,
             )
             lease = self.dvr.join(key, profile)
             window = self.dvr.window(key)

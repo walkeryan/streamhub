@@ -13,12 +13,14 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import select
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
 from app.api.streaming import OwnedStreamingResponse
 from app.domain.ports import ImageAuthProvider
-from app.proxy.stream_proxy import HlsSourceBusy, VodPlan
+from app.infra.models import Profile
+from app.proxy.stream_proxy import HlsSourceBusy, UpstreamRefused, Viewer, VodPlan
 from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
@@ -26,6 +28,10 @@ from app.services.playback import StreamGrant
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+# How a source turns away one connection too many: forbidden, throttled, unavailable, or it just
+# hangs up (None). ffmpeg names 429 and 5xx only by their class on some versions.
+LIMIT_REFUSALS = {None, "403", "429", "503", "4XX", "5XX"}
 
 
 @router.post("/playback/resolve", response_model=S.PlaybackDescriptor, tags=["playback"])
@@ -171,9 +177,10 @@ async def buffer_lease(body: S.BufferLeaseRequest, c: C, p: P) -> dict[str, Any]
             source_id=g.source_id,
             max_connections=c.sources.max_connections(source),
             generation=g.recovery_generation,
+            viewer=_viewer(g),
         )
     except HlsSourceBusy as exc:
-        raise Conflict("Source connection limit is occupied.", code="source_busy") from exc
+        raise await _source_busy(c, g) from exc
 
 
 @router.post("/playback/buffer/heartbeat", response_model=S.BufferWindow, tags=["playback"])
@@ -320,6 +327,55 @@ async def _grant(c: C, token: str) -> Any:
     return g
 
 
+def _viewer(g: StreamGrant) -> Viewer:
+    return Viewer(g.profile_id, g.title, g.kind, g.content_ref)
+
+
+async def _source_busy(c: C, g: StreamGrant, message: str = "Source connection limit is occupied.") -> Conflict:
+    """``source_busy`` for the profile that was turned away, naming who holds the source's connections.
+
+    ``active`` lists the streams this server is running on the source: the profile's name, what it
+    is watching and since when. A title the refused profile may not open itself is left unnamed.
+    """
+    source = await c.sources.get(g.source_id)
+    viewers = c.proxy.active_viewers(g.source_id)
+    names: dict[str, str] = {}
+    if viewers:
+        async with c.db.session() as session:
+            wanted = {v.profile_id for v in viewers}
+            rows = (await session.execute(select(Profile).where(Profile.id.in_(wanted)))).scalars()
+            names = {row.id: row.name for row in rows}
+    active = []
+    for viewer in viewers:
+        named = viewer.title is not None
+        if named and viewer.ref and viewer.profile_id != g.profile_id:
+            try:
+                await c.content_policy.require(g.profile_id, viewer.ref)
+            except ServiceError:
+                named = False
+        active.append(
+            {
+                "profile_name": names.get(viewer.profile_id),
+                "title": viewer.title if named else None,
+                "kind": viewer.kind if named else None,
+                "since": viewer.since.isoformat(),
+            }
+        )
+    limit = c.sources.max_connections(source)
+    return Conflict(message, code="source_busy", extra={"active": active, "limit": limit})
+
+
+async def _open_failed(c: C, g: StreamGrant, exc: Exception, maximum: int | None, message: str) -> ServiceError:
+    """The error for an upstream that did not open: ``source_busy`` when the source's limit explains it."""
+    if (
+        isinstance(exc, UpstreamRefused)
+        and exc.status in LIMIT_REFUSALS
+        and c.proxy.refused_at_limit(g.source_id, maximum)
+    ):
+        return await _source_busy(c, g, "The source refused another connection.")
+    return BadGateway(message)
+
+
 def _proxy_url(token: str, upstream: str, c: C) -> str:
     sub = c.crypto.encrypt_json({"u": upstream, "grant": hashlib.sha256(token.encode()).hexdigest()})
     return f"/api/v1/stream/{token}/seg/{sub}"
@@ -342,7 +398,13 @@ async def stream(token: str, request: Request, c: C) -> Response:
             return Response(body, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"})
         if g.live and g.channel_key:
             ctype, gen = await c.proxy.live_shared(
-                g.channel_key, g.url, g.headers, g.source_id, generation=g.recovery_generation, max_connections=maximum
+                g.channel_key,
+                g.url,
+                g.headers,
+                g.source_id,
+                generation=g.recovery_generation,
+                max_connections=maximum,
+                viewer=_viewer(g),
             )
             return OwnedStreamingResponse(
                 c.content_policy.guard_stream(g, c.auth, gen),
@@ -358,11 +420,14 @@ async def stream(token: str, request: Request, c: C) -> Response:
             live=g.live,
             generation=g.recovery_generation,
             max_connections=maximum,
+            viewer=_viewer(g),
         )
     except (ConnectionError, OSError) as exc:
-        raise BadGateway("upstream unavailable") from exc
-    except ServiceError:
-        raise
+        raise await _open_failed(c, g, exc, maximum, "upstream unavailable") from exc
+    except ServiceError as exc:
+        if exc.code != "source_busy":
+            raise
+        raise await _source_busy(c, g, exc.message) from exc
     except Exception as exc:
         log.warning("stream proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
@@ -403,11 +468,14 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
             request.headers.get("range"),
             generation=g.recovery_generation,
             max_connections=maximum,
+            viewer=_viewer(g),
         )
     except (ConnectionError, OSError) as exc:
-        raise BadGateway("upstream unavailable") from exc
-    except ServiceError:
-        raise
+        raise await _open_failed(c, g, exc, maximum, "upstream unavailable") from exc
+    except ServiceError as exc:
+        if exc.code != "source_busy":
+            raise
+        raise await _source_busy(c, g, exc.message) from exc
     except Exception as exc:
         log.warning("stream segment proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
@@ -462,8 +530,9 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
         if lease_id is None or c.proxy.dvr.key != key:
             raise Gone("Buffered session expired.", code="buffer_expired")
         c.proxy.dvr.check(key, g.profile_id, lease_id)
+    source = await c.sources.get(g.source_id)
+    maximum = c.sources.max_connections(source)
     try:
-        source = await c.sources.get(g.source_id)
         sess = await _start_hls(
             c,
             g,
@@ -473,17 +542,20 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
             live=g.live,
             transcode=transcode,
             source_id=g.source_id,
-            max_connections=c.sources.max_connections(source),
+            max_connections=maximum,
             generation=g.recovery_generation,
             pair_lease_id=g.pair_lease_id,
             vod=vod,
+            viewer=_viewer(g),
         )
     except HlsSourceBusy as exc:
-        raise Conflict("Another channel is using this source. Stop it and retry.", code="source_busy") from exc
+        raise await _source_busy(c, g, "Another stream is using this source. Stop it and retry.") from exc
     except (ConnectionError, TimeoutError, OSError) as exc:
-        raise BadGateway("could not start HLS session") from exc
-    except ServiceError:
-        raise
+        raise await _open_failed(c, g, exc, maximum, "could not start HLS session") from exc
+    except ServiceError as exc:
+        if exc.code != "source_busy":
+            raise
+        raise await _source_busy(c, g, exc.message) from exc
     except Exception as exc:
         log.warning("hls session failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("could not start HLS session") from exc

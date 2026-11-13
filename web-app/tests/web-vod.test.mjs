@@ -32,3 +32,20 @@ test('a seek inside what the stream produced stays in it; anything else restarts
   assert.deepEqual(seekPlan(9999, 600, produced, 5400), { restart: 5_399_000 })
   assert.deepEqual(seekPlan(42, 0, [], 0), { restart: 42_000 })
 })
+
+test('a source_busy answer becomes a heading and one line per stream', async () => {
+  const { busyHeading, busyLines, parseSourceBusy } = await import('../src/player/sourceBusy.ts')
+  const busy = parseSourceBusy({
+    code: 'source_busy', message: 'x', limit: 2,
+    active: [{ profile_name: 'Kids', title: 'Evening News', kind: 'channel', since: '2026-11-01T18:00:00+00:00' }, { profile_name: null, title: null }],
+  })
+  assert.equal(busyHeading(busy), 'Both streams are in use')
+  assert.deepEqual(busyLines(busy), ['Kids is watching Evening News', 'Someone is watching something else'])
+  assert.equal(busyHeading({ active: [], limit: 1 }), 'The stream is in use')
+  assert.equal(busyHeading({ active: [], limit: 4 }), 'All 4 streams are in use')
+  assert.equal(busyHeading({ active: [], limit: null }), 'No free stream')
+  assert.equal(busyHeading({ active: [{}, {}], limit: null }), 'Both streams are in use')
+  assert.deepEqual(parseSourceBusy({ code: 'source_busy', message: 'x' }), { active: [], limit: null })
+  assert.equal(parseSourceBusy({ code: 'upstream_error', message: 'x' }), null)
+  assert.equal(parseSourceBusy(null), null)
+})

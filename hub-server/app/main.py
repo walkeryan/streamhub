@@ -25,8 +25,14 @@ log = logging.getLogger(__name__)
 API_PREFIX = "/api/v1"
 
 
-def _err(status: int, code: str, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
-    return JSONResponse({"code": code, "message": message}, status_code=status, headers=headers)
+def _err(
+    status: int,
+    code: str,
+    message: str,
+    headers: dict[str, str] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> JSONResponse:
+    return JSONResponse({**(extra or {}), "code": code, "message": message}, status_code=status, headers=headers)
 
 
 def create_app(
@@ -86,7 +92,7 @@ def create_app(
         headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
         if exc.status == 429 and hasattr(exc, "retry_after"):
             headers = {"Retry-After": str(exc.retry_after)}
-        return _err(exc.status, exc.code, exc.message, headers)
+        return _err(exc.status, exc.code, exc.message, headers, exc.extra)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_req: Request, exc: RequestValidationError) -> JSONResponse:

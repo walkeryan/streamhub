@@ -93,6 +93,9 @@ class StreamGrant:
     vod_width: int | None = None
     audio_track: int | None = None
     start_s: int = 0
+    # What is playing, for the profile a busy source turns away (absent for adult titles).
+    title: str | None = None
+    kind: str | None = None
 
 
 @dataclass(slots=True)
@@ -142,6 +145,8 @@ class StreamTokens:
                 "vw": grant.vod_width,
                 "atr": grant.audio_track,
                 "ss": grant.start_s,
+                "ti": grant.title,
+                "k": grant.kind,
                 "iat": int(time.time()),
                 "generation": self._generation,
             }
@@ -174,6 +179,8 @@ class StreamTokens:
             vod_width=d.get("vw"),
             audio_track=d.get("atr"),
             start_s=int(d.get("ss") or 0),
+            title=d.get("ti"),
+            kind=d.get("k"),
         )
 
 
@@ -829,6 +836,7 @@ class PlaybackResolver:
             policy_ref=hub_id,
             policy_at=archive_start,
             policy_until=archive_end,
+            kind="channel",
         )
         desc.update(await self._runtime_audio(profile_id, ch.data or {}, audio_consent))
         desc["archive_start"] = archive_start
@@ -899,6 +907,8 @@ class PlaybackResolver:
             subtitle=subtitle,
             poster=image(src, row.poster, ids.lib_id(row.source_id, row.ext_id)),
             vod=vod,
+            kind=row.kind,
+            private=bool(row.adult),
         )
 
         desc.update(await self._runtime_audio(profile_id, row.extra or {}, audio_consent))
@@ -1082,6 +1092,8 @@ class PlaybackResolver:
         policy_at: datetime | None = None,
         policy_until: datetime | None = None,
         vod: WebVod | None = None,
+        kind: str | None = None,
+        private: bool = False,
     ) -> dict[str, Any]:
         mode = decide_mode(
             client=client,
@@ -1135,6 +1147,9 @@ class PlaybackResolver:
                     vod_width=plan.width if plan else None,
                     audio_track=plan.audio_track if plan else None,
                     start_s=plan.start_s if plan else 0,
+                    # Adult rows stay out of everything nobody asked for by id, a busy answer included.
+                    title=None if private else title[:80],
+                    kind=kind,
                 )
             )
             if mode == PlaybackMode.HLS:

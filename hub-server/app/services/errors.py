@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class ServiceError(Exception):
     status = 400
     code = "bad_request"
 
-    def __init__(self, message: str = "", *, code: str | None = None) -> None:
+    def __init__(self, message: str = "", *, code: str | None = None, extra: dict[str, Any] | None = None) -> None:
         super().__init__(message or self.__class__.__name__)
         self.message = message or self.code
         if code:
             self.code = code
+        # Further fields of the error body, next to code and message (``active`` on source_busy).
+        self.extra = extra
 
 
 class NotFound(ServiceError):

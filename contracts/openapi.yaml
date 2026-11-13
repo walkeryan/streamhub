@@ -11,7 +11,22 @@ components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:
-    Error: { type: object, properties: { code: {type: string}, message: {type: string} }, required: [code, message] }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        active: {type: array, items: {$ref: '#/components/schemas/ActiveStream'}, description: "Only on source_busy: the streams this server is running on the source, longest-running first. May be empty when something outside this server holds the connections."}
+        limit: {type: integer, nullable: true, description: "Only on source_busy: how many connections the source allows, when known."}
+    ActiveStream:
+      type: object
+      description: One stream holding a source connection, named to the profile a busy source turned away.
+      properties:
+        profile_name: {type: string, nullable: true}
+        title: {type: string, nullable: true, description: Channel or title being watched; null for adult titles and for content the refused profile may not open.}
+        kind: {type: string, nullable: true, description: "channel, movie, episode, …; null whenever title is."}
+        since: {type: string, format: date-time, description: When this stream's connection was opened.}
 
     AuthTokens:
       type: object
@@ -981,9 +996,20 @@ paths:
   /playback/progress:
     post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok }, '403': {description: Captured profile mismatch or content access denied} } }
   /stream/{token}:
-    get: { security: [], summary: Proxied/remuxed stream (token is short-lived and profile-bound), parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: stream } } }
+    get:
+      security: []
+      summary: Proxied/remuxed stream (token is short-lived and profile-bound)
+      parameters: [{name: token, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': { description: stream }
+        '409': { description: "source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /stream/{token}/index.m3u8:
-    get: { security: [], parameters: [{name: token, in: path, required: true, schema: {type: string}}], responses: { '200': { description: hls playlist } } }
+    get:
+      security: []
+      parameters: [{name: token, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': { description: hls playlist }
+        '409': { description: "source_busy, as for /stream/{token}", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /favorites:
     get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }

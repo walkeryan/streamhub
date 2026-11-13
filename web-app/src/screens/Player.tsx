@@ -11,6 +11,7 @@ import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
 import { trackLabel } from '../player/audioTracks'
 import { seekPlan, seekableRanges } from '../player/restartSeek'
+import { busyHeading, busyLines } from '../player/sourceBusy'
 import { LocalBufferControls } from '../player/LocalBufferControls'
 import { RewindControls } from '../player/RewindControls'
 import { useSession } from '../store/session'
@@ -345,10 +346,16 @@ export function Player() {
       {!audio.blocked && state === 'error' && (
         <div className="grid place-items-center p-6" style={{ position: 'absolute', inset: 0, zIndex: 8, background: 'rgba(0,0,0,.8)' }} role="alert" data-testid="player-error">
           <FocusGroup focusKey="perr" className="flex flex-col gap-4 items-start" style={{ maxWidth: '34rem' }}>
-            <h1 className="title-xl">Playback stopped</h1>
-            <p>{pb.error ?? 'The stream could not be played.'}</p>
+            {pb.busy ? <>
+              <h1 className="title-xl" data-testid="source-busy">{busyHeading(pb.busy)}</h1>
+              {busyLines(pb.busy).map((line, i) => <p key={i}>{line}</p>)}
+              <p className="muted">{pb.busy.active.length > 1 ? 'Try again once one of them has stopped.' : pb.busy.active.length ? 'Try again once that stream has stopped.' : 'Stop playback on another device, then try again.'}</p>
+            </> : <>
+              <h1 className="title-xl">Playback stopped</h1>
+              <p>{pb.error ?? 'The stream could not be played.'}</p>
+            </>}
             <div className="flex gap-3">
-              <Button focusKey="perr:source" onEnter={() => { if (audio.enabled) { setManualChoice(selectionKey); void audio.query.refetch() } else navigate(`/title/${encodeURIComponent(id)}?choose=1`) }}>Choose audio / source</Button>
+              {!pb.busy && <Button focusKey="perr:source" onEnter={() => { if (audio.enabled) { setManualChoice(selectionKey); void audio.query.refetch() } else navigate(`/title/${encodeURIComponent(id)}?choose=1`) }}>Choose audio / source</Button>}
               <Button focusKey="perr:retry" primary icon="refresh" onEnter={pb.retryNow}>Try again</Button>
               <Button focusKey="perr:back" onEnter={exit}>Back</Button>
             </div>

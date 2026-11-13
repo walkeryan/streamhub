@@ -5,6 +5,7 @@ import { useSession } from '../store/session'
 import { BufferSession, bufferError, type BufferWindow } from './bufferSession'
 import { attachSource, type PlayerHandle } from './engine'
 import { audioAllowed, audioSelection, preferredAudioTrack } from './audioPolicy'
+import { busyHeading, parseSourceBusy, type SourceBusy } from './sourceBusy'
 
 export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
 
@@ -59,6 +60,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const [desc, setDesc] = useState<PlaybackDescriptor | null>(null)
   const [state, setState] = useState<PlayState>('resolving')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<SourceBusy | null>(null)
+  const plays = useRef(0)
   const [attempt, setAttempt] = useState(0)
   const [tracksVersion, setTracksVersion] = useState(0)
   const handle = useRef<PlayerHandle | null>(null)
@@ -72,10 +75,14 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const intent = useRef<{ key: string; generation?: string }>({ key: '' })
   // What the viewer changed since this playback began: applied to every later resolve of the same request.
   const restart = useRef<{ audioTrack?: number; startMs?: number }>({})
+  const lastPosition = useRef<{ desc: PlaybackDescriptor | null; ms: number }>({ desc: null, ms: 0 })
   /** Position in the title, which for a restart-at-offset stream is not the media element's time. */
   const titlePositionMs = useCallback(() => {
     const d = descRef.current
-    return Math.floor((d?.start_position_ms ?? 0) + (videoRef.current?.currentTime || 0) * 1000)
+    const v = videoRef.current
+    // Tearing a player down resets the element to zero before the last report goes out: keep what it last showed.
+    if (v && v.readyState > 0) lastPosition.current = { desc: d, ms: Math.floor((d?.start_position_ms ?? 0) + v.currentTime * 1000) }
+    return lastPosition.current.desc === d ? lastPosition.current.ms : d?.start_position_ms ?? 0
   }, [videoRef])
   const clearWaiting = useCallback(() => {
     if (waitingTimer.current !== null) window.clearTimeout(waitingTimer.current)
@@ -87,9 +94,38 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   }, [])
   const key = req ? `${profileId}|${sessionGeneration}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}|${req.audioTrack ?? ''}` : ''
 
-  const reconnect = useCallback((_reason: string) => {
+  // The source has no free connection. Retrying on a timer would only knock again: stop and say who has them.
+  const showBusy = useCallback((found: SourceBusy) => {
+    terminal.current = true
+    clearRetry(); clearWaiting()
+    handle.current?.destroy()
+    setBusy(found); setState('error'); setError(busyHeading(found))
+  }, [clearRetry, clearWaiting])
+
+  // Most players only report that their stream failed, never the server's answer. When the stream is one
+  // of ours, ask for it again: a 409 source_busy says who is using the source.
+  const explainRefusal = useCallback(() => {
+    const d = descRef.current
+    if (!d?.url || (d.mode !== 'hls' && d.mode !== 'proxy')) return
+    let url: URL
+    try { url = new URL(d.url, window.location.href) } catch { return }
+    if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/v1/stream/')) return
+    const owner = intent.current
+    const played = plays.current
+    fetch(url, { headers: { Range: 'bytes=0-0' }, cache: 'no-store' }).then(async (response) => {
+      if (response.status !== 409) { void response.body?.cancel(); return }
+      const found = parseSourceBusy(await response.json())
+      // Stale once the viewer moved on, or once a retry got through while this was in flight.
+      if (!found || intent.current !== owner || plays.current !== played || terminal.current) return
+      showBusy(found)
+    }).catch(() => undefined)
+  }, [showBusy])
+
+  const reconnect = useCallback((_reason: string, refusal?: unknown) => {
     if (terminal.current) return
     clearWaiting()
+    const refused = parseSourceBusy(refusal)
+    if (refused && !buffer.current) { showBusy(refused); return }
     // A restart-at-offset stream comes back where it stopped, not where progress was last saved.
     if (descRef.current?.start_position_ms != null && hasPlayed.current) restart.current = { ...restart.current, startMs: titlePositionMs() }
     if (buffer.current) {
@@ -111,7 +147,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     const wait = Math.min(15_000, 500 * 2 ** retry.current++)
     setState('reconnecting')
     retryTimer.current = window.setTimeout(() => { retryTimer.current = null; setAttempt((a) => a + 1) }, wait)
-  }, [clearWaiting, titlePositionMs])
+    explainRefusal()
+  }, [clearWaiting, titlePositionMs, explainRefusal, showBusy])
 
   // resolve + attach
   useEffect(() => {
@@ -147,6 +184,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     window.addEventListener('pagehide', releaseOnHide)
     setState((s) => (s === 'reconnecting' ? s : 'resolving'))
     setError(null)
+    setBusy(null)
     ;(async () => {
       try {
         await pendingRelease.current
@@ -208,7 +246,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           }
           const next = await attachSource(video, descriptor, {
             signal: attachController.signal,
-            onFatal: (r) => !cancelled && sequence === attachSequence && reconnect(r),
+            onFatal: (r, refusal) => !cancelled && sequence === attachSequence && reconnect(r, refusal),
             onTracks: (reset) => { if (!cancelled && sequence === attachSequence) {
               if (reset) { consent.current = null; selectedAudio.current = null; wantedAudio.current = null }
               setTracksVersion((v) => v + 1); checkAudio.current()
@@ -257,6 +295,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         await attach(d)
       } catch (e) {
         if (cancelled) return
+        const refused = e instanceof ApiError ? parseSourceBusy(e.body) : null
+        if (refused) { showBusy(refused); return }
         // Re-resolving cannot repair missing content or denied access. Keep
         // transient network/server failures on the bounded reconnect path.
         if (e instanceof ApiError && ([400, 401, 403, 404, 410, 422].includes(e.status) || e.code === 'audio_selection_required')) {
@@ -312,7 +352,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       const at = titlePositionMs()
       if (at < d.duration_ms - 30_000) { restart.current = { ...restart.current, startMs: at }; setAttempt((a) => a + 1) }
     }
-    const onPlaying = () => { if (terminal.current || !checkAudio.current()) { v.muted = true; v.pause(); return }; hasPlayed.current = true; clearWaiting(); clearRetry(); setState('playing') }
+    const onPlaying = () => { if (terminal.current || !checkAudio.current()) { v.muted = true; v.pause(); return }; hasPlayed.current = true; plays.current++; clearWaiting(); clearRetry(); setState('playing') }
     const onPause = () => { clearWaiting(); if (!v.ended) setState((s) => (s === 'playing' || s === 'buffering' ? 'paused' : s)) }
     const onWaiting = () => {
       if (!hasPlayed.current || v.paused || waitingTimer.current !== null) return
@@ -329,10 +369,11 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     v.addEventListener('waiting', onWaiting)
     v.addEventListener('error', onError)
     v.addEventListener('ended', onEnded)
+    v.addEventListener('timeupdate', titlePositionMs)
     return () => {
       clearWaiting()
       v.removeEventListener('loadedmetadata', onMeta); v.removeEventListener('playing', onPlaying); v.removeEventListener('pause', onPause)
-      v.removeEventListener('waiting', onWaiting); v.removeEventListener('error', onError); v.removeEventListener('ended', onEnded)
+      v.removeEventListener('waiting', onWaiting); v.removeEventListener('error', onError); v.removeEventListener('ended', onEnded); v.removeEventListener('timeupdate', titlePositionMs)
     }
   }, [videoRef, reconnect, clearRetry, clearWaiting, key, titlePositionMs])
 
@@ -389,7 +430,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   }, [tracksVersion])
 
   return {
-    desc, state, error, tracks, audioBlocked,
+    desc, state, error, busy, tracks, audioBlocked,
     pause: () => { wantsPlayback.current = false; videoRef.current?.pause() },
     resume: () => { wantsPlayback.current = true; checkAudio.current() },
     consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; checkAudio.current() },

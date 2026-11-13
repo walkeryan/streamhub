@@ -2741,6 +2741,15 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
             };
         };
         put?: never;
@@ -2775,6 +2784,15 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+                /** @description source_busy, as for /stream/{token} */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
                 };
             };
         };
@@ -3643,6 +3661,23 @@ export interface components {
         Error: {
             code: string;
             message: string;
+            /** @description Only on source_busy: the streams this server is running on the source, longest-running first. May be empty when something outside this server holds the connections. */
+            active?: components["schemas"]["ActiveStream"][];
+            /** @description Only on source_busy: how many connections the source allows, when known. */
+            limit?: number | null;
+        };
+        /** @description One stream holding a source connection, named to the profile a busy source turned away. */
+        ActiveStream: {
+            profile_name?: string | null;
+            /** @description Channel or title being watched; null for adult titles and for content the refused profile may not open. */
+            title?: string | null;
+            /** @description channel, movie, episode, …; null whenever title is. */
+            kind?: string | null;
+            /**
+             * Format: date-time
+             * @description When this stream's connection was opened.
+             */
+            since?: string;
         };
         AuthTokens: {
             access_token: string;

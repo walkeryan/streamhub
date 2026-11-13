@@ -36,3 +36,4 @@ export type LanguageCount = { code: string; name: string; count: number }
 export type PlaybackOption = S['PlaybackOption']
 export type PlaybackOptions = S['PlaybackOptions']
 export type AudioTrack = S['AudioTrack']
+export type ActiveStream = S['ActiveStream']
