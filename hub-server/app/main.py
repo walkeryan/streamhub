@@ -8,12 +8,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.deps import playback_watch_gate
 from app.api.routers import auth, catalog, owner_pin, playback, requests, sources, system, users
 from app.container import Container, build_container, shutdown, startup
 from app.infra.logging import configure_logging
@@ -113,12 +114,13 @@ def create_app(
         owner_pin.router,
         sources.router,
         catalog.router,
-        playback.router,
         system.router,
         requests.router,
         users.router,
     ):
         app.include_router(r, prefix=API_PREFIX)
+    # The resolver knows nothing of permissions: what a caller may play is settled before it runs.
+    app.include_router(playback.router, prefix=API_PREFIX, dependencies=[Depends(playback_watch_gate)])
 
     _mount_web(app, settings.web_dist)
     return app

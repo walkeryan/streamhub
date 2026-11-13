@@ -1,4 +1,4 @@
-"""Adult rows stay out of general surfaces; the admin can ask for them explicitly."""
+"""Adult rows stay out of general surfaces; a permitted, unlocked session can ask for them."""
 
 from __future__ import annotations
 
@@ -143,9 +143,19 @@ async def test_home_rows_and_hero_hide_adult_rows(seeded: Api) -> None:
         assert_clean((await api.get(path)).json())
 
 
+async def unlock_adult(api: Api) -> None:
+    """The owner holds watch.adult; the session still has to be unlocked with their own PIN."""
+    me = (await api.get("/auth/me")).json()["user"]["id"]
+    assert (await api.put(f"/users/{me}/pin", json={"pin": "1357"})).status_code == 204
+    assert (await api.post("/auth/adult-unlock", json={"pin": "1357"})).status_code == 200
+
+
 async def test_admin_can_include_adult_rows(seeded: Api) -> None:
     api = seeded
     flag = {"include_adult": "true", "language": "all"}
+    # Asking is not enough until this session is unlocked.
+    assert_clean((await api.get("/browse/movies", params=flag)).json())
+    await unlock_adult(api)
     movies = (await api.get("/browse/movies", params=flag)).json()
     assert movies["total"] == 4 and {"lib:catalog:night", "tmdb:movie:900"} <= shown(movies)[0]
     assert shown((await api.get("/browse/shows", params=flag)).json())[0] == {"lib:catalog:hours"}

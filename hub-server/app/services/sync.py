@@ -22,6 +22,7 @@ from app.infra.logging import redact_text
 from app.infra.models import Channel, Programme, Source, SyncRun, utcnow
 from app.services.settings_service import SettingsService
 from app.services.sources import DbCatalogSink, SourceService
+from app.services.visibility import set_watch
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +55,9 @@ class SyncService:
 
     def spawn(self, source_id: str, *, with_epg: bool = True) -> None:
         async def _run() -> None:
+            # The task inherits the spawning request's context; a sync must see every row
+            # whatever that caller may watch.
+            set_watch(None)
             await self.sync_source(source_id)
             if with_epg:
                 await self.refresh_epg(source_id)

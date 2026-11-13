@@ -12,6 +12,7 @@ from app.container import Container
 from app.services.auth import Principal
 from app.services.errors import Forbidden, PermissionDenied, Unauthorized
 from app.services.sessions import SessionMeta
+from app.services.visibility import require_watch, reset_watch, set_watch
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -60,9 +61,11 @@ async def current_principal(
     profile = await c.content_policy.profile(principal.profile_id) if c.content_policy.enabled else None
     principal_token = active_principal.set(principal)
     token = active_policy.set((c.content_policy, profile) if profile is not None else None)
+    watch_token = set_watch(principal.permissions)
     try:
         yield principal
     finally:
+        reset_watch(watch_token)
         active_policy.reset(token)
         active_principal.reset(principal_token)
 
@@ -85,3 +88,47 @@ def require(*permissions: str) -> Any:
 Admin = Annotated[Principal, require("system.manage")]
 SourcesAdmin = Annotated[Principal, require("sources.manage")]
 UsersAdmin = Annotated[Principal, require("users.manage")]
+
+# Playback entry points that name what to play: (method, path) -> where the ids are.
+_PLAYBACK_REFS = {
+    ("POST", "/playback/resolve"),
+    ("POST", "/playback/multiview"),
+    ("GET", "/playback/options"),
+    ("GET", "/playback/rewind"),
+}
+
+
+async def playback_watch_gate(request: Request, c: C) -> None:
+    """Refuse playback of anything the caller's watch.* permissions do not cover.
+
+    Mounted on the playback router as a whole, so the resolver itself stays unaware of
+    permissions. Routes that carry no bearer (signed stream and image URLs) pass through;
+    their grants are checked by the stream path.
+    """
+    path = request.url.path.rsplit("/api/v1", 1)[-1]
+    if (request.method, path) not in _PLAYBACK_REFS:
+        return
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return  # the route's own principal dependency answers 401
+    principal = await _resolve(request, c, token)
+    refs: list[tuple[str, str | None]] = []
+    if request.method == "GET":
+        refs.append((request.query_params.get("id", ""), request.query_params.get("source_id")))
+    else:
+        try:
+            body = await request.json()
+        except ValueError:
+            return  # request validation reports the malformed body
+        if isinstance(body, dict):
+            listed = body.get("panes")
+            panes = listed if isinstance(listed, list) else [body]
+            for pane in panes:
+                if isinstance(pane, dict):
+                    source = pane.get("source_id") if isinstance(pane.get("source_id"), str) else None
+                    for key in ("id", "catchup_programme_id"):
+                        if isinstance(pane.get(key), str):
+                            refs.append((pane[key], source))
+    for ref, source in refs:
+        if ref:
+            await require_watch(c.db, principal.permissions, ref, source)
