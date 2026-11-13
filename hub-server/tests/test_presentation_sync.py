@@ -160,8 +160,10 @@ async def test_brand_and_library_titles_listed_for_a_language_profile(api: Api) 
     library_id = created.json()["id"]
     await api.c.sync.wait_idle()
 
-    # Neither a brand category nor a library section says anything about language.
-    assert (await api.get("/browse/movies")).json()["total"] == 0
+    # Neither a brand category nor a library section says anything about language. A provider's
+    # untagged title waits for a language; the household's own library is never hidden by one.
+    unset = (await api.get("/browse/movies")).json()
+    assert [t["title"] for t in unset["tiles"]] == ["Lighthouse Road"]
     languages = (await api.get("/browse/movies/languages")).json()
     assert languages == [{"code": "und", "name": "Unknown", "count": 2}]
 
