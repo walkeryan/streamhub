@@ -33,6 +33,7 @@ from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.classification import ClassificationStore
+from app.services.classifier import ClassificationJob
 from app.services.content_policy import ContentPolicy
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
@@ -89,6 +90,7 @@ class Container:
     owner_reauth: OwnerReauthService
     owner_pin: OwnerPinService
     content_policy: ContentPolicy
+    classifier: ClassificationJob
     catalog: CatalogService
     channels: ChannelService
     favorites: FavoritesService
@@ -174,7 +176,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     )
     recorder.content_policy = content_policy
     sync.after_epg_refresh = recorder.apply_rules
-    scheduler = SyncScheduler(sync, requests.reconcile, recorder.run_tick)
+    classifier = ClassificationJob(db, tmdb, app_settings)
+    scheduler = SyncScheduler(sync, requests.reconcile, recorder.run_tick, classifier.run_batch)
     home = HomeService(catalog, channels, progress, layout, sources, availability, tmdb)
     active = ActiveStreams()
     tokens = StreamTokens(crypto, settings.stream_token_ttl_s)
@@ -231,6 +234,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         availability=availability,
         catalog=catalog,
         content_policy=content_policy,
+        classifier=classifier,
         owner_reauth=OwnerReauthService(auth, google_auth),
         owner_pin=owner_pin,
         channels=channels,

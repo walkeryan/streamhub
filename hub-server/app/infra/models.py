@@ -129,6 +129,9 @@ class AuthSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     # Set by a correct PIN at /auth/adult-unlock; adult rows need it and watch.adult.
     adult_unlocked_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Carried in tokens as ``sg`` and bumped each time a shared device changes hands, so the
+    # tokens of whoever used it before stay dead even when that same user comes back.
+    generation: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Invite(Base):
@@ -178,6 +181,9 @@ class DeviceCode(Base):
     approved_by_profile_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     approved_by_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     approved_by_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # "Shared household device", ticked by an approver holding users.manage, and who that was.
+    shared_device: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    approved_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class Source(Base):

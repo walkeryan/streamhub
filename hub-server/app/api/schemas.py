@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool
 
 SourceTypeL = Literal["plex", "jellyfin", "xtream", "m3u", "streaming_service"]
 MediaKindL = Literal["movie", "show", "season", "episode", "channel", "vod", "series"]
@@ -87,6 +87,7 @@ class DevicePoll(_M):
 class DeviceApprove(_M):
     user_code: str = ""
     profile_id: str | None = None
+    shared_device: bool = Field(default=False, description="a shared household device; needs users.manage")
 
 
 class PinBody(_M):
@@ -485,6 +486,7 @@ class Settings(_M):
     proxy_mode: Literal["auto", "always", "never"] = "auto"
     signup_mode: Literal["approval", "invite_only"] = "approval"
     notify_webhook_set: bool = False
+    home_networks: str | None = Field(default=None, description="system.manage only: the home networks, as CIDRs")
 
 
 class SettingsPatch(_M):
@@ -495,6 +497,20 @@ class SettingsPatch(_M):
     proxy_mode: Literal["auto", "always", "never"] | None = None
     signup_mode: Literal["approval", "invite_only"] | None = None
     notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
+    home_networks: str | None = Field(default=None, max_length=1024, description="null restores the defaults")
+
+
+class ClassificationRun(_M):
+    classified: int
+    failed: int
+    remaining: int = Field(description="titles with a TMDB id still lacking fresh rating evidence")
+
+
+class TvAppRelease(_M):
+    version_code: int
+    version_name: str
+    apk_url: str = Field(description="a path on this server")
+    sha256: str = Field(description="64 lower-case hex digits")
 
 
 class TmdbKey(_M):
@@ -781,6 +797,40 @@ class AuthSession(_M):
     current: bool = False
 
 
+class AuthSessionPatch(_M):
+    shared_device: bool | None = Field(default=None, description="needs users.manage")
+    label: str | None = Field(default=None, max_length=128, description="empty clears it")
+
+
+class SwitchableUser(_M):
+    id: str
+    display_name: str
+    avatar: str | None = None
+    picture: str | None = None
+    role_name: str
+    has_pin: bool
+    current: bool
+
+
+class SwitchableUsers(_M):
+    users: list[SwitchableUser]
+
+
+class SwitchRequest(_M):
+    user_id: str = Field(min_length=1, max_length=32)
+    pin: str | None = _pin(default=None)
+
+
+class SwitchedUser(User):
+    """The user now on the device: every field of a picker entry, and of ``/auth/me``'s user."""
+
+    current: bool = True
+
+
+class Switched(AuthTokens):
+    user: SwitchedUser
+
+
 class HistoryEntry(_M):
     ref_id: str
     kind: str | None = None
@@ -816,6 +866,9 @@ class UserPatch(_M):
     denials: list[str] | None = None
     limits: LimitsWrite | None = None
     on_shared_devices: bool | None = None
+    plex_account_linked: StrictBool | None = Field(
+        default=None, description="whose Plex account the server's token is; setting it on one user clears the rest"
+    )
 
 
 class UserApprove(_M):

@@ -23,7 +23,7 @@ async def listing_cached(
     ttl: float = 15,
 ) -> Any:
     from app.services.adult import adult_included
-    from app.services.content_policy import active_policy, active_principal
+    from app.services.content_policy import active_policy, active_principal, rating_key
     from app.services.visibility import watch_key
 
     policy = active_policy.get()
@@ -32,8 +32,9 @@ async def listing_cached(
     for _ in range(2):
         revision = db.catalog_revisions.version(profile)
         # An include_adult listing must never be replayed for a general request, nor a
-        # listing computed under one set of watch permissions for another.
-        key = (operation, profile, image_session, revision, public_base.get(), adult_included(), watch_key(), params)
+        # listing computed under one set of watch permissions or rating limits for another.
+        scope = (adult_included(), watch_key(), rating_key(principal))
+        key = (operation, profile, image_session, revision, public_base.get(), scope, params)
         valid = lambda revision=revision: revision == db.catalog_revisions.version(profile)  # noqa: E731
         result = await db.result_cache.get(
             key,

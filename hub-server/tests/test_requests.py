@@ -304,6 +304,9 @@ async def test_restricted_profile_cannot_request_a_blocked_title(env: Env) -> No
     class Policy:
         enabled = True
 
+        def applies_to(self, principal: Principal) -> bool:
+            return True
+
         async def require(self, profile_id: str, ref: str) -> None:
             if profile_id == "viewer1":
                 raise Forbidden("blocked", code="content_restricted")

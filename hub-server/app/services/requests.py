@@ -356,7 +356,7 @@ class RequestService:
         seasons = _clean_seasons(media_type, seasons)
         meta = await self._details(media_type, tmdb_id)
         # Checked before anything about the title is echoed back, including an existing request.
-        if self.content_policy is not None and self.content_policy.enabled:
+        if self.content_policy is not None and self.content_policy.applies_to(p):
             await self.content_policy.require(p.profile_id, ids.tmdb_id(media_type, tmdb_id))
         existing = await self._open(media_type, tmdb_id)
         if existing is not None:

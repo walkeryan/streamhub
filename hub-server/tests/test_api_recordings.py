@@ -15,6 +15,7 @@ from app.infra.models import Channel, Programme, Recording
 from app.infra.settings import AppSettings
 from app.services import ids, recording_policy
 from tests.conftest import Api
+from tests.people import member
 from tests.test_epg_integrity import add_source
 
 
@@ -237,6 +238,59 @@ async def test_kids_profiles_can_look_but_not_schedule(api: Api) -> None:
         assert r.status_code == 403 and r.json()["code"] == "recording_forbidden", r.text
     async with api.c.db.session() as s:
         assert list((await s.execute(select(Recording))).scalars()) == []
+
+
+async def test_a_friend_has_no_recordings_at_all(api: Api) -> None:
+    bbc = await channel(api, await add_source(api))
+    pid = await programme(api, bbc, "Harbour Lights", soon(1))
+    mine = (await api.post("/recordings", json={"programme_id": pid})).json()
+    rule = (await api.post("/recording-rules", json={"kind": "series", "match": "Harbour Lights"})).json()
+    friend = await member(api, "friend", "Friend")
+    assert not {"recordings.view", "recordings.schedule"} & set((await friend.get("/auth/me")).json()["permissions"])
+    for method, url, body in [
+        ("GET", "/recordings", None),
+        ("POST", "/recordings", {"programme_id": pid}),
+        ("DELETE", f"/recordings/{mine['id']}", None),
+        ("GET", "/recording-rules", None),
+        ("POST", "/recording-rules", {"kind": "series", "match": "Harbour Lights"}),
+        ("PATCH", f"/recording-rules/{rule['id']}", {"enabled": False}),
+        ("DELETE", f"/recording-rules/{rule['id']}", None),
+    ]:
+        r = await friend.req(method, url, json=body)
+        assert r.status_code == 403 and r.json()["code"] == "recording_forbidden", (method, url, r.text)
+    # Nothing changed, and the guide tells them nothing about what the household records.
+    assert [r["state"] for r in (await api.get("/recordings")).json()["recordings"]] == ["scheduled"]
+    assert (await api.get("/recording-rules")).json()["rules"][0]["enabled"] is True
+    assert [p["recording_state"] for p in await guide(api, bbc, headers=friend.headers)] == [None]
+    assert [p["recording_state"] for p in await guide(api, bbc)] == ["scheduled"]
+    # View without schedule (the Kid role's set) looks but does not touch; one grant opens scheduling.
+    viewer = await member(api, "friend", "Viewer", grants=["recordings.view"])
+    await viewer.refresh()
+    listed = await viewer.get("/recordings")
+    assert listed.status_code == 200 and listed.json()["can_schedule"] is False
+    assert (await viewer.post("/recordings", json={"programme_id": pid})).status_code == 403
+    scheduler = await member(api, "friend", "Scheduler", grants=["recordings.view", "recordings.schedule"])
+    await scheduler.refresh()
+    assert (await scheduler.get("/recording-rules")).json()["can_schedule"] is True
+    made = await scheduler.post("/recording-rules", json={"kind": "series", "match": "Tide Pool"})
+    assert made.status_code == 201, made.text
+
+
+def test_recording_policy_answers_from_permissions() -> None:
+    from app.services.auth import Principal
+    from app.services.permissions import BUILTIN_ROLES
+
+    def who(role: str, **kw: Any) -> Principal:
+        return Principal("p", permissions=BUILTIN_ROLES[role].permissions, **kw)
+
+    # ``kids`` and the old admin flag decide nothing any more.
+    assert recording_policy.can_view(who("kid", kids=True)) and not recording_policy.can_schedule(who("kid"))
+    assert recording_policy.can_schedule(who("family", kids=True))
+    assert not recording_policy.can_view(who("friend")) and not recording_policy.can_schedule(who("friend"))
+    assert recording_policy.sees_all(who("owner")) and not recording_policy.sees_all(who("family"))
+    operator = Principal("p", permissions=BUILTIN_ROLES["family"].permissions | {"system.manage"})
+    assert operator.is_admin and not recording_policy.sees_all(operator)
+    assert recording_policy.sees_all(Principal("p", permissions={"users.manage"}))
 
 
 async def test_recordings_need_a_session_and_the_view_permission(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:

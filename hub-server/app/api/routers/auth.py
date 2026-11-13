@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api import schemas as S
-from app.api.deps import C, P, UsersAdmin, session_meta
+from app.api.deps import C, P, UsersAdmin, resolve, session_meta
 from app.infra.models import Profile as ProfileRow
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 
@@ -87,6 +87,29 @@ async def revoke_session(sid: str, c: C, p: P) -> Response:
     return Response(status_code=204)
 
 
+@router.patch("/auth/sessions/{sid}", response_model=S.AuthSession, tags=["auth"])
+async def update_session(sid: str, body: S.AuthSessionPatch, c: C, p: P) -> dict[str, Any]:
+    """Relabel one's own device; with ``users.manage``, mark any device shared or personal."""
+    patch = body.model_dump(exclude_unset=True)
+    if patch.get("shared_device") is None:
+        patch.pop("shared_device", None)
+    return await c.sessions.update(p, sid, patch)
+
+
+@router.get("/auth/switchable", response_model=S.SwitchableUsers, tags=["auth"])
+async def switchable(response: Response, c: C, p: P) -> dict[str, Any]:
+    """ "Who's watching?": the users a shared device can be handed to."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"users": await c.sessions.switchable(p)}
+
+
+@router.post("/auth/switch", response_model=S.Switched, tags=["auth"])
+async def switch_user(body: S.SwitchRequest, response: Response, c: C, p: P) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
+    profile, tokens, user = await c.auth.switch_user(p, body.user_id, body.pin)
+    return {**await tokens_out(c, profile, tokens), "user": user}
+
+
 @router.post("/auth/adult-unlock", response_model=S.AdultUnlock, tags=["auth"])
 async def adult_unlock(body: S.AdultUnlockRequest, response: Response, c: C, p: P) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
@@ -117,7 +140,7 @@ async def device_poll(body: S.DevicePoll, request: Request, c: C) -> dict[str, A
 
 @router.post("/auth/device/approve", status_code=status.HTTP_204_NO_CONTENT, tags=["auth"])
 async def device_approve(body: S.DeviceApprove, c: C, p: P) -> Response:
-    await c.auth.approve_device(p, body.user_code, body.profile_id)
+    await c.auth.approve_device(p, body.user_code, body.profile_id, body.shared_device)
     return Response(status_code=204)
 
 
@@ -129,7 +152,7 @@ async def list_profiles(request: Request, c: C) -> list[dict[str, Any]]:
         if scheme.lower() != "bearer" or not token:
             raise Unauthorized("Sign in to list profiles")
         # One person, one user: there is nobody else's profile to pick from here.
-        principal = await c.auth.resolve_principal(token)
+        principal = await resolve(request, c, token)
         return [await profile_out(c, await c.auth.get_profile(principal.profile_id))]
     return [await profile_out(c, p) for p in await c.auth.list_profiles()]
 

@@ -40,6 +40,9 @@ class AppSettings(BaseSettings):
     dvr_reserve_dir: Path | None = None
     database_url: str | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # The proxies whose X-Forwarded-For names the real client. The same variable, with the
+    # same default, that uvicorn reads for X-Forwarded-Proto.
+    forwarded_allow_ips: str = "127.0.0.1"
     log_level: str = "INFO"
     log_format: str = "json"  # json | text
     enable_scheduler: bool = True

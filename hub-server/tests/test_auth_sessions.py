@@ -29,7 +29,8 @@ async def test_sign_in_creates_one_row_and_refresh_keeps_it(api: Api) -> None:
     login = await api.client.post(
         "/api/v1/auth/login",
         json={"profile_id": api.profile_id, "password": "test-admin-pw"},
-        headers={"User-Agent": BROWSER, "X-Forwarded-For": "203.0.113.7, 10.0.0.1"},
+        # Through the trusted local proxy: its appended hop is the client, whatever was written before it.
+        headers={"User-Agent": BROWSER, "X-Forwarded-For": "192.0.2.1, 203.0.113.7"},
     )
     tokens = login.json()
     sid = sid_of(tokens["access_token"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
@@ -11,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.container import Container
 from app.services.auth import Principal
 from app.services.errors import Forbidden, PermissionDenied, Unauthorized
+from app.services.network import client_address, is_home
 from app.services.sessions import SessionMeta
 from app.services.visibility import require_watch, reset_watch, set_watch
 
@@ -48,26 +50,45 @@ def device_label(kind: str, agent: str) -> str | None:
     return f"{browser} on {system}" if system else browser
 
 
+def client_ip(request: Request) -> str | None:
+    """Where this request comes from: the peer, or what a trusted proxy says it forwarded for."""
+    settings = request.app.state.container.settings
+    forwarded = ",".join(request.headers.getlist("x-forwarded-for"))
+    return client_address(request.client.host if request.client else None, forwarded, settings.forwarded_allow_ips)
+
+
 def session_meta(request: Request, kind: str | None = None) -> SessionMeta:
     """What to record about the device asking for tokens. Informational: shown to its owner."""
     agent = request.headers.get("user-agent", "")
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     kind = kind or ("browser" if agent.startswith("Mozilla/") else "api")
     return SessionMeta(
         kind=kind,
         label=device_label(kind, agent),
         user_agent=agent or None,
-        ip=forwarded or (request.client.host if request.client else None),
+        ip=client_ip(request),
     )
 
 
-async def _resolve(request: Request, c: Container, token: str) -> Principal:
-    """One validation per request, however many dependencies ask."""
+def require_reachable(request: Request, c: Container, principal: Principal) -> None:
+    """Without ``remote.access`` a user is served on the home network and nowhere else."""
+    if "remote.access" in principal.permissions:
+        return
+    if not is_home(client_ip(request), str(c.app_settings.get("home_networks") or "")):
+        raise Forbidden("This account can only be used on the home network", code="remote_access_denied")
+
+
+async def resolve(request: Request, c: Container, token: str, *, owner_entry: bool = True) -> Principal:
+    """The caller behind a bearer token: validated, and allowed to be where the request comes from.
+
+    One validation per request, however many dependencies ask. ``GET /auth/me`` does not come
+    through here, so a client refused everything else can still say who is signed in and why.
+    """
     cached = getattr(request.state, "resolved", None)
     if cached is not None and cached[0] == token:
         principal: Principal = cached[1]
         return principal
-    principal = await c.auth.resolve_principal(token)
+    principal = await c.auth.resolve_principal(token, owner_entry=owner_entry)
+    require_reachable(request, c, principal)
     request.state.resolved = (token, principal)
     return principal
 
@@ -77,15 +98,17 @@ async def current_principal(
 ) -> AsyncIterator[Principal]:
     if creds is None or not creds.credentials:
         raise Unauthorized("missing bearer token")
-    principal = await _resolve(request, c, creds.credentials)
+    principal = await resolve(request, c, creds.credentials)
     request.state.principal = principal
     from app.services.content_policy import active_policy, active_principal
 
-    if c.content_policy is None:
+    policy = c.content_policy
+    if policy is None:
         raise Forbidden("Content policy service is unavailable.", code="content_policy_unavailable")
-    profile = await c.content_policy.profile(principal.profile_id) if c.content_policy.enabled else None
+    # The engine scopes every catalog read of this request, for a caller it applies to.
+    profile = await policy.profile(principal.profile_id, principal.limits) if policy.applies_to(principal) else None
     principal_token = active_principal.set(principal)
-    token = active_policy.set((c.content_policy, profile) if profile is not None else None)
+    token = active_policy.set((policy, profile) if profile is not None else None)
     watch_token = set_watch(principal.permissions)
     try:
         yield principal
@@ -124,7 +147,7 @@ _PLAYBACK_REFS = {
 
 
 async def playback_watch_gate(request: Request, c: C) -> None:
-    """Refuse playback of anything the caller's watch.* permissions do not cover.
+    """Refuse playback of anything the caller's watch.* permissions or rating limits do not cover.
 
     Mounted on the playback router as a whole, so the resolver itself stays unaware of
     permissions. Routes that carry no bearer (signed stream and image URLs) pass through;
@@ -136,10 +159,11 @@ async def playback_watch_gate(request: Request, c: C) -> None:
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token:
         return  # the route's own principal dependency answers 401
-    principal = await _resolve(request, c, token)
-    refs: list[tuple[str, str | None]] = []
+    principal = await resolve(request, c, token)
+    # (id, source, judged by the rating policy?, the moment it is asked for)
+    refs: list[tuple[str, str | None, bool, datetime | None]] = []
     if request.method == "GET":
-        refs.append((request.query_params.get("id", ""), request.query_params.get("source_id")))
+        refs.append((request.query_params.get("id", ""), request.query_params.get("source_id"), True, None))
     else:
         try:
             body = await request.json()
@@ -150,10 +174,28 @@ async def playback_watch_gate(request: Request, c: C) -> None:
             panes = listed if isinstance(listed, list) else [body]
             for pane in panes:
                 if isinstance(pane, dict):
-                    source = pane.get("source_id") if isinstance(pane.get("source_id"), str) else None
-                    for key in ("id", "catchup_programme_id"):
-                        if isinstance(pane.get(key), str):
-                            refs.append((pane[key], source))
-    for ref, source in refs:
+                    source: str | None = pane.get("source_id") if isinstance(pane.get("source_id"), str) else None
+                    ref = str(pane["id"]) if isinstance(pane.get("id"), str) else ""
+                    programme = pane.get("catchup_programme_id")
+                    if isinstance(programme, str) and programme:
+                        refs.append((programme, source, True, None))
+                    # A channel carrying a past programme is judged by that programme, just added;
+                    # a channel rewound is judged by what aired then; anything else as it is now.
+                    carrier = bool(programme) and ref.startswith("ch:")
+                    refs.append((ref, source, not carrier, _moment(pane.get("rewind_at"))))
+    policy = c.content_policy
+    # Under the legacy flag the resolver makes these checks itself, with the same arguments.
+    rated = not policy.enabled and policy.applies_to(principal)
+    for ref, source, judged, moment in refs:
         if ref:
             await require_watch(c.db, principal.permissions, ref, source)
+            if rated and judged:
+                await policy.require(principal.profile_id, ref.removeprefix("trailer:"), at=moment)
+
+
+def _moment(value: Any) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None  # request validation reports the malformed timestamp
+    return moment if moment is not None and moment.tzinfo is not None else None

@@ -141,8 +141,9 @@ async def test_watch_scope_is_never_replayed_from_the_listing_cache(api: Api) ->
 # ---------------------------------------------------------------- watch.live
 async def test_watch_live_gates_channels_guide_and_live_resolve(api: Api) -> None:
     await add_m3u(api, FIXTURES / "sample.m3u")
-    with_it = await member(api, "kid", name="With")
-    without = await member(api, "kid", name="Without", denials=["watch.live"])
+    # Friend, not Kid: a rating ceiling hides channels whose guide carries no rating, which is another rule.
+    with_it = await member(api, "friend", name="With")
+    without = await member(api, "friend", name="Without", denials=["watch.live"])
 
     channels = (await with_it.get("/channels")).json()["channels"]
     assert len(channels) == 7
