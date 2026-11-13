@@ -259,15 +259,96 @@ data class TitleDetail(
     fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable)
 }
 
+/**
+ * GET /search: one search across titles, live channels and guide broadcasts (on now, or starting
+ * within 48 hours). Every field is defaulted so the answer of a server older than a field decodes.
+ */
 @Serializable
 data class SearchResponse(
+    /** Titles, best first. Null only from servers that sent [playHere] and [openInApp] instead. */
     val results: List<Tile>? = null,
+    @SerialName("metadata_available") val metadataAvailable: Boolean? = null,
     @SerialName("discovery_note") val discoveryNote: String? = null,
     @SerialName("play_here") val playHere: List<Tile> = emptyList(),
     @SerialName("open_in_app") val openInApp: List<Tile> = emptyList(),
     val channels: List<Channel> = emptyList(),
+    val programmes: List<SearchProgramme> = emptyList(),
+    /**
+     * Ids of the results metadata discovery added: the titles the hub's own search (`discover=false`)
+     * does not list. Null from a server that does not name them.
+     */
+    val discovered: List<String>? = null,
+    val sections: SearchSections = SearchSections(),
+    /** The order to show the sections in (`programmes`, `channels`, `titles`); channels first for a channel's number or whole name. */
+    val order: List<String> = emptyList(),
     val attribution: String? = null,
+) {
+    /** The titles of the answer, whichever shape the server sent them in. */
+    val titles: List<Tile> get() = results ?: (playHere + openInApp)
+}
+
+/** How many a search section found, and whether it holds more than were returned (ask again with `expand`). */
+@Serializable
+data class SearchSection(val count: Int = 0, val more: Boolean = false)
+
+@Serializable
+data class SearchSections(
+    val titles: SearchSection = SearchSection(),
+    val channels: SearchSection = SearchSection(),
+    val programmes: SearchSection = SearchSection(),
 )
+
+/** One channel carrying a [SearchProgramme]. */
+@Serializable
+data class SearchFeed(
+    @SerialName("programme_id") val programmeId: String,
+    @SerialName("channel_id") val channelId: String,
+    @SerialName("channel_number") val channelNumber: Int = 0,
+    @SerialName("channel_name") val channelName: String = "",
+    @SerialName("channel_logo") val channelLogo: String? = null,
+)
+
+/**
+ * One broadcast of a search: a [Programme] as the guide lists it on the first channel carrying it
+ * (allOf in the contract, flattened here), and every channel with the same title at the same start
+ * as a feed. Can be recorded like any programme.
+ */
+@Serializable
+data class SearchProgramme(
+    val id: String,
+    @SerialName("channel_id") val channelId: String,
+    val start: String,
+    val stop: String,
+    val title: String,
+    val description: String? = null,
+    val category: String? = null,
+    val icon: String? = null,
+    @SerialName("catchup_available") val catchupAvailable: Boolean = false,
+    @SerialName("recording_state") val recordingState: String? = null,
+    @SerialName("is_sport") val isSport: Boolean = false,
+    val teams: List<String> = emptyList(),
+    @SerialName("on_now") val onNow: Boolean = false,
+    @SerialName("channel_number") val channelNumber: Int = 0,
+    @SerialName("channel_name") val channelName: String = "",
+    @SerialName("channel_logo") val channelLogo: String? = null,
+    val feeds: List<SearchFeed> = emptyList(),
+) {
+    fun asProgramme() = Programme(id, channelId, start, stop, title, description, category, icon, catchupAvailable, recordingState, isSport, teams)
+}
+
+/**
+ * Query for GET /search as the TV asks it, twice for every query. [discover] false is what the hub
+ * itself holds (its titles, channels and broadcasts) and answers at once; true also asks the
+ * metadata provider, for titles only. [expand] names the sections wanted in full.
+ */
+fun searchParameters(q: String, discover: Boolean, expand: Collection<String> = emptyList()): Map<String, String> = buildMap {
+    put("q", q.trim().take(200))
+    expand.filter { it in SEARCH_SECTIONS }.distinct().sorted().takeIf { it.isNotEmpty() }?.let { put("expand", it.joinToString(",")) }
+    if (discover) put("kinds", "movie,show") else put("discover", "false")
+}
+
+/** The section names of GET /search (`order`, `sections`, `expand`). */
+val SEARCH_SECTIONS = listOf("programmes", "channels", "titles")
 
 @Serializable
 data class BrowsePage(

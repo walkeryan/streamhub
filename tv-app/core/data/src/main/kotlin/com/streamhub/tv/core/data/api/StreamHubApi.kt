@@ -163,11 +163,12 @@ class StreamHubApi @Inject constructor(
 
     suspend fun home(): HomeResponse = get("/home")
 
-    suspend fun search(q: String, kinds: List<MediaKind>? = null, limit: Int = 40, languages: List<String>? = null, sourceId: String? = null): SearchResponse = get("/search") {
-        parameter("q", q)
-        applySearchFilters(languages, sourceId)
-        kinds?.let { k -> parameter("kinds", k.joinToString(",") { it.wire }) }
-        parameter("limit", limit)
+    /**
+     * One search across titles, channels and guide broadcasts. Asked twice per query: [discover] false
+     * for what the hub holds, then true for the titles the metadata provider adds (see [searchParameters]).
+     */
+    suspend fun search(q: String, discover: Boolean, expand: Collection<String> = emptyList()): SearchResponse = get("/search") {
+        searchParameters(q, discover, expand).forEach { (key, value) -> parameter(key, value) }
     }
 
     suspend fun title(titleId: String): TitleDetail = get("/titles/${id(titleId)}")

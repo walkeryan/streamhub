@@ -72,8 +72,10 @@ fun PosterTile(
     modifier: Modifier = Modifier,
     onFocus: (Tile) -> Unit = {},
     onLongClick: (() -> Unit)? = null,
-    /** A few words over the top of the artwork ("Not available", "Requested"); null for none. */
+    /** A few words over the top of the artwork (a tick, "Requested"); null for none. */
     badge: String? = null,
+    /** The source chips at the foot of the artwork. Off where the badge alone says whether the title plays here. */
+    showSources: Boolean = true,
 ) {
     val t = LocalThemeTokens.current
     var isFocused by remember { mutableStateOf(false) }
@@ -106,7 +108,7 @@ fun PosterTile(
             tile.progressPct?.takeIf { it > 0 }?.let {
                 ProgressLine((it / 100.0).toFloat(), Modifier.align(Alignment.BottomCenter).padding(6.dp))
             }
-            SourceBadges(tile.sources, Modifier.align(Alignment.BottomEnd).padding(6.dp).padding(bottom = 8.dp), max = 1)
+            if (showSources) SourceBadges(tile.sources, Modifier.align(Alignment.BottomEnd).padding(6.dp).padding(bottom = 8.dp), max = 1)
             if (badge != null) {
                 Text(
                     badge,

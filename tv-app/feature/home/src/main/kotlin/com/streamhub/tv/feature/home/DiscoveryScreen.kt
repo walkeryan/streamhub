@@ -23,7 +23,6 @@ import java.time.Year
 /** Source/language choices scope badges, never remove metadata titles from Discover. */
 @Composable
 fun DiscoveryScreen(
-    onSearch: () -> Unit,
     onLibrary: () -> Unit,
     onSection: (String) -> Unit = {},
     vm: DiscoveryViewModel = hiltViewModel(),
@@ -33,7 +32,8 @@ fun DiscoveryScreen(
     val launcher = LocalPlayLauncher.current
     val rail = LocalRailController.current
     val grid = rememberLazyGridState()
-    val searchFocus = remember { FocusRequester() }
+    // Where focus starts and falls back to: the section chips. Searching is the rail's Search, for everything at once.
+    val firstFocus = remember { FocusRequester() }
     val controlFocus = remember { listOf("source", "language", "year", "sort").associateWith { FocusRequester() } }
     val tileFocus = remember { mutableMapOf<String, FocusRequester>() }
     var picker by remember { mutableStateOf<String?>(null) }
@@ -48,7 +48,7 @@ fun DiscoveryScreen(
     LaunchedEffect(state.ready) {
         if (state.ready && initialFocus && !restoreTile) {
             withFrameNanos { }
-            if (runCatching { searchFocus.requestFocus() }.getOrDefault(false)) initialFocus = false
+            if (runCatching { firstFocus.requestFocus() }.getOrDefault(false)) initialFocus = false
         }
     }
     LaunchedEffect(state.page, state.filters) { if (!restoreTile) grid.scrollToItem(0) }
@@ -60,7 +60,7 @@ fun DiscoveryScreen(
             if (index >= 0) {
                 grid.scrollToItem(index); withFrameNanos { }
                 runCatching { tileFocus[vm.focusedId]?.requestFocus() }
-            } else runCatching { searchFocus.requestFocus() }
+            } else runCatching { firstFocus.requestFocus() }
             restoreTile = false; initialFocus = false
         }
     }
@@ -81,8 +81,7 @@ fun DiscoveryScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ShButton("Search movies & series", onSearch, Modifier.weight(1f).focusRequester(searchFocus).leftOpensRail(rail))
-            ShChip("Movies", state.section == "movies", { if (state.section != "movies") onSection("movies") })
+            ShChip("Movies", state.section == "movies", { if (state.section != "movies") onSection("movies") }, Modifier.focusRequester(firstFocus).leftOpensRail(rail))
             ShChip("Series", state.section == "shows", { if (state.section != "shows") onSection("shows") })
             ShButton("My library", onLibrary)
         }

@@ -467,7 +467,8 @@ private fun AppShell(
                     composable(Routes.HOME) { TopLevel(onTopLevelBack) { HomeScreen() } }
                     composable(Routes.SEARCH) {
                         TopLevel(onTopLevelBack) {
-                            SearchScreen(onJoinRoom = if (access.can(Permissions.ROOMS_JOIN)) ({ nav.navigate(Routes.JOIN_ROOM) { launchSingleTop = true } }) else null)
+                            // One field and its results; "Join a room" has its own place in the rail.
+                            SearchScreen()
                         }
                     }
                     composable(Routes.JOIN_ROOM) { TopLevel(onTopLevelBack) { JoinRoomScreen() } }
@@ -480,7 +481,7 @@ private fun AppShell(
                     composable(Routes.MULTIVIEW) { MultiviewScreen(onExit={nav.popBackStack()}) }
                     composable(Routes.DISCOVER, arguments=listOf(navArgument("section"){type=NavType.StringType})) { entry ->
                         TopLevel(onTopLevelBack) {
-                            DiscoveryScreen(onSearch={nav.navigate(Routes.SEARCH)},onLibrary={nav.navigate(if(entry.arguments?.getString("section")=="shows")Routes.SHOWS else Routes.MOVIES)},onSection={section->nav.navigate(Routes.discover(section)){popUpTo(Routes.DISCOVER){inclusive=true};launchSingleTop=true}})
+                            DiscoveryScreen(onLibrary={nav.navigate(if(entry.arguments?.getString("section")=="shows")Routes.SHOWS else Routes.MOVIES)},onSection={section->nav.navigate(Routes.discover(section)){popUpTo(Routes.DISCOVER){inclusive=true};launchSingleTop=true}})
                         }
                     }
                     composable(Routes.GUIDE) { TopLevel(onTopLevelBack) { LiveDestination(startInGuide = true) } }
