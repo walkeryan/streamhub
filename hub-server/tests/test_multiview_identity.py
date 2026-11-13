@@ -42,7 +42,7 @@ async def test_missing_pair_binding_rejects_before_session_or_audio_lookup(field
     c = SimpleNamespace(
         proxy=SimpleNamespace(ensure_running=lambda: None, release_pair=AsyncMock()),
         tokens=SimpleNamespace(verify=lambda token: invalid),
-        content_policy=SimpleNamespace(require_grant=AsyncMock()),
+        guard=SimpleNamespace(require_grant=AsyncMock()),
         auth=SimpleNamespace(session_valid=AsyncMock()),
         playback=SimpleNamespace(_check_channel_audio=AsyncMock()),
     )

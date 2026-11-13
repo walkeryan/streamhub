@@ -25,6 +25,7 @@ from app.domain.entities import (
     SourceRef,
     StreamTarget,
     TestResult,
+    WatchState,
 )
 
 # --------------------------------------------------------------------------- sinks
@@ -100,6 +101,18 @@ class ProgressReporter(Protocol):
     async def report_progress(
         self, item: CatalogItem, position_ms: int, duration_ms: int | None, state: str
     ) -> None: ...
+
+
+@runtime_checkable
+class WatchStateProvider(Protocol):
+    """A server whose watch state belongs to one account: the one its token was issued to.
+
+    Only the user linked to that account reads it or adds to it.
+    """
+
+    async def watch_states(self, item: CatalogItem) -> dict[str, WatchState]:
+        """Resume points by ext id: the item's own, or each episode's of a show or season. Unwatched ones are absent."""
+        ...
 
 
 @runtime_checkable

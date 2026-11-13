@@ -13,25 +13,20 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import select
 
 from app.api import schemas as S
 from app.api.deps import Admin, C, P
-from app.api.streaming import OwnedStreamingResponse
+from app.api.streaming import OwnedStreamingResponse, byte_range, file_range
 from app.domain.ports import ImageAuthProvider
-from app.infra.models import Profile
-from app.proxy.stream_proxy import HlsSourceBusy, UpstreamRefused, Viewer, VodPlan
+from app.proxy.stream_proxy import HlsSourceBusy, Viewer, VodPlan
 from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
 from app.services.playback import StreamGrant, play_key
+from app.services.streams import is_recording, open_failed, panes, source_busy
 
 log = logging.getLogger(__name__)
 router = APIRouter()
-
-# How a source turns away one connection too many: forbidden, throttled, unavailable, or it just
-# hangs up (None). ffmpeg names 429 and 5xx only by their class on some versions.
-LIMIT_REFUSALS = {None, "403", "429", "503", "4XX", "5XX"}
 
 
 @router.post("/playback/resolve", response_model=S.PlaybackDescriptor, tags=["playback"])
@@ -74,6 +69,7 @@ async def multiview(body: S.MultiviewRequest, c: C, p: P) -> dict[str, Any]:
     generation = c.proxy.generation
     if body.recovery_generation != c.proxy.recovery_epoch:
         raise Forbidden("Start multiview again manually.", code="playback_stopped")
+    await c.streams.require_slot(p.user_id, p.session_id, p.limits.max_streams, slots=len(body.panes))
     if any(not pane.id.startswith("ch:") or pane.catchup_programme_id or pane.rewind_at for pane in body.panes):
         raise ServiceError("Multiview requires two live channels.", code="multiview_live_only")
     if body.panes[0].id == body.panes[1].id:
@@ -84,15 +80,16 @@ async def multiview(body: S.MultiviewRequest, c: C, p: P) -> dict[str, Any]:
     # Resolution performs policy/audio checks only; no playback URL is returned
     # until both producer slots have been reserved in one critical section.
     for pane in body.panes:
-        desc = await c.playback.resolve(
-            p.profile_id,
-            pane.id,
-            source_id=pane.source_id,
-            variant_id=pane.variant_id,
-            allow_unverified_audio=pane.allow_unverified_audio,
-            client="web_hls",
-            https_site=is_https.get(),
-        )
+        with panes(len(body.panes)):  # two streams on one device: neither takes the other's place
+            desc = await c.playback.resolve(
+                p.profile_id,
+                pane.id,
+                source_id=pane.source_id,
+                variant_id=pane.variant_id,
+                allow_unverified_audio=pane.allow_unverified_audio,
+                client="web_hls",
+                https_site=is_https.get(),
+            )
         if desc.get("mode") != "hls" or not desc.get("live"):
             raise Conflict("Multiview requires server-mediated live HLS.", code="multiview_unsupported")
         token = str(desc["url"]).split("/stream/", 1)[1].split("/", 1)[0]
@@ -286,6 +283,12 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
         forward_item=forward,
         aliases=aliases,
     )
+    # The player's own word on its stream: still playing (it counts toward the user's limit even
+    # when no bytes pass through this server), or stopped (it no longer does).
+    if body.state == "stopped":
+        c.streams.release(p.user_id, p.session_id, body.id)
+    else:
+        c.streams.heartbeat(p.user_id, p.session_id, body.id)
     return Response(status_code=204)
 
 
@@ -307,7 +310,7 @@ async def _grant(c: C, token: str) -> Any:
     if g is None:
         raise Unauthorized("invalid or expired stream token")
     try:
-        await c.content_policy.require_grant(g, c.auth)
+        await c.guard.require_grant(g)
         if g.pair_lease_id:
             version, session_id, content_ref = _pair_identity(g)
             await c.auth.session_valid(g.profile_id, version, session_id)
@@ -328,52 +331,41 @@ async def _grant(c: C, token: str) -> Any:
 
 
 def _viewer(g: StreamGrant) -> Viewer:
-    return Viewer(g.profile_id, g.title, g.kind, g.content_ref)
+    return Viewer(
+        g.profile_id, g.title, g.kind, g.content_ref, user_id=g.user_id, session_id=g.session_id, client=g.client
+    )
 
 
 async def _source_busy(c: C, g: StreamGrant, message: str = "Source connection limit is occupied.") -> Conflict:
-    """``source_busy`` for the profile that was turned away, naming who holds the source's connections.
-
-    ``active`` lists the streams this server is running on the source: the profile's name, what it
-    is watching and since when. A title the refused profile may not open itself is left unnamed.
-    """
-    source = await c.sources.get(g.source_id)
-    viewers = c.proxy.active_viewers(g.source_id)
-    names: dict[str, str] = {}
-    if viewers:
-        async with c.db.session() as session:
-            wanted = {v.profile_id for v in viewers}
-            rows = (await session.execute(select(Profile).where(Profile.id.in_(wanted)))).scalars()
-            names = {row.id: row.name for row in rows}
-    active = []
-    for viewer in viewers:
-        named = viewer.title is not None
-        if named and viewer.ref and viewer.profile_id != g.profile_id:
-            try:
-                await c.content_policy.require(g.profile_id, viewer.ref)
-            except ServiceError:
-                named = False
-        active.append(
-            {
-                "profile_name": names.get(viewer.profile_id),
-                "title": viewer.title if named else None,
-                "kind": viewer.kind if named else None,
-                "since": viewer.since.isoformat(),
-            }
-        )
-    limit = c.sources.max_connections(source)
-    return Conflict(message, code="source_busy", extra={"active": active, "limit": limit})
+    return await source_busy(c, g.source_id, g.profile_id, message)
 
 
 async def _open_failed(c: C, g: StreamGrant, exc: Exception, maximum: int | None, message: str) -> ServiceError:
-    """The error for an upstream that did not open: ``source_busy`` when the source's limit explains it."""
-    if (
-        isinstance(exc, UpstreamRefused)
-        and exc.status in LIMIT_REFUSALS
-        and c.proxy.refused_at_limit(g.source_id, maximum)
-    ):
-        return await _source_busy(c, g, "The source refused another connection.")
-    return BadGateway(message)
+    return await open_failed(c, g.source_id, g.profile_id, exc, maximum, message)
+
+
+async def _recording_file(c: C, g: StreamGrant, request: Request) -> Response:
+    """A recording's file, whole or the range asked for, checked like any stream while it is sent."""
+    path = await c.recorder.stored(str(g.content_ref)[4:])
+    size = path.stat().st_size
+    asked = request.headers.get("range")
+    span = byte_range(asked, size)
+    if span is None:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
+    start, end = span
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(end - start + 1),
+        "Cache-Control": "private, no-store",
+    }
+    if asked:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(
+        c.guard.guard_stream(g, file_range(path, start, end)),
+        status_code=206 if asked else 200,
+        headers=headers,
+        media_type="video/x-matroska",
+    )
 
 
 def _proxy_url(token: str, upstream: str, c: C) -> str:
@@ -386,6 +378,8 @@ async def stream(token: str, request: Request, c: C) -> Response:
     g = await _grant(c, token)
     if g.mode == "hls":
         return Response(status_code=307, headers={"Location": f"/api/v1/stream/{token}/index.m3u8"})
+    if is_recording(g):
+        return await _recording_file(c, g, request)
     source = await c.sources.get(g.source_id)
     maximum = c.sources.max_connections(source)
     is_hls_upstream = ".m3u8" in g.url.split("?", 1)[0].lower()
@@ -407,7 +401,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
                 viewer=_viewer(g),
             )
             return OwnedStreamingResponse(
-                c.content_policy.guard_stream(g, c.auth, gen),
+                c.guard.guard_stream(g, gen),
                 owned_stream=gen,
                 media_type=ctype,
                 headers={"Cache-Control": "no-cache"},
@@ -433,7 +427,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
         log.warning("stream proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
     return OwnedStreamingResponse(
-        c.content_policy.guard_stream(g, c.auth, gen),
+        c.guard.guard_stream(g, gen),
         owned_stream=gen,
         status_code=status,
         headers=headers,
@@ -481,7 +475,7 @@ async def stream_segment(token: str, sub: str, request: Request, c: C) -> Respon
         log.warning("stream segment proxy failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("upstream unavailable") from exc
     return OwnedStreamingResponse(
-        c.content_policy.guard_stream(g, c.auth, gen),
+        c.guard.guard_stream(g, gen),
         owned_stream=gen,
         status_code=status,
         headers=headers,
@@ -526,31 +520,36 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
     g = await _grant(c, token)
     if at is not None and g.content_ref:
         await c.content_policy.require(g.profile_id, g.content_ref, at=at)
-    key, transcode, vod = _hls_session_key(c, g)
+    # A watch room's member reads the room's session; the room decides its key, start and audio.
+    key, transcode, vod = ("", "none", None) if g.room else _hls_session_key(c, g)
     if at is not None or lease_id is not None:
-        if lease_id is None or c.proxy.dvr.key != key:
+        if lease_id is None or g.room or c.proxy.dvr.key != key:
             raise Gone("Buffered session expired.", code="buffer_expired")
         c.proxy.dvr.check(key, g.profile_id, lease_id)
-    source = await c.sources.get(g.source_id)
-    maximum = c.sources.max_connections(source)
+    # A recording is a file of this server's: ffmpeg reads it from disk, no source and no limit.
+    recording = await c.recorder.stored(str(g.content_ref)[4:]) if is_recording(g) else None
+    maximum = None if recording else c.sources.max_connections(await c.sources.get(g.source_id))
     try:
-        sess = await _start_hls(
-            c,
-            g,
-            key,
-            g.url,
-            g.headers,
-            live=g.live,
-            transcode=transcode,
-            source_id=g.source_id,
-            max_connections=maximum,
-            generation=g.recovery_generation,
-            pair_lease_id=g.pair_lease_id,
-            vod=vod,
-            viewer=_viewer(g),
-            # A file remuxed without a plan is one process for everyone watching it: one upstream viewer.
-            pin_key=None if g.live else vod.family if vod is not None else key,
-        )
+        if g.room:
+            sess = await c.room_playback.open(g)
+        else:
+            sess = await _start_hls(
+                c,
+                g,
+                key,
+                str(recording) if recording else g.url,
+                g.headers,
+                live=g.live,
+                transcode=transcode,
+                source_id=None if recording else g.source_id,
+                max_connections=maximum,
+                generation=g.recovery_generation,
+                pair_lease_id=g.pair_lease_id,
+                vod=vod,
+                viewer=_viewer(g),
+                # A file remuxed without a plan is one process for everyone watching it: one upstream viewer.
+                pin_key=None if g.live or recording else vod.family if vod is not None else key,
+            )
     except HlsSourceBusy as exc:
         raise await _source_busy(c, g, "Another stream is using this source. Stop it and retry.") from exc
     except (ConnectionError, TimeoutError, OSError) as exc:
@@ -562,7 +561,7 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
     except Exception as exc:
         log.warning("hls session failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("could not start HLS session") from exc
-    if c.proxy.dvr.key == key:
+    if not g.room and c.proxy.dvr.key == key:
         if at is not None or lease_id is not None:
             if lease_id is None:
                 raise Forbidden("DVR seek requires a viewer lease.")
@@ -574,7 +573,7 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
         text = (sess.workdir / "index.m3u8").read_text(errors="ignore")
     base = f"/api/v1/stream/{token}/hls/{sess.sid}/"
     lines = [base + ln if ln and not ln.startswith("#") else ln for ln in text.splitlines()]
-    if vod is not None and lines and lines[0].startswith("#EXTM3U"):
+    if (vod is not None or g.room) and lines and lines[0].startswith("#EXTM3U"):
         # The playlist grows while ffmpeg runs, which players treat as live and join at its end.
         # It is a film from this session's start offset: begin at its first segment.
         lines.insert(1, "#EXT-X-START:TIME-OFFSET=0")
@@ -586,8 +585,9 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
 @router.get("/stream/{token}/hls/{sid}/{name}", tags=["playback"], include_in_schema=False)
 async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
     g = await _grant(c, token)
-    key, _, _ = _hls_session_key(c, g)
-    if sid != c.proxy.session_id(key):
+    # After a room seek the room's session has a new id: segments of the old one are not served.
+    expected = c.room_playback.sid(g) if g.room else c.proxy.session_id(_hls_session_key(c, g)[0])
+    if sid != expected:
         raise Forbidden("Segment does not belong to this playback grant.")
     sess = c.proxy.hls_by_sid(sid)
     if sess is None or "/" in name or ".." in name or not name.endswith((".ts", ".m4s", ".mp4", ".m3u8")):
@@ -595,7 +595,7 @@ async def stream_hls_segment(token: str, sid: str, name: str, c: C) -> Response:
     path: Path = sess.workdir / name
     if not path.is_file():
         raise NotFound("segment not found")
-    await c.content_policy.require_segment(g, c.auth, path, sess.workdir / "index.m3u8")
+    await c.guard.require_segment(g, path, sess.workdir / "index.m3u8")
     return FileResponse(
         path,
         media_type="video/mp2t" if name.endswith(".ts") else "application/octet-stream",

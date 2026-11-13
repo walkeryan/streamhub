@@ -138,9 +138,25 @@ async def search(
     return await c.requests.annotate(p, result)
 
 
+async def _title_rows(c: C, id: str) -> list[Any]:
+    """The catalog rows behind a title id, for merging the library account's watch state on open."""
+    parts = id.split(":", 2)
+    if len(parts) != 3:
+        return []
+    if parts[0] == "lib":
+        row = await c.catalog.title_row(parts[1], parts[2])
+        return [row] if row is not None else []
+    if parts[0] == "tmdb" and parts[1] in ("movie", "tv") and parts[2].isdigit():
+        return await c.catalog.rows_for_tmdb(parts[1], int(parts[2]))
+    return []
+
+
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
 async def title(id: str, c: C, p: P) -> dict[str, Any]:
     await require_watch(c.db, p.permissions, id)
+    # Opening a title is when the user linked to the library server's account picks up what
+    # they watched there (see ``ProgressService.merge_account_state``); nobody else asks it.
+    await c.progress.merge_account_state(p.profile_id, await _title_rows(c, id))
     return await c.requests.annotate_detail(p, await c.catalog.detail(id, p.profile_id))
 
 

@@ -157,6 +157,16 @@ class StreamTarget:
 
 
 @dataclass(slots=True)
+class WatchState:
+    """One item's resume point as the library server's own account has it."""
+
+    position_ms: int
+    viewed_at: datetime  # when the account last watched it
+    watched: bool = False  # watched to the end: there is nothing to resume
+    duration_ms: int | None = None
+
+
+@dataclass(slots=True)
 class TestResult:
     ok: bool
     message: str = ""

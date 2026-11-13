@@ -419,6 +419,7 @@ class PlaybackDescriptor(_M):
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
     audio_track: int | None = None
     start_position_ms: int | None = None
+    stream_epoch: int | None = None
     preferred_audio_languages: list[str] = Field(default_factory=list)
     audio_language_required: bool = True
     audio_languages: list[str] = Field(default_factory=list)

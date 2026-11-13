@@ -145,7 +145,17 @@ async def test_hls_route_passes_source_limit_and_returns_busy(api: Api, tmp_path
         row.hints = {**row.hints, "max_connections": 1}
         await session.commit()
     token = api.c.tokens.issue(
-        StreamGrant(api.profile_id, source["id"], "https://provider.invalid/live", {}, "hls", True, None, False)
+        StreamGrant(
+            api.profile_id,
+            source["id"],
+            "https://provider.invalid/live",
+            {},
+            "hls",
+            True,
+            None,
+            False,
+            **api.identity(),
+        )
     )
     seen = {}
 

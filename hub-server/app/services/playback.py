@@ -17,7 +17,7 @@ import contextlib
 import logging
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, quote_plus
@@ -51,6 +51,7 @@ from app.services.media_probe import cached_probe
 from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
+from app.services.streams import requested_ref
 from app.services.tiles import row_to_channel, row_to_item
 from app.services.user_state import ProgressService
 
@@ -101,6 +102,14 @@ class StreamGrant:
     # What is playing, for the profile a busy source turns away (absent for adult titles).
     title: str | None = None
     kind: str | None = None
+    # The user behind the profile and the version of their role and limits the grant was issued
+    # under: every request made with the grant checks both again (``GrantGuard``).
+    user_id: str | None = None
+    user_version: int | None = None
+    client: str | None = None
+    # A watch room's member on a source that limits connections: the stream is the room's one
+    # session (``RoomPlayback``), whatever the fields above say about start and audio.
+    room: str | None = None
 
 
 @dataclass(slots=True)
@@ -114,6 +123,34 @@ class WebVod:
     audio_track: int | None
     start_s: int
     duration_ms: int | None
+
+
+@dataclass(slots=True)
+class RoomScope:
+    """A watch room resolving its title for one member (see ``app.services.room_playback``).
+
+    A file from a source that limits connections, or that is always proxied, is played to the
+    whole room from one upstream. The resolver then plans that session instead of the member's
+    own, starting at ``position_ms``, and reports here what it found.
+    """
+
+    code: str
+    position_ms: int
+    shared: bool = False  # the resolver's answer: this title plays from the room's one session
+    source_id: str = ""
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    max_connections: int | None = None
+    variant_id: str = ""  # the row that plays
+    vod: WebVod | None = None
+    title: str | None = None  # absent for adult titles
+    kind: str | None = None
+
+
+def vod_start_s(position_ms: int | None, duration_ms: int | None) -> int:
+    """Where a restart-at-offset session starts for a position: on the ``VOD_START_STEP_S`` grid."""
+    start_s = max(0, int(position_ms or 0)) // 1000 // VOD_START_STEP_S * VOD_START_STEP_S
+    return 0 if duration_ms and start_s * 1000 >= duration_ms else start_s
 
 
 class StreamTokens:
@@ -152,6 +189,10 @@ class StreamTokens:
                 "ss": grant.start_s,
                 "ti": grant.title,
                 "k": grant.kind,
+                "uid": grant.user_id,
+                "uv": grant.user_version,
+                "cl": grant.client,
+                "rm": grant.room,
                 "iat": int(time.time()),
                 "generation": self._generation,
             }
@@ -186,6 +227,10 @@ class StreamTokens:
             start_s=int(d.get("ss") or 0),
             title=d.get("ti"),
             kind=d.get("k"),
+            user_id=d.get("uid"),
+            user_version=d.get("uv"),
+            client=d.get("cl"),
+            room=d.get("rm"),
         )
 
 
@@ -310,6 +355,7 @@ class PlaybackResolver:
         self.active = active
         self._probing: dict[str, asyncio.Future[dict[str, Any] | None]] = {}
         self._probe_retry: dict[str, float] = {}
+        self._recording_probes: dict[str, tuple[tuple[str, int], dict[str, Any]]] = {}
 
     content_policy: Any = None
     auth: Any = None
@@ -319,6 +365,33 @@ class PlaybackResolver:
     # ``StreamProxy.pin``: the probe opens the file as the viewer's playback will, so a source that
     # hands out per-viewer sessions sees one viewer and not two back to back.
     pin: Any = None
+    # ``StreamRegistry``: who is streaming what, for the per-user stream limit.
+    streams: Any = None
+    # ``RecorderService``: finished recordings play as ``rec:<id>``.
+    recorder: Any = None
+
+    async def _require_slot(self) -> None:
+        """409 ``user_stream_limit`` when the caller's other devices already use every stream they may play."""
+        from app.services.content_policy import active_principal
+
+        principal = active_principal.get()
+        if self.streams is not None and principal is not None and principal.user_id:
+            await self.streams.require_slot(principal.user_id, principal.session_id, principal.limits.max_streams)
+
+    def _admit(
+        self, principal: Any, profile_id: str, ref: str, title: str | None, kind: str | None, client: str
+    ) -> None:
+        if self.streams is not None and principal is not None and principal.user_id:
+            self.streams.admit(
+                principal.user_id,
+                profile_id,
+                principal.session_id,
+                ref,
+                title=title,
+                kind=kind,
+                client=client,
+                limit=principal.limits.max_streams,
+            )
 
     async def _require_content(self, profile_id: str, ref: str, at: datetime | None = None) -> None:
         if self.content_policy is not None and self.content_policy.enabled:
@@ -338,9 +411,11 @@ class PlaybackResolver:
         https_site: bool = False,
         audio_track: int | None = None,
         start_position_ms: int | None = None,
+        room: RoomScope | None = None,
     ) -> dict[str, Any]:
         if rewind_at is not None and (catchup_programme_id or not hub_id.startswith("ch:")):
             raise ServiceError("Rewind requires a channel and cannot be combined with programme catch-up.")
+        requested_ref.set(catchup_programme_id or hub_id)
         policy_at = rewind_at
         if catchup_programme_id:
             await self._require_content(profile_id, catchup_programme_id)
@@ -355,7 +430,9 @@ class PlaybackResolver:
             raise Forbidden("External trailers require owner access", code="content_restricted")
         client = client if client in ("web", "web_hls", "android_tv") else "web"
         web = client != "android_tv"
-        if not web:
+        if hub_id.startswith("rec:"):
+            return await self._resolve_recording(profile_id, hub_id, client, audio_track, start_position_ms)
+        if not web and room is None:
             # The TV plays the file itself and switches tracks itself; the field is accepted, not used.
             audio_track = start_position_ms = None
         if hub_id.startswith("trailer:"):
@@ -401,6 +478,7 @@ class PlaybackResolver:
                 audio_consent=bool(variant_id and allow_unverified_audio),
                 audio_track=audio_track,
                 start_position_ms=start_position_ms,
+                room=room,
             )
         if h.scheme == "tmdb" and h.a in ("movie", "tv") and h.b.isdigit():
             return await self._resolve_tmdb(
@@ -415,6 +493,7 @@ class PlaybackResolver:
                 allow_unverified_audio,
                 audio_track=audio_track,
                 start_position_ms=start_position_ms,
+                room=room,
             )
         raise NotFound("unknown id")
 
@@ -432,7 +511,7 @@ class PlaybackResolver:
         return target.url.startswith(("http://", "https://"))
 
     async def _probe_file(
-        self, row: Title, src: Source, target: StreamTarget, profile_id: str
+        self, row: Title, src: Source, target: StreamTarget, profile_id: str, pin_key: str | None = None
     ) -> dict[str, Any] | None:
         """This row's probe, from the cache or by asking the file now. ``None``: could not be learned.
 
@@ -450,7 +529,9 @@ class PlaybackResolver:
             from app.services.content_policy import active_principal
 
             principal = active_principal.get()
-            viewer = play_key(src.id, target.url, profile_id, principal.session_id if principal is not None else None)
+            viewer = pin_key or play_key(
+                src.id, target.url, profile_id, principal.session_id if principal is not None else None
+            )
             running = asyncio.ensure_future(self._run_probe(key, row, src, target, viewer))
             self._probing[key] = running
             running.add_done_callback(lambda _: self._probing.pop(key, None))
@@ -798,6 +879,7 @@ class PlaybackResolver:
             await self._require_content(profile_id, catchup_programme_id)
             policy_at = (await self._channels.programme(catchup_programme_id)).start
         ch = await self._authorized_channel(profile_id, hub_id, at=policy_at)
+        await self._require_slot()
         src, prov = await self._sources.provider_for(ch.source_id)
         if not isinstance(prov, LiveProvider):
             raise ServiceError("source cannot play live channels")
@@ -865,6 +947,7 @@ class PlaybackResolver:
 
     # ------------------------------------------------------------------ titles
     async def _next_episode(self, profile_id: str, show: Title) -> Title:
+        await self._progress.merge_account_state(profile_id, [show])
         kids = await self._catalog.children_rows(show)
         eps = [k for k in kids if k.kind == "episode"]
         if not eps:
@@ -886,8 +969,10 @@ class PlaybackResolver:
         audio_consent: bool = False,
         audio_track: int | None = None,
         start_position_ms: int | None = None,
+        room: RoomScope | None = None,
     ) -> dict[str, Any]:
         await self._require_content(profile_id, ids.lib_id(row.source_id, row.ext_id))
+        await self._require_slot()
         src, prov = await self._sources.provider_for(row.source_id)
         if not isinstance(prov, PlaybackProvider):
             raise ServiceError("source cannot play titles")
@@ -899,6 +984,8 @@ class PlaybackResolver:
             raise BadGateway("could not resolve stream from source") from exc
         lib = ids.lib_id(row.source_id, row.ext_id)
         keys = [hub_id, lib, *(progress_ids or [])]
+        # The one user linked to the library server's account resumes where that account is, if newer.
+        await self._progress.merge_account_state(profile_id, [row])
         p = await self._progress.get(profile_id, *keys)
         # Provider resume belongs to the shared source account, not this profile.
         resume = 0
@@ -912,7 +999,18 @@ class PlaybackResolver:
             )
         image = self._catalog.image_fn({src.id: src})
         vod = None
-        if client != "android_tv" and self._probe_applies(src, target):
+        if room is not None and self._room_shares(src, target):
+            # One session for every member, whatever their client: planned as for a browser, opened
+            # (and probed) as the room so the source sees a single viewer.
+            vod = await self._web_vod(
+                profile_id, row, src, target, audio_track, room.position_ms, pin_key=f"room:{room.code}"
+            )
+            room.shared = True
+            room.source_id, room.url, room.headers = src.id, target.url, dict(target.headers)
+            room.max_connections = self._sources.max_connections(src)
+            room.variant_id, room.vod = lib, vod
+            room.title, room.kind = None if row.adult else row.title, row.kind
+        elif client != "android_tv" and self._probe_applies(src, target):
             vod = await self._web_vod(profile_id, row, src, target, audio_track, start_position_ms)
         desc = self._descriptor(
             profile_id,
@@ -928,6 +1026,7 @@ class PlaybackResolver:
             vod=vod,
             kind=row.kind,
             private=bool(row.adult),
+            room=room.code if room is not None and room.shared else None,
         )
 
         desc.update(await self._runtime_audio(profile_id, row.extra or {}, audio_consent))
@@ -945,6 +1044,16 @@ class PlaybackResolver:
                 desc["audio_language_required"] = False
         return desc
 
+    def _room_shares(self, src: Source, target: StreamTarget) -> bool:
+        """Does a watch room play this from one upstream? A file this server may open, from a source
+        that limits connections or is always proxied. Other titles cost no budget: each member plays their own."""
+        policy = self._sources.proxy_policy(src).lower()
+        if target.live or "never" in (policy, str(self._settings.get("proxy_mode") or "").lower()):
+            return False
+        if not target.url.startswith(("http://", "https://")):
+            return False
+        return bool(self._sources.max_connections(src)) or policy == "always"
+
     async def _web_vod(
         self,
         profile_id: str,
@@ -953,14 +1062,38 @@ class PlaybackResolver:
         target: StreamTarget,
         audio_track: int | None,
         start_position_ms: int | None,
+        pin_key: str | None = None,
     ) -> WebVod:
         """Probe the file and plan its delivery to a browser (see ``web_vod_plan``).
 
         Seeking in the HLS form is restart-at-offset: the session starts at ``start_s`` (the requested
         position, else the profile's resume position, floored to ``VOD_START_STEP_S``) and the client
         asks for a new start when the viewer seeks outside what that session has produced.
+
+        ``pin_key`` is a watch room planning its one session: the probe uses the room's upstream
+        session, a file that cannot be probed is still planned (transcoded), and so is one a browser
+        would have played as it is (copied).
         """
-        probe = await self._probe_file(row, src, target, profile_id)
+        probe = None
+        if self._probe_applies(src, target):
+            probe = await self._probe_file(row, src, target, profile_id, pin_key)
+        vod = await self._plan_vod(
+            profile_id, probe, target.duration_ms, target.resume_position_ms, audio_track, start_position_ms
+        )
+        if pin_key is not None and vod.video is None:
+            vod.video = "copy"  # a room's members share one HLS session even when a browser could play the file
+        return vod
+
+    async def _plan_vod(
+        self,
+        profile_id: str,
+        probe: dict[str, Any] | None,
+        duration_ms: int | None,
+        resume_ms: int | None,
+        audio_track: int | None,
+        start_position_ms: int | None,
+    ) -> WebVod:
+        """A probed (or unprobeable) file as a browser gets it: audio track, video plan, start offset."""
         tracks = probe_tracks({"probe": probe}) if probe else []
         if audio_track is not None and probe is not None and audio_track >= len(tracks):
             raise ServiceError("This file has no such audio track.", code="audio_track_invalid")
@@ -971,11 +1104,9 @@ class PlaybackResolver:
             selected = wanted if wanted is not None else default_track(tracks)
         raw_video = probe.get("video") if probe else None
         video = raw_video if isinstance(raw_video, dict) else {}
-        duration_ms = target.duration_ms or (probe.get("duration_ms") if probe else None)
-        start_ms = target.resume_position_ms if start_position_ms is None else start_position_ms
-        start_s = max(0, int(start_ms or 0)) // 1000 // VOD_START_STEP_S * VOD_START_STEP_S
-        if duration_ms and start_s * 1000 >= duration_ms:
-            start_s = 0
+        duration_ms = duration_ms or (probe.get("duration_ms") if probe else None)
+        start_ms = resume_ms if start_position_ms is None else start_position_ms
+        start_s = vod_start_s(start_ms, duration_ms)
         return WebVod(
             video=web_vod_plan(probe, selected),
             codec=video.get("codec"),
@@ -985,6 +1116,98 @@ class PlaybackResolver:
             start_s=start_s,
             duration_ms=duration_ms,
         )
+
+    # ------------------------------------------------------------------ recordings
+    async def _resolve_recording(
+        self, profile_id: str, hub_id: str, client: str, audio_track: int | None, start_position_ms: int | None
+    ) -> dict[str, Any]:
+        """``rec:<recording id>``: a recording's file, to anyone who may see the recording.
+
+        The TV gets the file itself, with Range. A browser gets what it gets for any VOD file:
+        the file is probed and, since it is Matroska, served as HLS with the video copied
+        (H.264) or transcoded and one audio track encoded.
+        """
+        from app.services.content_policy import active_principal
+
+        principal = active_principal.get()
+        if self.recorder is None or principal is None:
+            raise NotFound("recording not found")
+        row, path = await self.recorder.playable(principal, hub_id.removeprefix("rec:"))
+        await self._require_slot()
+        p = await self._progress.get(profile_id, hub_id)
+        resume = 0 if p is None or p.completed else p.position_ms
+        vod: WebVod | None = None
+        probe: dict[str, Any] | None = None
+        if client != "android_tv":
+            probe = await self._probe_recording(row.id, path)
+            vod = await self._plan_vod(profile_id, probe, None, resume, audio_track, start_position_ms)
+        plan = vod if vod is not None and vod.video is not None else None
+        mode = PlaybackMode.HLS if plan is not None else PlaybackMode.PROXY
+        device = client if client == "android_tv" else "web"
+        title = row.title[:80]
+        self._admit(principal, profile_id, hub_id, title, "recording", device)
+        token = self.tokens.issue(
+            StreamGrant(
+                profile_id=profile_id,
+                content_ref=hub_id,
+                profile_version=principal.token_version,
+                session_id=principal.session_id,
+                source_id="",
+                url=hub_id,  # the file is looked up when the grant is used, never named in it
+                headers={},
+                mode=mode.value,
+                live=False,
+                channel_key=None,
+                transcode=False,
+                vod_video=plan.video if plan else None,
+                vod_codec=plan.codec if plan else None,
+                vod_width=plan.width if plan else None,
+                audio_track=plan.audio_track if plan else None,
+                start_s=plan.start_s if plan else 0,
+                title=title,
+                kind="recording",
+                user_id=principal.user_id or None,
+                user_version=principal.user_version,
+                client=device,
+            )
+        )
+        hls = mode == PlaybackMode.HLS
+        desc: dict[str, Any] = {
+            "id": hub_id,
+            "mode": mode.value,
+            "url": absolute(f"/api/v1/stream/{token}/index.m3u8" if hls else f"/api/v1/stream/{token}"),
+            "mime": "application/x-mpegURL" if hls else "video/x-matroska",
+            "headers": {},
+            "live": False,
+            "resume_position_ms": int(resume or 0),
+            "duration_ms": vod.duration_ms if vod is not None else None,
+            "audio_tracks": vod.tracks if vod is not None else [],
+            "audio_track": plan.audio_track if plan else None,
+            "start_position_ms": plan.start_s * 1000 if plan else None,
+            "title": row.title,
+            "subtitle": row.subtitle or row.channel_name or None,
+            "poster": None,
+            "channel_context": None,
+            "handoff": None,
+            "drm": None,
+        }
+        desc.update(await self._runtime_audio(profile_id, {"probe": probe} if probe else {}, consent=True))
+        return desc
+
+    async def _probe_recording(self, recording_id: str, path: Any) -> dict[str, Any] | None:
+        """Probe a recording's file once per file; ``None`` without ffprobe or when it cannot be read."""
+        if self.probe is None or not self.probe.available:
+            return None
+        stamp = (str(path), path.stat().st_size)
+        held = self._recording_probes.get(recording_id)
+        if held is not None and held[0] == stamp:
+            return held[1]
+        found: dict[str, Any] | None = await self.probe.run(str(path), {})
+        if found is not None:
+            if len(self._recording_probes) >= 256:
+                self._recording_probes.clear()
+            self._recording_probes[recording_id] = (stamp, found)
+        return found
 
     async def _runtime_audio(self, profile_id: str, extra: dict[str, Any], consent: bool) -> dict[str, Any]:
         preferred = await self._catalog.preferred_languages(profile_id, None)
@@ -1011,6 +1234,7 @@ class PlaybackResolver:
         allow_unverified_audio: bool = False,
         audio_track: int | None = None,
         start_position_ms: int | None = None,
+        room: RoomScope | None = None,
     ) -> dict[str, Any]:
         sources = await self._sources.rows_by_id()
         meta = await self._meta.details(media_type, tmdb_id) if self._meta.enabled else None
@@ -1044,6 +1268,7 @@ class PlaybackResolver:
                 audio_consent=bool(variant_id and allow_unverified_audio),
                 audio_track=audio_track,
                 start_position_ms=start_position_ms,
+                room=room,
             )
         if variant_id:
             raise NotFound("variant does not belong to this title or source")
@@ -1113,6 +1338,7 @@ class PlaybackResolver:
         vod: WebVod | None = None,
         kind: str | None = None,
         private: bool = False,
+        room: str | None = None,
     ) -> dict[str, Any]:
         mode = decide_mode(
             client=client,
@@ -1142,10 +1368,14 @@ class PlaybackResolver:
         url = target.url
         mime = target.mime
         headers = dict(target.headers)
-        if mode in (PlaybackMode.PROXY, PlaybackMode.HLS):
-            from app.services.content_policy import active_principal
+        from app.services.content_policy import active_principal
 
-            principal = active_principal.get()
+        principal = active_principal.get()
+        # Adult rows stay out of everything nobody asked for by id, a busy answer included.
+        shown = None if private else title[:80]
+        device = client if client == "android_tv" else "web"
+        self._admit(principal, profile_id, policy_ref or hub_id, shown, kind, device)
+        if mode in (PlaybackMode.PROXY, PlaybackMode.HLS):
             token = self.tokens.issue(
                 StreamGrant(
                     profile_id=profile_id,
@@ -1166,9 +1396,12 @@ class PlaybackResolver:
                     vod_width=plan.width if plan else None,
                     audio_track=plan.audio_track if plan else None,
                     start_s=plan.start_s if plan else 0,
-                    # Adult rows stay out of everything nobody asked for by id, a busy answer included.
-                    title=None if private else title[:80],
+                    title=shown,
                     kind=kind,
+                    user_id=(principal.user_id or None) if principal is not None else None,
+                    user_version=principal.user_version if principal is not None else None,
+                    client=device,
+                    room=room if plan is not None else None,
                 )
             )
             if mode == PlaybackMode.HLS:

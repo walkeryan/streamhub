@@ -37,7 +37,9 @@ async def test_admin_confirmation_generation_and_token_revocation(api: Api) -> N
             await api.client.request(method, "/api/v1" + path, headers=headers, json={"confirm": True})
         ).status_code == 403
     old_epoch = (await api.get("/playback/generation")).json()["generation"]
-    grant = StreamGrant(api.profile_id, "source", "https://provider.invalid/private", {}, "proxy", False, None, False)
+    grant = StreamGrant(
+        api.profile_id, "source", "https://provider.invalid/private", {}, "proxy", False, None, False, **api.identity()
+    )
     token = api.c.tokens.issue(grant)
     assert (await api.post("/playback/recovery/stop", json={"confirm": False})).status_code == 422
     assert not api.c.proxy.paused

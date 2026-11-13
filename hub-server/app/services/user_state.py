@@ -2,24 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 from sqlalchemy import delete, func, select
 
 from app.domain.entities import MediaKind
-from app.domain.ports import ProgressReporter
+from app.domain.ports import ProgressReporter, WatchStateProvider
 from app.infra.db import Database
-from app.infra.models import Favorite, Profile, Progress, Watchlist, utcnow
+from app.infra.models import Favorite, Profile, Progress, Title, User, Watchlist, utcnow
 from app.services import ids
 from app.services.errors import NotFound, PayloadTooLarge, ServiceError
 from app.services.sources import SourceService
-from app.services.tiles import row_to_item
+from app.services.tiles import hub_id_for_title, row_to_item
 
 log = logging.getLogger(__name__)
 
 COMPLETE_RATIO = 0.95
+# The library account's state is asked for at most this often per profile and title, and never
+# for longer than this: a slow library server must not hold up a title page or playback.
+ACCOUNT_STATE_EVERY_S = 10.0
+ACCOUNT_STATE_TIMEOUT_S = 5.0
 HOME_ROWS: list[tuple[str, str]] = [
     ("continue_watching", "Continue Watching"),
     ("on_now", "On Now"),
@@ -142,6 +148,68 @@ class ProgressService:
     def __init__(self, db: Database, sources: SourceService) -> None:
         self._db = db
         self._sources = sources
+        self._merged: dict[tuple[str, str, str], float] = {}
+
+    # ------------------------------------------------------------------ the library account's own state
+    async def account_linked(self, profile_id: str) -> bool:
+        """Is this the user the library server's account belongs to (``user.plex_account_linked``)?"""
+        async with self._db.session() as s:
+            linked = await s.execute(
+                select(User.plex_account_linked)
+                .join(Profile, Profile.user_id == User.id)
+                .where(Profile.id == profile_id)
+            )
+            return bool(linked.scalar_one_or_none())
+
+    async def merge_account_state(self, profile_id: str, rows: list[Title]) -> None:
+        """Take over the library account's resume points where they are newer than this profile's.
+
+        A server such as Plex keeps one watch state, its account's. For the user linked to that
+        account both sides are the same person's history: whichever was touched last wins, and a
+        title the account watched to the end is completed here. Nobody else's request reads the
+        account's state. Failures are logged and never reach the caller.
+        """
+        for row in rows:
+            try:
+                _src, prov = await self._sources.provider_for(row.source_id)
+                if not isinstance(prov, WatchStateProvider) or not await self.account_linked(profile_id):
+                    continue
+                key, now = (profile_id, row.source_id, row.ext_id), time.monotonic()
+                if now - self._merged.get(key, -ACCOUNT_STATE_EVERY_S) < ACCOUNT_STATE_EVERY_S:
+                    continue
+                if len(self._merged) > 2048:
+                    self._merged.clear()
+                self._merged[key] = now
+                states = await asyncio.wait_for(prov.watch_states(row_to_item(row)), ACCOUNT_STATE_TIMEOUT_S)
+                await self._take_over(profile_id, row, states)
+            except Exception as exc:
+                log.info("account watch state not merged", extra={"source": row.source_id, "err": type(exc).__name__})
+
+    async def _take_over(self, profile_id: str, row: Title, states: dict[str, Any]) -> None:
+        async with self._db.session() as s:
+            for ext_id, state in states.items():
+                lib = ids.lib_id(row.source_id, ext_id)
+                # The title itself may be known by its merged id; its episodes never are.
+                keys = [hub_id_for_title(row), lib] if ext_id == row.ext_id else [lib]
+                found = (
+                    await s.execute(
+                        select(Progress).where(Progress.profile_id == profile_id, Progress.ref_id.in_(keys))
+                    )
+                ).scalars()
+                local = min(found, key=lambda p: keys.index(p.ref_id), default=None)
+                if local is not None and local.updated_at >= state.viewed_at:
+                    continue  # this profile's own state is the newer one
+                if local is None:
+                    if not state.watched and state.position_ms <= 0:
+                        continue
+                    local = Progress(profile_id=profile_id, ref_id=keys[0])
+                    s.add(local)
+                local.completed = bool(state.watched)
+                local.position_ms = 0 if state.watched else max(0, int(state.position_ms))
+                local.duration_ms = state.duration_ms or local.duration_ms
+                local.source_id = row.source_id
+                local.updated_at = state.viewed_at
+            await s.commit()
 
     async def get(self, profile_id: str, *ref_ids: str) -> Progress | None:
         async with self._db.session() as s:
@@ -201,13 +269,19 @@ class ProgressService:
             await s.commit()
             await s.refresh(row)
         if forward_item is not None and source_id:
-            await self._forward(source_id, forward_item, position_ms, duration_ms, state)
+            await self._forward(profile_id, source_id, forward_item, position_ms, duration_ms, state)
         return row
 
-    async def _forward(self, source_id: str, item: Any, position_ms: int, duration_ms: int | None, state: str) -> None:
+    async def _forward(
+        self, profile_id: str, source_id: str, item: Any, position_ms: int, duration_ms: int | None, state: str
+    ) -> None:
         try:
             _src, prov = await self._sources.provider_for(source_id)
             if isinstance(prov, ProgressReporter):
+                # A server whose watch state is one account's hears only from the user linked to
+                # that account; anyone else's viewing would be written into that person's history.
+                if isinstance(prov, WatchStateProvider) and not await self.account_linked(profile_id):
+                    return
                 await prov.report_progress(row_to_item(item), position_ms, duration_ms, state)
         except Exception as exc:  # never fail the client's report
             log.info("progress forward failed", extra={"source": source_id, "err": type(exc).__name__})

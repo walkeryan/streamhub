@@ -21,15 +21,15 @@ components:
       properties:
         code: {type: string}
         message: {type: string}
-        active: {type: array, items: {$ref: '#/components/schemas/ActiveStream'}, description: "Only on source_busy: the streams this server is running on the source, longest-running first. May be empty when something outside this server holds the connections."}
-        limit: {type: integer, nullable: true, description: "Only on source_busy: how many connections the source allows, when known."}
+        active: {type: array, items: {$ref: '#/components/schemas/ActiveStream'}, description: "On source_busy: the streams this server is running on the source, longest-running first; may be empty when something outside this server holds the connections. On user_stream_limit: the user's own streams that use up their limit."}
+        limit: {type: integer, nullable: true, description: "On source_busy: how many connections the source allows, when known. On user_stream_limit: the user's max_streams."}
         missing: {type: array, items: {$ref: '#/components/schemas/Permission'}, description: "403 forbidden only: the permissions the caller lacks"}
     ActiveStream:
       type: object
-      description: One stream holding a source connection, named to the profile a busy source turned away.
+      description: One stream holding a source connection, named to the profile a busy source turned away; or one of a user's own streams, on user_stream_limit.
       properties:
         profile_name: {type: string, nullable: true}
-        title: {type: string, nullable: true, description: Channel or title being watched; null for adult titles and for content the refused profile may not open.}
+        title: {type: string, nullable: true, description: "Channel or title being watched; null for adult titles and for content the refused profile may not open. A watch room's shared stream is named \"Watch room: <title>\" (profile_name is the host), a recording on a connection of its own \"Recording: <title>\"."}
         kind: {type: string, nullable: true, description: "channel, movie, episode, …; null whenever title is."}
         since: {type: string, format: date-time, description: When this stream's connection was opened.}
 
@@ -93,7 +93,7 @@ components:
         profile_id: {type: string, nullable: true, description: The profile holding this user's viewer state}
         has_pin: {type: boolean}
         on_shared_devices: {type: boolean}
-        plex_account_linked: {type: boolean}
+        plex_account_linked: {type: boolean, description: "This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state."}
         created_at: {type: string, format: date-time}
         approved_at: {type: string, format: date-time, nullable: true}
         last_seen_at: {type: string, format: date-time, nullable: true}
@@ -101,7 +101,13 @@ components:
       type: object
       required: [id]
       additionalProperties: true
-      properties: { id: {type: string}, title: {type: string, nullable: true} }
+      description: One stream a user is playing. Listed while it shows activity - bytes or a segment served, or a progress report, in the last 30 seconds - and for 30 seconds after it was resolved.
+      properties:
+        id: {type: string, description: The id that was resolved}
+        title: {type: string, nullable: true, description: null for adult titles}
+        kind: {type: string, nullable: true, description: "channel, movie, episode, recording, …"}
+        since: {type: string, format: date-time}
+        client: {type: string, nullable: true, enum: [web, android_tv, null]}
     UserListItem:
       allOf:
         - $ref: '#/components/schemas/User'
@@ -530,7 +536,7 @@ components:
       type: object
       required: [id]
       properties:
-        id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false)"}
+        id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false). Also rec:<recording id> for a recording that has a file (state done, or failed with what it kept): android_tv gets mode=proxy, the Matroska file itself with Range support; web gets the file probed and served as restart-at-offset HLS like any VOD file a browser cannot decode. Needs recordings.view and a recording the caller's /recordings list shows; anything else is 404. Progress is reported under the same id."}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
         variant_id: {type: string, nullable: true}
         allow_unverified_audio: {type: boolean, default: false}
@@ -627,6 +633,7 @@ components:
         audio_tracks: {type: array, items: {$ref: '#/components/schemas/AudioTrack'}, description: Tracks of the probed file (web VOD only).}
         audio_track: {type: integer, nullable: true, description: The one track the server encoded into this stream; null when the client receives the file's own tracks.}
         start_position_ms: {type: integer, nullable: true, description: "Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms."}
+        stream_epoch: {type: integer, nullable: true, description: "Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. Null for every other descriptor."}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
@@ -760,7 +767,7 @@ components:
     RecordingState: { type: string, enum: [scheduled, recording, done, failed, missed, cancelled] }
     Recording:
       type: object
-      description: One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes.
+      description: "One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file it plays with POST /playback/resolve {id: \"rec:<id>\"}."
       required: [id, profile_id, channel_id, title, starts_at, ends_at, state, created_at, updated_at]
       properties:
         id: {type: string}
@@ -886,6 +893,8 @@ components:
         - `state {playing, position_ms, as_of_ms, by, controls_locked}`: the room clock (see RoomState).
           `by` is the member who caused it, or null when the room did. A member more than 1000 ms from
           the room position seeks to it. Any `state` clears a `waiting` notice.
+          In a room that plays one shared stream, every `state` also carries `stream_epoch` and
+          `stream_start_ms` (see below); in other rooms the two fields are absent.
         - `members {members: RoomMember[]}`: sent whenever someone joins, leaves or starts or stops buffering.
         - `waiting {name}`: the room is paused for this member. It resumes when they recover or after 15 s.
         - `error {code, message}`: to the sender only, for a refused command: `controls_locked`,
@@ -897,6 +906,22 @@ components:
         On connect the server sends `members`, then `state`, then `waiting` if the room is waiting.
         Closing the socket with code 1000 or 1001 leaves the room at once; any other end of the
         connection keeps the seat until the 20 s silence rule applies.
+
+        One shared stream. A title from a source that limits its connections (or is always proxied)
+        is played to the whole room from a single upstream: every member's `descriptor` is an HLS
+        URL of their own onto the same stream, whatever their client, with `start_position_ms`
+        (media time zero of the stream) and `stream_epoch` set. The stream uses one of the source's
+        connections however many members watch, and is released when the last member leaves or the
+        room closes. A seek restarts it at the new position before the seek's `state` is sent. That
+        `state` carries the new `stream_epoch` and `stream_start_ms`: a client whose epoch differs
+        reloads the same playlist URL (the descriptor's `url` does not change) and treats
+        `stream_start_ms` as its new time zero; segments of the previous epoch answer 403. A seek to
+        a position the running stream already starts at (positions are floored to 5 s) keeps the
+        epoch, and the client seeks within what it is playing. The stream's audio is the room's
+        `audio_track`, else the first member's preferred or default track; `audio_track` in the
+        descriptor says which. Titles from other sources are resolved per member, and live channels
+        share the proxy's upstream as any two viewers of a channel do: for both, `stream_epoch` is
+        null and `state` carries neither field.
       properties:
         member_token: {type: string, description: "valid 2 h, for this room and member only"}
         member_id: {type: string}
@@ -1439,9 +1464,16 @@ paths:
         '401': {description: Authentication required}
         '403': {description: Lease belongs to another profile or session}
   /playback/resolve:
-    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } } } }
+    post:
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackRequest' } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PlaybackDescriptor' } } } }
+        '409': { description: "user_stream_limit: the user's other devices already play as many streams as their max_streams allows; active lists them, limit is the allowance. Resolving on a device that is already playing never counts that device's own stream: the same title is the same stream (seek, audio change, retry), another title takes its place. Also audio_selection_required and the other playback conflicts.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /playback/progress:
-    post: { requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }, responses: { '204': { description: ok }, '403': {description: Captured profile mismatch or content access denied} } }
+    post:
+      description: Besides saving the position, a report keeps the stream counted as playing for the user's stream limit (playing, paused) or releases it at once (stopped).
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProgressReport' } } } }
+      responses: { '204': { description: ok }, '403': {description: Captured profile mismatch or content access denied} }
   /stream/{token}:
     get:
       security: []
@@ -1449,14 +1481,16 @@ paths:
       parameters: [{name: token, in: path, required: true, schema: {type: string}}]
       responses:
         '200': { description: stream }
-        '409': { description: "source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "session_revoked | user_suspended | session_stale: the session, user or user version the token was issued to no longer stands (checked on every request and about every second of a running stream, a positive answer reused for 3 seconds). Resolve playback again." }
+        '409': { description: "source_busy: every connection the source allows is in use, or the source refused this one while the others were; active says who is watching what. user_stream_limit: this stream went quiet for 30 seconds or was replaced on its device, and the user's limit is now used by other streams.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /stream/{token}/index.m3u8:
     get:
       security: []
       parameters: [{name: token, in: path, required: true, schema: {type: string}}]
       responses:
         '200': { description: hls playlist }
-        '409': { description: "source_busy, as for /stream/{token}", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "as for /stream/{token}; segments answer the same" }
+        '409': { description: "source_busy or user_stream_limit, as for /stream/{token}", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /favorites:
     get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
@@ -1617,14 +1651,14 @@ paths:
   /rooms/{code}/join:
     post:
       summary: Take a seat in the room
-      description: Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged. A room has at most 8 members and expires after 30 minutes with none.
+      description: Resolves playback for the current profile exactly as /playback/resolve would; its refusals are returned unchanged, and a member who may not watch the title is refused without disturbing the others. On a source that limits connections the descriptor is a seat on the room's one shared stream (see RoomJoined). A room has at most 8 members and expires after 30 minutes with none.
       parameters: [{name: code, in: path, required: true, schema: {type: string}}]
       requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoin' } } } }
       responses:
         '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RoomJoined' } } } }
         '403': { description: "content_restricted and the other /playback/resolve refusals" }
         '404': { description: "room_not_found, or the room's title or variant is not available to this profile" }
-        '409': { description: "room_full | room_unsupported | audio_selection_required" }
+        '409': { description: "room_full | room_unsupported | audio_selection_required | user_stream_limit | source_busy (the room's stream could not get a connection of its source; active says who holds them)" }
   /recordings:
     get:
       summary: The current profile's recordings (everyone's for an admin), earliest first
