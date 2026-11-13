@@ -102,6 +102,7 @@ export function Browse() {
     <div className="page-pad browse-head">
       <FocusGroup focusKey="browse:filters" className="browse-bar">
         {phone ? <FocusGroup focusKey="browse:switch" className="browse-switch" role="group" label="Library">
+          <h1 className="sr-only">{TITLES[section] ?? section}</h1>
           <Chip focusKey="browse:switch:movies" pressed={kind === 'movies'} onEnter={() => { if (kind !== 'movies') go('/browse/movies', { replace: true }) }}>Movies</Chip>
           <Chip focusKey="browse:switch:shows" pressed={kind === 'shows'} onEnter={() => { if (kind !== 'shows') go('/browse/shows', { replace: true }) }}>Shows</Chip>
         </FocusGroup> : <h1 className="title-xl">{TITLES[section] ?? section}</h1>}
