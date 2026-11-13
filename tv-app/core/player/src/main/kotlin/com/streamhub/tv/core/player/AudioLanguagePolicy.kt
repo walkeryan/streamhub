@@ -23,8 +23,8 @@ internal fun needsRuntimeAudioCheck(required:Boolean,preferred:List<String>):Boo
 internal enum class RuntimeAudioDecision { Allowed, Unobservable, Blocked }
 internal fun runtimeAudioDecision(required:Boolean,preferred:List<String>,exposedTracks:Int,selected:List<String?>,explicitSelected:Boolean):RuntimeAudioDecision = when {
     !needsRuntimeAudioCheck(required,preferred) -> RuntimeAudioDecision.Allowed // Explicit All languages.
-    exposedTracks==0 -> RuntimeAudioDecision.Unobservable // Preserve successful source preflight, without claiming track verification.
     explicitSelected -> RuntimeAudioDecision.Allowed
+    exposedTracks==0 || singleUntaggedAudio(exposedTracks,selected) -> RuntimeAudioDecision.Unobservable // Preserve successful source preflight, without claiming track verification.
     preferredAudioSelected(preferred,selected) -> RuntimeAudioDecision.Allowed
     else -> RuntimeAudioDecision.Blocked
 }
@@ -34,4 +34,12 @@ internal class RuntimeAudioApproval<T:Any> {
     fun approve(epoch:Long,group:T,index:Int) {value=Triple(epoch,group,index)}
     fun accepts(epoch:Long,group:T,index:Int):Boolean=value?.let {it.first==epoch && it.second===group && it.third==index}==true
     fun clear(){value=null}
+}
+
+/** Missing tags on the one actual selected track are unknown, not a foreign-language finding. */
+internal fun singleUntaggedAudio(exposedTracks:Int,selected:List<String?>):Boolean =
+    exposedTracks==1 && selected.size==1 && normalizedAudioLanguage(selected.single())==null
+
+internal fun preferredAudioIndex(preferred:List<String>,available:List<String?>):Int? = preferred.firstNotNullOfOrNull { wanted ->
+    normalizedAudioLanguage(wanted)?.let { language -> available.indexOfFirst {normalizedAudioLanguage(it)==language}.takeIf {it>=0} }
 }
