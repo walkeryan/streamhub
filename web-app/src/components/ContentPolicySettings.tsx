@@ -7,6 +7,7 @@ import { useProfiles } from '../api/hooks'
 import { useAuthCapabilities, useContentPolicy, type ContentPolicy, type ContentPolicyInput } from '../api/contentPolicy'
 import { useUi } from '../store/ui'
 import { useSession } from '../store/session'
+import { useCan } from '../api/me'
 import { Button, Chip, ErrorState, Modal } from './ui'
 import { FocusGroup } from '../nav/Focusable'
 
@@ -16,10 +17,11 @@ const TV = ['TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA']
 export function ContentPolicySettings() {
   const capability = useAuthCapabilities()
   const me = useSession((s) => s.profile)!
+  const manages = useCan('users.manage')
   if (capability.isPending) return <p role="status">Checking content-control availability…</p>
   if (capability.error) return <ErrorState error={capability.error} onRetry={() => void capability.refetch()} />
   if (!capability.data?.content_policy_enabled) return <p>Server-enforced content controls are not enabled. Profile labels and hidden groups are display preferences, not access restrictions.</p>
-  if (!me.is_admin || me.content_restricted) return <p>Content restrictions are managed by the owner. They cannot be changed in this profile’s preferences.</p>
+  if (!manages || me.content_restricted) return <p>Content restrictions are managed by the owner. They cannot be changed in this profile’s preferences.</p>
   if (!capability.data.owner_pin_configured) return <p>Owner PIN setup is required before restricted profiles can be enabled. Open Settings → Profiles → Owner PIN setup or recovery and request local VM approval.</p>
   return <AdminPolicies />
 }

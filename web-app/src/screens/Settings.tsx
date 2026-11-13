@@ -1,4 +1,5 @@
 import { useAuthCapabilities } from '../api/contentPolicy'
+import { useCan } from '../api/me'
 import { OwnerPinSettings } from '../components/OwnerPinSettings'
 import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
@@ -69,6 +70,9 @@ function ProfilesTab() {
   const capabilities=useAuthCapabilities()
   const { data, error, refetch } = useProfiles()
   const me = useCurrent()
+  // A restricted profile never manages others, whatever its permissions say.
+  const manages = useCan('users.manage') && !me.content_restricted
+  const owner = useCan('system.manage')
   const qc = useQueryClient()
   const toast = useUi((s) => s.toast)
   const [name, setName] = useState('')
@@ -105,12 +109,12 @@ function ProfilesTab() {
           {(data ?? []).map((p) => (
             <div key={p.id} className="panel flex items-center gap-3">
               <span className="flex-1">{p.name}{p.id === me.id ? ' (you)' : ''}<span className="label"> {p.is_admin ? ' · Admin' : ''}{p.kids ? ' · Kids' : ''}{p.has_pin ? ' · PIN' : ''}</span></span>
-              {me.is_admin && !me.content_restricted && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
+              {manages && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
             </div>
           ))}
         </FocusGroup>
       </section>
-      {me.is_admin && !me.content_restricted && (
+      {manages && (
         <section className="flex flex-col gap-3">
           <h2 className="heading">Add a profile</h2>
           <div className="flex gap-3 flex-wrap items-center">
@@ -121,7 +125,7 @@ function ProfilesTab() {
         </section>
       )}
       <OwnerPinSettings />
-      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || me.is_admin) && <section className="flex flex-col gap-3">
+      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || owner) && <section className="flex flex-col gap-3">
         <h2 className="heading">PIN for {me.name}</h2>
         <p className="muted">{me.has_pin ? 'A PIN is required to open this profile.' : 'Anyone can open this profile. Add a PIN to lock it.'}</p>
         <div className="flex gap-3 flex-wrap items-center">
@@ -266,7 +270,7 @@ function ParentalTab() {
 /* ------------------------------ playback / server ------------------------------ */
 function PlaybackTab() {
   const { data, error, refetch } = useSettings()
-  const me = useCurrent()
+  const admin = useCan('settings.admin')
   const qc = useQueryClient()
   const toast = useUi((s) => s.toast)
   const [key, setKey] = useState('')
@@ -293,7 +297,7 @@ function PlaybackTab() {
           <Button focusKey="tmdb:save" disabled={!key.trim()} onEnter={async () => { await ok(api.PUT('/settings/tmdb_key', { body: { api_key: key.trim() } })); setKey(''); void qc.invalidateQueries({ queryKey: qk.settings }); toast('TMDB key saved.', 'success') }}>Save key</Button>
         </div>
       </section>
-      {me.is_admin && <RequestManagerSettings configured={!!data.request_manager_configured} />}
+      {admin && <RequestManagerSettings configured={!!data.request_manager_configured} />}
     </div>
   )
 }

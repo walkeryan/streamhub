@@ -38,6 +38,7 @@ export function LoginGate() {
   const origin=useRef(0)
   const committing=useRef(false)
   const [finishing,setFinishing]=useState(false)
+  const notice = useSession((s) => s.notice)
   const [error, setError] = useState<string | null>(()=>new URLSearchParams(window.location.search).has('owner_pin_uncertain')?'Authorization outcome is unknown. Sign in with Google and your owner PIN again. The previous submission will not be retried.':null)
   const [busy, setBusy] = useState(false)
   const config = useQuery({ queryKey: ['auth-config'], queryFn: async () => {
@@ -95,7 +96,7 @@ export function LoginGate() {
   </main>
   if (config.isPending) return <main className="p-8"><p>Loading sign-in…</p></main>
   if (config.error) return <main className="p-8"><ErrorState error={config.error} onRetry={() => void config.refetch()} /></main>
-  if (!config.data.google_required && !config.data.google_enabled) return <ProfilePicker />
+  if (!config.data.google_required && !config.data.google_enabled) return <>{notice && <p role="alert" className="page-pad" data-testid="signed-out-notice">{notice}</p>}<ProfilePicker /></>
   return <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }}>
     <FocusGroup focusKey="google-login" className="flex flex-col items-center gap-6">
       <h1 className="display">Welcome to StreamHub</h1>
@@ -108,6 +109,7 @@ export function LoginGate() {
           window.location.assign(`/api/v1/auth/google/start?return_to=${encodeURIComponent(returnTo)}`)
         }}>{busy ? 'Completing sign-in…' : 'Continue with Google'}</Button>
         : <p role="alert">Google sign-in is not configured yet. Contact the server owner.</p>}
+      {notice && <p role="alert" data-testid="signed-out-notice">{notice}</p>}
       {error && <p role="alert">{error}</p>}
       {!config.data.google_required && <ProfilePicker />}
     </FocusGroup>

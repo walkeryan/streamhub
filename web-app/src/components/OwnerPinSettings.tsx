@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthCapabilities } from '../api/contentPolicy'
 import { useSession } from '../store/session'
+import { useCan } from '../api/me'
 import { OwnerPinSetup } from './OwnerPinSetup'
 import { Button, Modal } from './ui'
 
@@ -15,7 +16,8 @@ export function OwnerPinSettings() {
   const [finishing,setFinishing]=useState(false)
   const navigate=useNavigate()
   const qc=useQueryClient()
-  if(!capability.data?.content_policy_enabled || !profile.is_admin || profile.content_restricted)return null
+  const owner=useCan('system.manage')
+  if(!capability.data?.content_policy_enabled || !owner || profile.content_restricted)return null
   return <section className="panel flex flex-col gap-3">
     <h2 className="heading">Owner PIN protection</h2>
     <p>{capability.data.owner_pin_configured?'Owner PIN configured. Google sign-in still identifies the owner; the PIN authorizes protected actions.':'Owner PIN setup is required before enabling restricted profiles.'} Setup and recovery require separate local VM approval.</p>

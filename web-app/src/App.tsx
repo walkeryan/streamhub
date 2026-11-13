@@ -4,9 +4,10 @@ import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './api/client'
 import type { Profile } from './api/types'
 import { useDisclaimer } from './api/hooks'
+import { useMe } from './api/me'
 import { useCatalogFreshness } from './api/catalogFreshness'
 import { Rail } from './components/Rail'
-import { ErrorState, Skeleton, Toasts } from './components/ui'
+import { Button, ErrorState, Skeleton, Toasts } from './components/ui'
 import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
 import { bootTheme, useTheme } from './lib/theme'
@@ -46,6 +47,8 @@ function Shell() {
 export function App() {
   const profile = useSession((s) => s.profile)
   const setProfile = useSession((s) => s.setProfile)
+  const signOut = useSession((s) => s.clear)
+  const me = useMe()
   useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')
@@ -68,8 +71,15 @@ export function App() {
 
   let body
   if (!profile || googleComplete) body = <LoginGate />
-  else if (current.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
-  else if (current.error) body = <div className="page-pad"><ErrorState error={current.error} onRetry={() => void current.refetch()} /></div>
+  // Nothing is offered before the server has said what this user may do.
+  else if (current.isPending || me.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
+  else if (current.error || me.error) body = (
+    <div className="page-pad">
+      <ErrorState error={current.error ?? me.error} onRetry={() => { void current.refetch(); void me.refetch() }}>
+        <Button focusKey="boot:signout" onEnter={signOut}>Sign out</Button>
+      </ErrorState>
+    </div>
+  )
   else if (disclaimer.data && profile.disclaimer_accepted_version !== disclaimer.data.version) {
     body = <DisclaimerGate onAccepted={() => setProfile({ ...profile, disclaimer_accepted_version: disclaimer.data!.version })} />
   } else if (disclaimer.isLoading) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>

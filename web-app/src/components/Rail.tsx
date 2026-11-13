@@ -6,6 +6,7 @@ import { Modal } from './ui'
 import { useGo, useBackHandler } from '../nav/back'
 import { setFocus } from '../nav/spatial'
 import { can, type Capability } from '../lib/can'
+import { useAccess } from '../api/me'
 import { usePhone } from '../lib/layout'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
@@ -25,7 +26,7 @@ const NAV: Destination[] = [
 ]
 /** A phone's bar holds five: Movies and Shows share Library (the screen has the switch), My List moves under More. */
 const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: 'Library', icon: 'film', at: ['/browse', '/discover'] }]
-/** Everything else, each offered only to a profile that may use it. Recordings and Users join this
+/** Everything else, each offered only to a user who may use it. Recordings and Users join this
  *  list, with their capability, once those screens exist. */
 const MORE: Destination[] = [
   { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' },
@@ -40,6 +41,7 @@ export function Rail() {
   const go = useGo()
   const phone = usePhone()
   const profile = useSession((s) => s.profile)
+  const access = useAccess()
   const pinned = useUi((s) => s.railPinned)
   const setPinned = useUi((s) => s.setRailPinned)
   const [hasFocus, setHasFocus] = useState(false)
@@ -52,7 +54,7 @@ export function Rail() {
     void setFocus('MAIN')
   }, hasFocus || pinned)
   const here = (d: Destination) => (d.to === '/' ? loc.pathname === '/' : [d.to, ...(d.at ?? [])].some((p) => loc.pathname.startsWith(p)))
-  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => !d.needs || can(profile, d.needs))]
+  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => !d.needs || can(access, d.needs))]
   const open = (to: string) => { setPinned(false); setMenu(false); go(to) }
   return <>
     <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember onFocusChange={setHasFocus}

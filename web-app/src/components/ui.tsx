@@ -90,13 +90,16 @@ export function Empty({ title, hint, children }: { title: string; hint?: string;
   )
 }
 
-export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+export function ErrorState({ error, onRetry, children }: { error: unknown; onRetry?: () => void; children?: ReactNode }) {
   const msg = error instanceof Error ? error.message : 'Something went wrong.'
   return (
     <div className="flex flex-col items-start gap-3 py-12" role="alert">
       <h2 className="title-xl">Could not load this screen</h2>
       <p className="muted">{msg}</p>
-      {onRetry && <Button focusKey="retry" primary icon="refresh" onEnter={onRetry}>Try again</Button>}
+      <FocusGroup className="flex gap-3 flex-wrap">
+        {onRetry && <Button focusKey="retry" primary icon="refresh" onEnter={onRetry}>Try again</Button>}
+        {children}
+      </FocusGroup>
     </div>
   )
 }

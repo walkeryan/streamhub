@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { api, unwrap, ApiError } from '../api/client'
 import { useAuthCapabilities } from '../api/contentPolicy'
 import { useProfiles } from '../api/hooks'
+import { useCan } from '../api/me'
 import type { AuthTokens, Profile } from '../api/types'
 import { useSession } from '../store/session'
 import { OwnerPin } from './OwnerPin'
@@ -28,6 +29,7 @@ function SwitchDialog({ onClose }: { onClose: () => void }) {
   const current = useSession((s) => s.profile)!
   const setSession = useSession((s) => s.setSession)
   const profiles = useProfiles()
+  const owner = useCan('system.manage')
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [target, setTarget] = useState<Profile | null>(null)
@@ -51,7 +53,7 @@ function SwitchDialog({ onClose }: { onClose: () => void }) {
     navigate('/', { replace: true }); onClose()
   }
   const submit = async () => {
-    if (!target || busy || current.content_restricted || !current.is_admin || !target.content_restricted || (pending.current && !pending.current.signal.aborted)) return
+    if (!target || busy || current.content_restricted || !owner || !target.content_restricted || (pending.current && !pending.current.signal.aborted)) return
     const controller = new AbortController(); pending.current?.abort(); pending.current = controller
     setBusy(true); setError('')
     try {
@@ -61,7 +63,7 @@ function SwitchDialog({ onClose }: { onClose: () => void }) {
       if (!controller.signal.aborted) setError(e instanceof ApiError && e.code === 'owner_pin_required' ? 'The owner PIN is required to exit this profile.' : e instanceof ApiError && e.status === 401 ? 'The existing profile credential was not accepted.' : e instanceof ApiError && e.code === 'profile_switch_locked' ? 'This profile has no usable existing credential. Ask the owner to sign in.' : e instanceof Error ? e.message : 'Could not switch profiles.')
     } finally { if (pending.current === controller) { pending.current = null; if (!controller.signal.aborted) setBusy(false) } }
   }
-  const needsOwnerPin = !!target && (current.content_restricted || !current.is_admin || !target.content_restricted)
+  const needsOwnerPin = !!target && (current.content_restricted || !owner || !target.content_restricted)
   return <Modal open onClose={cancel} title="Switch profile" firstFocusKey="switch:cancel" wide>
     <p>Current profile: {current.name}. Viewing history and saved filters stay with each profile.</p>
     {profiles.error ? <ErrorState error={profiles.error} onRetry={() => void profiles.refetch()} /> : <FocusGroup focusKey="switch:profiles" className="flex flex-wrap gap-3">

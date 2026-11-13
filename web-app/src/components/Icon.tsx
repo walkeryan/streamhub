@@ -40,6 +40,10 @@ const P: Record<string, string> = {
   tv2: 'M3 7h18v10H3z',
   trophy: 'M7 4h10v5a5 5 0 01-10 0zM7 6H4v1a3 3 0 003 3M17 6h3v1a3 3 0 01-3 3M12 14v4M8 20h8',
   filter: 'M4 6h16M7 12h10M10 18h4',
+  users: 'M9 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zM2.5 20a6.5 6.5 0 0113 0M16 5.2a3.5 3.5 0 010 6.6M18 14.3a6.5 6.5 0 013.5 5.7',
+  lock: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 017 0v3',
+  copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
+  delete: 'M21 5H9l-6 7 6 7h12zM12 9.5l5 5M17 9.5l-5 5',
 }
 const FILLED = new Set(['play', 'pause'])
 
