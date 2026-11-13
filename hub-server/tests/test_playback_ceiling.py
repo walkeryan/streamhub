@@ -25,20 +25,18 @@ from tests.test_content_policy import activate
 from tests.test_source_busy import Process
 from tests.test_stream_sessions import Clock
 
-NOW = datetime.now(UTC).replace(second=0, microsecond=0)
-
 
 def rating(code: str) -> dict[str, Any]:
     return summarize("xmltv", "programme", [classification_record("US", "US-TVPG", code)])
 
 
-def airing(source: str, channel: str, title: str, start: int, stop: int, code: str) -> Programme:
+def airing(now: datetime, source: str, channel: str, title: str, start: int, stop: int, code: str) -> Programme:
     return Programme(
         feed=source,
         epg_channel=channel,
         title=title,
-        start=NOW + timedelta(minutes=start),
-        stop=NOW + timedelta(minutes=stop),
+        start=now + timedelta(minutes=start),
+        stop=now + timedelta(minutes=stop),
         age_evidence=rating(code),
     )
 
@@ -63,22 +61,26 @@ def ffmpeg(monkeypatch: pytest.MonkeyPatch) -> list[Process]:
 
 
 @pytest.fixture
-async def live(api: Api) -> dict[str, str]:
-    """Two channels with a rated guide: BBC One plays direct, TF1 has a provider archive."""
+async def live(api: Api) -> dict[str, Any]:
+    """Two channels with a rated guide: BBC One plays direct, TF1 has a provider archive.
+
+    The guide is laid out around ``now`` as the test starts: the archive only reaches back an hour.
+    """
     source = await add_m3u(api, FIXTURES / "sample.m3u")
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
     async with api.c.db.session() as s:
         s.add_all(
             [
-                airing(source["id"], "bbc1.uk", "Harbour Songs", -30, 30, "TV-PG"),
-                airing(source["id"], "tf1.fr", "Morning", -120, -40, "TV-G"),
-                airing(source["id"], "tf1.fr", "Middle", -40, -20, "TV-MA"),
-                airing(source["id"], "tf1.fr", "Now Show", -20, 30, "TV-G"),
+                airing(now, source["id"], "bbc1.uk", "Harbour Songs", -30, 30, "TV-PG"),
+                airing(now, source["id"], "tf1.fr", "Morning", -120, -40, "TV-G"),
+                airing(now, source["id"], "tf1.fr", "Middle", -40, -20, "TV-MA"),
+                airing(now, source["id"], "tf1.fr", "Now Show", -20, 30, "TV-G"),
             ]
         )
         await s.commit()
     listed = (await api.get("/channels", params={"language": "all"})).json()["channels"]
     by_name = {c["name"]: c["id"] for c in listed}
-    return {"source": source["id"], "bbc": by_name["BBC One HD"], "tf1": by_name["TF1"]}
+    return {"source": source["id"], "bbc": by_name["BBC One HD"], "tf1": by_name["TF1"], "now": now}
 
 
 async def play(who: Member | Api, ref: str, client: str = "web", **body: Any) -> Any:
@@ -97,7 +99,7 @@ async def programmes(api: Api) -> dict[str, Programme]:
         return {p.title: p for p in (await s.execute(select(Programme))).scalars()}
 
 
-async def test_live_is_served_through_the_guard_under_a_ceiling(api: Api, live: dict[str, str]) -> None:
+async def test_live_is_served_through_the_guard_under_a_ceiling(api: Api, live: dict[str, Any]) -> None:
     kid = await member(api, "kid", "Kid")
     # Nobody else is rerouted: the owner still plays the provider's own URL.
     assert (await play(api, live["bbc"])).json()["mode"] == "direct"
@@ -118,7 +120,7 @@ async def test_live_is_served_through_the_guard_under_a_ceiling(api: Api, live: 
     assert r.json()["mode"] == "direct"
 
 
-async def test_what_is_on_air_above_the_ceiling_is_refused_at_resolve(api: Api, live: dict[str, str]) -> None:
+async def test_what_is_on_air_above_the_ceiling_is_refused_at_resolve(api: Api, live: dict[str, Any]) -> None:
     kid = await member(api, "kid", "Kid", limits={"rating_ceiling_tv": "TV-G"})
     assert refused(await play(kid, live["bbc"]))
     assert (await play(kid, live["tf1"])).status_code == 200
@@ -135,12 +137,12 @@ async def test_what_is_on_air_above_the_ceiling_is_refused_at_resolve(api: Api, 
         active_principal.reset(token)
 
 
-async def test_rewind_and_catch_up_intervals_are_checked(api: Api, live: dict[str, str]) -> None:
+async def test_rewind_and_catch_up_intervals_are_checked(api: Api, live: dict[str, Any]) -> None:
     kid = await member(api, "kid", "Kid")
     rows = await programmes(api)
 
     def at(minutes: int) -> str:
-        return (NOW + timedelta(minutes=minutes)).isoformat()
+        return str((live["now"] + timedelta(minutes=minutes)).isoformat())
 
     # The archive is asked for from the chosen minute up to now: all of that is judged.
     assert (await play(kid, live["tf1"], rewind_at=at(-10))).status_code == 200
@@ -150,13 +152,13 @@ async def test_rewind_and_catch_up_intervals_are_checked(api: Api, live: dict[st
     morning = f"prog:{rows['Morning'].id}"
     assert (await play(kid, live["tf1"], catchup_programme_id=morning)).status_code == 200
     async with api.c.db.session() as s:
-        s.add(airing(live["source"], "tf1.fr", "Late Insert", -90, -80, "TV-MA"))
+        s.add(airing(live["now"], live["source"], "tf1.fr", "Late Insert", -90, -80, "TV-MA"))
         await s.commit()
     assert refused(await play(kid, live["tf1"], catchup_programme_id=morning))
     assert (await play(api, live["tf1"], catchup_programme_id=morning)).status_code == 200
 
 
-async def test_segments_are_rechecked_and_private(api: Api, live: dict[str, str], ffmpeg: list[Process]) -> None:
+async def test_segments_are_rechecked_and_private(api: Api, live: dict[str, Any], ffmpeg: list[Process]) -> None:
     clock = Clock()
     api.c.guard.clock = clock
     kid = await member(api, "kid", "Kid")
@@ -187,7 +189,7 @@ async def test_segments_are_rechecked_and_private(api: Api, live: dict[str, str]
     await api.c.proxy.shutdown()
 
 
-async def test_the_legacy_flag_still_guards_everyone(api: Api, live: dict[str, str]) -> None:
+async def test_the_legacy_flag_still_guards_everyone(api: Api, live: dict[str, Any]) -> None:
     await activate(api)
     try:
         # Under the flag the engine runs for every profile, the owner's included.
