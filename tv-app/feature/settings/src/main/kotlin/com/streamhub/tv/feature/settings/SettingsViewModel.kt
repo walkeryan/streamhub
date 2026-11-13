@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -88,7 +89,7 @@ data class SettingsState(
     val update: UpdateInfo? = null,
     val updateBusy: Boolean = false,
     val updateStatus: String? = null,
-    /** A household TV with a server that has users: "Who's watching?" is how people are switched. */
+    /** A household TV on a server that has the picker: "Who's watching?" is how people are switched. */
     val sharedDevice: Boolean = false,
     /** The signed-in user may ask for titles or decide on requests: the Requests section is listed. */
     val showRequests: Boolean = false,
@@ -118,8 +119,13 @@ class SettingsViewModel @Inject constructor(
     init {
         load()
         viewModelScope.launch {
-            me.state.collect { access ->
-                _state.update { it.copy(sharedDevice = access.sharedDevice, showRequests = access.can(Permissions.REQUESTS_CREATE) || access.can(Permissions.REQUESTS_APPROVE)) }
+            me.state.collectLatest { access ->
+                _state.update { it.copy(showRequests = access.can(Permissions.REQUESTS_CREATE) || access.can(Permissions.REQUESTS_APPROVE)) }
+                // "Who's watching?" replaces the profile list only where there really is a picker: a server
+                // that calls this a shared TV but has no picker yet keeps the list.
+                val picker = access.sharedDevice && try { switcher.switchable() != null }
+                    catch (e: CancellationException) { throw e } catch (_: Exception) { false }
+                _state.update { it.copy(sharedDevice = picker) }
             }
         }
     }
@@ -314,7 +320,7 @@ class SettingsViewModel @Inject constructor(
         currentCoroutineContext().ensureActive()
         // Tokens, session generation and per-user caches change hands in one place, shared with "Who's watching?".
         switcher.commitProfileSwitch(original,target.id,tokens)
-        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}",sharedDevice=me.state.value.sharedDevice,showRequests=_state.value.showRequests)
+        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}",sharedDevice=_state.value.sharedDevice,showRequests=_state.value.showRequests)
         themes.select(tokens.profile.themeId)
         load()
     }

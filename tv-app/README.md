@@ -134,8 +134,9 @@ When `/auth/me` says `shared_device`, the TV belongs to the household rather tha
 Whether the TV is shared is remembered on the device, so the next cold start opens on the picker at
 once; if the flag was not known yet, the picker appears as soon as the server has answered.
 
-If the server has no picker (`/auth/switchable` answers 404) or this is a personal device (403),
-the picker is skipped: the app opens on Home, and the avatar leads to Settings → Profiles as before.
+If the server has no picker (`/auth/switchable` answers 404, or `POST /auth/switch` turns out not to
+be a route) or this is a personal device (403), the picker is skipped: the app opens on Home, and
+the avatar leads to Settings → Profiles, which keeps its per-profile list, as before.
 
 ### Watch together (rooms)
 

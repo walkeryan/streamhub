@@ -112,6 +112,26 @@ class UserSwitchRepositoryTest {
         }
     }
 
+    @Test fun aServerWithTheListButWithoutTheSwitchRouteHasNoPicker() = runTest {
+        val users = listOf(SwitchableUser(id = "u1", displayName = "Alex", current = true), SwitchableUser(id = "u2", displayName = "Sam"))
+        for (unknownRoute in listOf(ApiException(404, null, "HTTP 404"), refusal(404, "http_error"), refusal(404, ""))) {
+            val repo = UserSwitchRepository(Fake(users = { users }) { _, _ -> throw unknownRoute })
+            assertEquals(users, repo.switchable())
+            val result = repo.switchTo("u2", null) as SwitchResult.Failed
+            assertEquals("Can't switch people here", result.error.title)
+            // From now on the picker is treated as absent, so a cold-start picker lets the viewer through.
+            assertNull(repo.switchable())
+        }
+    }
+
+    @Test fun aPersonWhoIsGoneDoesNotTakeThePickerWithThem() = runTest {
+        val users = listOf(SwitchableUser(id = "u1", displayName = "Alex", current = true))
+        val repo = UserSwitchRepository(Fake(users = { users }) { _, _ -> throw refusal(404, "not_found") })
+        val result = repo.switchTo("u9", null) as SwitchResult.Failed
+        assertEquals("No longer here", result.error.title)
+        assertEquals(users, repo.switchable())
+    }
+
     @Test fun legacyProfileSwitchCommitsThroughTheSamePath() = runTest {
         val fake = Fake { _, _ -> tokens }
         UserSwitchRepository(fake).commitProfileSwitch(Session("http://hub.test:8787", "a", "r", Profile(id = "p1", name = "Alex")), "p2", tokens)

@@ -59,14 +59,19 @@ class UserSwitchRepository internal constructor(private val backend: SwitchBacke
 
     private val mutex = Mutex()
 
+    /** POST /auth/switch is not a route on this server: there is no picker, whatever the list call said. */
+    @Volatile private var switchRouteMissing = false
+
     /**
      * The people who can be picked here, or null when there is no picker: a server without the
      * feature (404) or a personal device (403 `not_shared_device`). Other failures are thrown.
      */
-    suspend fun switchable(): List<SwitchableUser>? =
-        try { backend.switchable() }
+    suspend fun switchable(): List<SwitchableUser>? {
+        if (switchRouteMissing) return null
+        return try { backend.switchable() }
         catch (e: CancellationException) { throw e }
         catch (e: ApiException) { if (e.status == 404 || e.status == 403) null else throw e }
+    }
 
     suspend fun switchTo(userId: String, pin: String?): SwitchResult = mutex.withLock {
         val tokens = try {
@@ -79,7 +84,10 @@ class UserSwitchRepository internal constructor(private val backend: SwitchBacke
                 backend.post(userId, pin)
             }
         } catch (e: CancellationException) { throw e }
-        catch (e: ApiException) { return@withLock mapSwitchFailure(e) }
+        catch (e: ApiException) {
+            if (isMissingRoute(e)) switchRouteMissing = true
+            return@withLock mapSwitchFailure(e)
+        }
         catch (e: Exception) { return@withLock SwitchResult.Failed(ApiErrors.describe(e)) }
         try {
             backend.release()
@@ -109,9 +117,21 @@ class UserSwitchRepository internal constructor(private val backend: SwitchBacke
     }
 }
 
+/**
+ * A 404 that says "no such route" rather than "no such person": the server's own not-found errors
+ * carry a code of their own, the framework's answer for an unknown path does not.
+ */
+internal fun isMissingRoute(e: ApiException): Boolean = e.status == 404 && e.error?.code.orEmpty() in setOf("", "http_error")
+
 /** POST /auth/switch refusals, by what the person holding the remote can do about them. */
 internal fun mapSwitchFailure(e: ApiException): SwitchResult = when {
     e.status == 429 -> SwitchResult.LockedOut(lockoutSeconds(e.retryAfterSeconds))
+    isMissingRoute(e) -> SwitchResult.Failed(
+        UserError("Can't switch people here", "This StreamHub server can't switch people from the TV yet. The TV stays signed in as it is.", canRetry = false),
+    )
+    e.status == 404 -> SwitchResult.Failed(
+        UserError("No longer here", "This person can't be picked any more. The list has been refreshed.", canRetry = false),
+    )
     e.error?.code == "pin_required" -> SwitchResult.PinRequired
     e.error?.code == "pin_invalid" -> SwitchResult.PinInvalid
     e.error?.code == "pin_setup_required" -> SwitchResult.PinSetupRequired

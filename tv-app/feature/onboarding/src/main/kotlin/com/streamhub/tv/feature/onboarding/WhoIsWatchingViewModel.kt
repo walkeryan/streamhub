@@ -14,9 +14,7 @@ import com.streamhub.tv.core.ui.theme.ThemeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -39,13 +37,19 @@ data class WhoState(
     val busy: Boolean = false,
     /** Something to read and acknowledge (a person without a PIN, a refusal). */
     val notice: UserError? = null,
+    /**
+     * Set when the picker has nothing more to do. Part of the state rather than an event: the answer
+     * "there is no picker" can come back from a server on the same network before the screen has
+     * started listening, and a missed event would leave the TV on "Loading…" for good.
+     */
+    val outcome: WhoOutcome? = null,
 )
 
-sealed interface WhoEvent {
+enum class WhoOutcome {
     /** Someone was picked (or kept): carry on into the app. */
-    data object Done : WhoEvent
+    Done,
     /** There is no picker on this server or for this device: carry on as if it had not been asked for. */
-    data object Absent : WhoEvent
+    Absent,
 }
 
 /** What stands in for a face when there is no picture: a short avatar glyph if one is set, else the initial. */
@@ -73,20 +77,19 @@ class WhoIsWatchingViewModel @Inject constructor(
 ) : ViewModel() {
     private val _state = MutableStateFlow(WhoState())
     val state: StateFlow<WhoState> = _state.asStateFlow()
-    private val _events = MutableSharedFlow<WhoEvent>(extraBufferCapacity = 1)
-    val events: SharedFlow<WhoEvent> = _events
     private var loadJob: Job? = null
 
     init { load() }
 
     fun load() {
         loadJob?.cancel()
-        _state.update { it.copy(loading = true, loadError = null) }
+        // A list that is already up stays up while it is read again: taking it away would take focus with it.
+        _state.update { it.copy(loading = it.users.isEmpty(), loadError = null) }
         loadJob = viewModelScope.launch {
             try {
                 val server = sessions.current().serverUrl
                 val users = switcher.switchable()
-                if (users.isNullOrEmpty()) { _events.emit(WhoEvent.Absent); return@launch }
+                if (users.isNullOrEmpty()) { _state.update { it.copy(outcome = WhoOutcome.Absent) }; return@launch }
                 _state.update { it.copy(loading = false, users = users, serverUrl = server) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { _state.update { it.copy(loading = false, loadError = ApiErrors.describe(e)) } }
@@ -101,7 +104,7 @@ class WhoIsWatchingViewModel @Inject constructor(
      */
     fun pick(user: SwitchableUser, keepCurrent: Boolean) {
         if (_state.value.busy) return
-        if (user.current && (keepCurrent || !user.hasPin)) { _events.tryEmit(WhoEvent.Done); return }
+        if (user.current && (keepCurrent || !user.hasPin)) { _state.update { it.copy(outcome = WhoOutcome.Done) }; return }
         if (user.hasPin) _state.update { it.copy(pinFor = user, pinError = null, pinAttempt = it.pinAttempt + 1) }
         else attempt(user, null)
     }
@@ -113,15 +116,18 @@ class WhoIsWatchingViewModel @Inject constructor(
         attempt(user, pin)
     }
 
+    /** The person a switch without a PIN was last tried for, so "Try again" on its failure tries them again. */
+    private var triedWithoutPin: SwitchableUser? = null
+
     private fun attempt(user: SwitchableUser, pin: String?) {
+        if (pin == null) triedWithoutPin = user
         _state.update { it.copy(busy = true, pinError = null) }
         viewModelScope.launch {
             val name = user.displayName.ifBlank { "this person" }
             when (val result = switcher.switchTo(user.id, pin)) {
                 is SwitchResult.Ok -> {
                     try { themes.select(result.profile.themeId) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                    _state.update { it.copy(busy = false, pinFor = null) }
-                    _events.emit(WhoEvent.Done)
+                    _state.update { it.copy(busy = false, pinFor = null, outcome = WhoOutcome.Done) }
                 }
                 SwitchResult.PinRequired -> _state.update {
                     it.copy(busy = false, pinFor = user, pinError = if (pin == null) null else "Enter the PIN for $name.", pinAttempt = it.pinAttempt + 1)
@@ -150,7 +156,23 @@ class WhoIsWatchingViewModel @Inject constructor(
     }
 
     fun cancelPin() { if (!_state.value.busy) _state.update { it.copy(pinFor = null, pinError = null) } }
-    fun dismissNotice() = _state.update { it.copy(notice = null) }
+    /**
+     * The list is read again behind the acknowledged notice: the person may have gone, or the server
+     * may have turned out to have no way of switching, in which case there is no picker after all.
+     */
+    fun dismissNotice() {
+        if (_state.value.notice == null) return
+        _state.update { it.copy(notice = null) }
+        load()
+    }
+
+    /** "Try again" on a failure that can be retried (the server was away): the same person once more. */
+    fun retryNotice() {
+        val user = triedWithoutPin
+        if (_state.value.busy) return
+        _state.update { it.copy(notice = null) }
+        if (user != null) attempt(user, null)
+    }
     /** The countdown reached zero. */
     fun lockoutOver() = _state.update { if (SystemClock.elapsedRealtime() >= it.lockedUntilMs) it.copy(lockedUntilMs = 0) else it }
 }

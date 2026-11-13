@@ -81,7 +81,9 @@ fun WhoIsWatchingScreen(
     val t = LocalThemeTokens.current
     val activity = LocalContext.current as? Activity
     var askExit by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { vm.events.collect { if (it == WhoEvent.Done) onDone() else onAbsent() } }
+    LaunchedEffect(s.outcome) {
+        when (s.outcome) { WhoOutcome.Done -> onDone(); WhoOutcome.Absent -> onAbsent(); null -> Unit }
+    }
     BackHandler { if (gate) askExit = true else onBack() }
 
     ScreenBackground {
@@ -124,7 +126,7 @@ fun WhoIsWatchingScreen(
             attempt = s.pinAttempt,
         )
     }
-    s.notice?.let { ErrorDialog(it, onRetry = vm::dismissNotice, onDismiss = vm::dismissNotice) }
+    s.notice?.let { ErrorDialog(it, onRetry = vm::retryNotice, onDismiss = vm::dismissNotice) }
     if (askExit) ExitDialog(onStay = { askExit = false }, onExit = { activity?.finish() })
 }
 

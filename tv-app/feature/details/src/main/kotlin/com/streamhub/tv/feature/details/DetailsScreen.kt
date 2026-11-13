@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.streamhub.tv.core.data.model.MediaKind
+import com.streamhub.tv.core.data.model.RequestStates
 import com.streamhub.tv.core.data.room.RoomCode
 import com.streamhub.tv.core.ui.components.QrCode
 import com.streamhub.tv.core.ui.components.ErrorDialog
@@ -192,8 +193,9 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                         }
                         item("watched") { ShButton("Mark watched", vm::markWatched, icon = Icons.Filled.Check) }
                     }
-                    // Where the request stands, for as long as there is one; the toast line is for passing messages.
-                    requestStateText(s.requestState)?.let { Text(it, color = t.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = 4.dp)) }
+                    // Where the request stands, while that is news: once the title is simply available it is not.
+                    // The toast line is for passing messages.
+                    requestStateText(s.requestState.takeIf { it != RequestStates.AVAILABLE })?.let { Text(it, color = t.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = 4.dp)) }
                     s.toast?.let { Text(it, color = t.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = 4.dp)) }
                 }
                 if (d.seasons.isNotEmpty()) item("seasons") {
