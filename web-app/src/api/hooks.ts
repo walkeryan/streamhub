@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 import { api, ok, unwrap } from './client'
 import { useSession } from '../store/session'
+import type { Recording, RecordingList, RecordingRule, RecordingRuleList, RecordingState, Room, RoomJoin, RoomJoined } from './types'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, SearchResult,
   Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
@@ -269,3 +270,78 @@ export function useReadNotice() {
 
 export const useRequestManager = (enabled: boolean) =>
   useQuery({ queryKey: ['request-manager', useProfileId()], enabled, queryFn: () => unwrap<RequestManagerSettings>(api.GET('/settings/request_manager')) })
+
+/* ---------- watch rooms ---------- */
+export const createRoom = (body: { id: string; variant_id?: string | null; audio_track?: number | null }) => unwrap<Room>(api.POST('/rooms', { body }))
+export const joinRoom = (code: string, body: RoomJoin) => unwrap<RoomJoined>(api.POST('/rooms/{code}/join', { params: { path: { code } }, body }))
+export const closeRoom = (code: string) => ok(api.DELETE('/rooms/{code}', { params: { path: { code } } }))
+/** The join screen: who is in the room changes while it is open, so it polls. A refusal is an answer, not a fault to retry. */
+export const useRoomInfo = (code: string | undefined, poll = true) =>
+  useQuery({
+    queryKey: ['room', useProfileId(), code],
+    enabled: !!code,
+    retry: false,
+    staleTime: 0,
+    refetchInterval: poll ? 5000 : false,
+    queryFn: () => unwrap<Room>(api.GET('/rooms/{code}', { params: { path: { code: code! } } })),
+  })
+
+/* ---------- recordings ---------- */
+const RECORDING_VIEWS = [['recordings'], ['recording-rules'], ['epg'], ['channels']] as const
+const refreshRecordings = (qc: ReturnType<typeof useQueryClient>) => { for (const queryKey of RECORDING_VIEWS) void qc.invalidateQueries({ queryKey }) }
+
+// The recorder starts, finishes and fails recordings on its own clock, so the list polls.
+export const useRecordings = (enabled = true, state?: RecordingState) =>
+  useQuery({
+    queryKey: ['recordings', useProfileId(), state ?? 'all'],
+    enabled,
+    staleTime: 0,
+    refetchInterval: 60_000,
+    queryFn: () => unwrap<RecordingList>(api.GET('/recordings', { params: { query: state ? { state } : {} } })),
+  })
+
+export const useRecordingRules = (enabled = true) =>
+  useQuery({ queryKey: ['recording-rules', useProfileId()], enabled, staleTime: 0, queryFn: () => unwrap<RecordingRuleList>(api.GET('/recording-rules')) })
+
+export function useScheduleRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    // All three: programme ids change with every guide refresh, channel and start find it again.
+    mutationFn: (body: { programme_id: string; channel_id: string; start: string }) => unwrap<Recording>(api.POST('/recordings', { body })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function useDeleteRecording() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => ok(api.DELETE('/recordings/{id}', { params: { path: { id } } })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function useCreateRecordingRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { kind: RecordingRule['kind']; match: string; channel_id?: string | null; new_only?: boolean; keep?: number | null }) =>
+      unwrap<RecordingRule>(api.POST('/recording-rules', { body })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function usePatchRecordingRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { id: string; patch: { match?: string; channel_id?: string | null; new_only?: boolean; keep?: number | null; enabled?: boolean } }) =>
+      unwrap<RecordingRule>(api.PATCH('/recording-rules/{id}', { params: { path: { id: v.id } }, body: v.patch })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}
+
+export function useDeleteRecordingRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => ok(api.DELETE('/recording-rules/{id}', { params: { path: { id } } })),
+    onSettled: () => refreshRecordings(qc),
+  })
+}

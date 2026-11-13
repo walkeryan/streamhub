@@ -405,6 +405,8 @@ h1, h2, h3, p { margin: 0; }
 .title-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; }
 .title-actions .btn { padding: 0 0.875rem; overflow: hidden; }
 .title-actions .btn-icon { padding: 0; }
+/* Play, Watch together, My List and More share the one row. */
+.title-actions[data-together='true'] { grid-template-columns: minmax(0, 1fr) auto auto auto; }
 .title-choice { justify-content: space-between; min-height: 3.25rem; text-align: left; white-space: normal; }
 @media (max-width: 720px) {
   .title-page { padding-top: 1.5rem; }
@@ -412,4 +414,31 @@ h1, h2, h3, p { margin: 0; }
   .title-poster { width: 7.5rem; height: 11.25rem; }
   .title-head { gap: 0.5rem; }
   .title-head .display { font-size: var(--text-title); }
+}
+
+/* ---------- watch rooms ---------- */
+/* Share sheet: the QR code beside the code and link; stacked on a phone. */
+.room-share { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1.25rem; align-items: center; }
+.room-qr { width: 9rem; height: 9rem; border-radius: var(--radius-md); background: #fff; padding: 0.375rem; flex: none; }
+.room-qr img { width: 100%; height: 100%; }
+.room-code { font-size: var(--text-title); font-weight: 700; letter-spacing: 0.2em; font-variant-numeric: tabular-nums; }
+.room-link { font-size: var(--text-label); overflow-wrap: anywhere; user-select: all; }
+.room-code-field input { font-size: var(--text-title); font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; }
+@media (max-width: 720px) { .room-share { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; } }
+/* Join screen: the title page's layout without the shell around it. */
+.room-join { position: relative; min-height: 100dvh; }
+.room-join-art { position: absolute; inset: 0 0 auto 0; height: min(70dvh, 44rem); overflow: hidden; }
+/* Members: on the join screen and, over the video, in the player's top bar. */
+.room-member { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 1.75rem; padding: 0 0.625rem; border-radius: var(--radius-pill); background: var(--t-surface-alt); font-size: var(--text-label); font-weight: 600; white-space: nowrap; }
+.room-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.375rem; margin-left: auto; max-width: 60%; color: #fff; }
+.room-strip .room-member { background: rgba(8,10,16,.72); border: 1px solid rgba(255,255,255,.18); color: #fff; }
+.room-strip .room-member[data-me='true'] { border-color: rgba(255,255,255,.55); }
+.room-buffering { display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 500; opacity: 0.85; }
+.room-buffering i, .room-waiting i { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: currentColor; flex: none; animation: room-pulse 1s var(--ease) infinite alternate; }
+@keyframes room-pulse { from { opacity: 0.25; } to { opacity: 1; } }
+.room-waiting { position: absolute; z-index: 4; left: 50%; top: 42%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 0.75rem; max-width: calc(100% - 2rem); padding: 0.875rem 1.25rem; border-radius: var(--radius-lg); background: rgba(8,10,16,.86); border: 1px solid rgba(255,255,255,.18); color: #fff; font-size: var(--text-heading); font-weight: 600; }
+.room-waiting i { width: 0.75rem; height: 0.75rem; }
+@media (max-width: 720px) {
+  .player-ui .top { flex-wrap: wrap; }
+  .room-strip { max-width: 100%; flex-basis: 100%; justify-content: flex-start; margin-left: 0; }
 }

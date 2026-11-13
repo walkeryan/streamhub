@@ -9,6 +9,7 @@ import { can, type Capability } from '../lib/can'
 import { usePhone } from '../lib/layout'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
+import { JoinRoomDialog } from '../room/JoinRoomDialog'
 
 interface Destination { to: string; label: string; icon: string; /** path prefixes that also count as being here */ at?: string[]; needs?: Capability }
 
@@ -44,6 +45,7 @@ export function Rail() {
   const setPinned = useUi((s) => s.setRailPinned)
   const [hasFocus, setHasFocus] = useState(false)
   const [menu, setMenu] = useState(false)
+  const [joinRoom, setJoinRoom] = useState(false)
   const expanded = hasFocus || pinned
   // Back from the rail collapses it and returns focus to the screen content.
   useBackHandler(() => {
@@ -87,12 +89,17 @@ export function Rail() {
             <Icon name={d.icon} />{d.label}
           </Focusable>
         ))}
+        {/* watch rooms */}
+        <Focusable focusKey="more:join-room" className="menu-item fx-flat" label="Join a room" data-testid="nav-join-room" onEnter={() => { setPinned(false); setMenu(false); setJoinRoom(true) }}>
+          <Icon name="people" />Join a room
+        </Focusable>
         {phone && <Focusable focusKey="more:profile" className="menu-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`}
           data-testid="nav-profile" onEnter={() => open('/settings?tab=profiles')}>
           <Avatar name={profile?.name} />{profile?.name ?? 'Profile'}
         </Focusable>}
       </FocusGroup>
     </Modal>
+    <JoinRoomDialog open={joinRoom} onClose={() => setJoinRoom(false)} />
   </>
 }
 

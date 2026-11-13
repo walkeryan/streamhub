@@ -11,6 +11,7 @@ import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
 import { bootTheme, useTheme } from './lib/theme'
 import { useSession } from './store/session'
+import { useReturnToRoom } from './room/returnToRoom'
 import { DisclaimerGate } from './screens/Gate'
 import { LoginGate } from './screens/GoogleLogin'
 import { Home } from './screens/Home'
@@ -27,6 +28,8 @@ import { Pair } from './screens/Pair'
 const Player = lazy(() => import('./screens/Player').then((m) => ({ default: m.Player })))
 const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })))
+// watch rooms
+const RoomScreen = lazy(() => import('./screens/Room').then((m) => ({ default: m.RoomScreen })))
 
 bootTheme()
 
@@ -65,6 +68,8 @@ export function App() {
   }, [current.data, setProfile])
   useTheme(profile?.theme_id)
   useGlobalBack()
+  // A room link opened signed out returns to the room once signed in.
+  useReturnToRoom(!!profile && !googleComplete)
 
   let body
   if (!profile || googleComplete) body = <LoginGate />
@@ -78,6 +83,7 @@ export function App() {
       <Suspense fallback={null}>
         <Routes key={profile.id}>
           <Route path="/play/:id" element={<Player />} />
+          <Route path="/room/:code" element={<RoomScreen />} />
           <Route element={<Shell />}>
             <Route index element={<Home />} />
             <Route path="search" element={<Search />} />

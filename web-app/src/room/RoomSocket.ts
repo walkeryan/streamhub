@@ -112,6 +112,14 @@ export class RoomSocket {
     this.open()
   }
 
+  /** Give the seat up but stay in the room's business: moveTo() follows with the next seat. */
+  vacate(): void {
+    if (this.current.closed) return
+    if (this.retryTimer !== null) { clearTimeout(this.retryTimer); this.retryTimer = null }
+    this.drop(LEFT)
+    this.update({ status: 'reconnecting' })
+  }
+
   /** Leave the room at once (close code 1000); nothing reconnects afterwards. */
   leave(): void { this.finish('left', LEFT) }
 

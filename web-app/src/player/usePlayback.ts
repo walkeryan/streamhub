@@ -22,11 +22,14 @@ async function playbackGeneration(): Promise<string> {
   return status.generation
 }
 
+/** Browsers without MPEG-TS playback through Media Source ask the server for HLS. */
+export const prefersHls = (): boolean => /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window)
+
 export async function resolve(req: PlaybackReq, generation?: string): Promise<PlaybackDescriptor> {
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: /iPad|iPhone|iPod/.test(navigator.userAgent) || /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) || !('MediaSource' in window), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)) },
+      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)) },
     }),
   )
 }
@@ -41,7 +44,13 @@ const MAX_RETRIES = 6
  * browser): its media time zero is that position in the title and duration_ms is the title's length. Seeking
  * outside what the stream has produced, and switching the audio track, resolve again at the wanted position.
  */
-export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: { muted?: boolean; report?: boolean; buffer?: boolean } = {}) {
+export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: {
+  muted?: boolean; report?: boolean; buffer?: boolean
+  /** A watch room supplies its member's descriptor (the room decides variant and position) instead of /playback/resolve. */
+  descriptor?: (generation: string | undefined) => Promise<PlaybackDescriptor>
+} = {}) {
+  const descriptorSource = useRef(opts.descriptor)
+  descriptorSource.current = opts.descriptor
   const profile = useSession((s) => s.profile)
   const profileId = profile?.id
   const sessionGeneration = useSession((s) => s.generation)
@@ -194,7 +203,9 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           if (cancelled) return
           intent.current.generation = generation
         }
-        const d = await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs }, intent.current.generation)
+        const d = descriptorSource.current
+          ? await descriptorSource.current(intent.current.generation)
+          : await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs }, intent.current.generation)
         if (cancelled || !ownsSession()) return
         setDesc(d)
         descRef.current = d
@@ -304,7 +315,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           clearWaiting()
           clearRetry()
           setState('error')
-          setError(e.code === 'audio_selection_required' ? 'Choose an audio language and source from title details before playing.' : e.code === 'playback_paused' || e.code === 'playback_stopped'
+          // A room's refusals (the room ended, it is full) are the server's own words.
+          setError(descriptorSource.current && e.code?.startsWith('room_') ? e.message : e.code === 'audio_selection_required' ? 'Choose an audio language and source from title details before playing.' : e.code === 'playback_paused' || e.code === 'playback_stopped'
             ? 'Playback was stopped by an administrator. Once playback is resumed, choose Try again to start a new stream.'
             : e.code === 'playback_reload_required'
             ? 'Playback controls have been updated. Reload Streamhub before trying again.'
@@ -449,6 +461,12 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       if (descRef.current?.start_position_ms == null || terminal.current) return
       clearWaiting(); clearRetry(); retry.current = 0
       restart.current = { ...restart.current, startMs: Math.max(0, Math.floor(ms)) }
+      setAttempt((a) => a + 1)
+    },
+    /** Attach again with a fresh descriptor (a watch room whose stream was restarted). */
+    reload: () => {
+      if (terminal.current) return
+      clearWaiting(); clearRetry(); retry.current = 0
       setAttempt((a) => a + 1)
     },
     /** Have the server encode another audio track of the file, continuing from the current position. */

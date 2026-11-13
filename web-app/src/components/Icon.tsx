@@ -40,8 +40,13 @@ const P: Record<string, string> = {
   tv2: 'M3 7h18v10H3z',
   trophy: 'M7 4h10v5a5 5 0 01-10 0zM7 6H4v1a3 3 0 003 3M17 6h3v1a3 3 0 01-3 3M12 14v4M8 20h8',
   filter: 'M4 6h16M7 12h10M10 18h4',
+  people: 'M9 11a3 3 0 100-6 3 3 0 000 6zM3 20a6 6 0 0112 0M16 5.2a3 3 0 010 5.6M17.5 14.4A6 6 0 0121 20',
+  lock: 'M6 11h12v9H6zM9 11V8a3 3 0 016 0v3',
+  copy: 'M9 9h11v11H9zM5 15V4h11',
+  record: 'M12 6a6 6 0 100 12 6 6 0 000-12z',
+  exit: 'M10 4H5v16h5M15 8l4 4-4 4M19 12H9',
 }
-const FILLED = new Set(['play', 'pause'])
+const FILLED = new Set(['play', 'pause', 'record'])
 
 export function Icon({ name, size = 22, className, filled }: { name: keyof typeof P | string; size?: number; className?: string; filled?: boolean }) {
   const f = filled ?? FILLED.has(name)

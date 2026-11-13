@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router'
-import { useCreateRequest, usePlaybackOptions, useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
+import { createRoom, useCreateRequest, usePlaybackOptions, useTitle, useToggleFavorite, useToggleWatchlist, useWatchlist } from '../api/hooks'
 import { api, ok } from '../api/client'
-import type { PlaybackOption, SourceBadge } from '../api/types'
+import type { PlaybackOption, Room, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Meta, Modal, Skeleton } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { SafeImg } from '../components/SafeImg'
@@ -20,6 +20,8 @@ import { usePhone } from '../lib/layout'
 import { LANG_NAMES } from '../lib/util'
 import { isOpenRequest, requestStateLabel, tmdbRef } from '../lib/requests'
 import { useUi } from '../store/ui'
+import { ShareSheet } from '../room/ShareSheet'
+import { useGo } from '../nav/back'
 
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', series: 'Series', vod: 'Movie', episode: 'Episode', season: 'Season' }
 
@@ -57,6 +59,11 @@ function TitleDetails({ id }: { id: string }) {
   const createRequest = useCreateRequest()
   // null = closed; otherwise the seasons picked so far in the request dialog
   const [seasonPick, setSeasonPick] = useState<number[] | null>(null)
+  // Watch together: the room made for this title, kept so opening the sheet again does not make another.
+  const go = useGo()
+  const [room, setRoom] = useState<{ key: string; room: Room } | null>(null)
+  const [sharing, setSharing] = useState(false)
+  const [startingRoom, setStartingRoom] = useState(false)
   const requestOpen = isOpenRequest(t?.request_state)
   const canRequest = !!t?.requestable && !requestOpen && !!tmdbRef(t.id)
   useRestoreFocus(!!t, t?.sources.length ? 'title:play' : canRequest ? 'title:request' : 'title:watchlist')
@@ -118,6 +125,19 @@ function TitleDetails({ id }: { id: string }) {
   const startRequest = () => { if (t.kind === 'show' && (t.request_seasons?.length ?? 0) > 1) setSeasonPick([]); else sendRequest() }
   const toggleFavorite = () => toggleFav.mutate({ kind: t.kind, id: t.id, on: !t.is_favorite })
   const openTrailer = () => window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(`${t.title} ${t.year ?? ''} trailer`)}`, '_blank', 'noopener')
+  const watchTogether = async () => {
+    if (startingRoom) return
+    // The room plays what Play would: the picked track's file, else the automatic variant.
+    const variant = t.kind === 'channel' ? null : pickedTrack !== null && trackOption ? trackOption.variant_id : audio.data?.automatic_variant_id ?? null
+    const track = pickedTrack !== null && trackOption ? pickedTrack : null
+    const key = `${variant}|${track}`
+    if (room?.key === key) { setSharing(true); return }
+    setStartingRoom(true)
+    try {
+      setRoom({ key, room: await createRoom({ id: t.id, variant_id: variant, audio_track: track }) })
+      setSharing(true)
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not start a room.', 'error') } finally { setStartingRoom(false) }
+  }
   const choosable = t.kind !== 'channel' && inApp.length > 0
   // What Play will use, for the one control that stands in for the audio and version pickers.
   const playing = tracks.find((track) => track.index === shownTrack)
@@ -161,8 +181,9 @@ function TitleDetails({ id }: { id: string }) {
             {t.request_state && t.request_state !== 'available' && !canPlay && (
               <p role="status" data-testid="title-request-state"><span className="badge">{requestStateLabel(t.request_state)}</span></p>
             )}
-            <FocusGroup focusKey="title:actions" className={phone ? 'title-actions' : 'flex gap-3 flex-wrap items-center'} preferred="title:play">
+            <FocusGroup focusKey="title:actions" className={phone ? 'title-actions' : 'flex gap-3 flex-wrap items-center'} preferred="title:play" data={{ together: canPlay }}>
               {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id && pickedTrack === null ? 'Choose audio / source' : playLabel}</Button>}
+              {canPlay && <Button focusKey="title:together" icon="people" iconOnly={phone} label={phone ? 'Watch together' : undefined} disabled={startingRoom} onEnter={() => void watchTogether()} testId="title-together">{phone ? null : startingRoom ? 'Starting a room…' : 'Watch together'}</Button>}
               {!phone && choosable && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
               {canRequest && <Button focusKey="title:request" primary={!handoff.length} icon="plus" onEnter={startRequest} testId="title-request">{t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'}</Button>}
               <Button focusKey="title:watchlist" icon={onWatchlist ? 'check' : 'bookmark'} pressed={onWatchlist} onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })}>
@@ -238,6 +259,8 @@ function TitleDetails({ id }: { id: string }) {
           <Button focusKey="pick:cancel" ghost onEnter={() => { setPicker(null); setConfirmation(null) }}>Cancel</Button>
         </div>
       </Modal>
+
+      <ShareSheet room={sharing ? room?.room ?? null : null} onClose={() => setSharing(false)} onStart={() => room && go(`/room/${room.room.code}?start=1`)} />
 
       <Modal open={more} onClose={() => setMore(false)} title={t.title} firstFocusKey="title:fav" variant="sheet" testId="title-more-menu">
         <FocusGroup focusKey="title:more-list" className="flex flex-col gap-2">
