@@ -111,12 +111,16 @@ test('catch-up intent is retained and changing archive position requires a new e
   expect(await bodies(page)).toHaveLength(2)
 })
 
-test('Sports explicit labelled feed selection reuses consent without a second prompt', async ({ page }) => {
+test('Sports says nothing about audio: the player asks, as for any channel, when this profile has to choose', async ({ page }) => {
   await signIn(page)
   await page.goto('/sports')
-  await page.getByRole('button', { name: 'View feeds for Fixture match', exact: true }).click()
-  await expect(page.getByRole('dialog')).toContainText('Choosing Watch explicitly accepts')
-  await page.getByRole('button', { name: 'Watch Fixture channel', exact: true }).click()
+  await expect(page.getByTestId('sports')).not.toContainText(/audio|verif/i)
+  // One channel carries the game, so one press goes to the player; nothing has started yet.
+  await page.getByTestId('sports-listing').filter({ hasText: 'Fixture match' }).click()
+  await expect(page).toHaveURL(/\/play\/ch%3Afixture%3Aunknown$/)
+  await expect(page.getByRole('dialog')).toContainText('Audio unverified')
+  expect(await bodies(page)).toEqual([])
+  await page.getByRole('button', { name: /Play Fixture feed/ }).click()
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   expect((await bodies(page))[0]).toMatchObject({ variant_id: 'ch:fixture:unknown', allow_unverified_audio: true })
