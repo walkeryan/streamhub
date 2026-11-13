@@ -61,6 +61,15 @@ def access(user: User | None, role: Role | None) -> tuple[frozenset[str], Limits
     """Effective permissions and limits. Anyone not active, or without a role, holds nothing."""
     if user is None or role is None or user.status != "active":
         return frozenset(), NO_LIMITS
+    return standing(user, role)
+
+
+def standing(user: User, role: Role) -> tuple[frozenset[str], Limits]:
+    """What the role and the user's own overrides add up to, whatever the user's status.
+
+    Authority comes from ``access``. This is only the measure a shared device's hand-over is
+    judged by once its current user has been suspended.
+    """
     return (
         effective_permissions(role.permissions or [], user.grants or [], user.denials or []),
         effective_limits(role.limits or {}, user.limits or {}),

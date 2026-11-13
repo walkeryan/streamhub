@@ -1119,8 +1119,14 @@ paths:
       description: >-
         Active users whose role (or own override) has on_shared_devices, owners and family first,
         then by name. Only a shared-device session may ask.
+        A shared device whose current user has been suspended is not stranded: while its session
+        itself stands (not revoked), this route and POST /auth/switch keep answering for it, and
+        are the only two routes that do (every other one, /auth/me and /auth/refresh included,
+        answers 401 user_suspended). The suspended user is not listed, so no entry has current true.
+        Neither route can be reached once the access token has expired, because the refresh is refused.
       responses:
         '200': { description: ok, content: { application/json: { schema: { type: object, required: [users], properties: { users: { type: array, items: { $ref: '#/components/schemas/SwitchableUser' } } } } } } }
+        '401': { description: "token_expired | session_stale | session_revoked (signed out, or the device has been handed over since this token was issued). user_suspended only on a device that is not shared." }
         '403': { description: not_shared_device }
   /auth/switch:
     post:
@@ -1132,12 +1138,16 @@ paths:
         and answers with fresh tokens for the same session; sent with a PIN it is a PIN check: the
         current user's PIN is verified (pin_invalid when wrong, counted against the same five
         guesses), and a user without a PIN has nothing to check.
+        When the current user has been suspended the device can still be handed over (see
+        GET /auth/switchable): to anyone listed, by the same PIN rules, a target's access being
+        compared with what the suspended user held. The suspended user is not a target (404),
+        and their tokens for this device stop working with the hand-over like anyone's.
       requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "null or absent: no PIN offered"} } } } } }
       responses:
         '200': { description: switched, content: { application/json: { schema: { $ref: '#/components/schemas/Switched' } } } }
-        '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry." }
+        '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. user_suspended only on a device that is not shared." }
         '403': { description: not_shared_device }
-        '404': { description: not a user this device can switch to }
+        '404': { description: not a user this device can switch to (a suspended user included) }
         '409': { description: "pin_setup_required (the target has more access and no PIN) | switch_conflict (retry)" }
         '429': { description: "rate_limited: five wrong PINs for this target in 15 minutes. Retry-After is whole seconds (an integer), as on every 429 of this API." }
   /auth/adult-unlock:
@@ -1567,7 +1577,7 @@ paths:
   /users/{id}/deny:
     post: { summary: Refuse and remove a waiting user (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: removed }, '409': { description: not_pending } } }
   /users/{id}/suspend:
-    post: { summary: Suspend an active user; their sessions answer 401 user_suspended (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: suspended, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: "last_owner | not_active" } } }
+    post: { summary: "Suspend an active user; their sessions answer 401 user_suspended, except that a shared device they are the current user of can still be handed over (GET /auth/switchable, POST /auth/switch) (users.manage)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: suspended, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: "last_owner | not_active" } } }
   /users/{id}/reinstate:
     post: { summary: Reinstate a suspended user (users.manage), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: active, content: { application/json: { schema: { $ref: '#/components/schemas/UserDetail' } } } }, '409': { description: not_suspended } } }
   /users/{id}/pin:

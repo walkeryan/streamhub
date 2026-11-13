@@ -82,7 +82,9 @@ def require_reachable(request: Request, c: Container, remote: bool) -> None:
         raise Forbidden("This account can only be used on the home network", code="remote_access_denied")
 
 
-async def resolve(request: Request, c: Container, token: str, *, owner_entry: bool = True) -> Principal:
+async def resolve(
+    request: Request, c: Container, token: str, *, owner_entry: bool = True, handover: bool = False
+) -> Principal:
     """The caller behind a bearer token: validated, and allowed to be where the request comes from.
 
     One validation per request, however many dependencies ask. ``GET /auth/me`` does not come
@@ -92,7 +94,7 @@ async def resolve(request: Request, c: Container, token: str, *, owner_entry: bo
     if cached is not None and cached[0] == token:
         principal: Principal = cached[1]
         return principal
-    principal = await c.auth.resolve_principal(token, owner_entry=owner_entry)
+    principal = await c.auth.resolve_principal(token, owner_entry=owner_entry, handover=handover)
     require_reachable(request, c, "remote.access" in principal.permissions)
     request.state.resolved = (token, principal)
     return principal
@@ -131,6 +133,22 @@ async def current_principal(
 
 
 P = Annotated[Principal, Depends(current_principal)]
+
+
+async def handover_principal(
+    request: Request, c: C, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+) -> AsyncIterator[Principal]:
+    """``current_principal`` for "Who's watching?": a shared device whose user has been suspended
+    may still ask who it can be handed to, and be handed over. Nothing else is open to it."""
+    if creds is None or not creds.credentials:
+        raise Unauthorized("missing bearer token")
+    principal = await resolve(request, c, creds.credentials, handover=True)
+    request.state.principal = principal
+    async with acting_as(c, principal):
+        yield principal
+
+
+Handover = Annotated[Principal, Depends(handover_principal)]
 
 
 def require(*permissions: str) -> Any:

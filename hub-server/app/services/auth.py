@@ -30,7 +30,7 @@ from app.services.errors import (
 )
 from app.services.permissions import BUILTIN_ROLES, NO_LIMITS, OWNER_ROLE, Limits
 from app.services.sessions import SessionMeta, SessionsService, adult_unlocked
-from app.services.users import Identity, UsersService, access, audit, ensure_user, validate_pin
+from app.services.users import Identity, UsersService, access, audit, ensure_user, standing, validate_pin
 
 log = logging.getLogger(__name__)
 
@@ -317,8 +317,12 @@ class AuthService:
             self._require_active(user)
         return profile
 
-    def _access(self, profile: Profile, user: User, role: Role | None) -> tuple[frozenset[str], Limits]:
-        permissions, limits = access(user, role)
+    def _access(
+        self, profile: Profile, user: User, role: Role | None, *, handing_over: bool = False
+    ) -> tuple[frozenset[str], Limits]:
+        # A suspended user holds nothing. Their shared device is handed over by the rules
+        # that applied to them before, so a wider target still needs its PIN.
+        permissions, limits = standing(user, role) if handing_over and role is not None else access(user, role)
         # Legacy regime: a restricted profile never holds more than the Kid role does.
         if self.content_policy is not None and self.content_policy.is_restricted(profile):
             permissions &= BUILTIN_ROLES["kid"].permissions
@@ -331,11 +335,17 @@ class AuthService:
         session_id: str,
         user_version: int | None,
         generation: int | None = None,
+        *,
+        handover: bool = False,
     ) -> SessionState:
         """Unconditional session check: profile, user, role and session row, on every request.
 
         One short transaction of primary-key reads, so a role change, a suspension or a
         revocation applies to the very next request rather than when a cache expires.
+
+        ``handover`` is for the two routes that hand a shared device to someone else. There a
+        suspended user's session passes while its row stands, or the device would be stuck
+        on a user nobody can use and could only be paired again.
         """
         async with self._db.session() as s:
             profile = await s.get(Profile, profile_id)
@@ -347,16 +357,20 @@ class AuthService:
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
         if user is None:
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
-        self._require_active(user)
+        handing_over = handover and user.status == "suspended" and row is not None and row.shared_device
+        if not handing_over:
+            self._require_active(user)
         if row is None or row.revoked_at is not None or row.profile_id != profile.id or row.user_id != user.id:
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
         if generation is not None and generation != row.generation:
             # A shared device changed hands since this token was minted.
             raise Unauthorized("Session revoked; sign in again", code="session_revoked")
-        if user_version is None or user_version != user.version:
+        # The suspension itself made the token stale, and a suspended user cannot refresh it.
+        if not handing_over and (user_version is None or user_version != user.version):
             # Role, overrides or limits changed: the client refreshes and carries on.
             raise Unauthorized("Session is out of date; refresh it", code="session_stale")
-        return SessionState(Identity(profile, user, role, *self._access(profile, user, role)), row)
+        held = self._access(profile, user, role, handing_over=handing_over)
+        return SessionState(Identity(profile, user, role, *held), row)
 
     def _principal(self, state: SessionState, claims: dict[str, Any]) -> Principal:
         identity, row = state.identity, state.session
@@ -387,7 +401,8 @@ class AuthService:
         value = claims.get("sg", 0)
         return value if isinstance(value, int) and not isinstance(value, bool) else -1
 
-    async def resolve_principal(self, token: str, *, owner_entry: bool = True) -> Principal:
+    async def resolve_principal(self, token: str, *, owner_entry: bool = True, handover: bool = False) -> Principal:
+        """The caller behind an access token. ``handover``: see ``validate``."""
         claims = self._claims(token)
         if claims.get("typ") == "pending":
             raise Forbidden("Waiting for the owner's approval", code="approval_pending")
@@ -399,10 +414,12 @@ class AuthService:
             str(claims.get("sid") or ""),
             self._user_version(claims),
             self._generation(claims),
+            handover=handover,
         )
         if owner_entry:
             await self.check_owner_entry(state.identity.profile, int(claims.get("opv", 0)))
-        await self.sessions.touch(state.session.sid, state.identity.user.id)
+        if state.identity.user.status == "active":
+            await self.sessions.touch(state.session.sid, state.identity.user.id)
         return self._principal(state, claims)
 
     async def session_principal(self, profile_id: str, version: int, session_id: str) -> Principal:

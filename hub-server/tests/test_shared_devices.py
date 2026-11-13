@@ -369,6 +369,115 @@ async def test_a_correct_pin_clears_earlier_failures(api: Api) -> None:
         current = (await switch(api, current, kid["id"])).json()
 
 
+# ---------------------------------------------------------------- a suspended current user
+async def suspended_tv(api: Api, **who: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A shared TV whose current user has just been suspended: (that user, the TV's tokens)."""
+    gone = await user(api, "Gone", "family", **who)
+    tv = await pair(api, shared_device=True, profile_id=gone["profile_id"])
+    assert (await api.post(f"/users/{gone['id']}/suspend")).status_code == 200
+    return gone, tv
+
+
+async def test_a_suspended_user_does_not_strand_a_shared_device(api: Api) -> None:
+    me = await owner_id(api)
+    sibling = await user(api, "Sibling", "family")
+    gone, tv = await suspended_tv(api)
+    sid = claims_of(tv["access_token"])["sid"]
+
+    # The picker still opens. The suspended user is not on it, so nobody is current.
+    r = await api.client.get("/api/v1/auth/switchable", headers=bearer(tv))
+    assert r.status_code == 200, r.text
+    assert [(u["id"], u["current"]) for u in r.json()["users"]] == [(me, False), (sibling["id"], False)]
+    # They cannot be switched (back) to, and a refused switch leaves the device where it was.
+    assert (await switch(api, tv, gone["id"])).status_code == 404
+    assert (await session_row(api, sid)).user_id == gone["id"]
+
+    # Someone else takes the device over: the same session, their tokens.
+    r = await switch(api, tv, sibling["id"])
+    assert r.status_code == 200, r.text
+    taken = r.json()
+    assert taken["user"]["id"] == sibling["id"] and claims_of(taken["access_token"])["sid"] == sid
+    assert (await session_row(api, sid)).user_id == sibling["id"]
+    mine = await api.client.get("/api/v1/auth/me", headers=bearer(taken))
+    assert mine.status_code == 200 and mine.json()["user"]["id"] == sibling["id"]
+    # The suspended user's tokens died with the hand-over, like anyone's: the way out is one-way.
+    dead = await api.client.get("/api/v1/auth/switchable", headers=bearer(tv))
+    assert dead.status_code == 401 and dead.json()["code"] == "session_revoked", dead.text
+    assert (await switch(api, tv, me)).json()["code"] == "session_revoked"
+    assert (await session_row(api, sid)).user_id == sibling["id"]
+
+
+async def test_a_suspended_user_reaches_nothing_but_the_hand_over(api: Api) -> None:
+    gone, tv = await suspended_tv(api)
+    sid = claims_of(tv["access_token"])["sid"]
+    calls = (
+        ("GET", "/auth/me", None),
+        ("GET", "/auth/sessions", None),
+        ("PATCH", f"/auth/sessions/{sid}", {"label": "Den"}),
+        ("DELETE", f"/auth/sessions/{sid}", None),
+        ("POST", "/auth/adult-lock", None),
+        ("GET", "/settings", None),
+        ("GET", "/home", None),
+        ("POST", "/playback/resolve", {"id": "ch:1"}),
+        ("POST", "/auth/refresh", {"refresh_token": tv["refresh_token"]}),
+    )
+    for method, path, body in calls:
+        r = await api.client.request(method, "/api/v1" + path, json=body, headers=bearer(tv))
+        assert r.status_code == 401 and r.json()["code"] == "user_suspended", (path, r.text)
+    # Nothing above moved the device or signed it out.
+    row = await session_row(api, sid)
+    assert (row.user_id, row.revoked_at) == (gone["id"], None)
+    assert (await api.client.get("/api/v1/auth/switchable", headers=bearer(tv))).status_code == 200
+
+
+async def test_the_pin_rules_of_a_hand_over_outlive_the_suspension(api: Api) -> None:
+    """A target is judged against the access the suspended user held, exactly as before."""
+    parent = await user(api, "Parent", "family", pin="2468")
+    kid = await user(api, "Kid", "kid")
+    gone = await user(api, "Gone", "kid")
+    tv = await pair(api, shared_device=True, profile_id=gone["profile_id"])
+    assert (await api.post(f"/users/{gone['id']}/suspend")).status_code == 200
+    # Wider and without a PIN: closed to a kid's device, suspended or not.
+    r = await switch(api, tv, await owner_id(api))
+    assert r.status_code == 409 and r.json()["code"] == "pin_setup_required"
+    assert (await switch(api, tv, parent["id"])).json()["code"] == "pin_required"
+    assert (await switch(api, tv, parent["id"], "0000")).json()["code"] == "pin_invalid"
+    assert (await switch(api, tv, kid["id"])).status_code == 200
+
+
+async def test_a_revoked_session_is_revoked_for_the_hand_over_too(api: Api) -> None:
+    sibling = await user(api, "Sibling", "family")
+    _, tv = await suspended_tv(api)
+    sid = claims_of(tv["access_token"])["sid"]
+    assert (await api.delete(f"/auth/sessions/{sid}")).status_code == 204
+    for r in (
+        await api.client.get("/api/v1/auth/switchable", headers=bearer(tv)),
+        await switch(api, tv, sibling["id"]),
+        await api.client.get("/api/v1/auth/me", headers=bearer(tv)),
+        await api.client.post("/api/v1/auth/refresh", json={"refresh_token": tv["refresh_token"]}),
+    ):
+        assert r.status_code == 401 and r.json()["code"] == "session_revoked", r.text
+    assert (await session_row(api, sid)).user_id != sibling["id"]
+
+
+async def test_a_suspended_user_on_a_personal_device_stays_locked_out(api: Api) -> None:
+    sibling = await user(api, "Sibling", "family")
+    gone = await user(api, "Gone", "family")
+    tv = await pair(api, profile_id=gone["profile_id"])  # paired, but nobody marked it shared
+    assert (await api.post(f"/users/{gone['id']}/suspend")).status_code == 200
+    for r in (
+        await api.client.get("/api/v1/auth/switchable", headers=bearer(tv)),
+        await switch(api, tv, sibling["id"]),
+    ):
+        assert r.status_code == 401 and r.json()["code"] == "user_suspended", r.text
+    # Unmarking a shared device closes the way out again.
+    _, shared = await suspended_tv(api, on_shared_devices=True)
+    sid = claims_of(shared["access_token"])["sid"]
+    assert (await api.patch(f"/auth/sessions/{sid}", json={"shared_device": False})).status_code == 200
+    r = await api.client.get("/api/v1/auth/switchable", headers=bearer(shared))
+    assert r.status_code == 401 and r.json()["code"] == "user_suspended"
+
+
 async def test_switch_is_closed_under_the_legacy_owner_pin_regime(settings: AppSettings, api: Api) -> None:
     kid = await user(api, "Kid", "kid")
     tv = await pair(api, shared_device=True)
