@@ -1591,7 +1591,7 @@ paths:
         - { name: q, in: query, schema: {type: string, default: ""}, description: "Diacritics, punctuation, case and a leading article are ignored, and \"&\" is \"and\". A year after the title (\"the mill 2023\") narrows titles to that year. A number also finds the channel with that number." }
         - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind, plus programme for guide broadcasts. Omitted = movies, shows, channels and broadcasts; episodes only when asked for."} }
         - { name: limit, in: query, schema: {type: integer, default: 40}, description: "Cap of the titles section." }
-        - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages; all = all; und = unknown."} }
+        - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages first: a section that finds nothing in them is answered from every language instead. all = all; und = unknown; a language named here is taken at its word."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: expand, in: query, schema: {type: string, description: "csv of titles, channels, programmes: return those sections in full (up to 100 each) instead of capped. The rows of a capped section are the first rows of the expanded one."} }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResults' } } } } }

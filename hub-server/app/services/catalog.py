@@ -979,17 +979,28 @@ class CatalogService:
         chsvc = ChannelService(self._db, self.sources)
         chsvc.image_fn = self.image_fn
 
+        # A search asks for something by name. The profile's languages come first, as in every listing;
+        # a section that finds nothing in them looks in the others before it says there is nothing.
+        # Nobody has to find a language switch to reach a channel they typed the name of.
+        widen = language is None and bool(await self.preferred_languages(profile_id, None))
+
         async def channels() -> tuple[list[dict[str, Any]], int, int | None]:
             if "channel" not in want:
                 return [], 0, None
             cap = EXPANDED_CAP if "channels" in expand else CHANNEL_CAP
-            return await search_channels(chsvc, profile_id, q, language=language, source_id=source_id, cap=cap)
+            found = await search_channels(chsvc, profile_id, q, language=language, source_id=source_id, cap=cap)
+            if widen and not found[0]:
+                found = await search_channels(chsvc, profile_id, q, language="all", source_id=source_id, cap=cap)
+            return found
 
         async def programmes() -> tuple[list[dict[str, Any]], int, bool]:
             if "programme" not in want:
                 return [], 0, False
             cap = EXPANDED_CAP if "programmes" in expand else PROGRAMME_CAP
-            return await search_programmes(chsvc, profile_id, q, language=language, source_id=source_id, cap=cap)
+            aired = await search_programmes(chsvc, profile_id, q, language=language, source_id=source_id, cap=cap)
+            if widen and not aired[0]:
+                aired = await search_programmes(chsvc, profile_id, q, language="all", source_id=source_id, cap=cap)
+            return aired
 
         # The sections read different tables; side by side, each under this request's scopes.
         (
@@ -1207,6 +1218,9 @@ class CatalogService:
                 tile["id"],
             )
 
+        if not combined and language is None and languages:
+            # Nothing at all in the profile's languages: the same search in every language.
+            return await self._search_titles(q, profile_id, want, limit, "all", source_id)
         ordered = sorted(combined.values(), key=relevance)[:limit]
         return {
             "results": ordered,

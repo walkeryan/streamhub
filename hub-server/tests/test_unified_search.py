@@ -478,6 +478,51 @@ async def test_adult_titles_need_the_permission_and_the_unlock(api: Api) -> None
     assert names(found, "results") == ["Velvet Harbour"] and found["sections"]["titles"]["count"] == 1
 
 
+# ---------------------------------------------------------------- languages
+async def test_the_profile_languages_come_first_and_a_section_with_nothing_in_them_looks_in_the_rest(api: Api) -> None:
+    def spoken(row: Any, language: str) -> Any:
+        row.language = language
+        return row
+
+    await seed(
+        api,
+        spoken(title("en", "Lantern Song"), "eng"),
+        spoken(title("fr", "Lantern Chanson"), "fra"),
+        spoken(title("only", "Velours Bleu"), "fra"),
+        spoken(channel("news", "Lantern News", 1), "eng"),
+        spoken(channel("info", "Lantern Info", 2), "fra"),
+        spoken(channel("cine", "Cinq Sur Cinq", 30), "fra"),
+        programme("news", "Lantern Tonight", timedelta(minutes=-5)),
+        programme("info", "Lantern Ce Soir", timedelta(minutes=-5)),
+        programme("cine", "Minuit Passe", timedelta(minutes=-5)),
+    )
+    assert (await api.patch(f"/profiles/{api.profile_id}", json={"languages": ["eng"]})).status_code == 200
+
+    async def mine(q: str) -> dict[str, Any]:
+        response = await api.get("/search", params={"q": q})
+        assert response.status_code == 200, response.text
+        found: dict[str, Any] = response.json()
+        return found
+
+    # Something in the profile's languages: only that, as the listings show it.
+    found = await mine("lantern")
+    assert names(found, "results") == ["Lantern Song"] and names(found, "channels") == ["Lantern News"]
+    assert names(found, "programmes") == ["Lantern Tonight"]
+    assert found["sections"]["channels"] == {"count": 1, "more": False}
+    # Nothing in them: the title, the channel and the broadcast asked for by name are still found.
+    assert names(await mine("velours bleu"), "results") == ["Velours Bleu"]
+    assert names(await mine("cinq sur cinq"), "channels") == ["Cinq Sur Cinq"]
+    assert names(await mine("30"), "channels") == ["Cinq Sur Cinq"]
+    assert names(await mine("minuit"), "programmes") == ["Minuit Passe"]
+    # Each section on its own: an English title does not hide the only channel of that name.
+    mixed = await mine("lantern info")
+    assert names(mixed, "channels") == ["Lantern Info"] and mixed["results"] == []
+    # A language asked for outright is taken at its word.
+    strict = (await api.get("/search", params={"q": "cinq sur cinq", "language": "eng"})).json()
+    assert strict["channels"] == [] and strict["sections"]["channels"]["count"] == 0
+    assert len((await search(api, "lantern"))["channels"]) == 2
+
+
 # ---------------------------------------------------------------- cost
 async def test_the_number_of_queries_does_not_grow_with_the_catalog(api: Api) -> None:
     await seed(api)
