@@ -6,7 +6,8 @@ import { ProgressBar, SourceChips } from './ui'
 import { Initials, SafeImg } from './SafeImg'
 import { cn, fmtTime, hueOf, progressOf, useNow } from '../lib/util'
 import { useGo } from '../nav/back'
-import { requestBadge } from '../lib/requests'
+import { tileRequest } from '../lib/requests'
+import { RequestTileStatus } from './RequestStatus'
 import type { Tile as TileT, Channel, SourceBadge } from '../api/types'
 
 export type TileLayout = 'poster' | 'landscape' | 'channel'
@@ -50,7 +51,7 @@ export const MediaTile = memo(function MediaTile(p: {
   const layout = p.layout ?? 'poster'
   const art = layout === 'landscape' ? (p.tile.backdrop ?? p.tile.poster) : (p.tile.poster ?? p.tile.backdrop)
   const noArt = !art
-  const requested = p.tile.sources.some((s) => s.playable_in_app) ? null : requestBadge(p.tile.request_state)
+  const request = tileRequest(p.tile)
   return (
     <Focusable
       focusKey={`${p.scope}::${p.tile.id}`}
@@ -66,7 +67,8 @@ export const MediaTile = memo(function MediaTile(p: {
         <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className="tile" style={{ position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
           <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} fallback={<Fallback title={p.tile.title} />} />
           <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
-          <div className="tile-badges">{requested ? <span className="badge">{requested}</span> : p.tile.sources.length ? <TileBadge sources={p.tile.sources} /> : <span className="badge">Not available here</span>}</div>
+          {/* A request on its way says where it is, in place of where the title plays. */}
+          {request ? <RequestTileStatus progress={request} /> : <div className="tile-badges">{p.tile.sources.length ? <TileBadge sources={p.tile.sources} /> : <span className="badge">Not available here</span>}</div>}
           {p.tile.is_favorite && <span style={{ position: 'absolute', top: 6, left: 6, color: 'var(--t-accent)' }}><Icon name="heart" size={16} filled /></span>}
           {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && (
             <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}><ProgressBar pct={p.tile.progress_pct} /></div>
