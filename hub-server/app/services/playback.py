@@ -64,6 +64,11 @@ MAX_OPTION_PROBES = 3
 VOD_START_STEP_S = 5
 
 
+def play_key(source_id: str, url: str, profile_id: str, session_id: str | None) -> str:
+    """One viewer's playback of one file: its probe, its HLS sessions and its Range requests share this."""
+    return f"{source_id}:{url}:{profile_id}:{session_id or ''}"
+
+
 @dataclass(slots=True)
 class StreamGrant:
     """Decoded contents of a /stream/{token}."""
@@ -311,6 +316,9 @@ class PlaybackResolver:
     # ``MediaProbe`` and the proxy's admission gate for it; without them nothing is ever probed.
     probe: Any = None
     probe_slot: Any = None
+    # ``StreamProxy.pin``: the probe opens the file as the viewer's playback will, so a source that
+    # hands out per-viewer sessions sees one viewer and not two back to back.
+    pin: Any = None
 
     async def _require_content(self, profile_id: str, ref: str, at: datetime | None = None) -> None:
         if self.content_policy is not None and self.content_policy.enabled:
@@ -423,7 +431,9 @@ class PlaybackResolver:
             return False
         return target.url.startswith(("http://", "https://"))
 
-    async def _probe_file(self, row: Title, src: Source, target: StreamTarget) -> dict[str, Any] | None:
+    async def _probe_file(
+        self, row: Title, src: Source, target: StreamTarget, profile_id: str
+    ) -> dict[str, Any] | None:
         """This row's probe, from the cache or by asking the file now. ``None``: could not be learned.
 
         Only ever called for the one title being opened: a probe holds an upstream connection for up
@@ -437,7 +447,11 @@ class PlaybackResolver:
             return None
         running = self._probing.get(key)
         if running is None:
-            running = asyncio.ensure_future(self._run_probe(key, row, src, target))
+            from app.services.content_policy import active_principal
+
+            principal = active_principal.get()
+            viewer = play_key(src.id, target.url, profile_id, principal.session_id if principal is not None else None)
+            running = asyncio.ensure_future(self._run_probe(key, row, src, target, viewer))
             self._probing[key] = running
             running.add_done_callback(lambda _: self._probing.pop(key, None))
         # Shielded: a second request for the same title may be waiting on this probe.
@@ -446,7 +460,9 @@ class PlaybackResolver:
             row.extra = {**(row.extra or {}), "probe": found}
         return found
 
-    async def _run_probe(self, key: str, row: Title, src: Source, target: StreamTarget) -> dict[str, Any] | None:
+    async def _run_probe(
+        self, key: str, row: Title, src: Source, target: StreamTarget, viewer: str
+    ) -> dict[str, Any] | None:
         from sqlalchemy import select
 
         found: dict[str, Any] | None = None
@@ -454,7 +470,10 @@ class PlaybackResolver:
             async with contextlib.AsyncExitStack() as stack:
                 if self.probe_slot is not None:
                     await stack.enter_async_context(self.probe_slot(src.id, self._sources.max_connections(src)))
-                found = await self.probe.run(target.url, dict(target.headers))
+                url = target.url
+                if self.pin is not None:
+                    url = await self.pin(viewer, url, dict(target.headers))
+                found = await self.probe.run(url, dict(target.headers))
         except Conflict:
             return None  # every connection is in use; never take one from a viewer to probe
         except Exception as exc:
@@ -471,7 +490,7 @@ class PlaybackResolver:
                 await s.commit()
         return found
 
-    async def _probe_row(self, row: Title) -> None:
+    async def _probe_row(self, row: Title, profile_id: str) -> None:
         """Probe a listed variant whose source reported no audio tracks (``/playback/options``)."""
         if self.probe is None or not self.probe.available or cached_probe(row.extra) is not None:
             return
@@ -483,7 +502,7 @@ class PlaybackResolver:
         except Exception:
             return  # resolving the stream fails loudly at playback; options stay unverified
         if self._probe_applies(src, target):
-            await self._probe_file(row, src, target)
+            await self._probe_file(row, src, target, profile_id)
 
     async def _audio_options(self, profile_id: str, rows: list[Title], probe: bool = False) -> list[dict[str, Any]]:
         sources = await self._sources.rows_by_id()
@@ -505,7 +524,7 @@ class PlaybackResolver:
             extra = evidence_row.extra or {}
             if probes > 0 and not has_provider_tracks(extra) and cached_probe(extra) is None:
                 probes -= 1
-                await self._probe_row(evidence_row)
+                await self._probe_row(evidence_row, profile_id)
                 extra = evidence_row.extra or {}
             info = audio_info(extra, label=row.title, group=row.group_name, language=row.language)
             tracks = probe_tracks(extra)
@@ -941,7 +960,7 @@ class PlaybackResolver:
         position, else the profile's resume position, floored to ``VOD_START_STEP_S``) and the client
         asks for a new start when the viewer seeks outside what that session has produced.
         """
-        probe = await self._probe_file(row, src, target)
+        probe = await self._probe_file(row, src, target, profile_id)
         tracks = probe_tracks({"probe": probe}) if probe else []
         if audio_track is not None and probe is not None and audio_track >= len(tracks):
             raise ServiceError("This file has no such audio track.", code="audio_track_invalid")

@@ -24,7 +24,7 @@ from app.proxy.stream_proxy import HlsSourceBusy, UpstreamRefused, Viewer, VodPl
 from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
-from app.services.playback import StreamGrant
+from app.services.playback import StreamGrant, play_key
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -421,6 +421,7 @@ async def stream(token: str, request: Request, c: C) -> Response:
             generation=g.recovery_generation,
             max_connections=maximum,
             viewer=_viewer(g),
+            pin_key=None if g.live else play_key(g.source_id, g.url, g.profile_id, g.session_id),
         )
     except (ConnectionError, OSError) as exc:
         raise await _open_failed(c, g, exc, maximum, "upstream unavailable") from exc
@@ -494,7 +495,7 @@ def _hls_session_key(c: C, g: StreamGrant) -> tuple[str, str, VodPlan | None]:
     if g.vod_video:
         # One session per viewer, file, audio track and start offset; the codec alone decides
         # whether the video is transcoded, so the per-source ``transcode`` flag is not consulted.
-        family = f"{g.source_id}:{g.url}:{g.profile_id}:{g.session_id or ''}"
+        family = play_key(g.source_id, g.url, g.profile_id, g.session_id)
         plan = VodPlan(
             video=g.vod_video,
             hw=hw if g.vod_video == "transcode" else "none",
@@ -547,6 +548,8 @@ async def stream_hls(token: str, c: C, at: datetime | None = None, lease_id: str
             pair_lease_id=g.pair_lease_id,
             vod=vod,
             viewer=_viewer(g),
+            # A file remuxed without a plan is one process for everyone watching it: one upstream viewer.
+            pin_key=None if g.live else vod.family if vod is not None else key,
         )
     except HlsSourceBusy as exc:
         raise await _source_busy(c, g, "Another stream is using this source. Stop it and retry.") from exc

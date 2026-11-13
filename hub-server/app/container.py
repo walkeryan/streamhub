@@ -188,6 +188,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     )
     playback.probe = MediaProbe(settings.ffprobe_path)
     playback.probe_slot = proxy.probe_slot
+    playback.pin = proxy.pin
     google_auth = GoogleAuthService(settings, auth)
     return Container(
         settings=settings,

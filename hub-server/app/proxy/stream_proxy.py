@@ -10,6 +10,9 @@
   with the video copied or transcoded and one audio track encoded to AAC stereo.
 - Every session carries the ``Viewer`` its grant named, so a profile turned away by a source's
   connection limit can be told who holds the connections (``active_viewers``).
+- **Pinned upstream sessions** (``pin``): panels that hand out a per-viewer session on redirect see
+  one viewer for a probe, a play and every seek of one file, because all of them use the redirect
+  target that the first request was given (see ``pin_upstream_session``). Live streams are not pinned.
 
 Seeking in a web VOD session is restart-at-offset. A session starts at ``start_s`` (``-ss`` before
 ``-i``) and its playlist only ever lists what ffmpeg has produced since, as an ``EVENT`` playlist
@@ -42,6 +45,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from app.infra.http import pin_upstream_session
 from app.infra.logging import redact_url
 from app.proxy.dvr import MAX_SEGMENTS, DvrManager
 from app.services.errors import Conflict, Forbidden, ServiceError
@@ -64,6 +68,14 @@ VOD_READRATE = "2"
 VOD_BURST_S = "30"
 # A finished VOD session holds no upstream connection, only files: keep it through a pause.
 VOD_DONE_IDLE_S = 600.0
+# A pinned upstream URL is kept this long after its last use, and while a session is using it.
+PIN_TTL_S = 2 * 3600.0
+# An upstream that gave no session (it answers directly, or was busy or down) is asked again after this.
+PIN_MISS_TTL_S = 60.0
+PIN_TIMEOUT_S = 8.0
+MAX_PINS = 512
+# How a panel answers a session it no longer knows; ffmpeg names 410 only by its class.
+PIN_EXPIRED = {"403", "404", "410", "4XX"}
 # Codecs NVDEC decodes; anything else is decoded in software and only encoded on the GPU.
 CUDA_DECODE = {"h264", "hevc", "vp8", "vp9", "av1", "mpeg2video", "mpeg4", "vc1"}
 # ffmpeg's last line when the upstream refuses the request, e.g. "Server returned 403 Forbidden".
@@ -271,6 +283,7 @@ class HlsSession:
     label: str = ""
     fallbacks: list[tuple[str, list[str]]] = field(default_factory=list)
     upstream_status: str | None = None
+    pin_key: str | None = None  # the pinned upstream session this one uses, if any (``StreamProxy.pin``)
     # profile id -> (viewer, when it last asked for the playlist); a live channel can have several.
     viewers: dict[str, tuple[Viewer, float]] = field(default_factory=dict)
 
@@ -312,6 +325,7 @@ class HttpSession:
     counted: bool = False
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     viewer: Viewer | None = None
+    pin_key: str | None = None
 
 
 def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
@@ -482,6 +496,8 @@ class StreamProxy:
         self._viewers: dict[asyncio.Queue[bytes | None], tuple[SharedUpstream, str]] = {}
         self._cleanup_pending: set[Path] = set()
         self._probes: dict[object, str] = {}  # media probes in flight -> source id
+        self._pins: dict[str, tuple[str, float]] = {}  # playback -> (upstream URL to keep using, expiry)
+        self._pinning: dict[str, asyncio.Future[str]] = {}
 
     def ensure_running(self, generation: int | None = None) -> None:
         if self.paused or (generation is not None and generation != self.generation):
@@ -573,6 +589,7 @@ class StreamProxy:
             for lease_id in list(self._pairs):
                 with contextlib.suppress(Exception):
                     await self._release_pair_locked(lease_id)
+        self._pins.clear()
         status = self.recovery_status()
         return {
             **status,
@@ -599,6 +616,7 @@ class StreamProxy:
             if up._task:
                 up._task.cancel()
         self._shared.clear()
+        self._pins.clear()
 
     async def _reap_loop(self) -> None:
         while True:
@@ -629,6 +647,7 @@ class StreamProxy:
                         or (sess.proc.returncode is not None and not sess.complete)
                     ):
                         await self._stop_hls(key, expected=sess)
+                        self._forget_pin(sess)
 
     @property
     def stats(self) -> dict[str, Any]:
@@ -781,6 +800,7 @@ class StreamProxy:
             reserved = any(peer_key in lease.members for lease in self._pairs.values())
             if not reserved and not self.dvr.held(peer_key) and now - peer.last_access >= grace:
                 await self._stop_hls(peer_key, expected=peer)
+                self._forget_pin(peer)
                 full = self._source_use(source_id) >= capacity
         return full
 
@@ -799,6 +819,53 @@ class StreamProxy:
             yield
         finally:
             self._probes.pop(slot, None)
+
+    # ------------------------------------------------------------------ pinned upstream sessions
+    def _pin_held(self, key: str, now: float) -> str | None:
+        held = self._pins.get(key)
+        if held is None:
+            return None
+        # A film outlasts the TTL: a session that is still running keeps its pin, so the seek that
+        # replaces it reaches the upstream session it already holds.
+        in_use = any(s.pin_key == key for s in self._hls.values())
+        return held[0] if held[1] > now or in_use else None
+
+    async def pin(self, key: str, url: str, headers: dict[str, str], *, stale: str | None = None) -> str:
+        """The URL one playback (``key``) keeps using for ``url``, resolved upstream once.
+
+        ``stale`` is a pinned URL the upstream stopped honouring; it is resolved again, unless
+        another request of the same playback already did that.
+        """
+        now = self._clock()
+        held = self._pin_held(key, now)
+        if held is not None and held != stale:
+            if held != url:
+                self._pins[key] = (held, now + PIN_TTL_S)
+            return held
+        running = self._pinning.get(key)
+        if running is None:
+            running = asyncio.ensure_future(self._resolve_pin(key, url, headers))
+            self._pinning[key] = running
+            running.add_done_callback(lambda _: self._pinning.pop(key, None))
+        # Shielded: another request of the same playback may be waiting on this answer.
+        return await asyncio.shield(running)
+
+    async def _resolve_pin(self, key: str, url: str, headers: dict[str, str]) -> str:
+        async with self._client_factory(timeout=PIN_TIMEOUT_S) as client:
+            pinned = await pin_upstream_session(client, url, headers)
+        now = self._clock()
+        self._pins.pop(key, None)
+        for other in [k for k in self._pins if self._pin_held(k, now) is None]:
+            del self._pins[other]
+        while len(self._pins) >= MAX_PINS:
+            del self._pins[min(self._pins, key=lambda k: self._pins[k][1])]
+        self._pins[key] = (pinned, now + (PIN_TTL_S if pinned != url else PIN_MISS_TTL_S))
+        return pinned
+
+    def _forget_pin(self, sess: HlsSession) -> None:
+        """A reaped session takes its pin with it, unless the viewer's next session already uses it."""
+        if sess.pin_key and not any(s.pin_key == sess.pin_key for s in self._hls.values()):
+            self._pins.pop(sess.pin_key, None)
 
     # ------------------------------------------------------------------ passthrough
     def _drop_shared(self, key: str) -> None:
@@ -872,8 +939,13 @@ class StreamProxy:
         generation: int | None = None,
         max_connections: int | None = None,
         viewer: Viewer | None = None,
+        pin_key: str | None = None,
     ) -> tuple[int, dict[str, str], AsyncIterator[bytes]]:
-        """Single-client passthrough (VOD with Range support; live with reconnect)."""
+        """Single-client passthrough (VOD with Range support; live with reconnect).
+
+        ``pin_key`` names one viewer's playback of a file: its Range requests share one pinned
+        upstream session (``pin``) and replace each other instead of overlapping.
+        """
         self.ensure_running(generation)
         generation = self.generation
         req_headers = dict(headers)
@@ -881,14 +953,26 @@ class StreamProxy:
             req_headers["Range"] = range_header
         async with self._hls_lock:
             self.ensure_running(generation)
+            if pin_key:
+                # A seek is a new Range request, and it can arrive before the player's previous one
+                # is seen to disconnect. Upstream that would be two transfers for one viewer, and
+                # here a refusal at the source's limit: the previous response is closed first.
+                for previous in [s for s in self._http if s.pin_key == pin_key]:
+                    await self._close_http(previous)
             self._admit_source(source_id, max_connections)
             client = self._client_factory(timeout=httpx.Timeout(30.0, connect=10.0, read=None), headers=req_headers)
-            sess = HttpSession(client, asyncio.current_task(), source_id=source_id, viewer=viewer)
+            sess = HttpSession(client, asyncio.current_task(), source_id=source_id, viewer=viewer, pin_key=pin_key)
             self._http.add(sess)
         try:
-            req = client.build_request("GET", url)
-            resp = await client.send(req, stream=True)
+            target = await self.pin(pin_key, url, headers) if pin_key else url
+            resp = await client.send(client.build_request("GET", target), stream=True)
             sess.response = resp
+            if pin_key and target != url and str(resp.status_code) in PIN_EXPIRED:
+                # The panel no longer knows the pinned session: ask for a new one, once.
+                await resp.aclose()
+                target = await self.pin(pin_key, url, headers, stale=target)
+                resp = await client.send(client.build_request("GET", target), stream=True)
+                sess.response = resp
             self.ensure_running(generation)
         except (httpx.RemoteProtocolError, httpx.ReadError) as exc:
             # Accepted, then closed without an answer: how some panels turn a connection away.
@@ -1008,6 +1092,7 @@ class StreamProxy:
         source_id: str | None,
         buffered: bool = False,
         family: str | None = None,
+        pin_key: str | None = None,
     ) -> HlsSession:
         """Caller holds _hls_lock. Start ``attempts[0]``; the rest stay on the session as fallbacks."""
         (label, args), *fallbacks = attempts
@@ -1022,6 +1107,7 @@ class StreamProxy:
                 family=family,
                 label=label,
                 fallbacks=fallbacks,
+                pin_key=pin_key,
             )
             sess.stderr_task = asyncio.create_task(self._drain_hls_stderr(sess))
             self._hls[key] = sess
@@ -1062,9 +1148,32 @@ class StreamProxy:
         pair_lease_id: str | None = None,
         vod: VodPlan | None = None,
         viewer: Viewer | None = None,
+        pin_key: str | None = None,
     ) -> HlsSession:
         self.ensure_running(generation)
         generation = self.generation
+        # ffmpeg asks for its input again on every seek inside the file (a Matroska index sits at
+        # the end), so a file is opened by the URL of the upstream session this playback holds.
+        source_url = url
+        if pin_key:
+            url = await self.pin(pin_key, source_url, headers)
+
+        def attempts_for(target: str, outdir: Path) -> list[tuple[str, list[str]]]:
+            if vod is not None:
+                return vod_ffmpeg_attempts(self.ffmpeg, target, headers, outdir, vod, vaapi_device=self.vaapi_device)
+            legacy = ffmpeg_args(
+                self.ffmpeg,
+                target,
+                headers,
+                outdir,
+                live=live,
+                transcode=transcode,
+                vaapi_device=self.vaapi_device,
+                buffered=buffered,
+            )
+            return [("", legacy)]
+
+        repinned = False
         capacity = max_connections or 0
         admission_deadline = self._clock() + HLS_ADMISSION_WAIT_S
         while True:
@@ -1112,30 +1221,15 @@ class StreamProxy:
                         workdir = self.transcode_dir / sid
                         shutil.rmtree(workdir, ignore_errors=True)
                         workdir.mkdir(parents=True, exist_ok=True)
-                    if vod is not None:
-                        attempts = vod_ffmpeg_attempts(
-                            self.ffmpeg, url, headers, workdir, vod, vaapi_device=self.vaapi_device
-                        )
-                    else:
-                        legacy = ffmpeg_args(
-                            self.ffmpeg,
-                            url,
-                            headers,
-                            workdir,
-                            live=live,
-                            transcode=transcode,
-                            vaapi_device=self.vaapi_device,
-                            buffered=buffered,
-                        )
-                        attempts = [("", legacy)]
                     sess = await self._spawn_hls(
                         key,
                         sid,
                         workdir,
-                        attempts,
+                        attempts_for(url, workdir),
                         source_id=source_id,
                         buffered=buffered,
                         family=vod.family if vod is not None else None,
+                        pin_key=pin_key,
                     )
                     break
                 if now >= admission_deadline:
@@ -1165,6 +1259,32 @@ class StreamProxy:
                     # Let the drain read ffmpeg's last words: an upstream refusal is not an encoder failure.
                     with contextlib.suppress(Exception):
                         await asyncio.wait_for(asyncio.shield(sess.stderr_task), 0.5)
+                if pin_key and url != source_url and not repinned and sess.upstream_status in PIN_EXPIRED:
+                    # The panel no longer knows the pinned session: ask for a new one and start again, once.
+                    repinned = True
+                    async with self._hls_lock:
+                        await self._stop_hls(key, expected=sess)
+                    url = await self.pin(pin_key, source_url, headers, stale=url)
+                    async with self._hls_lock:
+                        self.ensure_running(generation)
+                        if key not in self._hls:  # else another request of this playback restarted it
+                            self._admit_source(source_id, max_connections)
+                            sess.workdir.mkdir(parents=True, exist_ok=True)
+                            watching = sess.viewers
+                            fresh = attempts_for(url, sess.workdir)
+                            tried = next((i for i, (label, _) in enumerate(fresh) if label == sess.label), 0)
+                            sess = await self._spawn_hls(
+                                key,
+                                sess.sid,
+                                sess.workdir,
+                                fresh[tried:],
+                                source_id=source_id,
+                                family=sess.family,
+                                pin_key=pin_key,
+                            )
+                            sess.viewers = watching
+                    deadline = self._clock() + HLS_READY_TIMEOUT
+                    continue
                 async with self._hls_lock:
                     # Exit 0 with nothing written is an empty input, not an encoder that failed to start.
                     retry = code != 0 and bool(sess.fallbacks) and sess.upstream_status is None
@@ -1178,7 +1298,13 @@ class StreamProxy:
                         sess.workdir.mkdir(parents=True, exist_ok=True)
                         watching = sess.viewers
                         sess = await self._spawn_hls(
-                            key, sess.sid, sess.workdir, sess.fallbacks, source_id=source_id, family=sess.family
+                            key,
+                            sess.sid,
+                            sess.workdir,
+                            sess.fallbacks,
+                            source_id=source_id,
+                            family=sess.family,
+                            pin_key=pin_key,
                         )
                         sess.viewers = watching
                         deadline = self._clock() + HLS_READY_TIMEOUT
