@@ -3,6 +3,7 @@ import { useLocation } from 'react-router'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
+import { SearchBox } from './SearchBox'
 import { Modal } from './ui'
 import { useGo, useBackHandler } from '../nav/back'
 import { setFocus } from '../nav/spatial'
@@ -11,6 +12,7 @@ import { useAccess, useMe } from '../api/me'
 import { useSwitchable } from '../api/people'
 import { useWho } from '../store/who'
 import { usePhone } from '../lib/layout'
+import { useSlashToSearch } from '../lib/searchQuery'
 import { useSession } from '../store/session'
 import { JoinRoomDialog } from '../room/JoinRoomDialog'
 import { useRecordings } from '../api/hooks'
@@ -21,7 +23,7 @@ const HOME: Destination = { to: '/', label: 'Home', icon: 'home' }
 const SEARCH: Destination = { to: '/search', label: 'Search', icon: 'search' }
 const LIVE: Destination = { to: '/live', label: 'Live TV', icon: 'tv', at: ['/guide'] }
 const MY_LIST: Destination = { to: '/favorites', label: 'My List', icon: 'bookmark' }
-/** Wide screens: every place to watch is named in the top bar; Search sits with More and the profile at its end. */
+/** Wide screens: every place to watch is named in the top bar; the search box sits with More and the profile at its end. */
 const NAV: Destination[] = [
   HOME, LIVE,
   { to: '/browse/movies', label: 'Movies', icon: 'film', at: ['/browse/vod', '/discover/movies'] },
@@ -40,6 +42,14 @@ const MORE: Destination[] = [
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
 const testId = (label: string) => `nav-${label.toLowerCase().replace(' ', '-')}`
+
+/** A phone has no box in its bar: "/" opens the search page, whose own box then takes the caret. */
+function SlashOpensSearch() {
+  const go = useGo()
+  const at = useLocation().pathname
+  useSlashToSearch(() => { if (at !== SEARCH.to) go(SEARCH.to) })
+  return null
+}
 
 /** The one navigation: a bar across the top of a wide screen, a bar of five along the bottom of a phone. */
 export function Rail() {
@@ -86,12 +96,10 @@ export function Rail() {
           <span className="lbl">{n.label}</span>
         </Focusable>
       ))}
+      {/* Wide: the one search box, a stop of the bar like any other. A phone's Search tab opens the results page, which has the box. */}
       {!phone && <>
         <div className="rail-gap" />
-        <Focusable focusKey={`rail:${SEARCH.to}`} className="rail-item rail-icon fx-flat" role="link" label={SEARCH.label} title={SEARCH.label}
-          aria-current={here(SEARCH) ? 'page' : undefined} data-testid={testId(SEARCH.label)} onEnter={() => open(SEARCH.to)}>
-          <Icon name={SEARCH.icon} />
-        </Focusable>
+        <SearchBox label={SEARCH.label} />
       </>}
       <Focusable focusKey="rail:more" className={phone ? 'rail-item fx-flat' : 'rail-item rail-icon fx-flat'} label="More" title="More"
         aria-current={more.some(here) ? 'page' : undefined} data-testid="nav-more" onEnter={() => setMenu(true)}>
@@ -124,5 +132,6 @@ export function Rail() {
       </FocusGroup>
     </Modal>
     <JoinRoomDialog open={joinRoom} onClose={() => setJoinRoom(false)} />
+    {phone && <SlashOpensSearch />}
   </>
 }

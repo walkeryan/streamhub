@@ -1,9 +1,9 @@
 import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
-import type { PlaybackDescriptor, Source, Tile } from '../api/types'
+import type { Channel, PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
   DISCLAIMER, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
-  sources, tileOf, titles, unavailable, watch, withNowNext,
+  searchBroadcasts, sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 import { roomHandlers } from './rooms'
@@ -195,17 +195,32 @@ export const handlers = [
 
   http.get(`${B}/home`, async () => { await delay(120); return HttpResponse.json(homeRows(homeShelves())) }),
   http.get(`${B}/search`, async ({ request }) => {
-    const q = (new URL(request.url).searchParams.get('q') ?? '').toLowerCase()
+    const params = new URL(request.url).searchParams
+    const q = (params.get('q') ?? '').trim().toLowerCase()
+    const expand = new Set((params.get('expand') ?? '').split(','))
     await delay(100)
-    const missing = unavailable.filter((t) => t.title.toLowerCase().includes(q))
-    const hits = [...titles.filter((t) => t.title.toLowerCase().includes(q)), ...missing].map(annotate)
-    const chans = channels.filter((c) => c.name.toLowerCase().includes(q)).map(withNowNext)
+    const none = { results: [], play_here: [], open_in_app: [], channels: [], programmes: [], attribution: 'Availability data by JustWatch' }
+    const section = (count: number, shown: number) => ({ count, more: count > shown })
+    // Like the server: nothing is looked up for a letter.
+    if (q.length < 2) return HttpResponse.json({ ...none, sections: { titles: section(0, 0), channels: section(0, 0), programmes: section(0, 0) }, order: ['programmes', 'channels', 'titles'] })
+    const cap = (name: string, capped: number) => (expand.has(name) ? 100 : capped)
+    // Titles: the library first, then what only the metadata provider knows, each by where the query falls in the name.
+    const rank = (name: string) => { const at = name.toLowerCase().indexOf(q); return name.toLowerCase() === q ? 0 : at === 0 ? 1 : at > 0 && name[at - 1] === ' ' ? 2 : 3 }
+    const hits = [...titles, ...unavailable].filter((t) => t.title.toLowerCase().includes(q))
+      .sort((a, b) => rank(a.title) - rank(b.title) || Number(!a.sources.length) - Number(!b.sources.length))
+    const exact = (c: Channel) => c.name.toLowerCase() === q || String(c.number) === q
+    const chans = channels.filter((c) => c.name.toLowerCase().includes(q) || String(c.number) === q)
+      .sort((a, b) => Number(exact(b)) - Number(exact(a)) || a.number - b.number)
+    const broadcasts = searchBroadcasts(q)
+    const shown = { titles: hits.slice(0, cap('titles', 40)).map(annotate), channels: chans.slice(0, cap('channels', 12)), programmes: broadcasts.slice(0, cap('programmes', 24)) }
     return HttpResponse.json({
-      // Like the server, discovery of titles no source has comes back as one ranked list.
-      ...(missing.length ? { results: hits } : {}),
-      play_here: hits.filter((t) => t.sources.some((s) => s.playable_in_app)),
-      open_in_app: hits.filter((t) => t.sources.length > 0 && !t.sources.some((s) => s.playable_in_app)),
-      channels: chans, attribution: 'Availability data by JustWatch',
+      results: shown.titles,
+      play_here: shown.titles.filter((t) => t.sources.some((s) => s.playable_in_app)),
+      open_in_app: shown.titles.filter((t) => t.sources.length > 0 && !t.sources.some((s) => s.playable_in_app)),
+      channels: shown.channels.map(withNowNext), programmes: shown.programmes.map(withRecordingState),
+      sections: { titles: section(hits.length, shown.titles.length), channels: section(chans.length, shown.channels.length), programmes: section(broadcasts.length, shown.programmes.length) },
+      order: chans[0] && exact(chans[0]) ? ['channels', 'programmes', 'titles'] : ['programmes', 'channels', 'titles'],
+      attribution: 'Availability data by JustWatch',
     })
   }),
   http.get(`${B}/titles/:id`, async ({ params }) => {

@@ -147,10 +147,35 @@ h1, h2, h3, p { margin: 0; }
   .rail-item[aria-current='page']::after { content: ''; position: absolute; inset: auto var(--rail-pad) 0.0625rem; height: 0.1875rem; border-radius: 999px; background: var(--t-accent); }
   .rail-icon[aria-current='page']::after { inset-inline: 0.375rem; }
   .rail-icon[aria-current='page'] svg { color: var(--t-accent); }
+  /* The search box: the magnifier and a short field. It takes room from the gap beside it when it is in
+     use and gives way before any name in the row does; it never pushes one off. */
+  .rail-search {
+    display: flex; align-items: center; gap: 0.5rem; flex: 0 1 14rem; min-width: 2.25rem; height: 2.25rem; padding: 0 0.625rem; margin-right: 0.25rem;
+    border-radius: var(--radius-pill); background: var(--t-surface-alt); border: 1px solid var(--surface-edge); color: var(--t-text-muted);
+    cursor: text; transition: flex-basis var(--dur-fast) var(--ease), outline-color var(--dur-focus) var(--ease);
+  }
+  .rail-search.fx[data-focused='true'] { transform: none; box-shadow: none; }
+  .rail-search[data-open], .rail-search[data-filled] { color: var(--t-text); }
+  .rail-search[data-open] { flex-basis: 20rem; }
+  .rail-search[aria-current='page'] svg { color: var(--t-accent); }
+  .rail-search svg { flex: none; width: 1.25rem; height: 1.25rem; }
+  .rail-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; font-size: var(--text-label); }
+  .rail-search input::placeholder { color: var(--t-text-muted); opacity: 0.8; }
+  .rail-search-clear { display: grid; place-items: center; flex: none; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--t-text-muted); cursor: pointer; }
+  .rail-search-clear:hover { color: var(--t-text); }
+  .rail-search-clear svg { width: 1rem; height: 1rem; }
 }
 @media (min-width: 721px) and (max-width: 1000px) {
   .rail { --rail-pad: 0.625rem; gap: 0; }
   .rail-brand { margin-right: 0.75rem; }
+  /* No room for a field beside eight entries: the magnifier alone, until the box is in use. Then it opens
+     over the row, and closes when the caret leaves it. */
+  .rail-search:not([data-open]) { flex: none; width: 2.25rem; padding: 0; justify-content: center; border-color: transparent; background: transparent; cursor: pointer; }
+  .rail-search:not([data-open]) input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .rail-search:not([data-open]) .rail-search-clear { display: none; }
+  .rail-search:not([data-open]) svg { width: 1.375rem; height: 1.375rem; }
+  .rail-search:not([data-open])[data-filled] svg { color: var(--t-accent); }
+  .rail-search[data-open] { position: absolute; z-index: 6; inset: var(--safe-y) var(--safe-x) auto; margin: 0; background: var(--t-surface-alt); }
 }
 @media (min-width: 721px) and (max-width: 800px) { .rail-brand { display: none; } }
 /* Phone: a bottom bar of five, each an icon over its name. */
@@ -260,11 +285,30 @@ h1, h2, h3, p { margin: 0; }
 /* grid */
 .grid-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-poster-w), 1fr)); gap: 1.25rem var(--tile-gap); padding: 1rem 0.5rem; }
 .grid-tiles .tile { width: auto; aspect-ratio: 2/3; height: auto; }
-.search-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; align-items: start; }
-.search-controls { min-width: 0; }
-@media (min-width: 1024px) {
-  .search-layout { grid-template-columns: 22rem minmax(0, 1fr); }
+/* Search results: one page of up to three sections. Broadcasts and channels are short rows in as many
+   columns as fit, so a full section stays a few lines tall above the posters. */
+.search-page { display: flex; flex-direction: column; gap: 1rem; min-height: 20rem; }
+.search-page-field { max-width: 32rem; }
+.search-sections { display: flex; flex-direction: column; gap: 1.75rem; padding-bottom: 2rem; }
+.search-section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+[data-testid='search-results'][data-stale] { opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
+.search-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(19rem, 100%), 1fr)); gap: 0.5rem; }
+.search-row {
+  display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; min-height: 3.5rem; padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md); background: var(--t-surface); border: 1px solid var(--surface-edge);
 }
+.search-row[data-focused='true'] { background-color: color-mix(in srgb, var(--t-accent) 12%, var(--t-surface)); }
+.search-row-copy { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.search-row-title { font-weight: 600; }
+.search-row-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.search-row-line > :first-child { flex: none; }
+.search-row-when { color: var(--t-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.search-row-number { color: var(--t-text-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+.search-grid { padding: 0; }
+.search-tile { position: relative; min-width: 0; }
+.search-kind { position: absolute; left: 0.375rem; top: 0.375rem; z-index: 6; pointer-events: none; }
+.search-more { display: flex; }
+.search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; padding: 0.5rem 0; }
 
 /* player */
 .player { position: fixed; inset: 0; background: #000; color: #fff; z-index: 60; overflow: hidden; }
