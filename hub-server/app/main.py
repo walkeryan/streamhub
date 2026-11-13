@@ -32,6 +32,7 @@ from app.infra.logging import configure_logging
 from app.infra.settings import APP_VERSION, AppSettings
 from app.services.context import is_https, public_base
 from app.services.errors import PermissionDenied, ServiceError
+from app.services.network import is_trusted_proxy, vouched_for
 
 log = logging.getLogger(__name__)
 API_PREFIX = "/api/v1"
@@ -88,9 +89,14 @@ def create_app(
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
-        host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
-        prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+        # What the outside world calls this server is a trusted proxy's to say, and nobody else's:
+        # these build the links and redirects handed out and decide which cookies are Secure.
+        peer, port = (request.client.host, request.client.port) if request.client else (None, None)
+        trusted = vouched_for(port) or is_trusted_proxy(peer, settings.forwarded_allow_ips)
+        said = request.headers if trusted else {}
+        proto = said.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+        host = said.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
+        prefix = said.get("x-forwarded-prefix", "").rstrip("/")
         t1 = public_base.set(f"{proto}://{host.split(',')[0].strip()}{prefix}")
         t2 = is_https.set(proto == "https")
         try:
