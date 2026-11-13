@@ -232,6 +232,17 @@ class BrowsePage(_M):
     page_size: int = 60
 
 
+class Shelf(_M):
+    name: str
+    count: int
+    items: list[Tile]
+    browse_path: str
+
+
+class ShelfList(_M):
+    shelves: list[Shelf]
+
+
 class DiscoveryPage(_M):
     tiles: list[Tile]
     page: int
