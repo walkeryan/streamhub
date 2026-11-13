@@ -33,9 +33,9 @@ def _room(c: Container, code: str) -> Room:
 
 async def _require_rated(c: Container, p: Principal, ref: str) -> None:
     """A room is no way around a rating ceiling or the adult lock: the title must be one this caller may watch."""
-    await require_adult(c.db, p, ref)
     if c.content_policy.applies_to(p):
         await c.content_policy.require(p.profile_id, ref)
+    await require_adult(c.db, p, ref)
 
 
 async def _title(c: Container, p: Principal, ref: str, series: str | None = None) -> dict[str, Any]:

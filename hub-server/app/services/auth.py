@@ -791,8 +791,10 @@ class AuthService:
         ticket = self.throttle.begin(f"p:{profile_id[:64]}", f"a:{address or 'unknown'}")
         async with self._db.session() as s:
             prof = await s.get(Profile, profile_id)
-            user = await s.get(User, prof.user_id) if prof is not None and prof.user_id else None
+            # A profile from before users existed gets its user here, by the upgrade rule, and is judged as that.
+            user = await ensure_user(s, prof) if prof is not None else None
             role = await s.get(Role, user.role_id) if user is not None and user.role_id else None
+            await s.commit()
         ok = False
         if prof is None:
             pass

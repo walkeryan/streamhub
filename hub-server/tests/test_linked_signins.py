@@ -16,8 +16,6 @@ from tests.plex_identity import account, complete, mock_plex, plex_sign_in
 from tests.test_google_auth import configure, mock_google
 from tests.test_password_signin import GOOD, person, sign_in, user_named
 
-ORIGIN = "https://streamhub.ryan-walker.dev"
-
 
 def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
@@ -129,7 +127,9 @@ async def test_link_google_through_the_callback(api: Api) -> None:
     assert await methods(api, mine) == ["google", "password"]
     assert ("user.signin_link", row.id, {"method": "google"}) in await audit(api)
     # Nobody was signed in by it: there is nothing to complete.
-    assert (await api.client.post("/api/v1/auth/google/complete", headers={"Origin": ORIGIN})).status_code == 401
+    assert (
+        await api.client.post("/api/v1/auth/google/complete", headers={"Origin": api.c.google_auth.origin})
+    ).status_code == 401
 
     # Somebody else's Google identity is refused, as is an unverified one.
     taken = await link_google(api, bearer(pal["access_token"]), "gran-subject", "gran@example.test")

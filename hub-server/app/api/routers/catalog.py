@@ -170,11 +170,13 @@ async def _title_rows(c: C, id: str) -> list[Any]:
 @router.get("/titles/{id}", response_model=S.TitleDetail, tags=["catalog"])
 async def title(id: str, c: C, p: P) -> dict[str, Any]:
     await require_watch(c.db, p.permissions, id)
-    await require_adult(c.db, p, id)
     # Opening a title is when the user linked to the library server's account picks up what
     # they watched there (see ``ProgressService.merge_account_state``); nobody else asks it.
     await c.progress.merge_account_state(p.profile_id, await _title_rows(c, id))
-    return await c.requests.annotate_detail(p, await c.catalog.detail(id, p.profile_id))
+    # The rating ceiling answers first, in its own words; then the adult lock, before anything is returned.
+    detail = await c.catalog.detail(id, p.profile_id)
+    await require_adult(c.db, p, id)
+    return await c.requests.annotate_detail(p, detail)
 
 
 @router.get("/discover/{section}", response_model=S.DiscoveryPage, tags=["catalog"])

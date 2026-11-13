@@ -243,9 +243,10 @@ async def playback_watch_gate(request: Request, c: C) -> None:
     for ref, source, judged, moment in refs:
         if ref:
             await require_watch(c.db, principal.permissions, ref, source)
-            await require_adult(c.db, principal, ref, source)
             if rated and judged:
                 await policy.require(principal.profile_id, ref.removeprefix("trailer:"), at=moment)
+            # After the rating ceiling, which answers a restricted viewer in its own words.
+            await require_adult(c.db, principal, ref, source)
 
 
 def _moment(value: Any) -> datetime | None:
