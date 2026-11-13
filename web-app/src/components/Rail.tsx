@@ -30,8 +30,7 @@ const NAV: Destination[] = [
 ]
 /** A phone's bar holds five: Movies and Shows share Library (the screen has the switch), My List moves under More. */
 const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: 'Library', icon: 'film', at: ['/browse', '/discover'] }]
-/** Everything else, each offered only to a user who may use it. Recordings joins this list, with
- *  its capability, once that screen exists. */
+/** Everything else, each offered only to a user who may use it. */
 const MORE: Destination[] = [
   { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' },
   { to: '/requests', label: 'Requests', icon: 'list', needs: 'requests' },
@@ -61,10 +60,12 @@ export function Rail() {
     void setFocus('MAIN')
   }, hasFocus || pinned)
   const here = (d: Destination) => (d.to === '/' ? loc.pathname === '/' : [d.to, ...(d.at ?? [])].some((p) => loc.pathname.startsWith(p)))
-  // Recordings: offered once the server says recording is on; an admin also sees it while it is off, to learn why.
-  const recordings = useRecordings(can(access, 'recordings'), false)
-  const recordingsOffered = !!recordings.data?.enabled || (!!recordings.data && can(access, 'settings.admin'))
-  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (!d.needs || can(access, d.needs)) && (d.to !== '/recordings' || recordingsOffered))]
+  // Recordings: offered to who may use them once the server says recording is on. While it is off only
+  // a holder of system.manage sees the entry, to learn why.
+  const manages = can(access, 'settings.admin')
+  const recordings = useRecordings(can(access, 'recordings') || manages, false)
+  const recordingsOffered = !!recordings.data && (recordings.data.enabled ? can(access, 'recordings') : manages)
+  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (d.to === '/recordings' ? recordingsOffered : !d.needs || can(access, d.needs)))]
   const open = (to: string) => { setPinned(false); setMenu(false); go(to) }
   // On a shared household device the profile entry asks who is watching; elsewhere it opens the profile's settings.
   const switchable = useSwitchable(!!useMe().data?.shared_device).data

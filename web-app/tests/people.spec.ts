@@ -42,10 +42,10 @@ test.describe('permissions', () => {
     await page.addInitScript((p) => localStorage.setItem('sh.session.v1', JSON.stringify({ access: 'mock-access-p2', refresh: 'mock-refresh-p2', profile: p })), { ...WHO.guest, is_admin: true })
     await page.goto('/')
     await expect(page.getByTestId('home')).toBeVisible()
-    await expect(await more(page)).toHaveText(['Sports', 'Requests', 'Settings'])
+    await expect(await more(page)).toHaveText(['Sports', 'Requests', 'Recordings', 'Settings'])
     const owner = await second(context)
     await enter(owner, '/')
-    await expect(await more(owner)).toHaveText(['Sports', 'Requests', 'Sources', 'Users', 'Settings'])
+    await expect(await more(owner)).toHaveText(['Sports', 'Requests', 'Recordings', 'Sources', 'Users', 'Settings'])
   })
 
   test('a server without /auth/me falls back to the admin flag and offers no Users screen', async ({ page, context }) => {
@@ -268,7 +268,7 @@ test.describe('the Users screen', () => {
   test('a role change reaches the other person\'s app on their next request', async ({ page, context }) => {
     await enter(page, '/', { who: 'guest' })
     await expect(page.getByTestId('home')).toBeVisible()
-    await expect(await more(page)).toHaveText(['Sports', 'Requests', 'Settings'])
+    await expect(await more(page)).toHaveText(['Sports', 'Requests', 'Recordings', 'Settings'])
     await page.keyboard.press('Escape')
 
     const owner = await second(context)
@@ -282,7 +282,7 @@ test.describe('the Users screen', () => {
 
     // Guest's token is now out of date: their next call is refused once, refreshed, and /auth/me is read again.
     await page.getByTestId('nav-live-tv').click()
-    await expect(await more(page)).toHaveText(['Sports', 'Requests', 'Users', 'Settings'])
+    await expect(await more(page)).toHaveText(['Sports', 'Requests', 'Recordings', 'Users', 'Settings'])
     await page.getByTestId('more-menu').getByRole('link', { name: 'Users', exact: true }).click()
     await expect(page.getByTestId('users')).toBeVisible()
 

@@ -17,9 +17,10 @@ async function openGuide(page: Page) {
   await expect(page.getByTestId('guide')).toBeVisible()
   await expect(page.locator('.epg-cell[data-now="true"]').first()).toBeVisible()
 }
-/** The first programme still to come on a channel, and its title as the guide names it. */
-async function upcoming(page: Page, channel: string): Promise<{ cell: Locator; title: string }> {
-  const cell = page.locator(`.epg-cell[aria-label^="${channel}: "][data-now="false"][data-past="false"]`).first()
+/** The first programme still to come on a channel (whose label matches, when asked), and its title as the guide names it. */
+async function upcoming(page: Page, channel: string, titled?: RegExp): Promise<{ cell: Locator; title: string }> {
+  const cells = page.locator(`.epg-cell[aria-label^="${channel}: "][data-now="false"][data-past="false"]`)
+  const cell = (titled ? cells.filter({ hasText: titled }) : cells).first()
   const label = (await cell.getAttribute('aria-label'))!
   return { cell, title: label.slice(channel.length + 2, label.lastIndexOf(', ')) }
 }
@@ -99,22 +100,36 @@ test('rules: every new episode from the guide, then switched off; a game offers 
   await expect(page.getByText(`Every new episode of ${series} will be recorded.`)).toBeVisible()
   await expect(cell.getByTestId('recording-badge')).toHaveText('Will record')
 
-  // A sports listing: every game for a team, prefilled from the title and editable; keyword only on request.
-  const game = await upcoming(page, 'Metro Sports 1')
+  // A game that names its sides: one choice per side, as the server read them, and nothing to type.
+  const game = await upcoming(page, 'Metro Sports 1', / (?:vs|v|at) /)
+  const sides = game.title.replace(' (Live)', '').replace(/^[^:]*: /, '').split(/ (?:vs|v|at) /)
+  expect(sides).toHaveLength(2)
   await game.cell.click()
-  await expect(dialog.getByLabel('Team')).toHaveValue(game.title.replace(' (Live)', ''))
+  await expect(dialog.getByTestId('record-team-choice')).toHaveText(sides)
+  await expect(dialog.getByLabel('Team')).toHaveCount(0)
   await expect(dialog.getByTestId('record-keyword')).toHaveCount(0)
   await dialog.getByTestId('record-advanced').click()
   await expect(dialog.getByTestId('record-keyword-go')).toHaveAttribute('aria-disabled', 'true')
+  await dialog.getByTestId('record-team-choice').nth(1).click()
+  await expect(page.getByText(`Every game for ${sides[1]} will be recorded.`)).toBeVisible()
+
+  // A sports listing that names no sides: the team is typed, starting empty.
+  const show = await upcoming(page, 'Metro Sports 1', /^(?!.* (?:vs|v|at) )/)
+  await show.cell.click()
+  await expect(dialog.getByTestId('record-team-choice')).toHaveCount(0)
+  await expect(dialog.getByLabel('Team')).toHaveValue('')
+  await expect(dialog.getByTestId('record-team-go')).toHaveAttribute('aria-disabled', 'true')
   await dialog.getByLabel('Team').fill('Riverton Rovers')
   await dialog.getByTestId('record-team-go').click()
   await expect(page.getByText('Every game for Riverton Rovers will be recorded.')).toBeVisible()
 
   await openMore(page, 'Recordings')
   await expect(page.getByTestId('recording-row').filter({ hasText: 'From a rule' }).first()).toBeVisible()
+  // A game recorded by a team rule names its two sides.
+  await expect(page.getByTestId('recording-row').filter({ hasText: sides[1]! }).first()).toContainText(`${sides[0]} v ${sides[1]}`)
   await page.getByTestId('recordings-tab-rules').click()
   const rules = page.getByTestId('rule-row')
-  await expect(rules).toHaveCount(2)
+  await expect(rules).toHaveCount(3)
   const rule = rules.filter({ hasText: series })
   await expect(rule).toContainText('Every new episode · Harbor News 24 · New only · Keeps all')
   await expect(rules.filter({ hasText: 'Riverton Rovers' })).toContainText('Every game · Any channel')
@@ -123,14 +138,15 @@ test('rules: every new episode from the guide, then switched off; a game offers 
   await expect(rule.getByTestId('rule-toggle')).toHaveText('Off')
   await expect(rule.getByTestId('rule-toggle')).toHaveAttribute('aria-pressed', 'false')
   await page.getByTestId('recordings-tab-upcoming').click()
-  await expect(page.getByTestId('recording-row')).toHaveCount(0)
+  await expect(page.getByTestId('recording-row').first()).toBeVisible()
+  await expect(page.getByTestId('recording-row').filter({ hasText: series })).toHaveCount(0)
 
   // Deleting says what goes with the rule.
   await page.getByTestId('recordings-tab-rules').click()
   await rule.getByTestId('rule-delete').click()
   await expect(page.getByTestId('rule-delete-confirm')).toContainText('also removes the upcoming recordings it scheduled')
   await page.getByTestId('rule-delete-go').click()
-  await expect(rules).toHaveCount(1)
+  await expect(rules).toHaveCount(2)
 })
 
 test('keyboard only: walk Upcoming, Recorded and Rules', async ({ page }) => {
@@ -239,17 +255,46 @@ test('recording that is not set up: the owner is told why; nobody is offered Rec
   await expect(page.getByTestId('record-dialog')).toHaveCount(0)
 })
 
-test('a profile that may not record sees no Recordings entry and the guide as it was', async ({ page }) => {
+/** What the owner changed about Guest on the Users screen: these permissions denied for this person. */
+const denyGuest = (page: Page, ...permissions: string[]) => page.evaluate((denied) => {
+  const db = JSON.parse(localStorage.getItem('mock.people.v1')!) as { users: Array<{ id: string; denials: string[] }> }
+  db.users.find((u) => u.id === 'u2')!.denials = denied
+  localStorage.setItem('mock.people.v1', JSON.stringify(db))
+}, permissions)
+
+test('Recordings follows the permissions: with neither there is no entry and the guide is as it was; view alone cannot change anything', async ({ page }) => {
   await signIn(page)
+  // Family may view and schedule, and recording is on.
   await page.getByTestId('nav-more').click()
-  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Settings'])
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Recordings', 'Settings'])
   await page.keyboard.press('Escape')
+
+  await denyGuest(page, 'recordings.schedule')
+  await page.reload()
   await openGuide(page)
   const { cell, title } = await upcoming(page, 'Harbor News 24')
   await cell.click()
   await expect(page.getByText(`${title} starts at`)).toBeVisible()
-  await page.goto('/recordings')
+  await expect(page.getByTestId('record-dialog')).toHaveCount(0)
+  await openMore(page, 'Recordings')
+  await expect(page.getByTestId('recordings-tab-upcoming')).toBeVisible()
+
+  await denyGuest(page, 'recordings.view', 'recordings.schedule')
+  await page.reload()
   await expect(page.getByText('Recordings are not available')).toBeVisible()
+  await page.getByTestId('nav-more').click()
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Settings'])
+})
+
+test('while recording is not set up, only a holder of system.manage sees Recordings in More', async ({ page }) => {
+  await signIn(page)
+  await page.evaluate(() => sessionStorage.setItem('mock.recordings.off', '1'))
+  await page.reload()
+  await expect(page.getByTestId('home')).toBeVisible()
+  await page.getByTestId('nav-more').click()
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Settings'])
+  await page.goto('/recordings')
+  await expect(page.getByText('Recording has not been set up on this server.')).toBeVisible()
 })
 
 test.describe('phone', () => {

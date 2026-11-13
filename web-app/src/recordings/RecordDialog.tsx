@@ -4,7 +4,7 @@ import type { Channel, Programme, RecordingRule } from '../api/types'
 import { Button, Chip, Modal } from '../components/ui'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
-import { looksLikeSport, recordingOf, seriesTitle, teamFrom } from '../lib/recordings'
+import { recordingOf, seriesTitle } from '../lib/recordings'
 import { fmtTime } from '../lib/util'
 import { useUi } from '../store/ui'
 import { RecordingBadge } from './RecordingBadge'
@@ -14,7 +14,9 @@ export interface RecordTarget { channel: Pick<Channel, 'id' | 'name'>; programme
 /**
  * Record from the guide: this programme, every new episode of it, every game of a team, or (advanced)
  * anything whose title contains a word. Opened on one programme, or on a channel's now and next.
- * `onWatch` adds Watch now for a programme that is on the air.
+ * `onWatch` adds Watch now for a programme that is on the air. Whether a listing is sport, and which
+ * two sides it names, is the server's reading (`is_sport`, `teams`): each side is one choice, and a
+ * team is typed only for a sports listing that names none.
  */
 export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarget | null; onClose: () => void; onWatch?: (p: Programme) => void }) {
   const toast = useUi((s) => s.toast)
@@ -30,14 +32,16 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
   const p = target?.programmes[Math.min(index, (target?.programmes.length ?? 1) - 1)]
   const key = target ? `${target.channel.id}|${target.programmes.map((x) => x.id).join(',')}` : ''
   useEffect(() => { setIndex(0); setAdvanced(false); setKeyword(''); setError(null) }, [key])
-  useEffect(() => { if (p) setTeam(teamFrom(p.title)) }, [p?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setTeam('') }, [p?.id])
   if (!target || !p) return null
 
   const busy = schedule.isPending || createRule.isPending || cancel.isPending
   const existing = recordingOf(recordings.data?.recordings, p)
   const active = p.recording_state === 'scheduled' || p.recording_state === 'recording'
   const onAir = Date.parse(p.start) <= Date.now() && Date.parse(p.stop) > Date.now()
-  const sport = looksLikeSport(p)
+  const sport = !!p.is_sport
+  const teams = sport ? p.teams ?? [] : []
+  const everyGame = (name: string) => rule('team', name, {}, 'Every game for {match} will be recorded.')
   const failed = (e: Error) => { setError(e.message); void setFocus(active ? 'rec:cancel' : 'rec:one') }
   const done = (text: string) => { toast(text, 'success'); onClose() }
   const one = () => {
@@ -76,13 +80,19 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
         {sport && (
           <div className="rec-option" data-testid="record-team">
             <span className="label">Record every game for</span>
-            <div className="flex gap-2 flex-wrap items-center">
-              <div className="flex-1" style={{ minWidth: '10rem' }}><FocusableInput focusKey="rec:team" label="Team" placeholder="Team name" maxLength={80} value={team} onChange={setTeam} onSubmit={() => rule('team', team, {}, 'Every game for {match} will be recorded.')} /></div>
-              <Button focusKey="rec:team:go" disabled={busy || !team.trim()} onEnter={() => rule('team', team, {}, 'Every game for {match} will be recorded.')} testId="record-team-go">Record games</Button>
-            </div>
+            {teams.length > 0 ? (
+              <div className="flex gap-2 flex-wrap">
+                {teams.map((name, i) => <Button key={name} focusKey={`rec:team:${i}`} disabled={busy} label={`Record every game for ${name}`} onEnter={() => everyGame(name)} testId="record-team-choice">{name}</Button>)}
+              </div>
+            ) : (
+              <div className="flex gap-2 flex-wrap items-center">
+                <div className="flex-1" style={{ minWidth: '10rem' }}><FocusableInput focusKey="rec:team" label="Team" placeholder="Team name" maxLength={80} value={team} onChange={setTeam} onSubmit={() => everyGame(team)} /></div>
+                <Button focusKey="rec:team:go" disabled={busy || !team.trim()} onEnter={() => everyGame(team)} testId="record-team-go">Record games</Button>
+              </div>
+            )}
           </div>
         )}
-        <Button focusKey="rec:advanced" ghost icon={advanced ? 'up' : 'chevD'} pressed={advanced} onEnter={() => setAdvanced((v) => !v)} testId="record-advanced">Keyword (advanced)</Button>
+        <Button focusKey="rec:advanced" ghost icon={advanced ? 'up' : 'down'} pressed={advanced} onEnter={() => setAdvanced((v) => !v)} testId="record-advanced">Keyword (advanced)</Button>
         {advanced && (
           <div className="rec-option" data-testid="record-keyword">
             <span className="label">Record every programme, on any channel, whose title contains</span>

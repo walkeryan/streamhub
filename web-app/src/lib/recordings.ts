@@ -14,17 +14,8 @@ export function recordingStateLabel(state: RecordingState | null | undefined): s
 
 export const RULE_KIND_LABEL: Record<RecordingRule['kind'], string> = { series: 'Every new episode', team: 'Every game', keyword: 'Keyword' }
 
-const SPORT_CATEGORY = /sport|football|soccer|basketball|baseball|hockey|tennis|golf|rugby|cricket|motor|racing|boxing|wrestling|athletics|cycling/i
-const FIXTURE = /^(?:.*?:\s*)?(.+?)\s+(?:vs?\.?|@|at)\s+(.+)$/i
-
-/** Does a guide entry look like a sports event? The guide gives a category and a title, nothing firmer. */
-export const looksLikeSport = (p: Pick<Programme, 'title' | 'category'>): boolean => SPORT_CATEGORY.test(p.category ?? '') || FIXTURE.test(p.title)
-
-/** A first guess at the team to follow: the first side of "A vs B", else the title itself. The viewer edits it. */
-export function teamFrom(title: string): string {
-  const plain = title.replace(/\s*\((?:live|new|repeat)\)\s*$/i, '').trim()
-  return (FIXTURE.exec(plain)?.[1] ?? plain).trim()
-}
+/** The sides the server read out of a sports title, as one line: "A v B". Null when it named none. */
+export const sidesLabel = (teams: readonly string[] | null | undefined): string | null => (teams?.length ? teams.join(' v ') : null)
 
 /** The series a guide entry belongs to: its title without the guide's own markers. */
 export const seriesTitle = (title: string): string => title.replace(/\s*\((?:live|new|repeat)\)\s*$/i, '').trim()

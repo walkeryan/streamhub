@@ -185,12 +185,17 @@ export function adultUnlocked(request: Request): boolean {
   return !!user && permissionsOf(db, user).includes('watch.adult') && (db.adult[user.id] ?? 0) > Date.now()
 }
 
-/** The 403 a caller without `needs` gets from the other fakes (rooms); null when they hold it. */
-export function refusedWithout(request: Request, needs: Permission): Response | null {
+/** Does the caller hold this permission? For the other fakes (rooms, recordings), which have no users of their own. */
+export function holds(request: Request, permission: Permission): boolean {
   const db = load()
   const me = callerOf(db, request)
-  return me && !permissionsOf(db, me).includes(needs) ? error(403, 'forbidden', `Missing permission: ${needs}`, { missing: [needs] }) : null
+  return !!me && permissionsOf(db, me).includes(permission)
 }
+/** The 403 a caller without `needs` gets; null when they hold it. */
+export const refusedWithout = (request: Request, needs: Permission): Response | null =>
+  holds(request, needs) ? null : error(403, 'forbidden', `Missing permission: ${needs}`, { missing: [needs] })
+/** A server from before users existed has none of the calls that came after. */
+export const legacyServer = (): boolean => mode() === 'legacy'
 
 type Resolver = (ctx: { db: Db; me: StoredUser; request: Request; params: Record<string, string | readonly string[] | undefined>; body: Record<string, unknown> }) => Response | Promise<Response>
 /** A signed-in caller holding `needs` (when given); the handler works on one loaded copy and saves it. */

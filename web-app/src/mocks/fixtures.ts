@@ -159,6 +159,14 @@ export const channels: Channel[] = chanNames.map((name, i) => {
 })
 
 const showNames = ['Morning Brief', 'The Daily Cut', 'Match Day', 'Classic Feature', 'Evening Edition', 'Studio Session', 'Late Feature', 'Kids Hour', 'The Long Take', 'Night Owl']
+// A sports channel alternates a game that names its two sides with a listing that names none.
+const games = ['Riverton Rovers vs Harbor City', 'Sports Tonight', 'Premier Cup: Eastgate Town v Westbrook', 'Match Day', 'Northfield United at Lakeside Athletic', 'The Final Whistle']
+/** The server's reading of a sports title: the two sides of a spelled-out matchup, league prefix and trailing notes dropped; else none. */
+export function teamsOf(title: string): string[] {
+  const plain = title.replace(/\s*\([^)]*\)\s*$/, '').replace(/^[^:]*:\s*/, '')
+  const sides = /^(.+?)\s+(?:vs\.?|v|versus|at|@)\s+(.+)$/i.exec(plain)
+  return sides ? [sides[1]!.trim(), sides[2]!.trim()] : []
+}
 export function programmesFor(ch: Channel, fromMs: number, toMs: number): Programme[] {
   const out: Programme[] = []
   const slot = 30 * 60_000
@@ -168,10 +176,12 @@ export function programmesFor(ch: Channel, fromMs: number, toMs: number): Progra
   while (t < toMs) {
     const len = (1 + ((seed + i) % 3)) * slot
     const start = Math.max(t, t)
+    const sport = ch.group === 'Sports'
+    const title = `${(sport ? games : showNames)[(seed + i) % (sport ? games : showNames).length]}${i % 4 === 0 ? ' (Live)' : ''}`
     out.push({
       id: `${ch.id}@${start}`, channel_id: ch.id, start: new Date(start).toISOString(), stop: new Date(start + len).toISOString(),
-      title: `${showNames[(seed + i) % showNames.length]}${i % 4 === 0 ? ' (Live)' : ''}`, description: 'Fixture programme. In mock mode every channel plays the same test pattern.',
-      category: ch.group, icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(),
+      title, description: 'Fixture programme. In mock mode every channel plays the same test pattern.',
+      category: ch.group, icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(), is_sport: sport, teams: sport ? teamsOf(title) : [],
     })
     t += len
     i++
