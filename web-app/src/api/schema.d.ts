@@ -2781,9 +2781,14 @@ export interface paths {
             parameters: {
                 query?: {
                     date?: string;
+                    /** @description The viewer's zone: it decides which calendar day date means. */
                     timezone?: string;
-                    status?: "all" | "current" | "upcoming" | "replay";
+                    /** @description Calendar days listed */
+                    days?: number;
+                    /** @description active = current, upcoming and game channels (everything but ended) */
+                    status?: "all" | "active" | "current" | "upcoming" | "replay";
                     language?: string;
+                    /** @description A name from the page's sports list; an unknown one matches nothing. */
                     sport?: string;
                     q?: string;
                     limit?: number;
@@ -2795,13 +2800,57 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio. */
+                /** @description Sports guide programmes and event-slot channels, grouped conservatively, by start. A programme that only repeats its channel's name is a placeholder and never an event. An event slot's embedded time is read in its source's event_timezone (source config, IANA name, default UTC). */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": components["schemas"]["SportsEventsPage"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sports/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Always-on sports networks
+         * @description Channels a sports group or their own name marks as sport and that are not event slots, by channel number.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    language?: string;
+                    q?: string;
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SportsChannelsPage"];
                     };
                 };
             };
@@ -6082,6 +6131,7 @@ export interface components {
             source_id: string;
             ext_id?: string;
             number: number;
+            /** @description As shown. An event-slot channel (a provider name such as "(XX) (NETWORK 001) | Sport: Away at Home (date time)") is called by its network and number, "NETWORK 001"; ids, numbers and search still follow the stored name. */
             name: string;
             logo?: string | null;
             group: string;
@@ -6099,7 +6149,9 @@ export interface components {
             /** @default 0 */
             catchup_days: number;
             is_favorite?: boolean;
+            /** @description Null without guide data. A placeholder programme that only repeats the channel's name is not guide data and is never sent, here or in /epg. On an event-slot channel this is the game in its name while that game is live (see Programme.id). */
             now?: components["schemas"]["Programme"];
+            /** @description As now. On an event-slot channel: the game in its name until it starts. */
             next?: components["schemas"]["Programme"];
         };
         ChannelGroup: {
@@ -6111,6 +6163,7 @@ export interface components {
             language_override?: string | null;
         };
         Programme: {
+            /** @description prog:<n> for a guide entry. prog:slot-<channel row>-<start, epoch seconds> for the game of an event-slot channel: it has no guide entry and no catch-up, and can be recorded like any other programme while the channel still announces it. */
             id: string;
             channel_id: string;
             /** Format: date-time */
@@ -6166,6 +6219,56 @@ export interface components {
             title?: string | null;
             /** @default false */
             default: boolean;
+        };
+        /** @description What is playing and how it reaches this client, for a player's stream information panel. The file's facts come from the media probe (the one that finds its audio tracks), the delivery from what the server planned for this stream. A field the server does not know is left out, not sent as null. Never a URL, a host name or a credential: the source is named as its owner named it. */
+        MediaInfo: {
+            /** @description The owner's name for the source; for a recording, the channel it was recorded from. */
+            source_name?: string | null;
+            /** @description ffprobe format name of the file, e.g. matroska, mov, mpegts */
+            container?: string | null;
+            /** @description Overall bit rate of the file. */
+            bitrate_kbps?: number | null;
+            /** @description The file's video stream. */
+            video?: {
+                /** @description ffmpeg codec name, e.g. h264, hevc, av1 */
+                codec?: string | null;
+                width?: number | null;
+                height?: number | null;
+                /** @description Frames per second. */
+                frame_rate?: number | null;
+                /**
+                 * @description From the stream's transfer characteristic.
+                 * @enum {string|null}
+                 */
+                dynamic_range?: "sdr" | "hdr10" | "hlg" | null;
+            } | null;
+            /** @description The audio track that plays: the one the server encoded (audio_track), else the file's default. */
+            audio?: {
+                /** @description Codec in the file; a remux or a transcode delivers it as AAC stereo. */
+                codec?: string | null;
+                channels?: number | null;
+                /** @description ISO 639-2 code. */
+                language?: string | null;
+            } | null;
+            /**
+             * @description direct: the file or feed as it is (played from the source or passed through this server). remux: repackaged as HLS with the video copied; a film's audio track is encoded to AAC. transcode: the video is encoded as well.
+             * @enum {string}
+             */
+            delivery: "direct" | "remux" | "transcode";
+            /**
+             * @description transcode only: what the server planned to encode the video with. A hardware encoder that fails to start falls back to software for that session without this changing.
+             * @enum {string|null}
+             */
+            encoder?: "hardware" | "software" | null;
+            /** @description Width of the picture as delivered. */
+            output_width?: number | null;
+            /** @description Height of the picture as delivered. */
+            output_height?: number | null;
+            /**
+             * @description The quality cap in force for this stream (PlaybackRequest.max_height); left out when none was asked for or the file is no taller than it.
+             * @enum {integer|null}
+             */
+            max_height?: 480 | 720 | 1080 | null;
         };
         PlaybackOption: {
             variant_id: string;
@@ -6226,6 +6329,11 @@ export interface components {
             audio_track?: number | null;
             /** @description Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced). */
             start_position_ms?: number | null;
+            /**
+             * @description Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height.
+             * @enum {integer|null}
+             */
+            max_height?: 480 | 720 | 1080 | null;
             catchup_programme_id?: string | null;
             /**
              * Format: date-time
@@ -6315,6 +6423,8 @@ export interface components {
             start_position_ms?: number | null;
             /** @description Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor. */
             stream_epoch?: number | null;
+            /** @description What is playing and how it is delivered; null for mode=handoff. Informational: nothing in playback depends on it. */
+            media_info?: components["schemas"]["MediaInfo"] | null;
             id: string;
             /** @enum {string} */
             mode: "direct" | "proxy" | "hls" | "handoff";
@@ -6733,27 +6843,77 @@ export interface components {
         };
         SportsEventFeed: {
             channel_id: string;
+            /** @description As shown: Channel.name */
             channel_name: string;
+            channel_number?: number | null;
+            /**
+             * @description Picture quality the provider's channel name advertises, in plain or superscript letters; null when it names none.
+             * @enum {string|null}
+             */
+            quality?: "4K" | "UHD" | "FHD" | "HD" | "SD" | null;
             source_id: string;
             source_name: string;
+            /** @description Programme.id of this event on this channel; pass it with channel_id and the event's start to POST /recordings. */
             programme_id: string;
             language?: string | null;
             language_verified: boolean;
         };
         SportsEvent: {
             id: string;
+            /**
+             * @description event = a guide programme classified as sport, or a dated event slot. channel = a game channel: an event slot whose name carries no date. It is listed with today's events and makes no claim about when it plays: status is unscheduled, start and stop are the bounds of the listed days.
+             * @default event
+             * @enum {string}
+             */
+            kind: "event" | "channel";
+            /** @description The event without provider decoration: for an event slot the text after its sport ("Away at Home"), for a guide programme its title. */
             title: string;
+            /** @description The classifier's sport for a guide programme; for an event slot the sport its name gives ("Field Hockey", "Men's Soccer"). */
             sport: string;
+            /** @description Network or league label of an event slot ("NETWORK" of "(NETWORK 001) | …"); null for a guide programme. */
+            league?: string | null;
+            /** @description With away: the two sides when the title is exactly "A at B" / "A @ B" (B is home) or "A vs B" / "A v B" (A is home). Null otherwise: nothing is guessed. */
+            home?: string | null;
+            away?: string | null;
             /** Format: date-time */
             start: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description For an event slot: start plus the source's event_duration_minutes (default 210).
+             */
             stop: string;
-            /** @enum {string} */
-            status: "current" | "upcoming" | "ended";
+            /**
+             * @description current = airing now by a real guide programme or a dated event slot inside its window. An event slot whose window has passed is not listed at all. unscheduled only with kind channel.
+             * @enum {string}
+             */
+            status: "current" | "upcoming" | "ended" | "unscheduled";
             replay: boolean;
+            /** @description The guide labels the programme live, or a dated event slot is inside its window. */
             live_evidence: boolean;
             grouping_evidence: string;
+            /** @description Channels carrying the event, lowest channel number first. Two event slots with the same title, sport and start are one event. */
             feeds: components["schemas"]["SportsEventFeed"][];
+        };
+        SportsChannel: {
+            channel_id: string;
+            /** @description The network's name without its country tag and quality marks */
+            channel_name: string;
+            channel_number: number;
+            logo?: string | null;
+            group: string;
+            /** @enum {string|null} */
+            quality?: "4K" | "UHD" | "FHD" | "HD" | "SD" | null;
+            language?: string | null;
+            source_id: string;
+            /** @description What the guide says is on; null without real guide data. */
+            now?: components["schemas"]["Programme"];
+        };
+        SportsChannelsPage: {
+            channels: components["schemas"]["SportsChannel"][];
+            total: number;
+            limit: number;
+            offset: number;
+            truncated: boolean;
         };
         SportsRecording: {
             /** @description Exact source-scoped library ID; open title/audio chooser */

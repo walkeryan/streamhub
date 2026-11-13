@@ -249,10 +249,12 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
       {snapshot.status === 'reconnecting' && <span className="room-member" role="status">Reconnecting…</span>}
     </div>
   )
+  // A phone's control bar has room for icons only; the names stay as labels.
+  const named = (text: string) => (phone ? { iconOnly: true, label: text, title: text } : { children: text })
   const bar: ReactNode = <>
-    {isHost && <Button focusKey="pb:lock" ghost icon="lock" pressed={snapshot.controlsLocked} onEnter={() => { if (!room.socket.lock(!snapshot.controlsLocked)) notice('Reconnecting to the room…') }} testId="room-lock">Only I can control</Button>}
-    <Button focusKey="pb:invite" ghost icon="people" onEnter={() => setSharing(true)} testId="room-invite">Invite</Button>
-    <Button focusKey="pb:leave" ghost icon="exit" onEnter={() => setLeaving(true)} testId="room-leave">Leave room</Button>
+    {isHost && <Button focusKey="pb:lock" ghost icon="lock" pressed={snapshot.controlsLocked} onEnter={() => { if (!room.socket.lock(!snapshot.controlsLocked)) notice('Reconnecting to the room…') }} testId="room-lock" {...named('Only I can control')} />}
+    <Button focusKey="pb:invite" ghost icon="people" onEnter={() => setSharing(true)} testId="room-invite" {...named('Invite')} />
+    <Button focusKey="pb:leave" ghost icon="exit" onEnter={() => setLeaving(true)} testId="room-leave" {...named('Leave room')} />
   </>
   const ended = closed ? CLOSED[closed] ?? { text: 'The room has closed.' } : null
   const layers: ReactNode = <>
@@ -308,6 +310,8 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
   </>
   return {
     snapshot, toggle, seekTo, seekBy, top, bar, layers,
+    /** May this member move the room now? Says why not when it may not. */
+    canControl: allowed,
     askLeave: () => setLeaving(true),
     /** A room dialog has the keys: the player's own shortcuts stand down. */
     modal: leaving || sharing || listing || ending !== null || !!closed,

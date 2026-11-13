@@ -54,6 +54,7 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         https_site=is_https.get(),
         audio_track=body.audio_track,
         start_position_ms=body.start_position_ms,
+        max_height=body.max_height,
     )
     c.proxy.ensure_running(generation)
     result["buffer_available"] = False
@@ -491,19 +492,23 @@ def _hls_session_key(c: C, g: StreamGrant) -> tuple[str, str, VodPlan | None]:
     """Producer key, transcode mode and (for web VOD) plan of the HLS session a grant plays."""
     hw = str(c.app_settings.get("transcode_hw") or "none")
     if g.vod_video:
-        # One session per viewer, file, audio track and start offset; the codec alone decides
-        # whether the video is transcoded, so the per-source ``transcode`` flag is not consulted.
+        # One session per viewer, file, audio track, start offset and quality cap; the codec and the
+        # cap decide whether the video is transcoded, so the per-source ``transcode`` flag is not consulted.
         family = play_key(g.source_id, g.url, g.profile_id, g.session_id)
         plan = VodPlan(
             video=g.vod_video,
             hw=hw if g.vod_video == "transcode" else "none",
             codec=g.vod_codec,
             width=g.vod_width,
+            height=g.vod_height,
+            max_height=g.max_height,
             audio_track=g.audio_track,
             start_s=g.start_s,
             family=family,
         )
-        return f"{family}:vod:{plan.video}:{plan.hw}:{plan.audio_track}:{plan.start_s}", "none", plan
+        # The cap is part of the key: output encoded for one quality is never served as another.
+        key = f"{family}:vod:{plan.video}:{plan.hw}:{plan.audio_track}:{plan.start_s}:{plan.max_height or 0}"
+        return key, "none", plan
     transcode = hw if g.transcode else "none"
     if g.transcode and transcode == "none":
         transcode = "software"

@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw'
 import type { Channel, PlaybackDescriptor, Programme, Recording, RecordingList, RecordingRule, RecordingRuleList } from '../api/types'
 import { channels, profiles, programmesFor, teamsOf } from './fixtures'
 import { holds, legacyServer, refusedWithout } from './people'
+import { sportsChannels } from './sports'
 
 /**
  * A fake recorder: a schedule and rules, no capture. Listing needs recordings.view, changing anything
@@ -119,7 +120,7 @@ export const recordingHandlers = [
     if (refused) return refused
     const me = profileOf(request)
     const b = (await request.json()) as { programme_id: string; channel_id?: string | null; start?: string | null }
-    const ch = channels.find((c) => c.id === b.channel_id)
+    const ch = [...channels, ...sportsChannels].find((c) => c.id === b.channel_id)
     // As on the server: the id first, else the same channel and start.
     const p = served.get(b.programme_id) ?? (ch && guide(ch).find((x) => Date.parse(x.start) === Date.parse(b.start ?? '')))
     if (!ch || !p) return error(409, 'guide_changed', 'The guide has changed. Open the programme again and record it from there.')

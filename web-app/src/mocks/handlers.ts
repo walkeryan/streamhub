@@ -9,6 +9,7 @@ import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } fro
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
 import { adultUnlocked, holds, mockProfile, ownProfile, peopleHandlers, setProfilePin } from './people'
+import { sportsChannels, sportsEvents, sportsNetworks } from './sports'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
@@ -40,7 +41,9 @@ const tileById = (id: string): Tile | undefined => {
   const seed = seedFor(id)
   if (seed) return tileOf(seed)
   const c = channels.find((x) => x.id === id)
-  return c ? channelTile(withNowNext(c)) : undefined
+  if (c) return channelTile(withNowNext(c))
+  const sport = sportsChannels.find((x) => x.id === id)
+  return sport && channelTile(sport)
 }
 
 const countryMatches = (value: string | null | undefined, country: string | null) =>
@@ -54,6 +57,8 @@ export const handlers = [
   ...roomHandlers,
   // recordings, rules and playing a finished recording (before the general resolve handler below)
   ...recordingHandlers,
+  http.get(`${B}/sports/events`, async ({ request }) => { await delay(60); return HttpResponse.json(sportsEvents(new URL(request.url).searchParams, withRecordingState)) }),
+  http.get(`${B}/sports/channels`, ({ request }) => HttpResponse.json(sportsNetworks(new URL(request.url).searchParams, withRecordingState))),
   http.get(`${B}/sports/recordings`, ({ request }) => {
     const params = new URL(request.url).searchParams
     return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])
@@ -299,7 +304,7 @@ export const handlers = [
 
   http.get(`${B}/playback/generation`, () => HttpResponse.json({ generation: 'fixture-generation' })),
   http.post(`${B}/playback/resolve`, async ({ request }) => {
-    const b = (await request.json()) as { id: string; source_id?: string | null }
+    const b = (await request.json()) as { id: string; source_id?: string | null; start_position_ms?: number | null; max_height?: number | null }
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
@@ -311,10 +316,33 @@ export const handlers = [
       }
       return HttpResponse.json(d)
     }
+    // A film only the provider has is converted for a browser: a restart-at-offset stream whose media time zero
+    // is where it was asked to start (on the server's 5 s grid) and which knows only its own clip beyond that.
+    // A quality cap below the file's height does the same to a film the browser would have played as it is.
+    const converted = !!t && !chan && t.sources.filter((s) => s.playable_in_app).every((s) => s.source_type === 'xtream')
+    const file = converted
+      ? { source_name: 'IPTV', container: 'matroska', bitrate_kbps: 18_250, video: { codec: 'hevc', width: 3840, height: 1600, frame_rate: 23.976, dynamic_range: 'hdr10' as const }, audio: { codec: 'eac3', channels: 6, language: 'eng' } }
+      : { source_name: t?.sources.find((s) => s.playable_in_app)?.name ?? null, container: 'mov', bitrate_kbps: 9_400, video: { codec: 'h264', width: 1920, height: 1080 }, audio: { codec: 'aac', channels: 2 } }
+    const cap = !chan && (b.max_height === 480 || b.max_height === 720 || b.max_height === 1080) && b.max_height < file.video.height ? b.max_height : null
+    if (converted || cap) {
+      const start = Math.floor((b.start_position_ms ?? 0) / 5000) * 5000
+      // The server's sizes: at most 1920 wide, then down to the cap, the shape kept and both sides even.
+      const wide = Math.min(1920, file.video.width)
+      const tall = Math.round((file.video.height * wide) / file.video.width / 2) * 2
+      const [width, height] = cap && tall > cap ? [Math.round((wide * cap) / tall / 2) * 2, cap] : [wide, tall]
+      const d: PlaybackDescriptor = {
+        ...base, mode: 'proxy', url: `/mock/room.webm?start=${start}${cap ? `&cap=${cap}` : ''}`, mime: 'video/webm', live: false,
+        resume_position_ms: start, duration_ms: converted ? 112 * 60_000 : 30_000, start_position_ms: start,
+        // As the server describes a film it transcodes for a browser; fields it does not know are absent.
+        media_info: { ...file, delivery: 'transcode', encoder: 'hardware', output_width: width, output_height: height, ...(cap ? { max_height: cap } : {}) },
+      }
+      return HttpResponse.json(d)
+    }
     const d: PlaybackDescriptor = {
       ...base, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: chan,
       resume_position_ms: progress[b.id]?.pos ? Math.min(progress[b.id]!.pos, 20_000) : 0, duration_ms: chan ? null : 30_000,
       channel_context: chan ? { list_id: 'mock', index: channels.findIndex((c) => c.id === b.id), count: channels.length } : null,
+      media_info: chan ? { source_name: 'IPTV', delivery: 'remux' } : { ...file, delivery: 'direct', output_width: 1920, output_height: 1080 },
     }
     return HttpResponse.json(d)
   }),

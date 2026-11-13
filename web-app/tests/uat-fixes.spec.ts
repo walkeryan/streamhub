@@ -4,6 +4,12 @@ import { focusBarEntry, focusedLabel, signIn } from './helpers'
 const focusedKeyIn = (page: Page, testId: string) =>
   page.evaluate((id) => !!document.querySelector(`[data-testid="${id}"] .fx[data-focused="true"]`), testId)
 
+const barFocus = (page: Page) => page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')
+/** Right along the control bar until the Audio button has focus: the buttons are icons, named by their labels. */
+async function walkToAudio(page: Page) {
+  for (let i = 0; i < 10 && (await barFocus(page).getAttribute('aria-label')) !== 'Audio'; i++) await page.keyboard.press('ArrowRight')
+}
+
 async function openLiveChannel(page: Page) {
   await signIn(page)
   await page.goto('/live')
@@ -34,10 +40,8 @@ test('UAT P1-2: live player control bar is reachable and usable with the D-pad',
   await expect.poll(() => focusedLabel(page)).toMatch(/Pause|Play/)
   const before = path()
   // Left/Right move between buttons and do not zap; Enter activates the focused button
-  for (let i = 0; i < 6 && !/Audio/.test((await page.locator('[data-testid="player-bar"] .fx[data-focused="true"]').textContent()) ?? ''); i++) {
-    await page.keyboard.press('ArrowRight')
-  }
-  await expect(page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')).toContainText('Audio and subtitles')
+  await walkToAudio(page)
+  await expect(barFocus(page)).toHaveAttribute('aria-label', 'Audio')
   expect(path()).toBe(before)
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('player-menu')).toBeVisible()
@@ -89,14 +93,12 @@ test('closing Audio restores focus immediately and cannot steal the next Up acti
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowDown')
   await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(true)
-  for (let i = 0; i < 6 && !/Audio/.test((await page.locator('[data-testid="player-bar"] .fx[data-focused="true"]').textContent()) ?? ''); i++) {
-    await page.keyboard.press('ArrowRight')
-  }
+  await walkToAudio(page)
   await page.keyboard.press('Enter')
   await expect.poll(() => focusedKeyIn(page, 'player-menu')).toBe(true)
   await page.clock.install()
   await page.keyboard.press('Escape')
-  await expect(page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')).toContainText('Audio and subtitles')
+  await expect(barFocus(page)).toHaveAttribute('aria-label', 'Audio')
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => focusedKeyIn(page, 'player-bar')).toBe(false)
   await page.clock.fastForward(50)

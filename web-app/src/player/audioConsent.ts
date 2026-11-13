@@ -8,13 +8,22 @@ const choices = new Map<string, { profileId: string; id: string; variantId: stri
 useSession.subscribe((next, previous) => {
   if (next.profile?.id !== previous.profile?.id) choices.clear()
 })
+/**
+ * An unguessable key for one choice. Not `crypto.randomUUID`: that exists only in a secure
+ * context, and a hub reached over plain http on the home network is not one, where the call
+ * threw and "play this anyway" silently did nothing. `getRandomValues` works everywhere.
+ */
+function randomToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
 export function grantAudioConsent(id: string, variantId: string, scope: AudioIntentScope = {}): string {
   const profileId = useSession.getState().profile?.id
   if (!profileId) return ''
   const now = Date.now()
   for (const [token, choice] of choices) if (choice.expires <= now) choices.delete(token)
   while (choices.size >= 32) choices.delete(choices.keys().next().value!)
-  const token = crypto.randomUUID()
+  const token = randomToken()
   choices.set(token, { profileId, id, variantId, scope: scopeKey(scope), expires: now + 5 * 60_000 })
   return token
 }

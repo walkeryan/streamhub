@@ -39,8 +39,9 @@ from app.infra.logging import redact_text
 from app.infra.models import Channel, Profile, Programme, Recording, RecordingRule, utcnow
 from app.services import ids, recording_policy
 from app.services.auth import Principal
-from app.services.channels import ChannelService
+from app.services.channels import ChannelService, slot_named
 from app.services.errors import Conflict, Forbidden, NotFound, ServiceError
+from app.services.event_slots import SLOT_PROGRAMME, display_name, is_placeholder, parse_event_slot
 from app.services.sports import REPLAY, classify_sport, split_matchup
 
 log = logging.getLogger(__name__)
@@ -472,7 +473,9 @@ class RecorderService:
                         tuple_(Channel.source_id, Channel.ext_id).in_(list(refs))
                     )
                 )
-                channels = {ids.channel_id(source_id, ext_id): name for source_id, ext_id, name in found.all()}
+                channels = {
+                    ids.channel_id(source_id, ext_id): display_name(name) for source_id, ext_id, name in found.all()
+                }
         return [
             {
                 "id": r.id,
@@ -616,6 +619,8 @@ class RecorderService:
         """
         if not programme_id.startswith("prog:"):
             raise NotFound("unknown programme")
+        if programme_id.startswith(SLOT_PROGRAMME):
+            return await self._resolve_slot(programme_id, channel_id, start)
         try:
             programme: Programme | None = await self._channels.programme(programme_id)
         except NotFound:
@@ -663,6 +668,32 @@ class RecorderService:
             raise NotFound("programme not found")
         return programme, found
 
+    async def _resolve_slot(
+        self, programme_id: str, channel_id: str | None, start: datetime | None
+    ) -> tuple[Programme, Channel]:
+        """The game of an event slot (``prog:slot-<channel row>-<start>``): read from the channel's name now.
+
+        The provider renames a slot for its next game, so the id is only good while the name
+        still announces the game that starts when the client saw it start.
+        """
+        row, _, stamp = programme_id.removeprefix(SLOT_PROGRAMME).partition("-")
+        if not (row.isdigit() and stamp.isdigit()):
+            raise NotFound("unknown programme")
+        if channel_id is not None:
+            ch = await self._channels.channel_by_hub_id(channel_id)
+        else:
+            async with self._db.session() as s:
+                found = await s.get(Channel, int(row))
+            if found is None:
+                raise NotFound("programme not found")
+            ch = found
+        game = (await self._channels.slot_entries([ch], self.clock())).get(ch.id)
+        if game is None:
+            raise NotFound("programme not found")
+        if game.start != (start or datetime.fromtimestamp(int(stamp), UTC)):
+            raise Conflict("The guide has changed. Refresh it and try again.", code="guide_changed")
+        return game, ch
+
     async def schedule_programme(
         self, p: Principal, programme_id: str, channel_id: str | None = None, start: datetime | None = None
     ) -> Recording:
@@ -676,14 +707,17 @@ class RecorderService:
         programme, ch = await self._resolve(programme_id, channel_id, start)
         # Checked before anything about the programme is echoed back, including an existing recording.
         if self.content_policy is not None and self.content_policy.applies_to(p):
-            await self.content_policy.require(p.profile_id, ids.prog_id(programme.id))
+            # A slot's game has no guide row and so no rating: its own id is one no policy admits.
+            await self.content_policy.require(
+                p.profile_id, programme_id if programme.id is None else ids.prog_id(programme.id)
+            )
         if programme.stop <= self.clock():
             raise Conflict("That programme has already ended.", code="programme_ended")
         values = self._snapshot(
             profile_id=p.profile_id,
             rule_id=None,
             channel_id=ids.channel_id(ch.source_id, ch.ext_id),
-            channel_name=ch.name,
+            channel_name=display_name(ch.name),
             title=programme.title,
             category=programme.category,
             start=programme.start,
@@ -868,35 +902,64 @@ class RecorderService:
                 .where(Programme.start > now)
                 .order_by(Programme.start, ch.c.number, ch.c.id, Programme.id)
             )
+
+            def offer(
+                pk: int,
+                channel_id: str,
+                name: str,
+                number: int,
+                title: str,
+                category: str | None,
+                start: datetime,
+                stop: datetime,
+                evidence: dict[str, Any],
+            ) -> None:
+                for rule in rules:
+                    if rule.channel_id is not None and rule.channel_id != channel_id:
+                        continue
+                    memo = (rule.id, title, category)
+                    if memo not in matched:
+                        matched[memo] = rule_matches(rule.kind, rule.match, title, category)
+                    if matched[memo]:
+                        details = programme_details(title, category)
+                        key = ids.normalise_title(details.title)
+                        out[rule.id].append(
+                            _Candidate(
+                                channel_id=channel_id,
+                                channel_name=display_name(name),
+                                order=(number, pk),
+                                title=title,
+                                category=category,
+                                start=start,
+                                stop=stop,
+                                evidence=evidence,
+                                details=details,
+                                key=key,
+                                episode=_episode_id(key, details.season, details.episode, details.subtitle),
+                            )
+                        )
+
             async with self._db.session() as s:
                 # One streamed pass over the guide for all of the profile's rules.
                 rows = await s.stream(query.execution_options(yield_per=500))
                 async for pk, source_id, ext_id, name, number, title, category, start, stop, evidence in rows:
-                    channel_id = ids.channel_id(source_id, ext_id)
-                    for rule in rules:
-                        if rule.channel_id is not None and rule.channel_id != channel_id:
-                            continue
-                        memo = (rule.id, title, category)
-                        if memo not in matched:
-                            matched[memo] = rule_matches(rule.kind, rule.match, title, category)
-                        if matched[memo]:
-                            details = programme_details(title, category)
-                            key = ids.normalise_title(details.title)
-                            out[rule.id].append(
-                                _Candidate(
-                                    channel_id=channel_id,
-                                    channel_name=name,
-                                    order=(number, pk),
-                                    title=title,
-                                    category=category,
-                                    start=start,
-                                    stop=stop,
-                                    evidence=evidence,
-                                    details=details,
-                                    key=key,
-                                    episode=_episode_id(key, details.season, details.episode, details.subtitle),
-                                )
-                            )
+                    # Filler that repeats the channel's name would match a team in every block, for weeks.
+                    if is_placeholder(title, name) or parse_event_slot(name) is not None:
+                        continue
+                    offer(pk, ids.channel_id(source_id, ext_id), name, number, title, category, start, stop, evidence)
+                # An event slot has no guide rows worth reading: the game in its name is its one listing.
+                named = await s.execute(
+                    select(Channel).where(Channel.id.in_(select(ch.c.id)), slot_named(Channel.name))
+                )
+                slots = list(named.scalars())
+            games = await self._channels.slot_entries(slots, now)
+            for row in slots:
+                game = games.get(row.id)
+                if game is not None and game.start > now:
+                    hub_id = ids.channel_id(row.source_id, row.ext_id)
+                    offer(row.id, hub_id, row.name, row.number, game.title, game.category, game.start, game.stop, {})
+            for found in out.values():
+                found.sort(key=lambda c: c.start)  # stable: the guide's own order within one start
         finally:
             active_policy.reset(reset)
         return out

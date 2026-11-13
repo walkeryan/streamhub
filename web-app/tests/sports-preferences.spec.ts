@@ -23,21 +23,25 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
         recordSportsQuery: (query: { profile: string; language: string; sport: string }) => Promise<void>
       }
       if (match) return Response.json(await state.sportsPrefsBackend(match[1], req.method, req.method === 'PUT' ? await req.json() : null))
+      if (url.pathname === '/api/v1/sports/channels') return Response.json({ channels: [], total: 0, limit: 24, offset: 0, truncated: false })
       if (url.pathname === '/api/v1/sports/events') {
         await state.recordSportsQuery({ profile: req.headers.get('authorization') ?? '', language: url.searchParams.get('language') ?? '', sport: url.searchParams.get('sport') ?? '' })
         const now = Date.now()
-        let items = ['Basketball', 'Tennis'].map((sport, i) => ({ id: String(i), sport, programme_id: String(i), title: `${sport} programme`, start: new Date(now - 60000).toISOString(), stop: new Date(now + 600000).toISOString(), channel_id: `ch:${i}`, channel_name: `Channel ${i}`, channel_number: i, source_name: 'Fixture' }))
+        let items = ['Basketball', 'Tennis'].map((sport, i) => ({ id: String(i), kind: 'event', sport, title: `${sport} game`, league: null, home: null, away: null, start: new Date(now - 60000).toISOString(), stop: new Date(now + 600000).toISOString(), status: 'current', replay: false, live_evidence: true, grouping_evidence: 'same_source_programme',
+          feeds: [{ programme_id: `prog:${i}`, channel_id: `ch:fixture:${i}`, channel_name: `Channel ${i}`, channel_number: i, quality: null, source_id: 'fixture', source_name: 'Fixture', language: 'eng', language_verified: false }] }))
         const sport = url.searchParams.get('sport')
         if (sport) items = items.filter((item) => item.sport === sport)
-        return Response.json({ as_of: new Date(now).toISOString(), timezone: 'America/New_York', date: url.searchParams.get('date'), truncated: false, events: items.map((item) => ({ ...item, status: 'current', replay: false, live_evidence: false, grouping_evidence: 'same_source_programme', feeds: [{ ...item, source_id: 'fixture', language: 'eng', language_verified: false }] })), total: items.length, offset: 0, limit: 40, sports: [{ name: 'Basketball', count: 1 }, { name: 'Tennis', count: 1 }], coverage: { eligible_channels: 2, channels_with_sports_schedule: 2 } })
+        return Response.json({ as_of: new Date(now).toISOString(), timezone: url.searchParams.get('timezone'), date: url.searchParams.get('date'), truncated: false, events: items, total: items.length, offset: 0, limit: 100, sports: [{ name: 'Basketball', count: 1 }, { name: 'Tennis', count: 1 }], coverage: { eligible_channels: 2, channels_with_sports_schedule: 2 } })
       }
       return original(req)
     }
   })
   await signIn(page)
   await openMore(page, 'Sports')
+  // Language lives in the search panel, sport on the chips: both are this profile's saved filters.
   await page.getByTestId('sports-filters').click()
   await page.getByRole('button', { name: 'All languages', exact: true }).click()
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
   await page.getByRole('button', { name: 'Tennis · 1', exact: true }).click()
   await expect.poll(() => docs.p2['sportsFilters.v1']).toEqual({ language: 'all', sport: 'Tennis' })
   expect(docs.p2.unrelated).toBe('keep')
@@ -49,9 +53,11 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
   expect(queries.length).toBe(before)
   blockReads = false
   release()
-  await page.getByTestId('sports-filters').click()
   await expect(page.getByRole('button', { name: 'Tennis · 1', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('sports-listing')).toHaveCount(1)
+  await page.getByTestId('sports-filters').click()
   await expect(page.getByRole('button', { name: 'All languages', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
   await expect.poll(() => queries.at(-1)).toEqual({ profile: 'Bearer mock-access-p2', language: 'all', sport: 'Tennis' })
   await page.evaluate(async () => {
     await fetch('/api/v1/disclaimer/accept', { method: 'POST', headers: { authorization: 'Bearer mock-access-p1' } })
@@ -60,8 +66,8 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
     const { profiles, DISCLAIMER } = await import(/* @vite-ignore */ fixtures)
     useSession.getState().setSession('mock-access-p1', 'mock-refresh-p1', { ...profiles[0], disclaimer_accepted_version: DISCLAIMER.version })
   })
-  await page.getByTestId('sports-filters').click()
   await expect(page.getByRole('button', { name: 'Basketball · 1', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByTestId('sports-filters').click()
   await expect(page.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => queries.at(-1)).toEqual({ profile: 'Bearer mock-access-p1', language: 'eng', sport: 'Basketball' })
   expect(docs.p2['sportsFilters.v1']).toEqual({ language: 'all', sport: 'Tennis' })

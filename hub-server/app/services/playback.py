@@ -7,7 +7,9 @@ Mode decision for in-app sources (``decide_mode``):
 - VOD and existing adaptive streams retain their existing direct/proxy routing.
 - A web client cannot decode most VOD files (MKV, HEVC, AC-3). Its files are probed once
   (``media_probe``) and anything a browser cannot play is served as HLS: H.264 video is copied,
-  other video transcoded, and the chosen audio track encoded to AAC (``web_vod_plan``).
+  other video transcoded, and the chosen audio track encoded to AAC (``web_vod_plan``). A quality
+  cap the viewer asks for (``max_height``) transcodes any file that is taller than it.
+- Every descriptor says what it plays and how it is delivered (``media_info``), from the same probe.
 """
 
 from __future__ import annotations
@@ -47,6 +49,8 @@ from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
 from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError
+from app.services.event_slots import display_name
+from app.services.media_info import capped_height, media_info
 from app.services.media_probe import cached_probe
 from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
@@ -97,6 +101,9 @@ class StreamGrant:
     vod_video: str | None = None
     vod_codec: str | None = None
     vod_width: int | None = None
+    # The source's height and the viewer's quality cap, when the cap applies (``capped_height``).
+    vod_height: int | None = None
+    max_height: int | None = None
     audio_track: int | None = None
     start_s: int = 0
     # What is playing, for the profile a busy source turns away (absent for adult titles).
@@ -123,6 +130,8 @@ class WebVod:
     audio_track: int | None
     start_s: int
     duration_ms: int | None
+    height: int | None = None
+    max_height: int | None = None  # the quality cap in force; None when none was asked for or the source is no taller
 
 
 @dataclass(slots=True)
@@ -185,6 +194,8 @@ class StreamTokens:
                 "vv": grant.vod_video,
                 "vc": grant.vod_codec,
                 "vw": grant.vod_width,
+                "vh": grant.vod_height,
+                "mh": grant.max_height,
                 "atr": grant.audio_track,
                 "ss": grant.start_s,
                 "ti": grant.title,
@@ -223,6 +234,8 @@ class StreamTokens:
             vod_video=d.get("vv"),
             vod_codec=d.get("vc"),
             vod_width=d.get("vw"),
+            vod_height=d.get("vh"),
+            max_height=d.get("mh"),
             audio_track=d.get("atr"),
             start_s=int(d.get("ss") or 0),
             title=d.get("ti"),
@@ -419,7 +432,11 @@ class PlaybackResolver:
         audio_track: int | None = None,
         start_position_ms: int | None = None,
         room: RoomScope | None = None,
+        max_height: int | None = None,
     ) -> dict[str, Any]:
+        """``max_height`` caps the quality of a film this server converts for a browser (see
+        ``capped_height``). It is not for the TV, which plays the file itself, nor for a room, whose
+        members share one stream or are steered together; a channel is delivered as it is."""
         if rewind_at is not None and (catchup_programme_id or not hub_id.startswith("ch:")):
             raise ServiceError("Rewind requires a channel and cannot be combined with programme catch-up.")
         requested_ref.set(catchup_programme_id or hub_id)
@@ -437,8 +454,10 @@ class PlaybackResolver:
             raise Forbidden("External trailers require owner access", code="content_restricted")
         client = client if client in ("web", "web_hls", "android_tv") else "web"
         web = client != "android_tv"
+        if not web or room is not None:
+            max_height = None
         if hub_id.startswith("rec:"):
-            return await self._resolve_recording(profile_id, hub_id, client, audio_track, start_position_ms)
+            return await self._resolve_recording(profile_id, hub_id, client, audio_track, start_position_ms, max_height)
         if not web and room is None:
             # The TV plays the file itself and switches tracks itself; the field is accepted, not used.
             audio_track = start_position_ms = None
@@ -486,6 +505,7 @@ class PlaybackResolver:
                 audio_track=audio_track,
                 start_position_ms=start_position_ms,
                 room=room,
+                max_height=max_height,
             )
         if h.scheme == "tmdb" and h.a in ("movie", "tv") and h.b.isdigit():
             return await self._resolve_tmdb(
@@ -501,6 +521,7 @@ class PlaybackResolver:
                 audio_track=audio_track,
                 start_position_ms=start_position_ms,
                 room=room,
+                max_height=max_height,
             )
         raise NotFound("unknown id")
 
@@ -892,7 +913,7 @@ class PlaybackResolver:
             raise ServiceError("source cannot play live channels")
         info = row_to_channel(ch)
         target: StreamTarget | None
-        title = ch.name
+        title = display_name(ch.name)
         subtitle = None
         archive_start = archive_end = None
         if rewind_at is not None:
@@ -1014,6 +1035,7 @@ class PlaybackResolver:
         audio_track: int | None = None,
         start_position_ms: int | None = None,
         room: RoomScope | None = None,
+        max_height: int | None = None,
     ) -> dict[str, Any]:
         await self._require_content(profile_id, ids.lib_id(row.source_id, row.ext_id))
         await self._require_slot()
@@ -1055,7 +1077,9 @@ class PlaybackResolver:
             room.variant_id, room.vod = lib, vod
             room.title, room.kind = None if row.adult else row.title, row.kind
         elif client != "android_tv" and self._probe_applies(src, target):
-            vod = await self._web_vod(profile_id, row, src, target, audio_track, start_position_ms)
+            vod = await self._web_vod(
+                profile_id, row, src, target, audio_track, start_position_ms, max_height=max_height
+            )
         desc = self._descriptor(
             profile_id,
             src,
@@ -1071,6 +1095,8 @@ class PlaybackResolver:
             kind=row.kind,
             private=bool(row.adult),
             room=room.code if room is not None and room.shared else None,
+            # Whatever a probe has already learned; nothing is probed for the sake of this.
+            probe=cached_probe(row.extra),
         )
 
         desc.update(await self._runtime_audio(profile_id, row.extra or {}, audio_consent))
@@ -1107,6 +1133,7 @@ class PlaybackResolver:
         audio_track: int | None,
         start_position_ms: int | None,
         pin_key: str | None = None,
+        max_height: int | None = None,
     ) -> WebVod:
         """Probe the file and plan its delivery to a browser (see ``web_vod_plan``).
 
@@ -1122,7 +1149,7 @@ class PlaybackResolver:
         if self._probe_applies(src, target):
             probe = await self._probe_file(row, src, target, profile_id, pin_key)
         vod = await self._plan_vod(
-            profile_id, probe, target.duration_ms, target.resume_position_ms, audio_track, start_position_ms
+            profile_id, probe, target.duration_ms, target.resume_position_ms, audio_track, start_position_ms, max_height
         )
         if pin_key is not None and vod.video is None:
             vod.video = "copy"  # a room's members share one HLS session even when a browser could play the file
@@ -1136,8 +1163,12 @@ class PlaybackResolver:
         resume_ms: int | None,
         audio_track: int | None,
         start_position_ms: int | None,
+        max_height: int | None = None,
     ) -> WebVod:
-        """A probed (or unprobeable) file as a browser gets it: audio track, video plan, start offset."""
+        """A probed (or unprobeable) file as a browser gets it: audio track, video plan, start offset.
+
+        A quality cap below the source's height makes it a transcode whatever the browser could have
+        decoded; a source that is no taller, or whose height is unknown, is planned as without one."""
         tracks = probe_tracks({"probe": probe}) if probe else []
         if audio_track is not None and probe is not None and audio_track >= len(tracks):
             raise ServiceError("This file has no such audio track.", code="audio_track_invalid")
@@ -1151,19 +1182,28 @@ class PlaybackResolver:
         duration_ms = duration_ms or (probe.get("duration_ms") if probe else None)
         start_ms = resume_ms if start_position_ms is None else start_position_ms
         start_s = vod_start_s(start_ms, duration_ms)
+        cap = capped_height(video.get("height"), max_height)
         return WebVod(
-            video=web_vod_plan(probe, selected),
+            video="transcode" if cap else web_vod_plan(probe, selected),
             codec=video.get("codec"),
             width=video.get("width"),
             tracks=tracks,
             audio_track=selected,
             start_s=start_s,
             duration_ms=duration_ms,
+            height=video.get("height") if isinstance(video.get("height"), int) else None,
+            max_height=cap,
         )
 
     # ------------------------------------------------------------------ recordings
     async def _resolve_recording(
-        self, profile_id: str, hub_id: str, client: str, audio_track: int | None, start_position_ms: int | None
+        self,
+        profile_id: str,
+        hub_id: str,
+        client: str,
+        audio_track: int | None,
+        start_position_ms: int | None,
+        max_height: int | None = None,
     ) -> dict[str, Any]:
         """``rec:<recording id>``: a recording's file, to anyone who may see the recording.
 
@@ -1184,7 +1224,7 @@ class PlaybackResolver:
         probe: dict[str, Any] | None = None
         if client != "android_tv":
             probe = await self._probe_recording(row.id, path)
-            vod = await self._plan_vod(profile_id, probe, None, resume, audio_track, start_position_ms)
+            vod = await self._plan_vod(profile_id, probe, None, resume, audio_track, start_position_ms, max_height)
         plan = vod if vod is not None and vod.video is not None else None
         mode = PlaybackMode.HLS if plan is not None else PlaybackMode.PROXY
         device = client if client == "android_tv" else "web"
@@ -1206,6 +1246,8 @@ class PlaybackResolver:
                 vod_video=plan.video if plan else None,
                 vod_codec=plan.codec if plan else None,
                 vod_width=plan.width if plan else None,
+                vod_height=plan.height if plan else None,
+                max_height=plan.max_height if plan else None,
                 audio_track=plan.audio_track if plan else None,
                 start_s=plan.start_s if plan else 0,
                 title=title,
@@ -1228,6 +1270,15 @@ class PlaybackResolver:
             "audio_tracks": vod.tracks if vod is not None else [],
             "audio_track": plan.audio_track if plan else None,
             "start_position_ms": plan.start_s * 1000 if plan else None,
+            "media_info": media_info(
+                source_name=row.channel_name or None,
+                probe=probe,
+                audio_track=vod.audio_track if vod is not None else None,
+                mode=mode.value,
+                video_plan=plan.video if plan else None,
+                hw=str(self._settings.get("transcode_hw") or "none"),
+                max_height=plan.max_height if plan else None,
+            ),
             "title": row.title,
             "subtitle": row.subtitle or row.channel_name or None,
             "poster": None,
@@ -1296,6 +1347,7 @@ class PlaybackResolver:
         audio_track: int | None = None,
         start_position_ms: int | None = None,
         room: RoomScope | None = None,
+        max_height: int | None = None,
     ) -> dict[str, Any]:
         sources, meta, badges, matches = await self._tmdb_matches(media_type, tmdb_id)
         if matches and (not source_id or any(m.source_id == source_id for m in matches)):
@@ -1319,6 +1371,7 @@ class PlaybackResolver:
                 audio_track=audio_track,
                 start_position_ms=start_position_ms,
                 room=room,
+                max_height=max_height,
             )
         if variant_id:
             raise NotFound("variant does not belong to this title or source")
@@ -1389,6 +1442,7 @@ class PlaybackResolver:
         kind: str | None = None,
         private: bool = False,
         room: str | None = None,
+        probe: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         mode = decide_mode(
             client=client,
@@ -1452,6 +1506,8 @@ class PlaybackResolver:
                     vod_video=plan.video if plan else None,
                     vod_codec=plan.codec if plan else None,
                     vod_width=plan.width if plan else None,
+                    vod_height=plan.height if plan else None,
+                    max_height=plan.max_height if plan else None,
                     audio_track=plan.audio_track if plan else None,
                     start_s=plan.start_s if plan else 0,
                     title=shown,
@@ -1480,6 +1536,16 @@ class PlaybackResolver:
             "audio_tracks": vod.tracks if vod is not None else [],
             "audio_track": plan.audio_track if plan else None,
             "start_position_ms": plan.start_s * 1000 if plan else None,
+            "media_info": media_info(
+                source_name=src.name,
+                probe=probe,
+                audio_track=vod.audio_track if vod is not None else None,
+                mode=mode.value,
+                video_plan=plan.video if plan else None,
+                hw=str(self._settings.get("transcode_hw") or "none"),
+                live_transcode=transcode and plan is None,
+                max_height=plan.max_height if plan else None,
+            ),
             "title": title,
             "subtitle": subtitle,
             "poster": poster,

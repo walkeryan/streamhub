@@ -11,7 +11,7 @@ import type { SourceBadge, Tile } from '../api/types'
 export function Button(p: {
   focusKey?: string; icon?: string; children?: ReactNode; onEnter?: () => void; primary?: boolean; ghost?: boolean; danger?: boolean
   disabled?: boolean; pressed?: boolean; label?: string; className?: string; testId?: string; onFocus?: () => void; onBlur?: () => void
-  iconOnly?: boolean; scroll?: boolean
+  iconOnly?: boolean; scroll?: boolean; title?: string
 }) {
   return (
     <Focusable
@@ -22,6 +22,7 @@ export function Button(p: {
       aria-pressed={p.pressed}
       data-testid={p.testId}
       scroll={p.scroll}
+      title={p.title}
       onFocus={p.onFocus}
       onBlur={p.onBlur}
       className={cn('btn', p.primary && 'btn-primary', p.ghost && 'btn-ghost', p.danger && 'btn-danger', p.iconOnly && 'btn-icon', p.className)}

@@ -464,7 +464,7 @@ components:
         source_id: {type: string}
         ext_id: {type: string}
         number: {type: integer}
-        name: {type: string}
+        name: {type: string, description: "As shown. An event-slot channel (a provider name such as \"(XX) (NETWORK 001) | Sport: Away at Home (date time)\") is called by its network and number, \"NETWORK 001\"; ids, numbers and search still follow the stored name."}
         logo: {type: string, nullable: true}
         group: {type: string}
         language: {type: string, description: "ISO 639-3 or 'und'"}
@@ -474,8 +474,8 @@ components:
         epg_id: {type: string, nullable: true}
         catchup_days: {type: integer, default: 0}
         is_favorite: {type: boolean}
-        now: { $ref: '#/components/schemas/Programme', nullable: true }
-        next: { $ref: '#/components/schemas/Programme', nullable: true }
+        now: { $ref: '#/components/schemas/Programme', nullable: true, description: "Null without guide data. A placeholder programme that only repeats the channel's name is not guide data and is never sent, here or in /epg. On an event-slot channel this is the game in its name while that game is live (see Programme.id)." }
+        next: { $ref: '#/components/schemas/Programme', nullable: true, description: "As now. On an event-slot channel: the game in its name until it starts." }
     ChannelGroup:
       type: object
       required: [id, source_id, name, channel_count, hidden]
@@ -484,7 +484,7 @@ components:
       type: object
       required: [id, channel_id, start, stop, title]
       properties:
-        id: {type: string}
+        id: {type: string, description: "prog:<n> for a guide entry. prog:slot-<channel row>-<start, epoch seconds> for the game of an event-slot channel: it has no guide entry and no catch-up, and can be recorded like any other programme while the channel still announces it."}
         channel_id: {type: string}
         start: {type: string, format: date-time}
         stop: {type: string, format: date-time}
@@ -533,6 +533,44 @@ components:
         channels: {type: integer, nullable: true}
         title: {type: string, nullable: true}
         default: {type: boolean, default: false}
+    MediaInfo:
+      type: object
+      description: >
+        What is playing and how it reaches this client, for a player's stream information panel. The file's
+        facts come from the media probe (the one that finds its audio tracks), the delivery from what the
+        server planned for this stream. A field the server does not know is left out, not sent as null.
+        Never a URL, a host name or a credential: the source is named as its owner named it.
+      required: [delivery]
+      properties:
+        source_name: {type: string, nullable: true, description: "The owner's name for the source; for a recording, the channel it was recorded from."}
+        container: {type: string, nullable: true, description: "ffprobe format name of the file, e.g. matroska, mov, mpegts"}
+        bitrate_kbps: {type: integer, nullable: true, description: Overall bit rate of the file.}
+        video:
+          type: object
+          nullable: true
+          description: The file's video stream.
+          properties:
+            codec: {type: string, nullable: true, description: "ffmpeg codec name, e.g. h264, hevc, av1"}
+            width: {type: integer, nullable: true}
+            height: {type: integer, nullable: true}
+            frame_rate: {type: number, nullable: true, description: Frames per second.}
+            dynamic_range: {type: string, nullable: true, enum: [sdr, hdr10, hlg], description: From the stream's transfer characteristic.}
+        audio:
+          type: object
+          nullable: true
+          description: "The audio track that plays: the one the server encoded (audio_track), else the file's default."
+          properties:
+            codec: {type: string, nullable: true, description: "Codec in the file; a remux or a transcode delivers it as AAC stereo."}
+            channels: {type: integer, nullable: true}
+            language: {type: string, nullable: true, description: ISO 639-2 code.}
+        delivery:
+          type: string
+          enum: [direct, remux, transcode]
+          description: "direct: the file or feed as it is (played from the source or passed through this server). remux: repackaged as HLS with the video copied; a film's audio track is encoded to AAC. transcode: the video is encoded as well."
+        encoder: {type: string, nullable: true, enum: [hardware, software], description: "transcode only: what the server planned to encode the video with. A hardware encoder that fails to start falls back to software for that session without this changing."}
+        output_width: {type: integer, nullable: true, description: Width of the picture as delivered.}
+        output_height: {type: integer, nullable: true, description: Height of the picture as delivered.}
+        max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "The quality cap in force for this stream (PlaybackRequest.max_height); left out when none was asked for or the file is no taller than it."}
     PlaybackOption:
       type: object
       required: [variant_id, source_id, source_name, provider_label, audio_languages, audio_verified, audio_evidence, preferred_audio_available]
@@ -574,6 +612,7 @@ components:
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255, description: "Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself."}
         start_position_ms: {type: integer, nullable: true, minimum: 0, description: "Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced)."}
+        max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height."}
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
@@ -662,6 +701,7 @@ components:
         audio_track: {type: integer, nullable: true, description: The one track the server encoded into this stream; null when the client receives the file's own tracks.}
         start_position_ms: {type: integer, nullable: true, description: "Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms."}
         stream_epoch: {type: integer, nullable: true, description: "Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor."}
+        media_info: {allOf: [{$ref: '#/components/schemas/MediaInfo'}], nullable: true, description: "What is playing and how it is delivered; null for mode=handoff. Informational: nothing in playback depends on it."}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
@@ -1032,10 +1072,12 @@ components:
       required: [channel_id, channel_name, source_id, source_name, programme_id, language_verified]
       properties:
         channel_id: {type: string}
-        channel_name: {type: string}
+        channel_name: {type: string, description: "As shown: Channel.name"}
+        channel_number: {type: integer, nullable: true}
+        quality: {type: string, nullable: true, enum: [4K, UHD, FHD, HD, SD, null], description: "Picture quality the provider's channel name advertises, in plain or superscript letters; null when it names none."}
         source_id: {type: string}
         source_name: {type: string}
-        programme_id: {type: string}
+        programme_id: {type: string, description: "Programme.id of this event on this channel; pass it with channel_id and the event's start to POST /recordings."}
         language: {type: string, nullable: true}
         language_verified: {type: boolean}
     SportsEvent:
@@ -1043,15 +1085,41 @@ components:
       required: [id, title, sport, start, stop, status, replay, live_evidence, grouping_evidence, feeds]
       properties:
         id: {type: string}
-        title: {type: string}
-        sport: {type: string}
+        kind: {type: string, enum: [event, channel], default: event, description: "event = a guide programme classified as sport, or a dated event slot. channel = a game channel: an event slot whose name carries no date. It is listed with today's events and makes no claim about when it plays: status is unscheduled, start and stop are the bounds of the listed days."}
+        title: {type: string, description: "The event without provider decoration: for an event slot the text after its sport (\"Away at Home\"), for a guide programme its title."}
+        sport: {type: string, description: "The classifier's sport for a guide programme; for an event slot the sport its name gives (\"Field Hockey\", \"Men's Soccer\")."}
+        league: {type: string, nullable: true, description: "Network or league label of an event slot (\"NETWORK\" of \"(NETWORK 001) | …\"); null for a guide programme."}
+        home: {type: string, nullable: true, description: "With away: the two sides when the title is exactly \"A at B\" / \"A @ B\" (B is home) or \"A vs B\" / \"A v B\" (A is home). Null otherwise: nothing is guessed."}
+        away: {type: string, nullable: true}
         start: {type: string, format: date-time}
-        stop: {type: string, format: date-time}
-        status: {type: string, enum: [current, upcoming, ended]}
+        stop: {type: string, format: date-time, description: "For an event slot: start plus the source's event_duration_minutes (default 210)."}
+        status: {type: string, enum: [current, upcoming, ended, unscheduled], description: "current = airing now by a real guide programme or a dated event slot inside its window. An event slot whose window has passed is not listed at all. unscheduled only with kind channel."}
         replay: {type: boolean}
-        live_evidence: {type: boolean}
+        live_evidence: {type: boolean, description: "The guide labels the programme live, or a dated event slot is inside its window."}
         grouping_evidence: {type: string}
-        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}}
+        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}, description: "Channels carrying the event, lowest channel number first. Two event slots with the same title, sport and start are one event."}
+    SportsChannel:
+      type: object
+      required: [channel_id, channel_name, channel_number, group, source_id]
+      properties:
+        channel_id: {type: string}
+        channel_name: {type: string, description: "The network's name without its country tag and quality marks"}
+        channel_number: {type: integer}
+        logo: {type: string, nullable: true}
+        group: {type: string}
+        quality: {type: string, nullable: true, enum: [4K, UHD, FHD, HD, SD, null]}
+        language: {type: string, nullable: true}
+        source_id: {type: string}
+        now: { $ref: '#/components/schemas/Programme', nullable: true, description: "What the guide says is on; null without real guide data." }
+    SportsChannelsPage:
+      type: object
+      required: [channels, total, limit, offset, truncated]
+      properties:
+        channels: {type: array, items: {$ref: '#/components/schemas/SportsChannel'}}
+        total: {type: integer}
+        limit: {type: integer}
+        offset: {type: integer}
+        truncated: {type: boolean}
     SportsRecording:
       type: object
       required: [title_id, title, source_id, source_name, sport, originally_available_at, duration_ms, audio_languages, audio_verified, language_hint, kind, live]
@@ -1607,19 +1675,39 @@ paths:
     get:
       parameters:
         - {in: query, name: date, schema: {type: string, format: date}}
-        - {in: query, name: timezone, schema: {type: string, default: America/New_York}}
-        - {in: query, name: status, schema: {type: string, enum: [all, current, upcoming, replay], default: all}}
+        - {in: query, name: timezone, schema: {type: string, default: America/New_York}, description: "The viewer's zone: it decides which calendar day date means."}
+        - {in: query, name: days, schema: {type: integer, minimum: 1, maximum: 7, default: 1}, description: Calendar days listed, from date}
+        - {in: query, name: status, schema: {type: string, enum: [all, active, current, upcoming, replay], default: all}, description: "active = current, upcoming and game channels (everything but ended)"}
         - {in: query, name: language, schema: {type: string}}
-        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string, maxLength: 80}, description: "A name from the page's sports list; an unknown one matches nothing."}
         - {in: query, name: q, schema: {type: string, maxLength: 200}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
       responses:
         '200':
-          description: Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio.
+          description: >-
+            Sports guide programmes and event-slot channels, grouped conservatively, by start. A programme that only
+            repeats its channel's name is a placeholder and never an event. An event slot's embedded time is read in its
+            source's event_timezone (source config, IANA name, default UTC).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SportsEventsPage'}
+  /sports/channels:
+    get:
+      tags: [live]
+      summary: Always-on sports networks
+      description: Channels a sports group or their own name marks as sport and that are not event slots, by channel number.
+      parameters:
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsChannelsPage'}
   /sports:
     get:
       tags: [live]

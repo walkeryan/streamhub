@@ -79,6 +79,13 @@ capabilities. Adding a source type = new adapter package + one `registry.registe
   in `extra`. Per-source config: `default_language`, `shelf_map` and `group_map` (raw name → display name),
   `hidden_groups` (live groups not stored), `adult_categories`. `default_language` also applies to Plex/Jellyfin sources.
   Title language filters read `title.language`; it is a hint, never audio evidence.
+- **Event slots** (`services/event_slots.py`): a sports panel renames numbered channels for each game instead of
+  sending a guide (`XX (NETWORK 001) | Sport: Away at Home (2026-10-02 14:50:00)`, or dateless
+  `LEAGUE | 02 - 1pm Away at Home`). Such a channel is shown as `NETWORK 001`, and the game in its name is its programme
+  while live (from the embedded start for `event_duration_minutes`, default 210) or still to come; a name whose time
+  has passed means nothing. The embedded time is read in the source's `event_timezone` (IANA name, default `UTC`).
+  Both keys are per-source config. The stored name is not rewritten. A programme that only repeats its channel's name,
+  or is titled like a slot, is the manager's filler for a missing guide: never now/next, an event or a rule match.
 - **Adult rows** (`services/adult.py`) are left out of home, search, browse and suggestions unless the admin profile
   passes `include_adult=true`. This hides; it does not authorize access by id.
 - **Shelves** (`services/catalog.py`, `services/home.py`): `GET /browse/{section}/shelves` lists shelves with their first
