@@ -2,9 +2,9 @@ import { HomeNotices } from '../components/Notices'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
 import type { Tile } from '../api/types'
-import { Button, Crossfade, Empty, ErrorState, Meta, Skeleton, SourceChips, useLoadedImage } from '../components/ui'
+import { Button, Crossfade, Empty, ErrorState, Meta, Skeleton, useLoadedImage } from '../components/ui'
 import { SafeImg } from '../components/SafeImg'
-import { TileRow } from '../components/Tile'
+import { TileBadge, TileRow, namesSource } from '../components/Tile'
 import { FocusGroup } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useUi } from '../store/ui'
@@ -67,7 +67,8 @@ export function Home() {
         <div className="hero-body">
           <h1 className="display" data-testid="hero-title"><SafeImg key={active.id} src={active.logo} alt={active.title} style={{ maxHeight: '3.5rem' }} fallback={active.title} /></h1>
           <Meta items={[active.year, active.subtitle, active.rating ? `★ ${active.rating.toFixed(1)}` : null]} />
-          <div className="flex gap-2 flex-wrap"><SourceChips sources={active.sources} max={3} /></div>
+          {/* The same rule as a tile: one ordinary source says nothing. */}
+          {namesSource(active.sources) && <div className="flex gap-2 flex-wrap" data-testid="hero-sources"><TileBadge sources={active.sources} max={3} /></div>}
           <FocusGroup focusKey="hero" className="flex gap-3 flex-wrap items-center" onFocusChange={setHeroFocused} remember={false} preferred="hero:play">
             <Button focusKey="hero:play" primary icon="play" testId="hero-play"
               onEnter={() => go(playable ? `/play/${encodeURIComponent(active.id)}` : `/title/${encodeURIComponent(active.id)}`)}>

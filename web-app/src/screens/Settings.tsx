@@ -1,8 +1,8 @@
 import { useAuthCapabilities } from '../api/contentPolicy'
 import { useCan, useMe } from '../api/me'
 import { absent } from '../api/client'
-import { people, useAbsent, usePeopleChange, useSessions, type AuthSession } from '../api/people'
-import { DeviceRow } from '../components/DeviceRow'
+import { people, usePeopleChange, useSessions, type AuthSession } from '../api/people'
+import { DEVICE_GONE, DeviceRow } from '../components/DeviceRow'
 import { deviceName } from '../lib/people'
 import { OwnerPinSettings } from '../components/OwnerPinSettings'
 import { ProfileSwitch } from '../components/ProfileSwitch'
@@ -10,15 +10,16 @@ import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
 import { StreamRecovery } from '../components/StreamRecovery'
 import { RequestManagerSettings } from '../components/RequestManagerSettings'
+import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ok } from '../api/client'
-import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useProfiles, useSettings } from '../api/hooks'
+import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useSettings } from '../api/hooks'
 import type { Profile } from '../api/types'
 import { Button, Chip, ErrorState, Modal } from '../components/ui'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
-import { useRestoreFocus } from '../nav/back'
+import { useGo, useRestoreFocus } from '../nav/back'
 import { setTheme } from '../lib/theme'
 import { LANG_NAMES } from '../lib/util'
 import { themes } from '../tokens'
@@ -26,7 +27,7 @@ import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 
 const TABS = [
-  ['profiles', 'Profiles'], ['appearance', 'Appearance'], ['languages', 'Languages'], ['rows', 'Home rows'],
+  ['profiles', 'Profile'], ['appearance', 'Appearance'], ['languages', 'Languages'], ['rows', 'Home rows'],
   ['parental', 'Parental'], ['playback', 'Playback'], ['about', 'About'], ['devices', 'Devices'],
 ] as const
 type Tab = (typeof TABS)[number][0]
@@ -72,63 +73,39 @@ function useSaveProfile() {
     })
 }
 
-/* ------------------------------ profiles ------------------------------ */
+/* ------------------------------ profile ------------------------------ */
+/** The signed-in person: who they are, switching, and their own PIN. Everyone else is managed on the Users screen. */
 function ProfilesTab() {
   const capabilities=useAuthCapabilities()
-  const { data, error, refetch } = useProfiles()
   const me = useCurrent()
   // A restricted profile never manages others, whatever its permissions say.
-  const manages = useCan('users.manage') && !me.content_restricted
+  const manages = useCan('users') && !me.content_restricted
   const owner = useCan('system.manage')
   const qc = useQueryClient()
+  const go = useGo()
   const toast = useUi((s) => s.toast)
-  const [name, setName] = useState('')
-  const [kids, setKids] = useState(false)
   const [pin, setPin] = useState('')
   const [pinErr, setPinErr] = useState<string | null>(null)
-  const [confirm, setConfirm] = useState<Profile | null>(null)
-  const refresh = () => void qc.invalidateQueries({ queryKey: qk.profiles })
-  const addProfile = async () => {
-    if (!name.trim()) return
-    try {
-      await ok(api.POST('/profiles', { body: { id: '', name: name.trim(), is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: capabilities.data?.content_policy_enabled ? false : kids } }))
-      setName(''); setKids(false); refresh(); toast('Profile added.', 'success')
-    } catch (e) { toast(e instanceof Error ? e.message : 'Could not add the profile.', 'error') }
-  }
   const savePin = async (value: string | null) => {
     if (value !== null && !/^\d{4,8}$/.test(value)) { setPinErr('Use 4 to 8 digits.'); return }
     setPinErr(null)
-    try { await ok(api.PUT('/profiles/{id}/pin', { params: { path: { id: me.id } }, body: { pin: value } })); setPin(''); refresh(); toast(value ? 'PIN saved.' : 'PIN removed.', 'success') }
+    try { await ok(api.PUT('/profiles/{id}/pin', { params: { path: { id: me.id } }, body: { pin: value } })); setPin(''); void qc.invalidateQueries({ queryKey: qk.profiles }); toast(value ? 'PIN saved.' : 'PIN removed.', 'success') }
     catch (e) { toast(e instanceof Error ? e.message : 'Could not change the PIN.', 'error') }
   }
-  if (error) return <ErrorState error={error} onRetry={() => void refetch()} />
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-3">
         <h2 className="heading">Signed in as {me.name}</h2>
+        <p className="muted">Theme and languages, on the tabs beside this one, are saved for {me.name} and nobody else.</p>
         <div className="flex gap-3 flex-wrap">
           <ProfileSwitch />
         </div>
       </section>
-      <section className="flex flex-col gap-3">
-        <h2 className="heading">Profiles</h2>
-        <FocusGroup focusKey="prof:list" className="flex flex-col gap-2">
-          {(data ?? []).map((p) => (
-            <div key={p.id} className="panel flex items-center gap-3">
-              <span className="flex-1">{p.name}{p.id === me.id ? ' (you)' : ''}<span className="label"> {p.is_admin ? ' · Admin' : ''}{p.kids ? ' · Kids' : ''}{p.has_pin ? ' · PIN' : ''}</span></span>
-              {manages && p.id !== me.id && !p.is_admin && <Button focusKey={`prof:del:${p.id}`} danger icon="trash" onEnter={() => setConfirm(p)}>Delete</Button>}
-            </div>
-          ))}
-        </FocusGroup>
-      </section>
       {manages && (
-        <section className="flex flex-col gap-3">
-          <h2 className="heading">Add a profile</h2>
-          <div className="flex gap-3 flex-wrap items-center">
-            <div style={{ width: '16rem' }}><FocusableInput focusKey="prof:name" label="Profile name" placeholder="Name" value={name} onChange={setName} onSubmit={() => void addProfile()} /></div>
-            {capabilities.data&&!capabilities.data.content_policy_enabled&&<Chip focusKey="prof:kids" pressed={kids} onEnter={() => setKids((k) => !k)}>Kids profile</Chip>}
-            <Button focusKey="prof:add" primary icon="plus" disabled={!name.trim()} onEnter={() => void addProfile()}>Add profile</Button>
-          </div>
+        <section className="flex flex-col gap-3" data-testid="profile-users">
+          <h2 className="heading">Other people</h2>
+          <p className="muted">Who can use this StreamHub, what each of them may watch, their PINs and their devices are on the Users screen.</p>
+          <div><Button focusKey="prof:users" icon="users" onEnter={() => go('/users')} testId="open-users">Open Users</Button></div>
         </section>
       )}
       <OwnerPinSettings />
@@ -142,13 +119,6 @@ function ProfilesTab() {
         </div>
         {pinErr && <p role="alert" style={{ color: 'var(--t-danger)' }}>{pinErr}</p>}
       </section>}
-      <Modal open={!!confirm} onClose={() => setConfirm(null)} title={`Delete ${confirm?.name ?? ''}?`} firstFocusKey="del:cancel">
-        <p>Their favorites, watchlist and resume positions are deleted too.</p>
-        <div className="flex gap-3">
-          <Button focusKey="del:cancel" onEnter={() => setConfirm(null)}>Keep profile</Button>
-          <Button focusKey="del:ok" danger icon="trash" onEnter={async () => { if (confirm) { await ok(api.DELETE('/profiles/{id}', { params: { path: { id: confirm.id } } })); refresh() } setConfirm(null) }}>Delete</Button>
-        </div>
-      </Modal>
     </div>
   )
 }
@@ -205,6 +175,8 @@ function LanguagesTab() {
 
 /* ------------------------------ home rows ------------------------------ */
 function RowsTab() {
+  // Which shelves Home has is the server's, for everyone; their order and visibility here is this browser's own.
+  const admin = useCan('settings.admin')
   const home = useHome()
   const prefs = useUi((s) => s.homePrefs)
   const setPrefs = useUi((s) => s.setHomePrefs)
@@ -220,8 +192,10 @@ function RowsTab() {
   }
   const hide = (id: string) => setPrefs({ ...prefs, hidden: prefs.hidden.includes(id) ? prefs.hidden.filter((h) => h !== id) : [...prefs.hidden, id] })
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="heading">Home rows</h2>
+    <div className="flex flex-col gap-8">
+    {admin && <HomeShelvesSettings />}
+    <section className="flex flex-col gap-3">
+      <h2 className="heading">{admin ? 'Home rows in this browser' : 'Home rows'}</h2>
       <p className="muted">Reorder or hide rows on Home. This is saved in this browser.</p>
       <FocusGroup focusKey="rows:list" className="flex flex-col gap-2">
         {rows.map((r) => (
@@ -235,6 +209,7 @@ function RowsTab() {
         {!home.data && <p className="muted">Loading rows…</p>}
       </FocusGroup>
       <div><Button focusKey="rows:reset" onEnter={() => setPrefs({ order: [], hidden: [] })}>Reset to default</Button></div>
+    </section>
     </div>
   )
 }
@@ -315,7 +290,6 @@ function DevicesTab() {
   const toast = useUi((s) => s.toast)
   const signOut = useSession((s) => s.clear)
   const qc = useQueryClient()
-  const markAbsent = useAbsent((a) => a.markSessionEdit)
   const [renaming, setRenaming] = useState<AuthSession | null>(null)
   const [label, setLabel] = useState('')
   const rename = usePeopleChange((v: { sid: string; label: string }) => people.patchSession(v.sid, { label: v.label }))
@@ -324,7 +298,7 @@ function DevicesTab() {
     if (!s || !label.trim()) return
     rename.mutate({ sid: s.sid, label: label.trim() }, {
       onSuccess: () => { toast('Device renamed.', 'success'); setRenaming(null) },
-      onError: (e) => { if (absent(e)) markAbsent(); toast(absent(e) ? 'This server cannot rename devices yet.' : e.message, 'error'); setRenaming(null) },
+      onError: (e) => { toast(absent(e) ? DEVICE_GONE : e.message, 'error'); setRenaming(null); if (absent(e)) void refetch() },
     })
   }
   if (error) return <ErrorState error={error} onRetry={() => void refetch()} />

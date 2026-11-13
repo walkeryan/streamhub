@@ -170,7 +170,7 @@ test.describe('on a phone', () => {
     await enter(page)
     await page.getByTestId('nav-more').tap()
     const menu = page.getByTestId('more-menu')
-    await expect(menu.getByRole('link')).toHaveText(['My List', 'Sports', 'Requests', 'Settings', /Guest$/])
+    await expect(menu.getByRole('link')).toHaveText(['My List', 'Sports', 'Requests', 'Recordings', 'Settings', /Guest$/])
     const box = (await menu.boundingBox())!
     expect([box.x, box.width, Math.round(box.y + box.height)]).toEqual([0, 390, 844])
     await menu.getByRole('link', { name: 'My List', exact: true }).tap()
@@ -245,8 +245,9 @@ test('Home is composed from shelves: New Releases, shelves with See all, Recentl
   // Every row is compact: posters for titles, a captioned wide tile for what is in progress.
   await expect(page.locator('.feature-card')).toHaveCount(0)
   await expect(page.locator('[data-row="continue"] .tile-landscape .cap').first()).toHaveCSS('opacity', '1')
-  // The hero features the New Releases shelf.
+  // The hero features the New Releases shelf, and says where its title plays the way a tile does.
   await expect(page.getByTestId('hero-title')).toHaveText('Neon Cartographers')
+  await expect(page.getByTestId('hero').locator('.badge')).toHaveText(['In your library'])
   // First screen at 1280x720: the hero, what is in progress, what is on, and the first shelf's posters.
   const poster = (await page.locator('[data-row="shelf:movies:New Releases"] .tile-poster').first().boundingBox())!
   expect(poster.y + poster.height / 2).toBeLessThan(720)
@@ -260,18 +261,109 @@ test('Home is composed from shelves: New Releases, shelves with See all, Recentl
   await expect(page).toHaveURL(/\/live$/)
 })
 
+test('Settings, Home rows: the owner chooses the shelves on Home and their order; an unknown name is flagged; Automatic resets', async ({ page, browser }) => {
+  const shelfRows = () => page.getByTestId('row').evaluateAll((all) => all.map((row) => row.getAttribute('data-row')).filter((id) => id?.startsWith('shelf:')))
+  await enter(page, '/', 'owner')
+  await expect(page.getByTestId('row').first()).toBeVisible()
+  const automatic = await shelfRows()
+  // What the app last saved to the settings, read before the fake server answers.
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init)
+      if (request.method === 'PATCH' && new URL(request.url).pathname === '/api/v1/settings') (window as unknown as { saved: unknown }).saved = await request.clone().json()
+      return original(request)
+    }
+  })
+  const saved = () => page.evaluate(() => (window as unknown as { saved?: unknown }).saved)
+
+  await page.goto('/settings?tab=rows')
+  const section = page.getByTestId('home-shelves')
+  const entries = section.getByTestId('home-shelf')
+  await expect(section.getByTestId('home-shelves-auto')).toContainText('Automatic. Home chooses its shelves.')
+  await expect(page.getByTestId('home-shelves-reset')).toHaveAttribute('aria-disabled', 'true')
+  // New Releases always leads Home, so it is not on offer. A shelf one side has goes in by name; one both have, per side.
+  await expect(section.getByRole('button', { name: 'Add New Releases from Movies', exact: true })).toHaveCount(0)
+  await section.getByRole('button', { name: 'Add Thriller from Movies', exact: true }).click()
+  await expect(entries).toHaveCount(1)
+  await section.getByRole('button', { name: 'Add Comedy from Shows', exact: true }).click()
+  await expect(entries).toHaveCount(2)
+  await expect(section.getByRole('button', { name: 'Add Comedy from Shows', exact: true })).toHaveCount(0)
+  await expect(section.getByRole('button', { name: 'Add Comedy from Movies', exact: true })).toBeVisible()
+  // A name typed by hand that no source has (yet).
+  await page.getByLabel('Shelf name', { exact: true }).fill(' Westerns ')
+  await page.keyboard.press('Enter')
+  await expect(entries).toHaveCount(3)
+  await expect(entries.nth(0)).toContainText('1. Thriller')
+  await expect(entries.nth(0)).toContainText('Movies')
+  await expect(entries.nth(1)).toContainText('2. Comedy')
+  await expect(entries.nth(1)).toContainText('Shows only')
+  await expect(entries.nth(2)).toContainText('3. Westerns')
+  await expect(entries.nth(2).getByTestId('home-shelf-unknown')).toContainText('No such shelf')
+  await expect(section.getByTestId('home-shelf-unknown')).toHaveCount(1)
+
+  // Reordering by remote: the focused arrow goes with its shelf, so it can be pressed again.
+  await section.getByRole('button', { name: 'Move Westerns up', exact: true }).click()
+  await expect(entries.nth(1)).toContainText('2. Westerns')
+  await expect(section.getByRole('button', { name: 'Move Westerns up', exact: true })).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Enter')
+  await expect(entries.nth(0)).toContainText('1. Westerns')
+  await expect(entries.nth(0).getByTestId('home-shelf-unknown')).toBeVisible()
+  await expect.poll(saved).toEqual({ home_shelves: ['Westerns', 'Thriller', 'shows:Comedy'] })
+
+  // Home shows New Releases, then the list in its order; the unknown name is skipped.
+  await page.getByTestId('nav-home').click()
+  await expect(page.getByTestId('row').first()).toBeVisible()
+  await expect.poll(shelfRows).toEqual(['shelf:movies:New Releases', 'shelf:movies:Thriller', 'shelf:shows:Comedy'])
+
+  // Automatic: asked first, then Home chooses again.
+  await page.goto('/settings?tab=rows')
+  await entries.nth(0).getByTestId('home-shelf-remove').click()
+  await expect(entries).toHaveCount(2)
+  await expect(section.getByTestId('home-shelf-unknown')).toHaveCount(0)
+  await page.getByTestId('home-shelves-reset').click()
+  await expect(page.getByTestId('home-shelves-reset-confirm')).toContainText('Your list of 2 shelves is cleared')
+  await expect(page.getByRole('button', { name: 'Keep my list', exact: true })).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Enter')
+  await expect(section.getByTestId('home-shelves-auto')).toBeVisible()
+  await expect.poll(saved).toEqual({ home_shelves: [] })
+  await page.getByTestId('nav-home').click()
+  await expect(page.getByTestId('row').first()).toBeVisible()
+  await expect.poll(shelfRows).toEqual(automatic)
+
+  // Someone without system.manage has only this browser's own row order.
+  const guest = await other(browser)
+  await enter(guest.page, '/settings?tab=rows')
+  await expect(guest.page.getByRole('heading', { name: 'Home rows', exact: true })).toBeVisible()
+  await expect(guest.page.getByTestId('home-shelves')).toHaveCount(0)
+  await guest.context.close()
+
+  // On a phone the list and its three buttons fit.
+  const phone = await other(browser, PHONE)
+  await enter(phone.page, '/settings?tab=rows', 'owner')
+  await phone.page.getByRole('button', { name: 'Add Documentaries from Shows', exact: true }).tap()
+  await expect(phone.page.getByTestId('home-shelf')).toHaveCount(1)
+  expect(await fits(phone.page)).toBe(true)
+  const row = (await phone.page.getByTestId('home-shelf').boundingBox())!
+  expect(row.x + row.width).toBeLessThanOrEqual(390)
+  await phone.context.close()
+})
+
 test('More offers only what the profile may use, and closes back onto its opener', async ({ page, browser }) => {
   await enter(page)
   await page.getByTestId('nav-more').click()
   const menu = page.getByTestId('more-menu')
-  // Recordings, Sources and Users are the owner's.
-  await expect(menu.getByRole('link')).toHaveText(['Sports', 'Requests', 'Settings'])
+  // Family may use recordings, and recording is on; Sources and Users are the owner's.
+  await expect(menu.getByRole('link')).toHaveText(['Sports', 'Requests', 'Recordings', 'Settings'])
   await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Sports')
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/requests$/)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('aria-current', 'page')
   await page.getByTestId('nav-more').click()
+  // Back belongs to the menu once it has taken focus.
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Sports')
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('data-focused', 'true')
@@ -493,5 +585,77 @@ test.describe('review of the first pass', () => {
     await expect(tile('Owned').locator('.badge')).toHaveText('In your library')
     await expect(tile('Owned Too').locator('.badge')).toHaveText('In your library')
     await expect(page.locator('.tile-badges').getByText(/Available · Plex/)).toHaveCount(0)
+
+    // The hero follows the focused tile and the same rule: nothing for one ordinary source, never "Available · <library>".
+    const hero = page.getByTestId('hero')
+    await walk(page, 'ArrowDown', tile('One Source'))
+    for (const [title, badges] of [['One Source', []], ['Two Sources', ['Available · IPTV', 'Available · Second IPTV']], ['Owned', ['In your library']], ['Owned Too', ['In your library']], ['Elsewhere', ['Open · Netflix']], ['Nowhere', []]] as const) {
+      await expect(tile(title)).toHaveAttribute('data-focused', 'true')
+      await expect(page.getByTestId('hero-title')).toHaveText(title)
+      await expect(hero.locator('.badge')).toHaveText([...badges])
+      await page.keyboard.press('ArrowRight')
+    }
+  })
+
+  test('Settings, Profile: the signed-in person and a way to Users; no profiles are added or deleted here', async ({ page, browser }) => {
+    await enter(page, '/settings?tab=profiles', 'owner')
+    await expect(page.getByTestId('tab-profiles')).toHaveText('Profile')
+    await expect(page.getByRole('heading', { name: /^Signed in as / })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Add profile', exact: true })).toHaveCount(0)
+    await expect(page.getByLabel('Profile name', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0)
+    // By remote: from the tab down to Open Users.
+    await walk(page, 'ArrowDown', page.getByTestId('open-users'))
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('users')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('open-users')).toHaveAttribute('data-focused', 'true')
+    // Their own preferences are still theirs to set.
+    await page.getByTestId('tab-appearance').click()
+    await expect(page.getByTestId('theme-oled')).toBeVisible()
+    await page.getByTestId('tab-languages').click()
+    await expect(page.getByRole('heading', { name: 'Preferred languages', exact: true })).toBeVisible()
+
+    const guest = await other(browser)
+    await enter(guest.page, '/settings?tab=profiles')
+    await expect(guest.page.getByRole('heading', { name: 'Signed in as Guest', exact: true })).toBeVisible()
+    await expect(guest.page.getByTestId('open-users')).toHaveCount(0)
+    await expect(guest.page.getByLabel('New PIN', { exact: true })).toBeVisible()
+    await guest.context.close()
+  })
+
+  test('the rail and the phone menu show the person, not only an initial: a picture, else their avatar', async ({ page, browser }) => {
+    const picture = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#888"/></svg>')}`
+    const withPicture = (url: string) => page.evaluate((url) => {
+      const db = JSON.parse(localStorage.getItem('mock.people.v1')!) as { users: Array<{ id: string; picture: string | null }> }
+      db.users.find((u) => u.id === 'u2')!.picture = url
+      localStorage.setItem('mock.people.v1', JSON.stringify(db))
+    }, url)
+    await enter(page)
+    const entry = page.getByTestId('nav-profile')
+    // No picture and no avatar: the initial.
+    await expect(entry.locator('img')).toHaveCount(0)
+    await expect(entry).toContainText('G')
+    await withPicture(picture)
+    await page.reload()
+    await expect(entry.locator('img')).toHaveAttribute('src', picture)
+    const face = (await entry.locator('img').boundingBox())!
+    expect([Math.round(face.width), Math.round(face.height)]).toEqual([22, 22])
+    // A picture that will not load falls back quietly.
+    await withPicture('/api/v1/images/refused-token')
+    await page.reload()
+    await expect(entry).toBeVisible()
+    await expect(entry.locator('img')).toHaveCount(0)
+
+    // Kids was given the fox, and has no picture; on a phone the entry sits in More.
+    const phone = await other(browser, PHONE)
+    await phone.page.addInitScript(() => {
+      sessionStorage.setItem('mock.accepted', JSON.stringify(['p1', 'p2', 'p3']))
+      localStorage.setItem('sh.session.v1', JSON.stringify({ access: 'mock-access-p3', refresh: 'mock-refresh-p3', profile: { id: 'p3', name: 'Kids', avatar: null, is_admin: false, theme_id: 'midnight', languages: ['eng'], has_pin: true, kids: true, disclaimer_accepted_version: '1.0' } }))
+    })
+    await phone.page.goto('/')
+    await phone.page.getByTestId('nav-more').tap()
+    await expect(phone.page.getByTestId('more-menu').getByTestId('nav-profile').locator('[data-avatar="fox"]')).toBeVisible()
+    await phone.context.close()
   })
 })

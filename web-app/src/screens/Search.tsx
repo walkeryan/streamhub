@@ -12,6 +12,7 @@ import { useUi } from '../store/ui'
 import { useDebounced } from '../lib/util'
 import type { LanguageCount, Tile } from '../api/types'
 import { JoinRoomDialog } from '../room/JoinRoomDialog'
+import { useCan } from '../api/me'
 
 export function Search() {
   const profileId = useSession((s) => s.profile?.id ?? 'anonymous')
@@ -43,6 +44,7 @@ function ProfileSearch({ profileId }: { profileId: string }) {
   const go = useGo()
   const input = useRef<HTMLInputElement>(null)
   const [joinRoom, setJoinRoom] = useState(false)
+  const mayJoinRoom = useCan('rooms.join')
   // wait for the (cached) results so the remembered result tile exists before focus is restored to it
   useRestoreFocus(dq.trim().length < 2 || !!data || !!error, 'search:input')
 
@@ -68,7 +70,7 @@ function ProfileSearch({ profileId }: { profileId: string }) {
       <FocusGroup focusKey="search:left" className="search-controls flex flex-col gap-4" data-testid="search-controls">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="title-xl">Search</h1>
-          <Button focusKey="search:join-room" icon="people" onEnter={() => setJoinRoom(true)} testId="search-join-room">Join a room</Button>
+          {mayJoinRoom && <Button focusKey="search:join-room" icon="people" onEnter={() => setJoinRoom(true)} testId="search-join-room">Join a room</Button>}
         </div>
         <FocusableInput focusKey="search:input" label="Search titles and channels" placeholder="Titles, shows, channels" value={q} onChange={setQ}
           inputRef={input} inputMode="search" onSubmit={() => setQ((v) => v.trim())} />

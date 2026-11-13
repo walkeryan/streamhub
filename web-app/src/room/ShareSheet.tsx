@@ -45,7 +45,7 @@ export function ShareSheet({ room, onClose, onStart, startLabel = 'Start watchin
   return (
     <Modal open={!!room} onClose={onClose} title="Watch together" firstFocusKey={onStart ? 'share:start' : 'share:copy'} variant="sheet" testId="room-share">
       {room && <>
-        <p className="muted">Send the link, or read out the code. Anyone signed in to this StreamHub can join you{room.title.title ? ` for ${room.title.title}` : ''}.</p>
+        <p className="muted">Send the link, or read out the code. Anyone signed in to this StreamHub who may join rooms can join you{room.title.title ? ` for ${room.title.title}` : ''}.</p>
         <div className="room-share">
           <div className="room-qr">{qr?.link === link && <img src={qr.src} alt="QR code for the room link" width={240} height={240} data-testid="room-qr" />}</div>
           <div className="flex flex-col gap-3 min-w-0">

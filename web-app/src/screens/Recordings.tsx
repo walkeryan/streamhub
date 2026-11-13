@@ -9,7 +9,7 @@ import { useHistoryState } from '../nav/historyState'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { RecordingBadge } from '../recordings/RecordingBadge'
 import { useCan } from '../api/me'
-import { RULE_KIND_LABEL, episodeLabel, recordingSize } from '../lib/recordings'
+import { RULE_KIND_LABEL, episodeLabel, recordingSize, sidesLabel } from '../lib/recordings'
 import { fmtTime } from '../lib/util'
 import { useUi } from '../store/ui'
 
@@ -30,7 +30,8 @@ export function Recordings() {
   const [tab, setTab] = useHistoryState<Tab>('rec:tab', TABS.find((t) => t.id === sp.get('tab'))?.id ?? 'upcoming')
   const allowed = useCan('recordings')
   const isAdmin = useCan('settings.admin')
-  const list = useRecordings(allowed)
+  // An administrator without recordings.view still asks: the answer may be that recording is not set up.
+  const list = useRecordings(allowed || isAdmin)
   const rules = useRecordingRules(allowed && !!list.data?.enabled)
   const remove = useDeleteRecording()
   const patchRule = usePatchRecordingRule()
@@ -41,7 +42,7 @@ export function Recordings() {
   const [deletingRule, setDeletingRule] = useState<RecordingRule | null>(null)
   const [editing, setEditing] = useState<RecordingRule | null>(null)
   const [draft, setDraft] = useState({ match: '', new_only: false, keep: null as number | null })
-  useRestoreFocus(!allowed || !!list.data || !!list.error, list.data?.enabled ? `rec:tab:${tab}` : 'rec:guide')
+  useRestoreFocus(!(allowed || isAdmin) || !!list.data || !!list.error, list.data?.enabled && allowed ? `rec:tab:${tab}` : 'rec:guide')
 
   const all = list.data?.recordings ?? []
   const upcoming = all.filter((r) => r.state === 'scheduled' || r.state === 'recording')
@@ -82,17 +83,19 @@ export function Recordings() {
     if (rule) removeRule.mutate(rule.id, { onSuccess: () => toast('Rule deleted.', 'success'), onError: failed })
   }
 
+  const barred = <Empty title="Recordings are not available" hint="This profile cannot use recordings. Ask the person who runs this StreamHub." />
   let body
-  if (!allowed) body = <Empty title="Recordings are not available" hint="This profile cannot use recordings. Ask the person who runs this StreamHub." />
-  else if (list.error) body = <ErrorState error={list.error} onRetry={() => void list.refetch()} />
-  else if (!list.data) body = <Skeleton style={{ height: '12rem' }} />
-  else if (!list.data.enabled) body = isAdmin ? (
+  if (!allowed && !isAdmin) body = barred
+  else if (list.data && !list.data.enabled) body = isAdmin ? (
     <div className="panel flex flex-col gap-3 items-start" style={{ maxWidth: '44rem' }} role="status" data-testid="recordings-off">
       <h2 className="title-xl">Recording is not set up on this server</h2>
       <p className="muted">Nothing can be recorded until the server has a folder to record into. Set RECORDINGS_DIR to a writable folder on the library disk and restart the server; Record then appears on the guide.</p>
       <Button focusKey="rec:guide" icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button>
     </div>
   ) : <Empty title="Recording is not available" hint="Recording has not been set up on this server." />
+  else if (!allowed) body = barred
+  else if (list.error) body = <ErrorState error={list.error} onRetry={() => void list.refetch()} />
+  else if (!list.data) body = <Skeleton style={{ height: '12rem' }} />
   else body = <>
     <FocusGroup focusKey="rec:tabs" className="flex gap-2 flex-wrap" role="tablist">
       {TABS.map((t) => <Chip key={t.id} focusKey={`rec:tab:${t.id}`} pressed={tab === t.id} onEnter={() => setTab(t.id)} testId={`recordings-tab-${t.id}`}>{t.label}</Chip>)}
@@ -107,7 +110,7 @@ export function Recordings() {
           <div key={r.id} className="panel rec-row" data-testid="recording-row" data-state={r.state}>
             <div className="flex-1 min-w-0 flex flex-col gap-1">
               <span className="flex items-center gap-2 min-w-0"><span className="truncate" style={{ fontWeight: 600 }}>{r.title}</span><RecordingBadge state={r.state} /></span>
-              <span className="label">{[r.subtitle, episodeLabel(r), r.channel_name, when(r), r.rule_id ? 'From a rule' : null].filter(Boolean).join(' · ')}</span>
+              <span className="label">{[r.subtitle, episodeLabel(r), sidesLabel(r.teams), r.channel_name, when(r), r.rule_id ? 'From a rule' : null].filter(Boolean).join(' · ')}</span>
             </div>
             {mayChange && <Button focusKey={`rec:${r.id}:cancel`} danger icon="x" label={`${r.state === 'recording' ? 'Stop recording' : 'Cancel'}: ${r.title}`} onEnter={() => cancel(r)} testId="recording-cancel">{r.state === 'recording' ? 'Stop recording' : 'Cancel'}</Button>}
           </div>
@@ -120,7 +123,7 @@ export function Recordings() {
           <div key={r.id} className="panel rec-row" data-testid="recording-row" data-state={r.state}>
             <div className="flex-1 min-w-0 flex flex-col gap-1">
               <span className="flex items-center gap-2 min-w-0"><span className="truncate" style={{ fontWeight: 600 }}>{r.title}</span>{r.state !== 'done' && <RecordingBadge state={r.state} />}</span>
-              <span className="label">{[r.subtitle, episodeLabel(r), r.channel_name, when(r), recordingSize(r.size_bytes)].filter(Boolean).join(' · ')}</span>
+              <span className="label">{[r.subtitle, episodeLabel(r), sidesLabel(r.teams), r.channel_name, when(r), recordingSize(r.size_bytes)].filter(Boolean).join(' · ')}</span>
               {r.state !== 'done' && <span className="muted" data-testid="recording-reason">{r.error ?? (r.state === 'missed' ? 'No connection was free when it started.' : 'The recording did not finish.')}</span>}
             </div>
             {r.state === 'done' && <Button focusKey={`rec:${r.id}:play`} primary icon="play" label={`Play: ${r.title}`} onEnter={() => go(`/play/${encodeURIComponent(`rec:${r.id}`)}`)} testId="recording-play">Play</Button>}

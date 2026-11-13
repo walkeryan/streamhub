@@ -44,6 +44,7 @@ export type ActiveStream = S['ActiveStream']
 export type Room = S['Room']
 export type RoomJoin = S['RoomJoin']
 export type RoomJoined = S['RoomJoined']
+export type RoomDescriptorQuery = paths['/rooms/{code}/descriptor']['get']['parameters']['query']
 
 /* ---------- recordings ---------- */
 export type Recording = S['Recording']

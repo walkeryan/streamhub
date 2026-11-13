@@ -13,7 +13,7 @@ This product uses the TMDB API but is not endorsed or certified by TMDB. Availab
 }
 
 export const profiles: Profile[] = [
-  { id: 'p1', name: 'Ryan', avatar: null, is_admin: true, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: false, disclaimer_accepted_version: null },
+  { id: 'p1', name: 'Ryan', avatar: null, is_admin: true, theme_id: 'midnight', languages: ['eng'], has_pin: false, has_password: true, kids: false, disclaimer_accepted_version: null },
   { id: 'p2', name: 'Guest', avatar: null, is_admin: false, theme_id: 'midnight', languages: ['eng', 'spa'], has_pin: false, kids: false, disclaimer_accepted_version: null },
   { id: 'p3', name: 'Kids', avatar: null, is_admin: false, theme_id: 'oled', languages: ['eng'], has_pin: true, kids: true, disclaimer_accepted_version: null },
 ]
@@ -159,6 +159,14 @@ export const channels: Channel[] = chanNames.map((name, i) => {
 })
 
 const showNames = ['Morning Brief', 'The Daily Cut', 'Match Day', 'Classic Feature', 'Evening Edition', 'Studio Session', 'Late Feature', 'Kids Hour', 'The Long Take', 'Night Owl']
+// A sports channel alternates a game that names its two sides with a listing that names none.
+const games = ['Riverton Rovers vs Harbor City', 'Sports Tonight', 'Premier Cup: Eastgate Town v Westbrook', 'Match Day', 'Northfield United at Lakeside Athletic', 'The Final Whistle']
+/** The server's reading of a sports title: the two sides of a spelled-out matchup, league prefix and trailing notes dropped; else none. */
+export function teamsOf(title: string): string[] {
+  const plain = title.replace(/\s*\([^)]*\)\s*$/, '').replace(/^[^:]*:\s*/, '')
+  const sides = /^(.+?)\s+(?:vs\.?|v|versus|at|@)\s+(.+)$/i.exec(plain)
+  return sides ? [sides[1]!.trim(), sides[2]!.trim()] : []
+}
 export function programmesFor(ch: Channel, fromMs: number, toMs: number): Programme[] {
   const out: Programme[] = []
   const slot = 30 * 60_000
@@ -168,10 +176,12 @@ export function programmesFor(ch: Channel, fromMs: number, toMs: number): Progra
   while (t < toMs) {
     const len = (1 + ((seed + i) % 3)) * slot
     const start = Math.max(t, t)
+    const sport = ch.group === 'Sports'
+    const title = `${(sport ? games : showNames)[(seed + i) % (sport ? games : showNames).length]}${i % 4 === 0 ? ' (Live)' : ''}`
     out.push({
       id: `${ch.id}@${start}`, channel_id: ch.id, start: new Date(start).toISOString(), stop: new Date(start + len).toISOString(),
-      title: `${showNames[(seed + i) % showNames.length]}${i % 4 === 0 ? ' (Live)' : ''}`, description: 'Fixture programme. In mock mode every channel plays the same test pattern.',
-      category: ch.group, icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(),
+      title, description: 'Fixture programme. In mock mode every channel plays the same test pattern.',
+      category: ch.group, icon: null, catchup_available: ch.catchup_days > 0 && start + len < Date.now(), is_sport: sport, teams: sport ? teamsOf(title) : [],
     })
     t += len
     i++
@@ -189,7 +199,8 @@ export const channelTile = (c: Channel): Tile => ({
   sources: [{ source_id: c.source_id, source_type: 'xtream', name: 'IPTV', playable_in_app: true, kind: 'live' }], now_playing: c.now,
 })
 
-export function homeRows(): { hero: Tile[]; rows: Row[] } {
+/** `chosen`: the home_shelves setting (Name, movies:Name, shows:Name). Empty: Home chooses, as below. */
+export function homeRows(chosen: string[] = []): { hero: Tile[]; rows: Row[] } {
   const all: Tile[] = titles.map((t) => ({ ...t, is_favorite: fav.has(t.id), progress_pct: progress[t.id] ? (progress[t.id]!.pos / progress[t.id]!.dur) * 100 : null }))
   const by = (ids: string[]) => ids.map((id) => all.find((t) => t.id === id)).filter((t): t is Tile => !!t)
   const favChannels = channels.filter((c) => fav.has(c.id)).map(withNowNext).map(channelTile)
@@ -203,7 +214,16 @@ export function homeRows(): { hero: Tile[]; rows: Row[] } {
   })
   const [newReleases, ...otherMovies] = movies
   const picked: Row[] = []
-  for (let i = 0; picked.length < 8 && (shows[i] || otherMovies[i]); i++) {
+  if (chosen.length) {
+    // The owner's list, in order, at most twelve; a name no shelf has is skipped.
+    for (const entry of chosen) {
+      const sided = /^(movies|shows):(.+)$/.exec(entry)
+      for (const section of sided ? [sided[1] as 'movies' | 'shows'] : (['movies', 'shows'] as const)) {
+        const shelf = (section === 'movies' ? movies : shows).find((s) => s.name === (sided ? sided[2] : entry))
+        if (shelf && picked.length < 12 && !(section === 'movies' && shelf === newReleases)) picked.push(shelfRow(section, shelf))
+      }
+    }
+  } else for (let i = 0; picked.length < 8 && (shows[i] || otherMovies[i]); i++) {
     if (shows[i]) picked.push(shelfRow('shows', shows[i]!))
     if (otherMovies[i] && picked.length < 8) picked.push(shelfRow('movies', otherMovies[i]!))
   }

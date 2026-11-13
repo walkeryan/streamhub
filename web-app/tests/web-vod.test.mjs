@@ -49,3 +49,16 @@ test('a source_busy answer becomes a heading and one line per stream', async () 
   assert.equal(parseSourceBusy({ code: 'upstream_error', message: 'x' }), null)
   assert.equal(parseSourceBusy(null), null)
 })
+
+test('a stream URL that will not play says which kind of no it is', async () => {
+  const { streamRefusal, AWAY_FROM_HOME } = await import('../src/player/sourceBusy.ts')
+  // 409: the source, or the viewer's own limit, with who is watching what.
+  assert.deepEqual(streamRefusal({ code: 'user_stream_limit', message: 'limit', limit: 1, active: [{ title: 'Harbor Lights' }] }), { busy: { active: [{ title: 'Harbor Lights' }], limit: 1, own: true } })
+  // 403: not for this user here; asking again changes nothing.
+  assert.deepEqual(streamRefusal({ code: 'remote_access_denied', message: 'remote access is not allowed for this user' }), { denied: AWAY_FROM_HOME })
+  assert.deepEqual(streamRefusal({ code: 'content_restricted', message: 'Not available for this profile.' }), { denied: 'Not available for this profile.' })
+  // 401: the session the URL was issued to; the API decides what that means for this device.
+  for (const code of ['session_revoked', 'user_suspended', 'session_stale']) assert.deepEqual(streamRefusal({ code, message: '' }), { session: true })
+  assert.equal(streamRefusal({ code: 'not_found', message: '' }), null)
+  assert.equal(streamRefusal(undefined), null)
+})

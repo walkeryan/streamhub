@@ -61,8 +61,10 @@ async function refreshTokens(): Promise<boolean> {
         body: JSON.stringify({ refresh_token: refresh }),
       })
       if (!res.ok) {
-        // A suspended user's refresh is refused too; they are told why they are signed out.
-        if ((await codeOf(res)) === 'user_suspended' && useSession.getState().refresh === refresh && useSession.getState().generation === generation) useSession.getState().end(SUSPENDED)
+        // A suspended user's refresh is refused too, and so is a device that was signed out elsewhere; they are told why.
+        const why = await codeOf(res)
+        const reason = why === 'user_suspended' ? SUSPENDED : why === 'session_revoked' ? REVOKED : null
+        if (reason && useSession.getState().refresh === refresh && useSession.getState().generation === generation) useSession.getState().end(reason)
         throw new Error('refresh failed')
       }
       const t = (await res.json()) as AuthTokens
@@ -98,7 +100,8 @@ const NOT_A_TOKEN = new Set(['pin_required', 'pin_invalid'])
 /**
  * fetch wrapper: bearer auth + single refresh-and-retry on 401. It also acts on what a refusal says about
  * the session itself: a suspended user is signed out with the reason, a stale session (role, permissions
- * or limits changed) is refreshed and re-reads /auth/me, a missing permission re-reads it too.
+ * or limits changed) is refreshed and re-reads /auth/me, a missing permission re-reads it too, and a
+ * user who may not watch away from home is shown that instead of the app.
  */
 export const authenticatedFetch = async (input: Request): Promise<Response> => {
   const initialProfile = useSession.getState().profile?.id
@@ -115,6 +118,8 @@ export const authenticatedFetch = async (input: Request): Promise<Response> => {
   if (res.status === 403) {
     // What this user may do is not what the app thought: ask again (unless that was the asking).
     if (code === 'forbidden' && !new URL(input.url).pathname.endsWith('/auth/me')) refreshMe()
+    // Away from the home network without remote.access every call but /auth/me answers this: the app says so once, in one place.
+    if (code === 'remote_access_denied' && current()) useSession.getState().setAway(true)
     return res
   }
   if (current() && !NOT_A_TOKEN.has(code ?? '')) {
@@ -129,6 +134,23 @@ export const authenticatedFetch = async (input: Request): Promise<Response> => {
 
 export const api = createClient<paths>({ baseUrl: API_BASE, fetch: authenticatedFetch })
 
+/**
+ * A URL that carries its own grant (a stream, a room member's descriptor) answered 401 session_revoked,
+ * user_suspended or session_stale: the session it was issued to no longer stands. Whether that is this
+ * device's session is the API's to say, so ask /auth/me. The fetch above then signs a revoked or
+ * suspended session out with the reason, and refreshes a stale one. True when the session still stands,
+ * so the caller can ask for its stream again.
+ */
+export async function sessionStands(): Promise<boolean> {
+  const { refresh, generation } = useSession.getState()
+  if (!refresh) return false
+  try { await unwrap(api.GET('/auth/me')) } catch { /* what the refusal means has been acted on above */ }
+  refreshMe()
+  return useSession.getState().generation === generation && !!useSession.getState().access
+}
+/** For the calls the contract gives no bearer token: what authorizes them is in the request itself (a room member's token). */
+export const tokenless = createClient<paths>({ baseUrl: API_BASE })
+
 /** Unwraps an openapi-fetch result, throwing ApiError on failure. */
 export async function unwrap<T>(p: Promise<{ data?: unknown; error?: unknown; response: Response }>): Promise<T> {
   const { data, error, response } = await p
@@ -142,21 +164,7 @@ export async function ok(p: Promise<{ error?: unknown; response: Response }>): P
   if (!response.ok) throw apiError(response, error)
 }
 
-/**
- * For calls the generated contract does not describe yet. Same auth, refresh and errors as `api`.
- * A 404 means the server does not have the feature; callers hide what depends on it.
- */
-export async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await authenticatedFetch(new Request(`${API_BASE}${path}`, {
-    method, signal, headers: body === undefined ? undefined : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
-  }))
-  const text = await response.text()
-  let data: unknown
-  try { data = text ? JSON.parse(text) : undefined } catch { data = undefined }
-  if (!response.ok) throw apiError(response, data)
-  return data as T
-}
-/** The server has no such call (an older server). */
+/** The server has no such call (an older server), or no such thing. */
 export const absent = (e: unknown): boolean => e instanceof ApiError && e.status === 404
 
 /**

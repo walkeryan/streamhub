@@ -8,12 +8,25 @@ import {
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
-import { adultUnlocked, mockProfile, ownProfile, peopleHandlers, setProfilePin } from './people'
+import { adultUnlocked, holds, mockProfile, ownProfile, peopleHandlers, setProfilePin } from './people'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
 const srcs: Source[] = [...sources]
 let settings = { tmdb_api_key_set: false, region: 'US', sleep_timer_min: null as number | null, epg_refresh_hours: 12, transcode_hw: 'none', proxy_mode: 'auto' }
+// The shelves Home shows after New Releases, in order; empty = Home chooses. Kept for the tab, like the other fixtures a spec changes.
+const HOME_SHELVES = 'mock.home_shelves'
+const homeShelves = (): string[] => { try { return JSON.parse(sessionStorage.getItem(HOME_SHELVES) ?? '[]') as string[] } catch { return [] } }
+/** Does an entry (Name, movies:Name, shows:Name) name a shelf the fixtures have? */
+const knownShelf = (entry: string): boolean => {
+  const sided = /^(movies|shows):(.+)$/.exec(entry)
+  return (sided ? [sided[1] as 'movies' | 'shows'] : (['movies', 'shows'] as const)).some((section) => shelvesOf(section).some((s) => s.name === (sided ? sided[2] : entry)))
+}
+/** GET /settings: the two home_shelves fields are null for a caller without system.manage. */
+const settingsFor = (request: Request) => {
+  const manages = holds(request, 'system.manage')
+  return { ...settings, request_manager_configured: requestManagerConfigured(), home_shelves: manages ? homeShelves() : null, home_shelves_unknown: manages ? homeShelves().filter((e) => !knownShelf(e)) : null }
+}
 let pinPolls = 0
 const hiddenGroups = new Set<string>()
 
@@ -144,7 +157,7 @@ export const handlers = [
     { key: 'disney', name: 'Disney+', web_url: 'https://www.disneyplus.com/' },
   ])),
 
-  http.get(`${B}/home`, async () => { await delay(120); return HttpResponse.json(homeRows()) }),
+  http.get(`${B}/home`, async () => { await delay(120); return HttpResponse.json(homeRows(homeShelves())) }),
   http.get(`${B}/search`, async ({ request }) => {
     const q = (new URL(request.url).searchParams.get('q') ?? '').toLowerCase()
     await delay(100)
@@ -318,7 +331,18 @@ export const handlers = [
   http.delete(`${B}/watchlist`, ({ request }) => { watch.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
   http.get(`${B}/history`, () => HttpResponse.json(Object.keys(progress).map(tileById).filter((t): t is Tile => !!t))),
   http.get(`${B}/themes`, () => HttpResponse.json([])),
-  http.get(`${B}/settings`, () => HttpResponse.json({ ...settings, request_manager_configured: requestManagerConfigured() })),
-  http.patch(`${B}/settings`, async ({ request }) => { settings = { ...settings, ...((await request.json()) as object) }; return HttpResponse.json(settings) }),
+  http.get(`${B}/settings`, ({ request }) => HttpResponse.json(settingsFor(request))),
+  http.patch(`${B}/settings`, async ({ request }) => {
+    const { home_shelves, ...rest } = (await request.json()) as { home_shelves?: string[] | null } & Record<string, unknown>
+    if (home_shelves !== undefined) {
+      if (!holds(request, 'system.manage')) return HttpResponse.json({ code: 'forbidden', message: 'Missing permission: system.manage', missing: ['system.manage'] }, { status: 403 })
+      // Stored trimmed, without blanks or repeats.
+      const kept = [...new Set((home_shelves ?? []).map((e) => e.trim()).filter(Boolean))]
+      if (kept.length > 24 || kept.some((e) => e.length > 200)) return HttpResponse.json({ code: 'validation_error', message: 'home_shelves takes at most 24 entries of at most 200 characters.' }, { status: 422 })
+      sessionStorage.setItem(HOME_SHELVES, JSON.stringify(kept))
+    }
+    settings = { ...settings, ...rest }
+    return HttpResponse.json(settingsFor(request))
+  }),
   http.put(`${B}/settings/tmdb_key`, () => { settings.tmdb_api_key_set = true; return new HttpResponse(null, { status: 204 }) }),
 ]

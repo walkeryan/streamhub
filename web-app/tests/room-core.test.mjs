@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { RoomClock, clockSample } from '../src/room/roomClock.ts'
-import { decide, isSeek, positionAt } from '../src/room/roomSync.ts'
+import { decide, positionAt, streamRestarted } from '../src/room/roomSync.ts'
 import { RoomSocket, RECONNECT_DELAYS_MS } from '../src/room/RoomSocket.ts'
 
 test('a pong gives the offset to the middle of its round trip', () => {
@@ -72,14 +72,14 @@ test('a live room has no position: only play and pause', () => {
   assert.deepEqual(decide({ ...live, playing: false }, 9000, 0, true), { type: 'pause' })
 })
 
-test('a seek is a state whose position the clock did not already have', () => {
-  const playing = { playing: true, position_ms: 10_000, as_of_ms: 1000 }
-  assert.equal(isSeek(null, playing), false)
-  assert.equal(isSeek(playing, { playing: false, position_ms: 14_000, as_of_ms: 5000 }), false) // paused four seconds in
-  assert.equal(isSeek({ playing: false, position_ms: 14_000, as_of_ms: 5000 }, { playing: true, position_ms: 14_000, as_of_ms: 90_000 }), false)
-  assert.equal(isSeek(playing, { playing: true, position_ms: 300_000, as_of_ms: 5000 }), true)
-  assert.equal(isSeek(playing, { playing: true, position_ms: 0, as_of_ms: 5000 }), true)
-  assert.equal(isSeek(playing, { playing: true, position_ms: null, as_of_ms: 5000 }), false)
+test('a shared stream is loaded again only when its epoch is not the one in use', () => {
+  assert.equal(streamRestarted(3, { stream_epoch: 4 }), true) // a seek restarted it
+  assert.equal(streamRestarted(3, { stream_epoch: 3 }), false) // play, pause, or a seek to where it already starts
+  assert.equal(streamRestarted(3, { stream_epoch: 1 }), true) // the room's stream was made anew
+  // A title each member plays for themselves: no epoch on the state, nothing to reload, whatever the position did.
+  assert.equal(streamRestarted(null, { stream_epoch: null }), false)
+  assert.equal(streamRestarted(null, {}), false)
+  assert.equal(streamRestarted(undefined, {}), false)
 })
 
 /* ---------- RoomSocket against a fake socket and fake timers ---------- */
@@ -204,18 +204,45 @@ test('closed{reason} and the final close codes end the room without a retry', ()
   } finally { mock.timers.reset() }
 })
 
-test('moving to a new seat leaves the old one and connects as the new member', () => {
+test('a renewed member token is used by the next connection; the open one stays', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { socket, last } = room()
+    socket.connect(); last().open()
+    const first = last()
+    socket.setUrl('ws://hub.test/api/v1/rooms/ABC234/ws?member_token=t2')
+    assert.equal(first.closedWith, null)
+    assert.equal(FakeSocket.made.length, 1)
+    first.end(1006)
+    mock.timers.tick(RECONNECT_DELAYS_MS[0])
+    assert.equal(FakeSocket.made.length, 2)
+    assert.equal(last().url.endsWith('member_token=t2'), true)
+  } finally { mock.timers.reset() }
+})
+
+test('a shared-stream state carries its epoch and start; other rooms have neither', () => {
   const { socket, last } = room()
   socket.connect(); last().open()
-  const first = last()
-  socket.moveTo('ws://hub.test/api/v1/rooms/ABC234/ws?member_token=t2')
-  assert.equal(first.closedWith, 1000)
-  assert.equal(FakeSocket.made.length, 2)
-  assert.equal(last().url.endsWith('member_token=t2'), true)
-  first.end(1000) // the old socket's close is not this room's business any more
-  assert.equal(socket.snapshot.closed, null)
-  last().open()
-  assert.equal(socket.snapshot.status, 'open')
+  last().say({ type: 'state', playing: false, position_ms: 62_000, as_of_ms: 5000, by: 'm1', controls_locked: false, stream_epoch: 2, stream_start_ms: 60_000 })
+  assert.equal(socket.snapshot.state.stream_epoch, 2)
+  assert.equal(socket.snapshot.state.stream_start_ms, 60_000)
+  last().say({ type: 'state', playing: true, position_ms: 62_000, as_of_ms: 6000, by: 'm1', controls_locked: false })
+  assert.equal(socket.snapshot.state.stream_epoch, null)
+  assert.equal(socket.snapshot.state.stream_start_ms, null)
   socket.leave()
-  assert.equal(socket.snapshot.closed, 'left')
+})
+
+test('a seat found gone elsewhere ends the room once, without a retry', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { socket, last } = room()
+    socket.connect(); last().open()
+    socket.end('not_a_member')
+    assert.equal(socket.snapshot.closed, 'not_a_member')
+    assert.equal(socket.snapshot.status, 'closed')
+    socket.end('unauthorized') // the first reason stands
+    assert.equal(socket.snapshot.closed, 'not_a_member')
+    mock.timers.tick(60_000)
+    assert.equal(FakeSocket.made.length, 1)
+  } finally { mock.timers.reset() }
 })

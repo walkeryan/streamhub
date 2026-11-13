@@ -19,7 +19,7 @@ export interface PlayerHandle {
 
 export interface AttachOptions {
   signal?: AbortSignal
-  /** `refusal` is the server's JSON answer when it turned the stream away (409), if the engine can read it. */
+  /** `refusal` is the server's JSON answer when it turned the stream away (401, 403, 409), if the engine can read it. */
   onFatal: (reason: string, refusal?: unknown) => void
   onTracks?: (resetAudio?: boolean) => void
 }
@@ -70,11 +70,13 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     let audioReady = false
     hls.on(Hls.Events.ERROR, (_e, data) => {
       if (!data.fatal) return
-      // 409 is the server saying the source has no free connection. Loading again cannot succeed.
-      if (data.response?.code === 409) {
+      // The server turned the stream away and says why: no free connection (409), not for this user here (403),
+      // or the session it was issued to is gone (401). Loading again cannot succeed.
+      const status = data.response?.code
+      if (status === 409 || status === 403 || status === 401) {
         let refusal: unknown
         try { refusal = JSON.parse((data.networkDetails as XMLHttpRequest | undefined)?.responseText ?? '') } catch { refusal = undefined }
-        opt.onFatal('http 409', refusal)
+        opt.onFatal(`http ${status}`, refusal)
         return
       }
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries++ < 2) hls.startLoad()

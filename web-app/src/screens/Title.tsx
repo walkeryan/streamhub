@@ -21,6 +21,7 @@ import { LANG_NAMES } from '../lib/util'
 import { isOpenRequest, requestStateLabel, tmdbRef } from '../lib/requests'
 import { useUi } from '../store/ui'
 import { ShareSheet } from '../room/ShareSheet'
+import { useCan } from '../api/me'
 import { useGo } from '../nav/back'
 
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', series: 'Series', vod: 'Movie', episode: 'Episode', season: 'Season' }
@@ -64,6 +65,7 @@ function TitleDetails({ id }: { id: string }) {
   const [room, setRoom] = useState<{ key: string; room: Room } | null>(null)
   const [sharing, setSharing] = useState(false)
   const [startingRoom, setStartingRoom] = useState(false)
+  const mayStartRoom = useCan('rooms.create')
   const requestOpen = isOpenRequest(t?.request_state)
   const canRequest = !!t?.requestable && !requestOpen && !!tmdbRef(t.id)
   useRestoreFocus(!!t, t?.sources.length ? 'title:play' : canRequest ? 'title:request' : 'title:watchlist')
@@ -181,9 +183,9 @@ function TitleDetails({ id }: { id: string }) {
             {t.request_state && t.request_state !== 'available' && !canPlay && (
               <p role="status" data-testid="title-request-state"><span className="badge">{requestStateLabel(t.request_state)}</span></p>
             )}
-            <FocusGroup focusKey="title:actions" className={phone ? 'title-actions' : 'flex gap-3 flex-wrap items-center'} preferred="title:play" data={{ together: canPlay }}>
+            <FocusGroup focusKey="title:actions" className={phone ? 'title-actions' : 'flex gap-3 flex-wrap items-center'} preferred="title:play" data={{ together: canPlay && mayStartRoom }}>
               {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id && pickedTrack === null ? 'Choose audio / source' : playLabel}</Button>}
-              {canPlay && <Button focusKey="title:together" icon="people" iconOnly={phone} label={phone ? 'Watch together' : undefined} disabled={startingRoom} onEnter={() => void watchTogether()} testId="title-together">{phone ? null : startingRoom ? 'Starting a room…' : 'Watch together'}</Button>}
+              {canPlay && mayStartRoom && <Button focusKey="title:together" icon="people" iconOnly={phone} label={phone ? 'Watch together' : undefined} disabled={startingRoom} onEnter={() => void watchTogether()} testId="title-together">{phone ? null : startingRoom ? 'Starting a room…' : 'Watch together'}</Button>}
               {!phone && choosable && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
               {canRequest && <Button focusKey="title:request" primary={!handoff.length} icon="plus" onEnter={startRequest} testId="title-request">{t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'}</Button>}
               <Button focusKey="title:watchlist" icon={onWatchlist ? 'check' : 'bookmark'} pressed={onWatchlist} onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })}>

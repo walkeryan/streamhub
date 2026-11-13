@@ -15,13 +15,15 @@ import { Button, ErrorState } from './ui'
 /**
  * The picker a shared household device opens on, and shows again from the profile entry. Choosing
  * someone switches this device's session to them: the server asks for their PIN when they have one,
- * and refuses a switch to wider access when they have none. `mandatory` is the picker at the start
- * of the app, which has no way out but choosing.
+ * and refuses a switch to wider access when they have none. Choosing the person already watching
+ * hands nothing over; when they have a PIN the same call checks it. `mandatory` is the picker at the
+ * start of the app, which has no way out but choosing.
  */
 export function WhoIsWatching({ users, mandatory, error, onRetry }: { users: Switchable[] | undefined; mandatory?: boolean; error?: unknown; onRetry?: () => void }) {
   const pick = useWho((s) => s.pick)
   const hide = useWho((s) => s.hide)
   const setSession = useSession((s) => s.setSession)
+  const refreshSession = useSession((s) => s.refreshSession)
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [asking, setAsking] = useState<Switchable | null>(null)
@@ -37,7 +39,16 @@ export function WhoIsWatching({ users, mandatory, error, onRetry }: { users: Swi
   }, [])
 
   const switchTo = async (u: Switchable, pin?: string) => {
-    const t = await people.switchTo(u.id, pin)
+    const { refresh, generation } = useSession.getState()
+    let t
+    try { t = await people.switchTo(u.id, pin) } catch (e) {
+      // Not someone this device can be handed to any more: removed, suspended, or taken off shared devices.
+      if (!absent(e)) throw e
+      void qc.invalidateQueries({ queryKey: ['switchable'] })
+      throw new Error(`${u.display_name} can no longer be chosen on this device.`, { cause: e })
+    }
+    // The same person stays: new tokens for the same session, and nothing of theirs to throw away.
+    if (u.current && refresh && refreshSession(t.access_token, t.refresh_token, t.profile, refresh, generation)) { pick(); return }
     // Everything cached belongs to the person who was watching.
     await qc.cancelQueries()
     qc.clear()
@@ -59,7 +70,6 @@ export function WhoIsWatching({ users, mandatory, error, onRetry }: { users: Swi
     try { await switchTo(u) } catch (e) {
       const code = e instanceof ApiError ? e.code : undefined
       if (code === 'pin_required') setAsking(u)
-      else if (absent(e)) { setProblem('This server cannot switch users yet.'); if (!mandatory) hide() }
       else setProblem(refused(u)(code) ?? (e instanceof ApiError && e.status === 429 ? 'Too many attempts. Wait a few minutes and try again.' : e instanceof Error ? e.message : 'Could not switch.'))
     } finally { setBusy(false) }
   }

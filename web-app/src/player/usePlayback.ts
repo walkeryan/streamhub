@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { api, ApiError, reportProgress, unwrap } from '../api/client'
+import { api, ApiError, reportProgress, sessionStands, unwrap } from '../api/client'
 import type { PlaybackDescriptor } from '../api/types'
 import { useSession } from '../store/session'
 import { BufferSession, bufferError, type BufferWindow } from './bufferSession'
 import { attachSource, type PlayerHandle } from './engine'
 import { audioAllowed, audioSelection, preferredAudioTrack } from './audioPolicy'
-import { busyHeading, parseSourceBusy, type SourceBusy } from './sourceBusy'
+import { AWAY_FROM_HOME, busyHeading, parseSourceBusy, streamRefusal, type SourceBusy, type StreamRefusal } from './sourceBusy'
 
 export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
 
@@ -111,8 +111,39 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     setBusy(found); setState('error'); setError(busyHeading(found))
   }, [clearRetry, clearWaiting])
 
+  // The stream will not play for this user from here (away from home, or no longer allowed): say so, do not knock again.
+  const showDenied = useCallback((message: string) => {
+    terminal.current = true
+    clearRetry(); clearWaiting()
+    handle.current?.destroy()
+    setBusy(null); setState('error'); setError(message)
+  }, [clearRetry, clearWaiting])
+  // The stream says the session it was issued to no longer stands. Once per deliberate Play or Retry, have the API
+  // judge this device's session: a revoked or suspended one is signed out there, a stale one refreshed, and a
+  // session that stands asks for its stream again at once.
+  const sessionChecked = useRef<object | null>(null)
+  const recheckSession = useCallback((): boolean => {
+    const owner = intent.current
+    if (sessionChecked.current === owner) return false
+    sessionChecked.current = owner
+    void sessionStands().then((stands) => {
+      if (!stands || intent.current !== owner || terminal.current) return
+      clearRetry(); retry.current = 0
+      setAttempt((a) => a + 1)
+    })
+    return true
+  }, [clearRetry])
+  /** Act on what the stream said. False when it said nothing this can act on, or it was acted on before. */
+  const heed = useCallback((refused: StreamRefusal | null): boolean => {
+    if (!refused) return false
+    if ('busy' in refused) showBusy(refused.busy)
+    else if ('denied' in refused) showDenied(refused.denied)
+    else return recheckSession()
+    return true
+  }, [showBusy, showDenied, recheckSession])
+
   // Most players only report that their stream failed, never the server's answer. When the stream is one
-  // of ours, ask for it again: a 409 source_busy says who is using the source.
+  // of ours, ask for it again: a 409 says who is using the source, a 403 or 401 why this user may not have it.
   const explainRefusal = useCallback(() => {
     const d = descRef.current
     if (!d?.url || (d.mode !== 'hls' && d.mode !== 'proxy')) return
@@ -122,19 +153,22 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     const owner = intent.current
     const played = plays.current
     fetch(url, { headers: { Range: 'bytes=0-0' }, cache: 'no-store' }).then(async (response) => {
-      if (response.status !== 409) { void response.body?.cancel(); return }
-      const found = parseSourceBusy(await response.json())
+      if (response.status !== 409 && response.status !== 403 && response.status !== 401) { void response.body?.cancel(); return }
+      const found = streamRefusal(await response.json())
       // Stale once the viewer moved on, or once a retry got through while this was in flight.
       if (!found || intent.current !== owner || plays.current !== played || terminal.current) return
-      showBusy(found)
+      heed(found)
     }).catch(() => undefined)
-  }, [showBusy])
+  }, [heed])
 
   const reconnect = useCallback((_reason: string, refusal?: unknown) => {
     if (terminal.current) return
     clearWaiting()
-    const refused = parseSourceBusy(refusal)
-    if (refused && !buffer.current) { showBusy(refused); return }
+    if (!buffer.current) {
+      const refused = streamRefusal(refusal)
+      if (refused && 'session' in refused) setState('reconnecting')
+      if (heed(refused)) return
+    }
     // A restart-at-offset stream comes back where it stopped, not where progress was last saved.
     if (descRef.current?.start_position_ms != null && hasPlayed.current) restart.current = { ...restart.current, startMs: titlePositionMs() }
     if (buffer.current) {
@@ -157,7 +191,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     setState('reconnecting')
     retryTimer.current = window.setTimeout(() => { retryTimer.current = null; setAttempt((a) => a + 1) }, wait)
     explainRefusal()
-  }, [clearWaiting, titlePositionMs, explainRefusal, showBusy])
+  }, [clearWaiting, titlePositionMs, explainRefusal, heed])
 
   // resolve + attach
   useEffect(() => {
@@ -322,6 +356,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
             ? 'Playback was stopped by an administrator. Once playback is resumed, choose Try again to start a new stream.'
             : e.code === 'playback_reload_required'
             ? 'Playback controls have been updated. Reload Streamhub before trying again.'
+            : e.code === 'remote_access_denied'
+            ? AWAY_FROM_HOME
             : e.status === 401 || e.status === 403
             ? 'Playback access was denied. Check your sign-in and source access, then try again.'
             : 'This title or channel is unavailable from this source. Try another item or retry after the source is available.')

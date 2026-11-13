@@ -13,16 +13,21 @@ import { busyHeading, busyLines, parseSourceBusy } from '../player/sourceBusy'
 import { prefersHls } from '../player/usePlayback'
 import { JoinRoomDialog } from '../room/JoinRoomDialog'
 import { positionAt } from '../room/roomSync.ts'
-import { RoomSession } from '../room/session'
+import { RoomSession, seatToken } from '../room/session'
 import { ShareSheet } from '../room/ShareSheet'
 import { useAdaptiveAccent } from '../lib/theme'
 import { fmtDuration } from '../lib/util'
 import { useSession } from '../store/session'
+import { useAccess } from '../api/me'
+import { can } from '../lib/can'
 import { Player } from './Player'
 
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', episode: 'Episode', channel: 'Live channel' }
 
 interface Refusal { title: string; lines: string[]; /** joining with the room's audio is the viewer's call */ consent?: boolean; gone?: boolean }
+
+/** A link reaches this screen whoever opens it; someone without rooms.join is told so before they try. */
+const BARRED: Refusal = { title: 'You cannot join rooms', lines: ['Your account is not allowed to join watch rooms. Ask the person who runs this StreamHub to change that.'], gone: true }
 
 /** Why the room could not be shown or joined, in the server's words where it has some. */
 function refusalOf(e: unknown): Refusal {
@@ -57,8 +62,10 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
   const [sharing, setSharing] = useState(false)
   const [other, setOther] = useState(false)
   const busy = useRef(false)
+  const access = useAccess()
+  const barred = access.permissions !== undefined && !can(access, 'rooms.join')
   useAdaptiveAccent(room?.title.backdrop ?? room?.title.poster)
-  useRestoreFocus(!session && (!!room || !!info.error), room ? 'room:join' : 'room:other')
+  useRestoreFocus(!session && (!!room || !!info.error), barred ? 'room:home' : room ? 'room:join' : 'room:other')
 
   const join = useCallback(async (known: Room, allowUnverifiedAudio = false) => {
     if (busy.current) return
@@ -66,7 +73,8 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
     setJoining(true); setRefusal(null)
     try {
       const { generation } = await unwrap<{ generation: string }>(api.GET('/playback/generation'))
-      const joined = await joinRoom(code, { client: 'web', prefer_hls: prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio })
+      // A seat this tab still holds (a reload, a connection that came back) is kept, not doubled.
+      const joined = await joinRoom(code, { client: 'web', prefer_hls: prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio, member_token: seatToken(code) })
       setSession(new RoomSession(known, joined, { generation, allowUnverifiedAudio, startAtMs }))
       setSeat((n) => n + 1)
     } catch (e) {
@@ -91,7 +99,7 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
 
   if (session) return <Player key={seat} room={session} onRejoin={() => { setSession(null); void join(session.room) }} />
 
-  const failed = info.error && !room ? refusalOf(info.error) : null
+  const failed = barred ? BARRED : info.error && !room ? refusalOf(info.error) : null
   const shown = failed ?? refusal
   const full = !!room && room.members.length >= room.max_members
   const at = room ? positionAt(room.state, room.server_ms + (Date.now() - info.dataUpdatedAt)) : null
@@ -133,7 +141,7 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
                   {joining ? 'Joining…' : refusal?.consent ? "Join with the room's audio" : full ? 'Room is full' : refusal ? 'Try again' : 'Join room'}
                 </Button>}
                 {room && !shown && <Button focusKey="room:invite" icon="people" onEnter={() => setSharing(true)} testId="room-join-invite">Invite</Button>}
-                <Button focusKey="room:other" icon="search" onEnter={() => setOther(true)} testId="room-other">{room ? 'Another room' : 'Enter a code'}</Button>
+                {!barred && <Button focusKey="room:other" icon="search" onEnter={() => setOther(true)} testId="room-other">{room ? 'Another room' : 'Enter a code'}</Button>}
                 <Button focusKey="room:home" ghost onEnter={() => go('/')}>{room ? 'Not now' : 'Home'}</Button>
               </FocusGroup>
             </div>

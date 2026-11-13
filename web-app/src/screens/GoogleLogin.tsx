@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router'
 import { OwnerPin } from '../components/OwnerPin'
 import { OwnerPinSetup } from '../components/OwnerPinSetup'
 import { isAuthTokens, type PendingOwnerLogin, type OwnerPinResult } from '../api/ownerPin'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useAuthCapabilities } from '../api/contentPolicy'
 import { Button, ErrorState } from '../components/ui'
 import { FocusGroup } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
@@ -63,11 +64,7 @@ export function LoginGate() {
   const notice = useSession((s) => s.notice)
   const [error, setError] = useState<string | null>(()=>new URLSearchParams(window.location.search).has('owner_pin_uncertain')?'Authorization outcome is unknown. Sign in with Google and your owner PIN again. The previous submission will not be retried.':null)
   const [busy, setBusy] = useState(false)
-  const config = useQuery({ queryKey: ['auth-config'], queryFn: async () => {
-    const r = await fetch('/api/v1/auth/config')
-    if (!r.ok) throw new Error('Cannot load sign-in settings. Please retry.')
-    return await r.json() as { google_enabled: boolean; google_required: boolean; signup_mode?: 'approval' | 'invite_only' }
-  } })
+  const config = useAuthCapabilities()
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.has('google_error')) {

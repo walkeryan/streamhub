@@ -19,6 +19,7 @@ import type { RoomSession } from '../room/session'
 import { ShareSheet } from '../room/ShareSheet'
 import { useRoomPlayer } from '../room/useRoomPlayer'
 import { useSession } from '../store/session'
+import { useCan } from '../api/me'
 import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
 
@@ -124,6 +125,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   // Watch together from the player: the room that was just made, shown with its link and code.
   const [together, setTogether] = useState<Room | null>(null)
   const [startingRoom, setStartingRoom] = useState(false)
+  const mayStartRoom = useCan('rooms.create')
   const zappable = isChannel && !room
   const blocking = audio.blocked || overlay !== null || state === 'error' || state === 'handoff' || !!roomCtl?.modal || !!together
   const blockingRef = useRef(false)
@@ -366,7 +368,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   }
 
   return (
-    <div className="player" data-testid="player" data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} role="main" onPointerMove={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
+    <div className="player" data-testid="player" data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} data-stream-start={restartable ? desc.start_position_ms ?? 0 : undefined} role="main" onPointerMove={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
       {/* focus target for "the video itself": Up from the control bar lands here, so no hidden button keeps focus */}
       <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>
       <video ref={videoRef} playsInline loop={live && desc?.mime === 'video/webm'} style={{ objectFit: aspect }} data-testid="video" aria-label={title} onDoubleClick={fullscreen} onClick={togglePlay} />
@@ -500,7 +502,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
             <MenuSection title="Aspect ratio">
               {ASPECTS.map((a) => <Chip key={a.id} focusKey={`pm:asp:${a.id}`} pressed={aspect === a.id} onEnter={() => setAspect(a.id)}>{a.label}</Chip>)}
             </MenuSection>
-            {!room && !catchup && !rewindAt && !isRecording && (
+            {!room && !catchup && !rewindAt && !isRecording && mayStartRoom && (
               <MenuSection title="Watch together">
                 <Button focusKey="pm:together" icon="people" disabled={startingRoom} onEnter={() => void startTogether()} testId="player-together">{startingRoom ? 'Starting a room…' : 'Watch together'}</Button>
                 <span className="muted label" style={{ flexBasis: '100%' }}>Start a room for this {isChannel ? 'channel' : 'title'} and invite others with a link or code.</span>

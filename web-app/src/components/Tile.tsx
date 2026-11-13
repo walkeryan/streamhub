@@ -25,11 +25,13 @@ export function useOpenTile() {
  * is: "In your library". So is a choice between sources, and a title that only opens in another
  * app. One ordinary source is what every tile of a one-source catalog has, and says nothing.
  */
-export function TileBadge({ sources }: { sources: SourceBadge[] }) {
+export function TileBadge({ sources, max = 1 }: { sources: SourceBadge[]; max?: number }) {
   if (sources.some((s) => s.kind === 'library' || s.source_type === 'plex' || s.source_type === 'jellyfin')) return <span className="badge badge-play" data-testid="tile-badge">In your library</span>
-  const several = new Set(sources.map((s) => s.source_id)).size > 1
-  return several || sources.some((s) => !s.playable_in_app) ? <SourceChips sources={sources} max={1} /> : null
+  return namesSource(sources) ? <SourceChips sources={sources} max={max} /> : null
 }
+/** Is there anything to say about where this plays: the household's library, a choice of sources, or another app? */
+export const namesSource = (sources: SourceBadge[]): boolean =>
+  sources.some((s) => s.kind === 'library' || s.source_type === 'plex' || s.source_type === 'jellyfin' || !s.playable_in_app) || new Set(sources.map((s) => s.source_id)).size > 1
 
 function Fallback({ title }: { title: string }) {
   const h = hueOf(title)

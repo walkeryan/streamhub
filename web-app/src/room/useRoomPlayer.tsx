@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { useNavigate } from 'react-router'
+import { closeRoom } from '../api/hooks'
 import { Button, Modal } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { FocusGroup } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
+import { usePhone } from '../lib/layout'
 import type { PlayState } from '../player/usePlayback'
 import { seekPlan, seekableRanges } from '../player/restartSeek'
 import { useUi } from '../store/ui'
 import type { RoomSnapshot } from './RoomSocket.ts'
-import { decide, isSeek, positionAt } from './roomSync.ts'
+import { decide, positionAt, streamRestarted } from './roomSync.ts'
 import type { RoomSession } from './session'
 import { ShareSheet } from './ShareSheet'
 
@@ -59,6 +61,11 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
   const snapshot = useSyncExternalStore(subscribe, () => (room ? room.socket.snapshot : NO_ROOM))
   const [leaving, setLeaving] = useState(false)
   const [sharing, setSharing] = useState(false)
+  // A phone has one row for back and title: who is in the room is a count there, and a list behind it.
+  const phone = usePhone()
+  const [listing, setListing] = useState(false)
+  // The host ending the room for everyone: asked first, then under way.
+  const [ending, setEnding] = useState<null | 'ask' | 'busy'>(null)
   const link = useRef(player)
   link.current = player
   const isHost = !!room?.room.is_host
@@ -78,7 +85,7 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
   useEffect(() => {
     const video = videoRef.current
     if (!room || !video) return
-    // One fresh descriptor per room state: a stream that still does not reach the room position will not after a second one.
+    // One descriptor asked for per room state: a stream that still does not reach the room position will not after a second one.
     let refreshedFor: number | null = null
     // How long this player's seeks take: while the room plays, aim that far ahead so the seek lands on it.
     let lead = 0
@@ -101,6 +108,11 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
       const p = link.current
       const { state, closed } = room.socket.snapshot
       if (!state || closed) return
+      // The room's shared stream was started again: load the same playlist again, from its new time zero.
+      if (streamRestarted(room.streamEpoch, state)) {
+        if (room.followStream(state)) { refreshedFor = state.as_of_ms; p.reload(); return }
+        if (refreshedFor !== state.as_of_ms) { refresh(state.as_of_ms); return }
+      }
       // The element says whether there is something to steer; the player's own state lags it by a render.
       const loading = p.state === 'resolving' || p.state === 'reconnecting' || video.readyState < HTMLMediaElement.HAVE_METADATA
       const stopped = p.state === 'error' || p.state === 'handoff'
@@ -134,11 +146,7 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
       seekStarted = 0
       tick()
     }
-    const offState = room.onState((state, previous) => {
-      // A seek may have restarted the room's stream: a server-produced stream is asked for again, a plain file is moved in place.
-      if (isSeek(previous, state) && link.current.restartable && refreshedFor !== state.as_of_ms) refresh(state.as_of_ms)
-      else tick()
-    })
+    const offState = room.onState(tick)
     const timer = window.setInterval(tick, SYNC_INTERVAL_MS)
     const events = ['playing', 'pause', 'loadedmetadata', 'canplay', 'waiting'] as const
     for (const name of events) video.addEventListener(name, tick)
@@ -195,18 +203,41 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     navigate(room.room.live ? '/live' : `/title/${encodeURIComponent(room.room.id)}`, { replace: true })
   }, [room, navigate])
   const leave = useCallback(() => { setLeaving(false); room?.socket.leave(); away() }, [room, away])
-  const closed = snapshot.closed && snapshot.closed !== 'left' ? snapshot.closed : null
+  const end = useCallback(async () => {
+    if (!room) return
+    setEnding('busy')
+    try {
+      await closeRoom(room.code)
+      room.socket.leave()
+      away()
+    } catch (e) {
+      setEnding('ask')
+      toast(e instanceof Error ? e.message : 'Could not end the room.', 'error')
+    }
+  }, [room, away, toast])
+  // The host who is ending the room is on the way out, not someone to tell that it closed.
+  const closed = snapshot.closed && snapshot.closed !== 'left' && ending !== 'busy' ? snapshot.closed : null
   useEffect(() => {
     if (!closed) return
-    setLeaving(false); setSharing(false)
+    setLeaving(false); setSharing(false); setListing(false); setEnding(null)
     const timer = window.setTimeout(() => void setFocus('room:closed:away'), 50)
     return () => window.clearTimeout(timer)
   }, [closed])
 
   if (!room) return null
   const lockedOut = snapshot.controlsLocked && !isHost
-  const top: ReactNode = (
-    <div className="room-strip" data-testid="room-members" role="group" aria-label={`In the room: ${snapshot.members.map((m) => m.name).join(', ')}`}>
+  const names = snapshot.members.map((m) => m.name).join(', ')
+  const top: ReactNode = phone ? (
+    <FocusGroup focusKey="room:top" className="room-count">
+      <Button focusKey="room:members" icon="people" onEnter={() => setListing(true)} testId="room-count"
+        label={`${snapshot.members.length} in the room: ${names}. Show who.${lockedOut ? ' The host controls playback.' : ''}${snapshot.status === 'reconnecting' ? ' Reconnecting.' : ''}`}>
+        {snapshot.status === 'reconnecting' ? 'Reconnecting…' : snapshot.members.length}
+        {snapshot.members.some((m) => m.buffering) && <span className="room-buffering"><i aria-hidden="true" /></span>}
+        {lockedOut && <Icon name="lock" size={14} />}
+      </Button>
+    </FocusGroup>
+  ) : (
+    <div className="room-strip" data-testid="room-members" role="group" aria-label={`In the room: ${names}`}>
       <Icon name="people" size={18} />
       {snapshot.members.map((m) => (
         <span key={m.id} className="room-member" data-testid="room-member" data-buffering={m.buffering} data-me={m.id === room.memberId}>
@@ -244,10 +275,34 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     )}
     <Modal open={leaving} onClose={() => setLeaving(false)} title="Leave the room?" firstFocusKey="room:leave:stay" testId="room-leave-confirm">
       <p className="muted">{snapshot.members.length > 1 ? 'The others keep watching. You can come back with the same link or code.' : 'The room stays open for 30 minutes in case someone joins.'}</p>
-      <div className="flex gap-3 flex-wrap">
+      <FocusGroup focusKey="room:leave" className="flex gap-3 flex-wrap">
         <Button focusKey="room:leave:stay" onEnter={() => setLeaving(false)}>Stay</Button>
         <Button focusKey="room:leave:go" danger icon="exit" onEnter={leave} testId="room-leave-go">Leave room</Button>
-      </div>
+        {isHost && <Button focusKey="room:leave:end" ghost icon="x" onEnter={() => { setLeaving(false); setEnding('ask') }} testId="room-end">End room for everyone</Button>}
+      </FocusGroup>
+    </Modal>
+    <Modal open={ending !== null && !closed} onClose={() => { if (ending !== 'busy') setEnding(null) }} title="End the room for everyone?" firstFocusKey="room:end:keep" testId="room-end-confirm">
+      <p className="muted">{snapshot.members.length > 1 ? `Playback stops for all ${snapshot.members.length} of you.` : 'Nobody else is in the room.'} The link and the code stop working, and the room cannot be opened again.</p>
+      <FocusGroup focusKey="room:end" className="flex gap-3 flex-wrap">
+        <Button focusKey="room:end:keep" disabled={ending === 'busy'} onEnter={() => setEnding(null)}>Keep the room</Button>
+        <Button focusKey="room:end:go" danger icon="x" disabled={ending === 'busy'} onEnter={() => void end()} testId="room-end-go">{ending === 'busy' ? 'Ending…' : 'End room for everyone'}</Button>
+      </FocusGroup>
+    </Modal>
+    <Modal open={listing && phone} onClose={() => setListing(false)} title={`In the room · ${snapshot.members.length}`} firstFocusKey="room:list:done" variant="sheet" testId="room-member-list">
+      <ul className="room-list">
+        {snapshot.members.map((m) => (
+          <li key={m.id} data-testid="room-member" data-buffering={m.buffering} data-me={m.id === room.memberId}>
+            <span className="truncate">{m.name}</span>
+            {m.host && <span className="badge">Host</span>}
+            {m.id === room.memberId && <span className="badge">You</span>}
+            {m.buffering && <span className="room-buffering"><i aria-hidden="true" />buffering</span>}
+          </li>
+        ))}
+      </ul>
+      {lockedOut && <p className="muted flex items-center gap-2" data-testid="room-locked"><Icon name="lock" size={16} />The host controls playback.</p>}
+      <FocusGroup focusKey="room:list" className="flex gap-3 flex-wrap">
+        <Button focusKey="room:list:done" onEnter={() => setListing(false)}>Done</Button>
+      </FocusGroup>
     </Modal>
     <ShareSheet room={sharing ? room.room : null} onClose={() => setSharing(false)} />
   </>
@@ -255,6 +310,6 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     snapshot, toggle, seekTo, seekBy, top, bar, layers,
     askLeave: () => setLeaving(true),
     /** A room dialog has the keys: the player's own shortcuts stand down. */
-    modal: leaving || sharing || !!closed,
+    modal: leaving || sharing || listing || ending !== null || !!closed,
   }
 }

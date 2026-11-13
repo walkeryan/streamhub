@@ -1,10 +1,11 @@
 import { http, HttpResponse } from 'msw'
 import type { Channel, PlaybackDescriptor, Programme, Recording, RecordingList, RecordingRule, RecordingRuleList } from '../api/types'
-import { channels, profiles, programmesFor } from './fixtures'
+import { channels, profiles, programmesFor, teamsOf } from './fixtures'
+import { holds, legacyServer, refusedWithout } from './people'
 
 /**
- * A fake recorder: a schedule and rules, no capture. It starts empty, so every other fixture flow is
- * what it was. `sessionStorage['mock.recordings.demo'] = '1'` starts it with a little of everything
+ * A fake recorder: a schedule and rules, no capture. Listing needs recordings.view, changing anything
+ * recordings.schedule. It starts empty, so every other fixture flow is what it was. `sessionStorage['mock.recordings.demo'] = '1'` starts it with a little of everything
  * instead (two to come, one being recorded, two finished, one failed, one missed, two rules) on the
  * first channels of the fixture guide; `sessionStorage['mock.recordings.off'] = '1'` is a server
  * without a recordings folder.
@@ -22,14 +23,14 @@ const profileOf = (req: Request) => profiles.find((p) => p.id === req.headers.ge
 const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('')
 const error = (status: number, code: string, message: string) => HttpResponse.json({ code, message }, { status })
 const enabled = () => sessionStorage.getItem(OFF) !== '1'
-const isSport = (p: Programme) => p.category === 'Sports'
+const isSport = (p: Programme) => !!p.is_sport
 const plain = (title: string) => title.replace(/\s*\(live\)\s*$/i, '').trim().toLowerCase()
 
 function recordingFor(p: Programme, ch: Channel, state: Recording['state'], extra: Partial<Recording> = {}): Recording {
   const now = new Date().toISOString()
   return {
     id: newId(), profile_id: 'p1', profile_name: 'Owner', rule_id: null, channel_id: ch.id, channel_name: ch.name, title: p.title, subtitle: null, season: null, episode: null,
-    is_sport: isSport(p), starts_at: p.start, ends_at: p.stop, pad_before_s: 120, pad_after_s: isSport(p) ? 3600 : 300, state, error: null,
+    is_sport: isSport(p), teams: isSport(p) ? teamsOf(p.title) : [], starts_at: p.start, ends_at: p.stop, pad_before_s: 120, pad_after_s: isSport(p) ? 3600 : 300, state, error: null,
     size_bytes: state === 'done' ? Math.round(((Date.parse(p.stop) - Date.parse(p.start)) / HOUR) * 1.8e9) : null, created_at: now, updated_at: now, ...extra,
   }
 }
@@ -100,11 +101,14 @@ function applyRule(s: Store, rule: RecordingRule): void {
   }
 }
 const dropUpcoming = (s: Store, ruleId: string) => { s.recordings = s.recordings.filter((r) => !(r.rule_id === ruleId && r.state === 'scheduled')) }
-const mayChange = (req: Request) => !!profileOf(req).is_admin
+const mayChange = (req: Request) => holds(req, 'recordings.schedule')
 const refuse = (req: Request) => !enabled() ? error(409, 'recording_unavailable', 'Recording is not set up on this server.') : !mayChange(req) ? error(403, 'recording_forbidden', 'This profile is not allowed to schedule recordings.') : null
 
 export const recordingHandlers = [
   http.get(`${B}/recordings`, ({ request }) => {
+    if (legacyServer()) return error(404, 'not_found', 'Not found')
+    const barred = refusedWithout(request, 'recordings.view')
+    if (barred) return barred
     if (!enabled()) return HttpResponse.json({ enabled: false, can_schedule: mayChange(request), recordings: [] } satisfies RecordingList)
     const state = new URL(request.url).searchParams.get('state')
     const recordings = load().recordings.filter((r) => (state ? r.state === state : r.state !== 'cancelled')).sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))
@@ -138,7 +142,7 @@ export const recordingHandlers = [
     return new HttpResponse(null, { status: 204 })
   }),
   http.get(`${B}/recording-rules`, ({ request }) =>
-    HttpResponse.json({ enabled: enabled(), can_schedule: mayChange(request), rules: enabled() ? load().rules : [] } satisfies RecordingRuleList)),
+    refusedWithout(request, 'recordings.view') ?? HttpResponse.json({ enabled: enabled(), can_schedule: mayChange(request), rules: enabled() ? load().rules : [] } satisfies RecordingRuleList)),
   http.post(`${B}/recording-rules`, async ({ request }) => {
     const refused = refuse(request)
     if (refused) return refused

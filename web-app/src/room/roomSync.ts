@@ -36,12 +36,11 @@ export function decide(state: RoomClockState, serverNowMs: number, localPosition
 }
 
 /**
- * Did someone seek between two room states? Play and pause keep the position the clock already had;
- * a seek puts it somewhere else. The stream of a room may be restarted on a seek, so this is the
- * moment a member's descriptor can go stale.
+ * Has the room's one shared stream been started again since the descriptor in use was made? A seek
+ * restarts it, and every state of such a room says which start it describes (`stream_epoch`): a
+ * different one means the playlist is to be loaded again. A room whose members each play the title
+ * for themselves sends no epoch, and has nothing to reload: its state alone moves the player.
  */
-export function isSeek(previous: RoomClockState | null, next: RoomClockState): boolean {
-  if (!previous || next.position_ms === null) return false
-  const expected = positionAt(previous, next.as_of_ms)
-  return expected === null || Math.abs(expected - next.position_ms) > DRIFT_LIMIT_MS
+export function streamRestarted(inUse: number | null | undefined, state: { stream_epoch?: number | null }): boolean {
+  return state.stream_epoch != null && state.stream_epoch !== (inUse ?? null)
 }
