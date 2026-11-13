@@ -32,8 +32,8 @@ function ProfileSearch({ profileId }: { profileId: string }) {
     }
   }, [q, language, profileId, storageKey, params, setParams])
   // Search spans channels, movies and shows, so its language row counts the languages of all three.
-  const scopes = [useLanguages().data, useBrowseLanguages('movies').data, useBrowseLanguages('shows').data]
-  const known = scopes.every(Boolean) ? [...new Map(scopes.flatMap((list) => list ?? []).map((l): [string, LanguageCount] => [l.code, l])).values()] : undefined
+  const scopes = [useLanguages(), useBrowseLanguages('movies'), useBrowseLanguages('shows')]
+  const known = scopes.some((query) => query.isPending) ? undefined : [...new Map(scopes.flatMap((query) => query.data ?? []).map((l): [string, LanguageCount] => [l.code, l])).values()]
   const scope = languageScope(known, language, preferred)
   const { data, error, isFetching, refetch } = useSearch(dq, { language: scope.language })
   const recents = useUi((s) => s.recentSearches)

@@ -3,7 +3,7 @@ import { useLocation } from 'react-router'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
 import { useChannelGroups, useChannels, useLanguages, useSources, useToggleFavorite } from '../api/hooks'
-import type { Channel } from '../api/types'
+import type { Channel, ChannelGroup } from '../api/types'
 import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
@@ -28,6 +28,7 @@ const liveFilterSchema = z.object({
   group: z.string().max(512), source: z.string().max(256), favorites: z.boolean(),
 })
 type SavedLiveFilters = z.infer<typeof liveFilterSchema>
+const channelCount = (groups?: ChannelGroup[]) => groups?.reduce((sum, g) => sum + g.channel_count, 0)
 const validateLiveFilters = (raw: unknown) => { const parsed = liveFilterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
 
 export function LiveTV() {
@@ -52,8 +53,9 @@ export function LiveTV() {
   const languages = useLanguages()
   const { offered: languageOffered, language } = languageScope(languages.data, lang, profile?.languages.join(',') ?? '')
   // A region row is a choice only when United States is some, not all or none, of what is listed.
-  const anywhere = useChannels({ language, country: 'all', limit: 1 }, saved.ready).data?.total
-  const domestic = useChannels({ language, country: 'US', limit: 1 }, saved.ready).data?.total
+  // Group counts answer that without asking the server for (and having it remember) two more channel lists.
+  const anywhere = channelCount(useChannelGroups({ language, country: 'all' }, saved.ready).data)
+  const domestic = channelCount(useChannelGroups({ language, country: 'US' }, saved.ready).data)
   const regionKnown = anywhere != null && domestic != null
   const regionOffered = regionKnown && domestic > 0 && domestic < anywhere
   const region = !regionKnown || regionOffered || (country === 'US' && domestic === anywhere) ? country : 'all'

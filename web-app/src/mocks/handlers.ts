@@ -244,8 +244,12 @@ export const handlers = [
     const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === currentProfileId(request))?.languages ?? []
     const q = u.searchParams.get('q')?.toLowerCase()
     const all = [...new Set(channels.map((c) => c.group))]
-    return HttpResponse.json(all.map((g, i) => ({ id: `g${i}`, source_id: 's_xt', name: g,
-      channel_count: channels.filter((c) => countryMatches(c.country, country) && c.group === g && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)).length,
+    // One pass over the channels: a large fixture catalog has hundreds of groups.
+    const counts = new Map<string, number>()
+    for (const c of channels) {
+      if (countryMatches(c.country, country) && (!langs.length || langs.includes(c.language)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q)) counts.set(c.group, (counts.get(c.group) ?? 0) + 1)
+    }
+    return HttpResponse.json(all.map((g, i) => ({ id: `g${i}`, source_id: 's_xt', name: g, channel_count: counts.get(g) ?? 0,
       hidden: hiddenGroups.has(g), language_override: null })).filter((g) => g.channel_count > 0))
   }),
   http.patch(`${B}/channels/groups/:id`, async ({ params, request }) => {
