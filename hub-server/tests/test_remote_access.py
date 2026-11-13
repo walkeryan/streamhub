@@ -273,11 +273,15 @@ async def test_home_networks_is_a_setting(api: Api) -> None:
 
 
 async def test_session_rows_record_the_address_the_same_way(api: Api) -> None:
+    # Signing in with a profile is for the home network now; away from it, a username and password.
+    made = await api.put("/auth/password", json={"username": "boss", "new_password": "a long enough phrase"})
+    assert made.status_code == 204, made.text
+
     async def signed_in_from(peer: str, forwarded: str | None) -> str | None:
         headers = {"X-Forwarded-For": forwarded} if forwarded else {}
         async with from_address(api, peer) as client:
             r = await client.post(
-                "/api/v1/auth/login", json={"profile_id": api.profile_id, "password": "test-admin-pw"}, headers=headers
+                "/api/v1/auth/password", json={"username": "boss", "password": "a long enough phrase"}, headers=headers
             )
         sid = jwt.decode(r.json()["access_token"], options={"verify_signature": False})["sid"]
         async with api.c.db.session() as s:

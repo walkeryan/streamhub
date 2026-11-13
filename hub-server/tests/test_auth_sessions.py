@@ -30,12 +30,13 @@ async def test_sign_in_creates_one_row_and_refresh_keeps_it(api: Api) -> None:
         "/api/v1/auth/login",
         json={"profile_id": api.profile_id, "password": "test-admin-pw"},
         # Through the trusted local proxy: its appended hop is the client, whatever was written before it.
-        headers={"User-Agent": BROWSER, "X-Forwarded-For": "192.0.2.1, 203.0.113.7"},
+        # (A home address: signing in with a profile is for the home network.)
+        headers={"User-Agent": BROWSER, "X-Forwarded-For": "192.0.2.1, 192.168.1.20"},
     )
     tokens = login.json()
     sid = sid_of(tokens["access_token"])
     row = (await rows(api))[sid]
-    assert (row.kind, row.user_agent, row.ip, row.shared_device) == ("browser", BROWSER, "203.0.113.7", False)
+    assert (row.kind, row.user_agent, row.ip, row.shared_device) == ("browser", BROWSER, "192.168.1.20", False)
     assert row.label == "Chrome on Linux"
     assert row.user_id == await owner_id(api) and row.profile_id == api.profile_id and row.revoked_at is None
     before = len(await rows(api))

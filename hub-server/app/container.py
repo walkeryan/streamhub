@@ -60,6 +60,7 @@ from app.services.sources import SourceService
 from app.services.streams import GrantGuard, StreamRegistry
 from app.services.sync import SyncScheduler, SyncService
 from app.services.themes import ThemeService
+from app.services.throttle import RateLimiter
 from app.services.user_state import (
     ClientPrefsService,
     FavoritesService,
@@ -89,6 +90,7 @@ class Container:
     google_auth: GoogleAuthService
     plex_auth: PlexAuthService
     passwords: PasswordAuth
+    limiter: RateLimiter
     language: LanguageChain
     tmdb: TmdbClient
     sources: SourceService
@@ -270,6 +272,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         invites=InvitesService(db),
         google_auth=google_auth,
         plex_auth=plex_auth,
+        limiter=RateLimiter(),
         passwords=PasswordAuth(db, auth, app_settings.get, available=lambda: not content_policy.enabled),
         language=language,
         tmdb=tmdb,

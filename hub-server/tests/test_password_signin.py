@@ -12,13 +12,9 @@ from sqlalchemy import select
 
 from app.infra.models import AuditLog, AuthSession, Invite, User
 from app.services.errors import ServiceError
-from app.services.passwords import (
-    COMMON_PASSWORDS,
-    LoginThrottle,
-    clean_username,
-    validate_password,
-)
+from app.services.passwords import COMMON_PASSWORDS, clean_username, validate_password
 from app.services.sessions import RateLimited
+from app.services.throttle import LoginThrottle
 from tests.conftest import Api
 from tests.people import audit_actions, member, owner_id
 

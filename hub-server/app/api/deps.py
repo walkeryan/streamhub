@@ -84,6 +84,15 @@ def at_home(request: HTTPConnection, c: Container) -> bool:
     )
 
 
+def limited(bucket: str) -> Any:
+    """Dependency: this route answers one client address only so often (429 with Retry-After beyond)."""
+
+    def check(request: Request, c: C) -> None:
+        c.limiter.hit(bucket, client_ip(request, c.settings))
+
+    return Depends(check)
+
+
 def require_reachable(request: HTTPConnection, c: Container, remote: bool) -> None:
     """Without ``remote.access`` (``remote``) a user is served on the home network and nowhere else.
 

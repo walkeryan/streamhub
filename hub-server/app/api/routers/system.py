@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from app.adapters.tmdb.client import JUSTWATCH_ATTRIBUTION, TMDB_ATTRIBUTION
 from app.api import schemas as S
-from app.api.deps import Admin, C, P
+from app.api.deps import Admin, C, P, limited
 from app.infra.settings import APP_VERSION
 from app.services.auth import Principal
 from app.services.errors import NotFound, ServiceError
@@ -82,7 +82,7 @@ async def health(c: C) -> dict[str, Any]:
     return {"status": "ok" if ok else "degraded", "version": APP_VERSION, "db": ok}
 
 
-@router.get("/qr", tags=["system"], response_class=Response)
+@router.get("/qr", tags=["system"], response_class=Response, dependencies=[limited("qr")])
 async def qr(data: str = Query(..., min_length=1, max_length=1024)) -> Response:
     """SVG QR code for pairing / Plex link screens (TV shows it next to the 6-char code)."""
     import io

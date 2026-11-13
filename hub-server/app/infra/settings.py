@@ -43,6 +43,8 @@ class AppSettings(BaseSettings):
     # The proxies whose X-Forwarded-For names the real client. The same variable, with the
     # same default, that uvicorn reads for X-Forwarded-Proto.
     forwarded_allow_ips: str = "127.0.0.1"
+    # /api/docs and /api/openapi.json describe every route to whoever asks: off unless enabled.
+    api_docs_enabled: bool = False
     log_level: str = "INFO"
     log_format: str = "json"  # json | text
     enable_scheduler: bool = True

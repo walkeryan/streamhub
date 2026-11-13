@@ -8,10 +8,17 @@ from typing import Any
 
 import pytest
 
+from app.infra.settings import AppSettings
 from tests.conftest import Api
 
 CONTRACT = Path(__file__).resolve().parents[2] / "contracts" / "openapi.yaml"
 METHODS = ("get", "post", "put", "patch", "delete")
+
+
+@pytest.fixture
+def settings(settings: AppSettings) -> AppSettings:
+    # The served schema is what these tests compare against; it is off unless enabled.
+    return settings.model_copy(update={"api_docs_enabled": True})
 
 
 def contract_ops() -> set[tuple[str, str]]:
