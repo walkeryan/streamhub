@@ -478,8 +478,17 @@ components:
         next: { $ref: '#/components/schemas/Programme', nullable: true, description: "As now. On an event-slot channel: the game in its name until it starts." }
     ChannelGroup:
       type: object
-      required: [id, source_id, name, channel_count, hidden]
-      properties: { id: {type: string}, source_id: {type: string}, name: {type: string}, channel_count: {type: integer}, hidden: {type: boolean}, language_override: {type: string, nullable: true} }
+      description: "A channel group of one source. Groups have two levels: a source names a child `Parent / Child`. GET /channels/groups lists each top-level group followed by its children; clients that show one level list the rows whose parent is null."
+      required: [id, source_id, name, path, channel_count, hidden]
+      properties:
+        id: {type: string, description: "Stable for a source and a path. A parent has an id whether or not any channel is in it directly."}
+        source_id: {type: string}
+        name: {type: string, description: "The group's own name: for a child, the part after the parent."}
+        parent: {type: string, nullable: true, description: "The parent's name; null for a top-level group."}
+        path: {type: string, description: "`Parent / Child`, or the name of a top-level group. Channel.group carries this."}
+        channel_count: {type: integer, description: "A parent counts its own channels and its children's."}
+        hidden: {type: boolean, description: "True when the group is hidden or its parent is."}
+        language_override: {type: string, nullable: true, description: "A parent's also applies to its children that set none."}
     Programme:
       type: object
       required: [id, channel_id, start, stop, title]
@@ -1631,7 +1640,7 @@ paths:
       parameters:
         - { name: country, in: query, schema: {type: string, description: "Country ISO codes CSV from explicit tag or provider group/flag; all or omitted = all; und = unknown. Independent of language."} }
         - { name: source_id, in: query, schema: {type: string} }
-        - { name: group, in: query, schema: {type: string} }
+        - { name: group, in: query, schema: {type: string, description: "A ChannelGroup id or path. A top-level group includes its children, except children hidden on their own. A child is named by its id, its path (`Parent / Child`) or its bare name while only one path ends in that name. The named group is listed even when hidden. An unknown or ambiguous name matches nothing."} }
         - { name: language, in: query, schema: {type: string, description: "csv ISO 639-3. Omitted = the profile's languages. Present but empty (`language=`) or `all` = all languages (the TV's All chip)."} }
         - { name: favorites, in: query, schema: {type: boolean} }
         - { name: q, in: query, schema: {type: string} }
@@ -1651,7 +1660,7 @@ paths:
         - { name: include_hidden, in: query, schema: {type: boolean, default: false} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChannelGroup' } } } } } }
   /channels/groups/{id}:
-    patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { hidden: {type: boolean}, language_override: {type: string, nullable: true}, sort: {type: integer} } } } } }, responses: { '200': { description: ok } } }
+    patch: { summary: "Hide, sort or set the language of a group. Hiding a parent hides its children without changing their own setting, so a child hidden alone stays hidden when the parent is shown again.", parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { hidden: {type: boolean}, language_override: {type: string, nullable: true}, sort: {type: integer} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/ChannelGroup' } } } } } }
   /channels/languages:
     get: { summary: Languages present with counts, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { type: object, properties: { code: {type: string}, name: {type: string}, count: {type: integer} } } } } } } } }
   /channels/{id}:

@@ -24,6 +24,7 @@ from app.domain.entities import (
     SourceStatus,
     SourceType,
 )
+from app.domain.groups import split_group_path
 from app.domain.ports import LanguageInferrer, SourceProvider
 from app.infra.crypto import Crypto
 from app.infra.db import Database
@@ -373,12 +374,23 @@ class DbCatalogSink:
             gname = ch.group or "Uncategorized"
             gid = self._groups.get(gname)
             if gid is None:
-                gid = group_id(sid, gname)
-                self._groups[gname] = gid
-                self._group_sort += 1
-                group_rows.append(
-                    {"id": gid, "source_id": sid, "name": gname, "sort": self._group_sort, "sync_gen": self._gen}
-                )
+                # "Parent / Child": the parent is a group too, with or without channels of its own, so
+                # that hiding or sorting it has a row to live on. It is met first and so sorts first.
+                parent = split_group_path(gname)[0]
+                for name in (parent, gname) if parent else (gname,):
+                    if name not in self._groups:
+                        self._groups[name] = group_id(sid, name)
+                        self._group_sort += 1
+                        group_rows.append(
+                            {
+                                "id": self._groups[name],
+                                "source_id": sid,
+                                "name": name,
+                                "sort": self._group_sort,
+                                "sync_gen": self._gen,
+                            }
+                        )
+                gid = self._groups[gname]
             self.channel_count += 1
             # An adapter that cleaned the group name keeps the provider's own in raw_group;
             # that is the one carrying the language and country tags.
@@ -549,7 +561,7 @@ async def upsert_titles(db: Database, rows: list[dict[str, Any]]) -> None:
 async def apply_overrides(db: Database, source_id: str | None = None) -> None:
     """Recompute effective number/language/epg for channels from overrides."""
     async with db.session() as s:
-        q = select(ChannelGroup).where(ChannelGroup.language_override.is_not(None))
+        q = select(ChannelGroup)
         if source_id:
             q = q.where(ChannelGroup.source_id == source_id)
         groups = list((await s.execute(q)).scalars())
@@ -562,11 +574,19 @@ async def apply_overrides(db: Database, source_id: str | None = None) -> None:
         await s.execute(
             update(Channel).where(*cond, Channel.epg_override.is_not(None)).values(epg_id=Channel.epg_override)
         )
-        # group language overrides (unless the channel has its own override)
-        for g in groups:
+        # group language overrides (unless the channel has its own override). A parent's reaches the
+        # children ("Parent / Child") that set none; parents go first so a child's own override wins.
+        for g in sorted(groups, key=lambda g: split_group_path(g.name)[0] is not None):
+            if g.language_override is None:
+                continue
+            inherit = [
+                c.id
+                for c in groups
+                if c.source_id == g.source_id and c.language_override is None and split_group_path(c.name)[0] == g.name
+            ]
             await s.execute(
                 update(Channel)
-                .where(Channel.group_id == g.id, Channel.language_override.is_(None))
+                .where(Channel.group_id.in_([g.id, *inherit]), Channel.language_override.is_(None))
                 .values(language=g.language_override, language_source="user")
             )
         # channel language overrides
