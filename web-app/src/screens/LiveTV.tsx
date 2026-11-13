@@ -161,7 +161,7 @@ export function LiveTV() {
         </FocusGroup>
       </div>
       {/* A phone has no room for a preview: selecting a channel plays it. */}
-      {!phone && <aside className="live-catalog-preview flex flex-col gap-3" aria-label="Preview" style={{ position: 'sticky', top: '1rem', alignSelf: 'start' }}>
+      {!phone && <aside className="live-catalog-preview flex flex-col gap-3" aria-label="Preview" style={{ position: 'sticky', top: 'calc(var(--bar-h) + 1rem)', alignSelf: 'start' }}>
         <Preview channelId={previewId} />
         {focused && <div className="flex flex-col gap-1" data-testid="live-info"><h2 className="title-xl">{focused.number} · {focused.name}</h2><p className="flex items-center gap-2 flex-wrap">{focused.now ? `Now: ${focused.now.title} (${fmtTime(focused.now.start)} to ${fmtTime(focused.now.stop)})` : 'No programme data supplied for this channel'}<RecordingBadge state={focused.now?.recording_state} /></p>{focused.next && <p className="muted flex items-center gap-2 flex-wrap">Next: {focused.next.title} at {fmtTime(focused.next.start)}<RecordingBadge state={focused.next.recording_state} /></p>}</div>}
         <FocusGroup focusKey="live:actions" className="flex gap-2 flex-wrap">

@@ -12,7 +12,6 @@ import { useSwitchable } from '../api/people'
 import { useWho } from '../store/who'
 import { usePhone } from '../lib/layout'
 import { useSession } from '../store/session'
-import { useUi } from '../store/ui'
 import { JoinRoomDialog } from '../room/JoinRoomDialog'
 import { useRecordings } from '../api/hooks'
 
@@ -22,9 +21,9 @@ const HOME: Destination = { to: '/', label: 'Home', icon: 'home' }
 const SEARCH: Destination = { to: '/search', label: 'Search', icon: 'search' }
 const LIVE: Destination = { to: '/live', label: 'Live TV', icon: 'tv', at: ['/guide'] }
 const MY_LIST: Destination = { to: '/favorites', label: 'My List', icon: 'bookmark' }
-/** Wide screens: every place to watch has its own entry, each with its own icon. */
+/** Wide screens: every place to watch is named in the top bar; Search sits with More and the profile at its end. */
 const NAV: Destination[] = [
-  HOME, SEARCH, LIVE,
+  HOME, LIVE,
   { to: '/browse/movies', label: 'Movies', icon: 'film', at: ['/browse/vod', '/discover/movies'] },
   { to: '/browse/shows', label: 'Shows', icon: 'shows', at: ['/browse/series', '/discover/shows'] },
   MY_LIST,
@@ -42,24 +41,18 @@ const MORE: Destination[] = [
 ]
 const testId = (label: string) => `nav-${label.toLowerCase().replace(' ', '-')}`
 
+/** The one navigation: a bar across the top of a wide screen, a bar of five along the bottom of a phone. */
 export function Rail() {
   const loc = useLocation()
   const go = useGo()
   const phone = usePhone()
   const profile = useSession((s) => s.profile)
   const access = useAccess()
-  const pinned = useUi((s) => s.railPinned)
-  const setPinned = useUi((s) => s.setRailPinned)
   const [hasFocus, setHasFocus] = useState(false)
   const [menu, setMenu] = useState(false)
   const [joinRoom, setJoinRoom] = useState(false)
-  const expanded = hasFocus || pinned
-  // Back from the rail collapses it and returns focus to the screen content.
-  useBackHandler(() => {
-    if (!hasFocus && !pinned) return false
-    setPinned(false)
-    void setFocus('MAIN')
-  }, hasFocus || pinned)
+  // Back from the bar returns focus to where it was in the screen content.
+  useBackHandler(() => { void setFocus('MAIN') }, hasFocus)
   const here = (d: Destination) => (d.to === '/' ? loc.pathname === '/' : [d.to, ...(d.at ?? [])].some((p) => loc.pathname.startsWith(p)))
   // Recordings: offered to who may use them once the server says recording is on. While it is off only
   // a holder of system.manage sees the entry, to learn why.
@@ -67,39 +60,51 @@ export function Rail() {
   const recordings = useRecordings(can(access, 'recordings') || manages, false)
   const recordingsOffered = !!recordings.data && (recordings.data.enabled ? can(access, 'recordings') : manages)
   const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (d.to === '/recordings' ? recordingsOffered : !d.needs || can(access, d.needs)))]
-  const open = (to: string) => { setPinned(false); setMenu(false); go(to) }
+  const open = (to: string) => { setMenu(false); go(to) }
+  // Focus enters the bar on the entry for where the viewer is. A screen outside every section
+  // (a title page) keeps the entry it was reached from.
+  const at = (phone ? BAR : [...NAV, SEARCH]).find(here)?.to ?? (more.some(here) ? 'more' : undefined)
+  const [entry, setEntry] = useState(at)
+  if (at && at !== entry) setEntry(at)
   // On a shared household device the profile entry asks who is watching; elsewhere it opens the profile's settings.
   const me = useMe().data
   const switchable = useSwitchable(!!me?.shared_device).data
-  // The person's Google picture, else the avatar chosen for them, else their initial; the size of the icons above it.
-  const face = <Avatar name={profile?.name} avatar={me?.user.avatar ?? profile?.avatar} picture={me?.user.picture} size="22px" />
+  // The person's Google picture, else the avatar chosen for them, else their initial: the size of the icons
+  // beside it in a menu, a little larger at the end of the top bar.
+  const face = (size: string) => <Avatar name={profile?.name} avatar={me?.user.avatar ?? profile?.avatar} picture={me?.user.picture} size={size} />
   const showWho = useWho((s) => s.show)
-  const openProfile = () => { if (switchable) { setPinned(false); setMenu(false); showWho() } else open('/settings?tab=profiles') }
+  const openProfile = () => { if (switchable) { setMenu(false); showWho() } else open('/settings?tab=profiles') }
   return <>
-    <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember onFocusChange={setHasFocus}
-      data-testid="rail" data={{ expanded }}>
+    <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember={false} preferred={entry && `rail:${entry}`}
+      onFocusChange={setHasFocus} data-testid="rail">
+      {!phone && <span className="rail-brand" onClick={() => open('/')}>StreamHub</span>}
+      {/* A phone names each icon; the top bar has the room to say the name alone. */}
       {(phone ? BAR : NAV).map((n) => (
-        <Focusable key={n.label} focusKey={`rail:${n.to}`} className="rail-item fx-flat" role="link" label={n.label} title={n.label}
+        <Focusable key={n.label} focusKey={`rail:${n.to}`} className="rail-item fx-flat" role="link" label={n.label}
           aria-current={here(n) ? 'page' : undefined} data-testid={testId(n.label)} onEnter={() => open(n.to)}>
-          <Icon name={n.icon} />
+          {phone && <Icon name={n.icon} />}
           <span className="lbl">{n.label}</span>
         </Focusable>
       ))}
-      <Focusable focusKey="rail:more" className="rail-item fx-flat" label="More" title="More" aria-current={more.some(here) ? 'page' : undefined}
-        data-testid="nav-more" onEnter={() => setMenu(true)}>
-        <Icon name="menu" />
-        <span className="lbl">More</span>
-      </Focusable>
       {!phone && <>
-        <div className="spacer" style={{ flex: 1 }} />
-        <Focusable focusKey="rail:profile" className="rail-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`} title={profile?.name}
-          data-testid="nav-profile" onEnter={openProfile}>
-          {face}
-          <span className="lbl">{profile?.name ?? 'Profile'}</span>
+        <div className="rail-gap" />
+        <Focusable focusKey={`rail:${SEARCH.to}`} className="rail-item rail-icon fx-flat" role="link" label={SEARCH.label} title={SEARCH.label}
+          aria-current={here(SEARCH) ? 'page' : undefined} data-testid={testId(SEARCH.label)} onEnter={() => open(SEARCH.to)}>
+          <Icon name={SEARCH.icon} />
         </Focusable>
       </>}
+      <Focusable focusKey="rail:more" className={phone ? 'rail-item fx-flat' : 'rail-item rail-icon fx-flat'} label="More" title="More"
+        aria-current={more.some(here) ? 'page' : undefined} data-testid="nav-more" onEnter={() => setMenu(true)}>
+        <Icon name="menu" />
+        {phone && <span className="lbl">More</span>}
+      </Focusable>
+      {!phone && <Focusable focusKey="rail:profile" className="rail-item rail-icon fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`} title={profile?.name}
+        data-testid="nav-profile" onEnter={openProfile}>
+        {face('1.75rem')}
+        <span className="sr-only">{profile?.name}</span>
+      </Focusable>}
     </FocusGroup>
-    {/* outside the rail's focus group: an open menu must not count as focus in the rail */}
+    {/* outside the bar's focus group: an open menu must not count as focus in the bar */}
     <Modal open={menu} onClose={() => setMenu(false)} title="More" firstFocusKey={`more:${more[0]?.to}`} variant="sheet" testId="more-menu">
       <FocusGroup focusKey="more:list" className="flex flex-col gap-2">
         {more.map((d) => (
@@ -109,12 +114,12 @@ export function Rail() {
           </Focusable>
         ))}
         {/* watch rooms */}
-        {can(access, 'rooms.join') && <Focusable focusKey="more:join-room" className="menu-item fx-flat" label="Join a room" data-testid="nav-join-room" onEnter={() => { setPinned(false); setMenu(false); setJoinRoom(true) }}>
+        {can(access, 'rooms.join') && <Focusable focusKey="more:join-room" className="menu-item fx-flat" label="Join a room" data-testid="nav-join-room" onEnter={() => { setMenu(false); setJoinRoom(true) }}>
           <Icon name="people" />Join a room
         </Focusable>}
         {phone && <Focusable focusKey="more:profile" className="menu-item fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`}
           data-testid="nav-profile" onEnter={openProfile}>
-          {face}{profile?.name ?? 'Profile'}
+          {face('22px')}{profile?.name ?? 'Profile'}
         </Focusable>}
       </FocusGroup>
     </Modal>

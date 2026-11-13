@@ -101,7 +101,7 @@ export function Guide({ filters, selectedChannelId, onSelectChannel }: {
         </Empty>
       ) : (
         <>
-          <div ref={scroller} className="epg" style={{ overflow: 'auto', maxHeight: 'calc(100dvh - 24rem)', minHeight: '14rem', borderRadius: 'var(--radius-md)', background: 'var(--t-surface)' }}>
+          <div ref={scroller} className="epg" style={{ overflow: 'auto', maxHeight: 'calc(100dvh - 24rem - var(--bar-h))', minHeight: '14rem', borderRadius: 'var(--radius-md)', background: 'var(--t-surface)' }}>
             <div style={{ width: `calc(${totalMin * REM_PER_MIN}rem + var(--epg-ch))`, position: 'relative' }}>
               <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, background: 'var(--t-surface)', height: '2rem' }}>
                 <div style={{ width: 'var(--epg-ch)', flex: 'none', position: 'sticky', left: 0, zIndex: 21, background: 'var(--t-surface)' }} />
