@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useChannelPages, useEpgChunks, useRecordings, type ChannelFilters, type EpgRequest } from '../api/hooks'
 import type { Channel, Programme } from '../api/types'
@@ -11,28 +11,21 @@ import { useHistoryState } from '../nav/historyState'
 import { fmtTime, useNow } from '../lib/util'
 import { useCan } from '../api/me'
 import { recordingOf, recordingStateLabel } from '../lib/recordings'
-import { SLOT_MS, extendedEnd, nearEnd, openingSpan, programmeAt, rowWindow, rowsToDraw, spanChunks, type RowWindow, type TimeSpan } from '../lib/guideWindow'
+import { SLOT_MS, extendedEnd, nearEnd, openingSpan, programmeAt, rowsToDraw, spanChunks, type TimeSpan } from '../lib/guideWindow'
 import { RecordDialog } from '../recordings/RecordDialog'
 import { GuideDetailsLine, GuideDetailsPanel, type GuideDetailsProps } from './GuideDetails'
-import { GuideRow, REM_PER_MIN, ROW_REM, COL_REM, cellKey, channelKey } from './GuideRow'
+import { COL_REM, GuideRow, HEAD_REM, REM_PER_MIN, ROW_REM, cellKey, channelKey } from './GuideRow'
+import { VIEW_BUFFER, remPx, startOfSlot, useGuideView, type GuideView } from './useGuideView'
 
 const HOUR_MS = 3600_000
-const HEAD_REM = 2 // the time header, see .epg --epg-head
 const BACK_H = 3
 const FWD_H = 9
 // Later hours are asked for as the viewer nears the end of what is loaded, up to a day ahead.
 const EXTEND_H = 4
 const HORIZON_H = 24
 const PAGE = 40
-const BUFFER = 4 // rows drawn beyond each edge of the view
 const NEAR = 8 // rows from the end at which the next page of channels is asked for
 
-/** Where the view is, to the row and the half hour: what Back restores, and what decides which requests are due. */
-interface View { row: number; from: number; to: number }
-const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize)
-const startOfSlot = (time: number) => Math.floor(time / SLOT_MS) * SLOT_MS
-/** A length of time as a scroll offset. */
-const offsetPx = (ms: number) => Math.max(0, (ms / 60_000) * REM_PER_MIN * remPx())
 
 export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, onSelectChannel, wide, detailsSlot, upKey, onTotal }: {
   filters: ChannelFilters; scheduledOnly: boolean; onShowAll: () => void
@@ -46,14 +39,11 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
   const now = useNow(30_000)
   const [sel, setSel] = useHistoryState<Programme | null>('guide:selected-programme', null)
   const [span, setSpan] = useHistoryState<TimeSpan>('guide:time', openingSpan(Date.now(), BACK_H, FWD_H))
-  const [view, setView] = useHistoryState<View | null>('guide:view', null)
+  const [view, setView] = useHistoryState<GuideView | null>('guide:view', null)
   const key = JSON.stringify([filters, scheduledOnly])
   const [filterKey, setFilterKey] = useHistoryState('guide:filters', key)
   // Other filters start at the first channel; the hour on screen stays.
   if (filterKey !== key) { setFilterKey(key); setSel(null); setView((v) => v && { ...v, row: 0 }) }
-  // The filters the grid was last scrolled into place for: null until it has been, after Back too.
-  const [placed, setPlaced] = useState<string | null>(null)
-  const [jump, setJump] = useState<number | null>(null)
 
   const ch = useChannelPages({ ...filters, has_epg: scheduledOnly || undefined }, PAGE)
   const pages = ch.data?.pages
@@ -63,7 +53,7 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
   const total = pages?.[0]?.total ?? count
   const rowOf = useMemo(() => new Map(channels.map((c, i) => [c.id, i])), [channels])
   const focusRow = (selectedChannelId !== null ? rowOf.get(selectedChannelId) : undefined) ?? null
-  const [win, setWin] = useState<RowWindow>({ first: 0, end: 0 })
+  const { scroller, gridRef, onScroll, win, placed, jumpTo } = useGuideView({ filterKey: key, count, span, view, setView, morePages: !!ch.hasNextPage })
   const first = Math.min(win.first, Math.max(0, count - 1)), end = Math.min(Math.max(win.end, first + 1), count)
   const drawn = useMemo(() => rowsToDraw({ first, end }, focusRow, count), [first, end, focusRow, count])
 
@@ -86,9 +76,6 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
   const toast = useUi((s) => s.toast)
   const go = useGo()
   const [catchup, setCatchup] = useState<{ ch: Channel; p: Programme } | null>(null)
-  const scroller = useRef<HTMLDivElement | null>(null)
-  const [grid, setGrid] = useState<HTMLDivElement | null>(null)
-  const gridRef = useCallback((el: HTMLDivElement | null) => { scroller.current = el; setGrid(el) }, [])
   // Recording: where the server has it on and this profile may schedule, OK on a programme that is on or still to come opens Record.
   const recordings = useRecordings(useCan('recordings'), false)
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
@@ -98,53 +85,12 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
   useEffect(() => { if (pages) setChannelList(pages[0]?.list_id ?? null, channels) }, [pages, channels, setChannelList])
   useEffect(() => { onTotal(pages ? total : null) }, [pages, total, onTotal])
 
-  /* ---------- the view: which rows and hours are on screen ---------- */
-  const measure = useCallback(() => {
-    const el = scroller.current
-    if (!el) return
-    const px = remPx(), minute = REM_PER_MIN * px, row = ROW_REM * px
-    const next = rowWindow(el.scrollTop, el.clientHeight - HEAD_REM * px, row, count, BUFFER)
-    setWin((w) => (w.first === next.first && w.end === next.end ? w : next))
-    // Until the grid is in place its scroll offsets are not the viewer's: they must not replace what Back restores.
-    if (placed !== key) return
-    const columnPx = parseFloat(getComputedStyle(el).getPropertyValue('--epg-ch')) * px
-    // A minute's and a hundredth of a row's allowance: an offset set from a time or a row reads back a hair short of it.
-    const from = startOfSlot(span.from + (el.scrollLeft / minute + 1) * 60_000)
-    const to = Math.ceil((span.from + ((el.scrollLeft + el.clientWidth - columnPx) / minute - 1) * 60_000) / SLOT_MS) * SLOT_MS
-    const top = Math.floor(el.scrollTop / row + 0.01)
-    setView((v) => (v && v.row === top && v.from === from && v.to === to ? v : { row: top, from, to }))
-  }, [count, placed, key, span.from, setView])
-  const latest = useRef(measure)
-  useEffect(() => { latest.current = measure }, [measure])
-  const frame = useRef(0)
-  const onScroll = () => { if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; latest.current() }) }
-  // The grid's own box changes with the window, and with the header above it (a row of sub-groups, the search field).
-  useEffect(() => {
-    if (!grid) return
-    const watch = new ResizeObserver(() => latest.current())
-    watch.observe(grid)
-    return () => { watch.disconnect(); cancelAnimationFrame(frame.current); frame.current = 0 }
-  }, [grid])
-  // Put the grid where it belongs once it is drawn: on the half hour before the one now is in, or where Back left it.
   const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = ch
-  useLayoutEffect(() => {
-    // (While other filters load, `grid` is still the element that has just left the page: nothing to place.)
-    if (!grid || !grid.isConnected || !count || placed === key) return
-    // Back to a row further down than is loaded: its page is asked for below, and the grid waits for it.
-    if (view && view.row >= count && hasNextPage) return
-    grid.scrollTop = (view?.row ?? 0) * ROW_REM * remPx()
-    grid.scrollLeft = offsetPx((view?.from ?? startOfSlot(Date.now() - SLOT_MS)) - span.from)
-    setPlaced(key)
-  }, [grid, placed, key, view, count, hasNextPage, span.from])
-  useLayoutEffect(() => {
-    if (grid && jump !== null) { grid.scrollLeft = offsetPx(jump - span.from); setJump(null) }
-  }, [grid, jump, span.from])
-  useLayoutEffect(() => { measure() }, [measure, grid])
-  const ready = placed === key && count > 0
+  const ready = placed && count > 0
 
   /* ---------- loading as you go ---------- */
-  const reachedRow = Math.max(end - 1 - BUFFER, focusRow ?? 0)
-  const restoring = placed !== key && !!view && view.row >= count
+  const reachedRow = Math.max(end - 1 - VIEW_BUFFER, focusRow ?? 0)
+  const restoring = !placed && !!view && view.row >= count
   useEffect(() => {
     if (!pages || !hasNextPage || isFetchingNextPage || isFetchNextPageError) return
     if (restoring || (ready && nearEnd(reachedRow, count, NEAR))) void fetchNextPage()
@@ -269,7 +215,7 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
     // A guide left open for hours has a window that no longer holds the present: open a new one.
     if (t - SLOT_MS < span.from || t + 2 * HOUR_MS > span.to) setSpan(openingSpan(t, BACK_H, FWD_H))
     anchor.current = t
-    setJump(startOfSlot(t - SLOT_MS))
+    jumpTo(startOfSlot(t - SLOT_MS))
   }
 
   /* ---------- the programme described beside (or under) the header ---------- */
@@ -289,7 +235,9 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
   const failed = ch.error && !pages ? ch.error : epg.error && !Object.keys(epg.byChannel).length ? epg.error : null
   const minutes = (span.to - span.from) / 60_000
   const ticks = Array.from({ length: minutes / 30 }, (_, i) => span.from + i * SLOT_MS)
-  const midnight = (t: number) => { const d = new Date(t); return d.getHours() === 0 && d.getMinutes() === 0 }
+  // Hours of another day say which: scrolled to tomorrow morning, "6:00 AM" alone would read as today's.
+  const today = new Date(now).toDateString()
+  const dayOf = (t: number) => { const d = new Date(t); return d.getMinutes() === 0 && d.toDateString() !== today ? `${d.toLocaleDateString([], { weekday: 'short' })} ` : '' }
   return (
     <div data-testid="guide" className="epg-view" aria-label="Programme guide">
       {wide ? detailsSlot && createPortal(<GuideDetailsPanel {...details} />, detailsSlot) : <GuideDetailsLine {...details} />}
@@ -307,7 +255,7 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
                   <i aria-hidden="true" />Now
                 </Focusable>
               </div>
-              {ticks.map((t) => <div key={t} className="label epg-tick" style={{ width: `${COL_REM}rem` }}>{midnight(t) ? `${new Date(t).toLocaleDateString([], { weekday: 'short' })} ` : ''}{fmtTime(t)}</div>)}
+              {ticks.map((t) => <div key={t} className="label epg-tick" style={{ width: `${COL_REM}rem` }}>{dayOf(t)}{fmtTime(t)}</div>)}
             </div>
             <div className="epg-rows">
               {drawn.map((i) => {

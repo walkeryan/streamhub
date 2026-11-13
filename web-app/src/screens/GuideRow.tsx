@@ -10,6 +10,7 @@ import { RecordingBadge } from '../recordings/RecordingBadge'
 export const COL_REM = 13 // 30-minute column width, see .epg --col
 export const REM_PER_MIN = COL_REM / 30
 export const ROW_REM = 3 // see .epg --epg-row
+export const HEAD_REM = 2 // the time header, see .epg --epg-head
 export const channelKey = (channelId: string) => `guide:ch:${channelId}`
 export const cellKey = (channelId: string, programmeId: string) => `epg::${channelId}::${programmeId}`
 
