@@ -87,6 +87,7 @@ import com.streamhub.tv.feature.onboarding.OnboardingScreen
 import com.streamhub.tv.feature.onboarding.WhoIsWatchingScreen
 import com.streamhub.tv.feature.player.PlayerScreen
 import com.streamhub.tv.feature.recordings.RecordingsScreen
+import com.streamhub.tv.feature.requests.RequestsScreen
 import com.streamhub.tv.feature.search.JoinRoomScreen
 import com.streamhub.tv.feature.search.SearchScreen
 import com.streamhub.tv.feature.settings.SettingsScreen
@@ -125,6 +126,8 @@ object Routes {
     const val SOURCES = "sources"
     const val SETTINGS = "settings"
     const val RECORDINGS = "recordings"
+    /** My requests / all requests; opened from Settings, so Back returns there. */
+    const val REQUESTS = "requests"
     /** Join a watch room by its code. */
     const val JOIN_ROOM = "rooms/join"
     /** "Who's watching?" opened from the rail or Settings: Back returns. */
@@ -399,6 +402,7 @@ private fun AppShell(
                     }
                     composable(Routes.JOIN_ROOM) { TopLevel(onTopLevelBack) { JoinRoomScreen() } }
                     composable(Routes.RECORDINGS) { TopLevel(onTopLevelBack) { RecordingsScreen() } }
+                    composable(Routes.REQUESTS) { RequestsScreen() }
                     composable(Routes.LIVE) { TopLevel(onTopLevelBack) { LiveDestination() } }
                     composable(Routes.SPORTS) { TopLevel(onTopLevelBack) { SportsScreen(onMultiview={nav.navigate(Routes.MULTIVIEW)}) } }
                     composable(Routes.MULTIVIEW) { MultiviewScreen(onExit={nav.popBackStack()}) }
@@ -428,7 +432,11 @@ private fun AppShell(
                     }
                     composable(Routes.FAVORITES) { TopLevel(onTopLevelBack) { FavoritesScreen() } }
                     composable(Routes.SOURCES) { TopLevel(onTopLevelBack) { SourcesScreen() } }
-                    composable(Routes.SETTINGS) { TopLevel(onTopLevelBack) { SettingsScreen(appVersion = BuildConfig.VERSION_NAME, onWhoIsWatching = { nav.navigate(Routes.WHO) { launchSingleTop = true } }) } }
+                    composable(Routes.SETTINGS) { TopLevel(onTopLevelBack) { SettingsScreen(
+                                appVersion = BuildConfig.VERSION_NAME,
+                                onWhoIsWatching = { nav.navigate(Routes.WHO) { launchSingleTop = true } },
+                                onOpenRequests = { nav.navigate(Routes.REQUESTS) { launchSingleTop = true } },
+                            ) } }
                     composable(Routes.DETAILS, arguments = listOf(navArgument("id") { type = NavType.StringType })) { DetailsScreen() }
                     composable(Routes.PLAYER, arguments = listOf(navArgument("key") { type = NavType.StringType })) {
                         PlayerScreen(onExit = { nav.popBackStack() })
@@ -441,6 +449,7 @@ private fun AppShell(
                     selectedRoute = when {
                         route == Routes.DISCOVER -> Routes.discover()
                         route == Routes.GUIDE -> Routes.LIVE
+                        route == Routes.REQUESTS -> Routes.SETTINGS
                         // The destination route is the pattern, so Movies/Shows are told apart by the argument.
                         route?.startsWith("browse/") == true -> if (backStack?.arguments?.getString("section") == "shows") Routes.SHOWS else Routes.MOVIES
                         route?.startsWith("details") == true -> null

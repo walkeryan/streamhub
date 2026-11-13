@@ -12,6 +12,7 @@ import com.streamhub.tv.core.data.model.AuthTokens
 import com.streamhub.tv.core.data.model.OwnerPinChallenge
 import com.streamhub.tv.core.data.model.OwnerPinCancel
 import com.streamhub.tv.core.data.repo.MeRepository
+import com.streamhub.tv.core.data.model.Permissions
 import com.streamhub.tv.core.data.repo.UserSwitchRepository
 import com.streamhub.tv.core.data.repo.ProfileSwitchPath
 import com.streamhub.tv.core.data.repo.profileSwitchPath
@@ -61,7 +62,7 @@ import javax.inject.Inject
 
 enum class SettingsSection(val label: String) {
     Profiles("Profiles"), Theme("Theme"), Languages("Languages"), Rows("Home rows"),
-    Parental("Parental controls"), Playback("Playback"), About("About"),
+    Parental("Parental controls"), Requests("Requests"), Playback("Playback"), About("About"),
 }
 
 data class SettingsState(
@@ -89,6 +90,8 @@ data class SettingsState(
     val updateStatus: String? = null,
     /** A household TV with a server that has users: "Who's watching?" is how people are switched. */
     val sharedDevice: Boolean = false,
+    /** The signed-in user may ask for titles or decide on requests: the Requests section is listed. */
+    val showRequests: Boolean = false,
 )
 
 @HiltViewModel
@@ -114,7 +117,11 @@ class SettingsViewModel @Inject constructor(
     private val authorization=AuthorizationCommitGate { finishing -> _state.update{it.copy(authorizationFinishing=finishing)} }
     init {
         load()
-        viewModelScope.launch { me.state.collect { access -> _state.update { it.copy(sharedDevice = access.sharedDevice) } } }
+        viewModelScope.launch {
+            me.state.collect { access ->
+                _state.update { it.copy(sharedDevice = access.sharedDevice, showRequests = access.can(Permissions.REQUESTS_CREATE) || access.can(Permissions.REQUESTS_APPROVE)) }
+            }
+        }
     }
 
     private fun pid() = _state.value.current?.id ?: "default"
@@ -307,7 +314,7 @@ class SettingsViewModel @Inject constructor(
         currentCoroutineContext().ensureActive()
         // Tokens, session generation and per-user caches change hands in one place, shared with "Who's watching?".
         switcher.commitProfileSwitch(original,target.id,tokens)
-        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}",sharedDevice=me.state.value.sharedDevice)
+        _state.value=SettingsState(current=tokens.profile,serverUrl=original.serverUrl,message="Switched to ${tokens.profile.name}",sharedDevice=me.state.value.sharedDevice,showRequests=_state.value.showRequests)
         themes.select(tokens.profile.themeId)
         load()
     }

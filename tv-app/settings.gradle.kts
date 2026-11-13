@@ -30,4 +30,5 @@ include(
     ":feature:sources",
     ":feature:settings",
     ":feature:recordings",
+    ":feature:requests",
 )

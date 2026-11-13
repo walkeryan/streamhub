@@ -80,6 +80,9 @@ object ApiErrors {
             "already_scheduled" -> UserError("Already being recorded", "Someone else in the household has already scheduled this programme.", canRetry = false)
             "guide_changed" -> UserError("The guide has changed", "This programme is no longer where the guide showed it. Reload the guide and try again.", canRetry = false)
             "rule_limit" -> UserError("Too many rules", "This profile has as many recording rules as the server allows. Remove one under Recordings first.", canRetry = false)
+            "already_available" -> UserError("Already available", "This title can already be watched here. Go back and open it again.", canRetry = false)
+            "request_manager_unconfigured" -> UserError("Requests aren't set up", "The server has no request manager to pass requests to. Its owner can add one in the server's settings.", canRetry = false)
+            "metadata_unavailable" -> UserError("Can't look this title up", "The server couldn't get this title's details right now, so it can't be requested. Try again in a moment.", canRetry = true)
             "disclaimer_required" -> UserError(
                 "Legal notice not accepted",
                 "This can't play until the legal notice has been accepted for this profile. Restart StreamHub to read and accept it.",

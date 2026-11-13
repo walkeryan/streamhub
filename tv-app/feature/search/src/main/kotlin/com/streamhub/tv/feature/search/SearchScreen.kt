@@ -29,6 +29,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.streamhub.tv.core.data.repo.availabilityBadge
 import com.streamhub.tv.core.ui.components.ChannelTile
 import com.streamhub.tv.core.ui.components.FocusRow
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
@@ -119,7 +120,8 @@ fun SearchScreen(onJoinRoom: (() -> Unit)? = null, vm: SearchViewModel = hiltVie
                         val ranked = res.results ?: (res.playHere + res.openInApp)
                         if (ranked.isNotEmpty()) item("results") {
                             FocusRow(ranked, key = { it.id }, title = "Titles · relevance", contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)) { _, tile, _ ->
-                                PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) })
+                                // No in-app source: say so (or where its request stands) on the tile itself.
+                                PosterTile(tile, onClick = { vm.commit(); launcher.openDetails(tile.id) }, badge = availabilityBadge(tile))
                             }
                         }
                         res.discoveryNote?.let { note -> item("discovery") {

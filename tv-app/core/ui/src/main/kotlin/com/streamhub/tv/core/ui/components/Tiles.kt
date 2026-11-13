@@ -72,6 +72,8 @@ fun PosterTile(
     modifier: Modifier = Modifier,
     onFocus: (Tile) -> Unit = {},
     onLongClick: (() -> Unit)? = null,
+    /** A few words over the top of the artwork ("Not available", "Requested"); null for none. */
+    badge: String? = null,
 ) {
     val t = LocalThemeTokens.current
     var isFocused by remember { mutableStateOf(false) }
@@ -105,6 +107,13 @@ fun PosterTile(
                 ProgressLine((it / 100.0).toFloat(), Modifier.align(Alignment.BottomCenter).padding(6.dp))
             }
             SourceBadges(tile.sources, Modifier.align(Alignment.BottomEnd).padding(6.dp).padding(bottom = 8.dp), max = 1)
+            if (badge != null) {
+                Text(
+                    badge,
+                    style = MaterialTheme.typography.labelSmall, color = t.text, maxLines = 1,
+                    modifier = Modifier.align(Alignment.TopStart).padding(6.dp).background(t.overlay, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
         }
         Box(Modifier.height(40.dp).padding(top = 8.dp)) {
             if (isFocused || tile.poster == null) {

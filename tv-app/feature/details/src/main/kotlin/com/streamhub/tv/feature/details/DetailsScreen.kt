@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -38,6 +39,11 @@ import androidx.compose.ui.window.DialogProperties
 import com.streamhub.tv.core.data.model.MediaKind
 import com.streamhub.tv.core.data.room.RoomCode
 import com.streamhub.tv.core.ui.components.QrCode
+import com.streamhub.tv.core.ui.components.ErrorDialog
+import com.streamhub.tv.core.data.repo.isOpenRequest
+import com.streamhub.tv.core.data.repo.requestStateLabel
+import com.streamhub.tv.core.data.repo.requestStateText
+import com.streamhub.tv.core.data.repo.requestTarget
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -107,10 +113,18 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
     val handoff = d.sources.filterNot { it.playableInApp }
     var chosenSource by remember(d.id) { mutableStateOf(inApp.firstOrNull()) }
     val listFocus = remember { FocusRequester() }
+    // Request: offered for a title the server marks requestable, and kept in place (showing where the
+    // request stands) once one is open, so the button under the viewer's focus does not vanish.
+    val requestOpen = isOpenRequest(s.requestState)
+    val showRequest = s.canRequest && requestTarget(d.id) != null && (d.requestable || requestOpen)
+    // With nothing to play here, Request is the first thing this screen is for.
+    val requestFirst = showRequest && inApp.isEmpty()
     // Play on first show of this title only; back from the player (or a related title) restores focus.
     InitialFocusOnce(initial = playFocus, restore = listFocus, key = d.id)
     LaunchedEffect(s.toast) { if (s.toast != null) { delay(2500); vm.clearToast() } }
 
+    if (s.seasonPicker) SeasonPickerDialog(d.title, d.requestSeasons, onAll = { vm.submitRequest(null) }, onPicked = vm::submitRequest, onDismiss = vm::closeSeasonPicker)
+    s.requestError?.let { ErrorDialog(it, onRetry = { vm.dismissRequestError(); vm.request() }, onDismiss = vm::dismissRequestError) }
     s.together?.let { WatchTogetherDialog(it, d.title, onStart = vm::startRoom, onRetry = vm::watchTogether, onCancel = vm::cancelRoom) }
     Box(Modifier.fillMaxSize()) {
         HeroBackdrop(d.asTile())
@@ -142,14 +156,23 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                         contentPadding = PaddingValues(horizontal = Tokens.Canvas.SafeMarginX, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
+                        if (showRequest) item("request") {
+                            ShButton(
+                                when { s.requesting -> "Requesting…"; requestOpen -> requestStateLabel(s.requestState) ?: "Requested"; else -> "Request" },
+                                onClick = { if (requestOpen) vm.say(requestStateText(s.requestState).orEmpty()) else vm.request() },
+                                icon = if (requestOpen) Icons.Filled.Check else Icons.Filled.Add,
+                                style = if (requestFirst && !requestOpen) ButtonStyle.Primary else ButtonStyle.Secondary,
+                                modifier = if (requestFirst) Modifier.focusRequester(playFocus).leftOpensRail(rail) else Modifier,
+                            )
+                        }
                         if (d.sources.isNotEmpty()) item("play") {
                             val label = if (inApp.isNotEmpty()) "Choose audio / source" else "Open in ${handoff.firstOrNull()?.name ?: "app"}"
                             ShButton(
                                 label,
                                 onClick = { launcher.play(d.id, sourceId = chosenSource?.sourceId ?: handoff.firstOrNull()?.sourceId) },
                                 icon = if (inApp.isNotEmpty()) HeroIcons.Play else HeroIcons.Open,
-                                style = ButtonStyle.Primary,
-                                modifier = Modifier.focusRequester(playFocus).leftOpensRail(rail),
+                                style = if (requestFirst) ButtonStyle.Secondary else ButtonStyle.Primary,
+                                modifier = if (requestFirst) Modifier else Modifier.focusRequester(playFocus).leftOpensRail(rail),
                             )
                         }
                         // A room plays one title for everyone: films and episodes, not a whole series.
@@ -161,7 +184,7 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                                 ShChip("${b.shortLabel()}${b.quality?.let { " $it" } ?: ""}", chosenSource == b, { chosenSource = b })
                             }
                         }
-                        item("wl") { ShButton(if (s.inWatchlist) "In watchlist" else "Watchlist", vm::toggleWatchlist, modifier = if (d.sources.isEmpty()) Modifier.focusRequester(playFocus) else Modifier, icon = if (s.inWatchlist) Icons.Filled.PlaylistAddCheck else Icons.Filled.PlaylistAdd) }
+                        item("wl") { ShButton(if (s.inWatchlist) "In watchlist" else "Watchlist", vm::toggleWatchlist, modifier = if (d.sources.isEmpty() && !requestFirst) Modifier.focusRequester(playFocus) else Modifier, icon = if (s.inWatchlist) Icons.Filled.PlaylistAddCheck else Icons.Filled.PlaylistAdd) }
                         item("fav") { ShButton(if (d.isFavorite) "Favorited" else "Favorite", vm::toggleFavorite, icon = if (d.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder) }
                         item("trailer") {
                             // Trailer is resolved server-side to a YouTube hand-off descriptor.
@@ -169,6 +192,8 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                         }
                         item("watched") { ShButton("Mark watched", vm::markWatched, icon = Icons.Filled.Check) }
                     }
+                    // Where the request stands, for as long as there is one; the toast line is for passing messages.
+                    requestStateText(s.requestState)?.let { Text(it, color = t.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = 4.dp)) }
                     s.toast?.let { Text(it, color = t.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = Tokens.Canvas.SafeMarginX, top = 4.dp)) }
                 }
                 if (d.seasons.isNotEmpty()) item("seasons") {
@@ -186,6 +211,35 @@ private fun DetailsContent(s: DetailsState, vm: DetailsViewModel) {
                 }
             }
         }
+    }
+}
+
+/** A series request: everything, or the seasons ticked here. */
+@Composable
+private fun SeasonPickerDialog(title: String, seasons: List<Int>, onAll: () -> Unit, onPicked: (List<Int>) -> Unit, onDismiss: () -> Unit) {
+    val t = LocalThemeTokens.current
+    val focus = remember { FocusRequester() }
+    var picked by remember { mutableStateOf(emptySet<Int>()) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(Modifier.width(560.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Request $title", style = MaterialTheme.typography.titleLarge, color = t.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            ShButton("All seasons", onAll, Modifier.focusRequester(focus), style = ButtonStyle.Primary)
+            Text("Or pick seasons:", style = MaterialTheme.typography.bodyMedium, color = t.textMuted)
+            LazyRow(Modifier.fillMaxWidth().focusRestorer(), horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 4.dp, horizontal = 4.dp)) {
+                items(seasons.sorted(), key = { it }) { n ->
+                    ShChip(if (n == 0) "Specials" else "Season $n", n in picked, { picked = if (n in picked) picked - n else picked + n })
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Never disabled (focus would be stranded on it): with nothing ticked it says what to do.
+                ShButton(
+                    when (picked.size) { 0 -> "Tick seasons above"; 1 -> "Request 1 season"; else -> "Request ${picked.size} seasons" },
+                    { if (picked.isNotEmpty()) onPicked(picked.sorted()) },
+                )
+                ShButton("Cancel", onDismiss)
+            }
+        }
+        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { focus.requestFocus() } }
     }
 }
 

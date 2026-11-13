@@ -353,6 +353,20 @@ class StreamHubApi @Inject constructor(
         client.patch(url("/recording-rules/${id(ruleId)}")) { setBody(patch) }.ok()
     suspend fun deleteRecordingRule(ruleId: String) = client.delete(url("/recording-rules/${id(ruleId)}")).unit()
 
+    // ---- Requests / notices ---------------------------------------------------------------------
+
+    /** Newest first. [all] lists everyone's and needs permission to approve. */
+    suspend fun requests(all: Boolean = false): RequestsResponse = get("/requests") { parameter("scope", if (all) "all" else "mine") }
+    /** 201 created, or 200 when an open request for this title already exists: both answer with the request. */
+    suspend fun createRequest(req: RequestCreate): MediaRequest = client.post(url("/requests")) { setBody(req) }.ok()
+    suspend fun approveRequest(requestId: String, note: String? = null): MediaRequest =
+        client.post(url("/requests/${id(requestId)}/approve")) { setBody(RequestDecision(note)) }.ok()
+    suspend fun declineRequest(requestId: String, note: String? = null): MediaRequest =
+        client.post(url("/requests/${id(requestId)}/decline")) { setBody(RequestDecision(note)) }.ok()
+    /** Notices for the current profile, unread first. */
+    suspend fun notices(): NoticesResponse = get("/notices")
+    suspend fun markNoticeRead(noticeId: String) = client.post(url("/notices/${id(noticeId)}/read")).unit()
+
     // ---- Favorites / watchlist / history -------------------------------------------------------
 
     suspend fun favorites(): List<Tile> = get("/favorites")

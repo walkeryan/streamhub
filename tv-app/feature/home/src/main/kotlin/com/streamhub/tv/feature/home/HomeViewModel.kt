@@ -5,6 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.HomeResponse
+import com.streamhub.tv.core.data.model.Notice
+import com.streamhub.tv.core.data.repo.RequestsRepository
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import com.streamhub.tv.core.data.model.Row
 import com.streamhub.tv.core.data.model.Tile
 import com.streamhub.tv.core.data.repo.catalogScope
@@ -45,6 +50,7 @@ class HomeViewModel @Inject constructor(
     session: SessionStore,
     prefs: LocalPrefs,
     private val themes: ThemeRepository,
+    private val requests: RequestsRepository,
 ) : ViewModel() {
     private val refreshRequests = MutableStateFlow(0)
     private val sessionStore = session
@@ -70,6 +76,30 @@ class HomeViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeUi.Loading)
 
     fun refresh() { refreshRequests.update { it + 1 } }
+
+    // ---- Notices ("your request is ready", "your request was declined") --------------------------
+
+    private val _notices = MutableStateFlow<List<Notice>>(emptyList())
+    /** Unread notices for the banner row above the hero; empty on servers without them. */
+    val notices: StateFlow<List<Notice>> = _notices.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            // Per profile, and again on every refresh; one person's notices are never left up for the next.
+            combine(profileId, refreshRequests) { profile, _ -> profile }.collectLatest { profile ->
+                _notices.value = emptyList()
+                if (profile != null) _notices.value = try { requests.unreadNotices() } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
+            }
+        }
+    }
+
+    /** Marks [notice] read. It leaves the row at once; a failed call brings it back on the next load. */
+    fun dismissNotice(notice: Notice) {
+        _notices.update { list -> list.filterNot { it.id == notice.id } }
+        viewModelScope.launch {
+            try { requests.markRead(notice.id) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
+    }
 
     private suspend fun loadHome(owner: String): HomeResponse {
         val current = sessionStore.current()

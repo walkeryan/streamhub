@@ -198,6 +198,10 @@ data class Tile(
     @SerialName("is_favorite") val isFavorite: Boolean = false,
     val sources: List<SourceBadge> = emptyList(),
     @SerialName("now_playing") val nowPlaying: Programme? = null,
+    /** The open request for this title, else its most recent closed one; null when never requested. */
+    @SerialName("request_state") val requestState: String? = null,
+    /** No in-app source, a request manager is configured and the profile may request. */
+    val requestable: Boolean = false,
 ) {
     val playableInApp: Boolean get() = sources.any { it.playableInApp }
 }
@@ -247,8 +251,12 @@ data class TitleDetail(
     val seasons: List<Tile> = emptyList(),
     val episodes: List<Tile> = emptyList(),
     val attribution: String? = null,
+    @SerialName("request_state") val requestState: String? = null,
+    val requestable: Boolean = false,
+    /** Requestable series only: season numbers a request may pick from (empty = whole series only). */
+    @SerialName("request_seasons") val requestSeasons: List<Int> = emptyList(),
 ) {
-    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying)
+    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable)
 }
 
 @Serializable
