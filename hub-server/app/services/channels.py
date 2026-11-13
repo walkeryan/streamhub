@@ -20,6 +20,16 @@ from app.infra.db import Database
 from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Progress, Setting, Source
 from app.services import ids
 from app.services.errors import NotFound, ServiceError
+from app.services.event_slots import (
+    DEFAULT_SLOT_CONFIG,
+    SLOT_NAME_LIKE,
+    EventSlot,
+    SlotConfig,
+    display_name,
+    is_placeholder,
+    parse_event_slot,
+    slot_programme_id,
+)
 from app.services.sources import SourceService, apply_overrides
 from app.services.sports import sport_facts
 from app.services.tiles import ImageFn
@@ -47,6 +57,59 @@ def programme_dict(p: Programme, ch: Channel | None = None, now: datetime | None
         "is_sport": is_sport,
         "teams": list(teams),
     }
+
+
+def slot_named(name: Any) -> Any:
+    """SQL condition narrowing a channel-name column to names that can be event slots (see SLOT_NAME_LIKE)."""
+    squashed = func.replace(func.replace(name, "  ", " "), "  ", " ")
+    return or_(*(squashed.like(pattern) for pattern in SLOT_NAME_LIKE))
+
+
+def slot_programme(ch: Channel, slot: EventSlot, config: SlotConfig) -> dict[str, Any] | None:
+    """The game a dated slot's name announces, shaped like a guide entry."""
+    window = slot.window(config)
+    if window is None:
+        return None
+    return {
+        "id": slot_programme_id(ch.id, window[0]),
+        "channel_id": ids.channel_id(ch.source_id, ch.ext_id),
+        "start": window[0],
+        "stop": window[1],
+        "title": slot.title,
+        "description": None,
+        "category": slot.sport,
+        "icon": None,
+        "catchup_available": False,
+        "is_sport": True,
+        "teams": slot.teams,
+    }
+
+
+def present_now_next(
+    ch: Channel,
+    current: Programme | None,
+    following: Programme | None,
+    config: SlotConfig = DEFAULT_SLOT_CONFIG,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """What is on a channel and what follows, as a client should show it.
+
+    An event slot is its own schedule: the game is "now" while it is live and "next" before
+    it starts, and nothing once it is over (the provider leaves old names in place for
+    weeks). Anywhere else a programme that only repeats the channel's name is the
+    manager's filler for a missing guide, and is left out.
+    """
+    now = now or datetime.now(UTC)
+    slot = parse_event_slot(ch.name)
+    if slot is not None:
+        state = slot.state(now, config)
+        event = slot_programme(ch, slot, config) if state in ("live", "upcoming") else None
+        return (event, None) if state == "live" else (None, event)
+    shown = [
+        None if p is None or is_placeholder(p.title, ch.name) else programme_dict(p, ch, now)
+        for p in (current, following)
+    ]
+    return shown[0], shown[1]
 
 
 async def now_next(
@@ -329,13 +392,13 @@ class ChannelService:
                     )
                 ).scalars()
             )
-        nn = await now_next(self._db, chans)
+        shown = await self.now_next_view(chans)
         sources = await self._sources.rows_by_id() if self.image_fn and chans else {}
         image = self.image_fn(sources) if self.image_fn else None
         out = []
         for c in chans:
             cid = ids.channel_id(c.source_id, c.ext_id)
-            cur, nxt = nn.get((c.source_id, c.epg_id or ""), (None, None))
+            cur, nxt = shown[c.id]
             country, country_source = channel_country(c.country, c.group_name)
             out.append(
                 {
@@ -343,7 +406,7 @@ class ChannelService:
                     "source_id": c.source_id,
                     "ext_id": c.ext_id,
                     "number": c.number,
-                    "name": c.name,
+                    "name": display_name(c.name),
                     "logo": image(sources.get(c.source_id), c.logo, cid) if image else c.logo,
                     "group": c.group_override or c.group_name,
                     "language": c.language or "und",
@@ -353,11 +416,35 @@ class ChannelService:
                     "epg_id": c.epg_id,
                     "catchup_days": c.catchup_days,
                     "is_favorite": cid in favs,
-                    "now": programme_dict(cur, c) if cur else None,
-                    "next": programme_dict(nxt, c) if nxt else None,
+                    "now": cur,
+                    "next": nxt,
                 }
             )
         return out
+
+    async def slot_configs(self, chans: Sequence[Channel]) -> dict[str, SlotConfig]:
+        """Each source's slot clock, read only when one of ``chans`` is a slot: most pages have none."""
+        if not any(parse_event_slot(c.name) for c in chans):
+            return {}
+        return await self._sources.slot_configs()
+
+    async def now_next_view(
+        self, chans: Sequence[Channel], now: datetime | None = None
+    ) -> dict[int, tuple[dict[str, Any] | None, dict[str, Any] | None]]:
+        """Now and next of each channel (by row id), as shown: see ``present_now_next``."""
+        if not chans:
+            return {}
+        nn = await now_next(self._db, chans)
+        configs = await self.slot_configs(chans)
+        return {
+            c.id: present_now_next(
+                c,
+                *nn.get((c.source_id, c.epg_id or ""), (None, None)),
+                configs.get(c.source_id, DEFAULT_SLOT_CONFIG),
+                now,
+            )
+            for c in chans
+        }
 
     async def channel_by_hub_id(self, hub_id: str) -> Channel:
         try:
@@ -570,10 +657,18 @@ class ChannelService:
                 )
             chans = [ch for ch in chans if ch.id in allowed]
         by_epg: dict[tuple[str, str], list[Channel]] = {}
-        for c in chans:
-            if c.epg_id:
-                by_epg.setdefault((c.source_id, c.epg_id), []).append(c)
         out: dict[str, list[dict[str, Any]]] = {ids.channel_id(c.source_id, c.ext_id): [] for c in chans}
+        configs = await self.slot_configs(chans)
+        for c in chans:
+            slot = parse_event_slot(c.name)
+            if slot is not None:
+                # The name is this channel's whole schedule; its guide rows only repeat it.
+                config = configs.get(c.source_id, DEFAULT_SLOT_CONFIG)
+                event = slot_programme(c, slot, config) if slot.state(now, config) != "ended" else None
+                if event is not None and event["stop"] > start and event["start"] < stop:
+                    out[ids.channel_id(c.source_id, c.ext_id)].append(event)
+            elif c.epg_id:
+                by_epg.setdefault((c.source_id, c.epg_id), []).append(c)
         if not by_epg:
             return out
         async with self._db.session() as s:
@@ -590,7 +685,35 @@ class ChannelService:
                 ).scalars()
                 for p in rows:
                     for c in by_epg.get((p.feed, p.epg_channel), []):
-                        out[ids.channel_id(c.source_id, c.ext_id)].append(programme_dict(p, c, now))
+                        if not is_placeholder(p.title, c.name):
+                            out[ids.channel_id(c.source_id, c.ext_id)].append(programme_dict(p, c, now))
+        return out
+
+    async def slot_entries(self, chans: Sequence[Channel], now: datetime | None = None) -> dict[int, Programme]:
+        """The game each live or coming slot among ``chans`` announces (by row id), as an unsaved guide row.
+
+        For the recorder, which snapshots a guide entry: there is no stored row to read.
+        """
+        now = now or datetime.now(UTC)
+        out: dict[int, Programme] = {}
+        configs = await self.slot_configs(chans)
+        for ch in chans:
+            slot = parse_event_slot(ch.name)
+            if slot is None:
+                continue
+            window = slot.window(configs.get(ch.source_id, DEFAULT_SLOT_CONFIG))
+            if window is None or window[1] <= now:
+                continue
+            out[ch.id] = Programme(
+                feed=ch.source_id,
+                epg_channel=ch.epg_id or "",
+                start=window[0],
+                stop=window[1],
+                title=slot.title,
+                # A slot is a game whatever its sport is called: the classifier must not miss one it has no word for.
+                category=slot.sport if slot.sport and sport_facts(slot.title, slot.sport)[0] else "Sports",
+                age_evidence={},
+            )
         return out
 
     async def programme(self, prog_hub_id: str) -> Programme:
@@ -605,8 +728,14 @@ class ChannelService:
             raise NotFound("programme not found")
         return p
 
-    async def on_now(self, profile_id: str, limit: int = 20) -> tuple[list[tuple[Channel, Programme | None]], bool]:
-        """Currently scheduled channels, prioritizing this profile's recent viewing."""
+    async def on_now(
+        self, profile_id: str, limit: int = 20
+    ) -> tuple[list[tuple[Channel, dict[str, Any] | None]], bool]:
+        """Currently scheduled channels, prioritizing this profile's recent viewing.
+
+        Each comes with what it is showing, as ``present_now_next`` reads it. A channel whose
+        only "programme" repeats its own name has no schedule and does not count.
+        """
         now = datetime.now(UTC)
         query, _ = await self._channel_query(profile_id)
         history = (
@@ -628,6 +757,7 @@ class ChannelService:
                     Programme.epg_channel == Channel.epg_id,
                     Programme.start <= now,
                     Programme.stop > now,
+                    func.lower(func.trim(Programme.title)) != func.lower(func.trim(Channel.name)),
                 )
                 .exists()
             )
@@ -658,8 +788,8 @@ class ChannelService:
                             )
                         ).scalars()
                     )
-            return [(ch, None) for ch in chans], False
+            shown = await self.now_next_view(chans, now)
+            return [(ch, shown[ch.id][0]) for ch in chans], False
         chans = [row[0] for row in rows]
-        nn = await now_next(self._db, chans)
-        pairs = [(c, nn.get((c.source_id, c.epg_id or ""), (None, None))[0]) for c in chans]
-        return pairs, any(row[1] is not None for row in rows)
+        shown = await self.now_next_view(chans, now)
+        return [(c, shown[c.id][0]) for c in chans], any(row[1] is not None for row in rows)
