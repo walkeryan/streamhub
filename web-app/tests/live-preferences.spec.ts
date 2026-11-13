@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { chooseLiveOption, closeLiveOptions, openLiveOptions, signIn } from './helpers'
+import { chooseLiveGroup, chooseLiveOption, closeLiveOptions, openLiveOptions, signIn } from './helpers'
 
 type Document = Record<string, unknown>
 async function backend(page: Page, documents: Record<string, Document>) {
@@ -71,7 +71,7 @@ test('live region and filters survive reload and another device without replacin
   await groups(page).getByRole('button', { name: 'Favorites', exact: true }).click()
   await expect.poll(() => documents.p2['liveFilters.v1']).toEqual({ language: 'all', country: 'all', source: '', group: '', favorites: true })
   // All, Favorites and the groups are one row of choices: a group replaces Favorites.
-  await groups(page).getByRole('button', { name: 'Sports', exact: true }).click()
+  await chooseLiveGroup(page, 'Sports')
   await expect.poll(() => documents.p2['liveFilters.v1']).toEqual({ language: 'all', country: 'all', source: '', group: 'g1', favorites: false })
   expect(documents.p2.unrelated).toEqual({ preserve: true })
   await page.reload()

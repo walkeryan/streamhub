@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 
 // Channel groups have two levels. The fixture's Sports has a channel of its own and three children;
 // the other groups are plain. A guest sees four of its channels: one in each child, one in Sports itself.
+// A group with children is one chip that drops them down: no second control beside it, and no × in the row.
 const PROFILES = {
   guest: { id: 'p2', name: 'Guest', avatar: null, is_admin: false, theme_id: 'midnight', languages: ['eng', 'spa'], has_pin: false, kids: false, disclaimer_accepted_version: '1.0' },
   owner: { id: 'p1', name: 'Owner', avatar: null, is_admin: true, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: false, disclaimer_accepted_version: '1.0' },
@@ -20,145 +21,224 @@ async function enter(page: Page, path = '/live', who: keyof typeof PROFILES = 'g
 }
 const groups = (page: Page) => page.getByRole('group', { name: 'Channel groups', exact: true })
 const chip = (page: Page, name: string) => groups(page).getByRole('button', { name, exact: true })
+/** The Sports chip, whatever it names: "Sports", or "Sports · Football" while a child is the choice. */
+const sports = (page: Page) => groups(page).getByRole('button', { name: /^Sports/ })
 const rows = (page: Page) => page.getByTestId('channel-row')
-const picker = (page: Page) => page.getByTestId('live-subgroup')
-const clear = (page: Page) => page.getByRole('button', { name: 'Clear filters', exact: true })
-const list = (page: Page) => page.getByRole('dialog', { name: 'Sports', exact: true })
+const menu = (page: Page, name = 'Sports') => page.getByRole('menu', { name, exact: true })
+const entries = (page: Page) => page.getByRole('menuitemradio')
+const entry = (page: Page, name: string) => page.getByRole('menuitemradio', { name: new RegExp(`^${name} \\(`) })
+const names = (target: Locator) => target.evaluateAll((all) => all.map((el) => el.getAttribute('aria-label')))
+/** Everything in the row of chips, in order, by its text: a control that is not a chip would show here. */
+const inRow = (page: Page) => groups(page).evaluate((row) => Array.from(row.children, (el) => el.textContent))
 const fits = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
+const SPORTS_MENU = ['All Sports (4)', 'Basketball (1)', 'Football (1)', 'Hockey (1)']
 async function walk(page: Page, key: string, target: Locator, limit = 16) {
   for (let i = 0; i < limit && (await target.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press(key)
   await expect(target).toHaveAttribute('data-focused', 'true')
 }
+/** Another line-up, before Live TV asks for it: enough plain groups to overflow the row, then a parent at its end. */
+async function longRow(page: Page) {
+  await enter(page, '/')
+  await expect(page.getByTestId('home')).toBeVisible()
+  await page.evaluate(async () => {
+    const path = '/src/mocks/fixtures.ts'
+    const { channels } = await import(/* @vite-ignore */ path)
+    channels.forEach((c: { group: string }, i: number) => {
+      c.group = i < 15 ? `Fixture Group ${i + 1}` : i === 15 ? 'Regional' : i === 16 ? 'Regional / North Coast' : 'Regional / The Longest Running Regional Network Of Them All'
+    })
+  })
+  await page.getByRole('link', { name: 'Live TV', exact: true }).click()
+  await expect(rows(page).first()).toBeVisible()
+}
 
-test('chips are the top level; a parent offers its children in a drop-down beside its chip', async ({ page }) => {
+test('chips are the top level; a parent is one chip whose menu opens under it and lists All and its children', async ({ page }) => {
   await enter(page)
   await expect(rows(page).first()).toBeVisible()
   await expect(groups(page).getByRole('button')).toHaveText(TOP_LEVEL)
   // Only the group that has children says so.
-  await expect(chip(page, 'Sports').locator('svg')).toHaveCount(1)
+  await expect(sports(page).locator('svg')).toHaveCount(1)
   await expect(groups(page).locator('.chip svg')).toHaveCount(1)
-  await expect(picker(page)).toHaveCount(0)
+  const everything = await rows(page).count()
 
-  await chip(page, 'Sports').click()
+  // Opening chooses nothing: the list under the chip, the filter as it was.
+  await sports(page).click()
+  await expect(menu(page)).toBeVisible()
+  expect(await names(entries(page))).toEqual(SPORTS_MENU)
+  await expect(entries(page).locator('.label')).toHaveText(['4', '1', '1', '1'])
+  await expect(page.locator('[aria-checked="true"]')).toHaveCount(0)
+  await expect(chip(page, 'All')).toHaveAttribute('aria-pressed', 'true')
+  await expect(sports(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(rows(page)).toHaveCount(everything)
+  const at = (await sports(page).boundingBox())!, list = (await page.locator('.chip-menu').boundingBox())!
+  expect(list.y - (at.y + at.height)).toBeGreaterThanOrEqual(0)
+  expect(list.y - (at.y + at.height)).toBeLessThan(12)
+  expect(Math.abs(list.x - at.x)).toBeLessThan(6)
+  expect(list.width).toBeLessThan(400)
+  expect(await page.locator('.chip-menu').evaluate((el) => getComputedStyle(el).position)).toBe('fixed')
+
+  // All Sports: the chip is the choice and still says Sports. Nothing else joined the row, and there is no ×.
+  await entry(page, 'All Sports').click()
+  await expect(menu(page)).toHaveCount(0)
   await expect(rows(page)).toHaveText(SPORTS)
-  await expect(picker(page)).toHaveText('All Sports')
-  await expect(picker(page)).toHaveAccessibleName('Sports: All Sports')
-  // Directly after the chip it belongs to, on the chips' line; then the small × that clears the filter.
-  expect(await groups(page).evaluate((row) => Array.from(row.children, (el) => el.textContent))).toEqual([...TOP_LEVEL.slice(0, 4), 'All Sports', '', ...TOP_LEVEL.slice(4)])
-  await expect(clear(page)).toHaveAccessibleName('Clear filters')
-  expect((await clear(page).boundingBox())!.width).toBeLessThan(60)
+  await expect(sports(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(sports(page)).toHaveAttribute('data-focused', 'true')
+  await expect(sports(page)).toHaveAccessibleName('Sports')
+  expect(await inRow(page)).toEqual(TOP_LEVEL)
+  await expect(groups(page).getByRole('button')).toHaveCount(TOP_LEVEL.length)
+  await expect(page.getByRole('button', { name: /clear/i })).toHaveCount(0)
   expect(await groups(page).evaluate((row) => new Set(Array.from(row.children, (el) => (el as HTMLElement).offsetTop + (el as HTMLElement).offsetHeight / 2)).size)).toBe(1)
 
-  await picker(page).click()
-  await expect(list(page).getByRole('button')).toHaveText(['All Sports (4)', 'Basketball (1)', 'Football (1)', 'Hockey (1)', 'Done'])
-  await list(page).getByRole('button', { name: /^Football/ }).click()
-  await expect(list(page)).toHaveCount(0)
+  // A child: the same chip names it, and the menu marks it.
+  await sports(page).click()
+  await expect(entry(page, 'All Sports')).toHaveAttribute('aria-checked', 'true')
+  await entry(page, 'Football').click()
+  await expect(menu(page)).toHaveCount(0)
   await expect(rows(page)).toHaveText([/Sunday League/])
-  // The chip stays the choice; the drop-down names the child.
-  await expect(chip(page, 'Sports')).toHaveAttribute('aria-pressed', 'true')
-  await expect(picker(page)).toHaveText('Football')
+  await expect(sports(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(sports(page)).toHaveAccessibleName('Sports · Football')
+  expect(await inRow(page)).toEqual([...TOP_LEVEL.slice(0, 3), 'Sports · Football', ...TOP_LEVEL.slice(4)])
+  await expect(groups(page).getByRole('button')).toHaveCount(TOP_LEVEL.length)
+  await expect(page.getByRole('button', { name: /clear/i })).toHaveCount(0)
   await expect(page.getByText('1 channels', { exact: true })).toBeVisible()
+  await sports(page).click()
+  await expect(entry(page, 'Football')).toHaveAttribute('aria-checked', 'true')
+  await expect(page.locator('[aria-checked="true"]')).toHaveCount(1)
 
-  // A plain group has no drop-down; the × moves to the chip now in force, and is gone with the filter.
+  // A click anywhere else closes the list and changes nothing.
+  await page.mouse.click(900, 600)
+  await expect(menu(page)).toHaveCount(0)
+  await expect(sports(page)).toHaveAccessibleName('Sports · Football')
+  await expect(rows(page)).toHaveText([/Sunday League/])
+
+  // A plain group is chosen at once; Sports is Sports again. All takes the filter off.
   await chip(page, 'News').click()
-  await expect(picker(page)).toHaveCount(0)
-  await expect(chip(page, 'Sports')).toHaveAttribute('aria-pressed', 'false')
-  expect(await groups(page).evaluate((row) => Array.from(row.children, (el) => el.textContent))).toEqual([...TOP_LEVEL.slice(0, 3), '', ...TOP_LEVEL.slice(3)])
+  await expect(menu(page)).toHaveCount(0)
+  await expect(sports(page)).toHaveAttribute('aria-pressed', 'false')
+  expect(await inRow(page)).toEqual(TOP_LEVEL)
   await chip(page, 'All').click()
-  await expect(clear(page)).toHaveCount(0)
-  await chip(page, 'News').click()
+  await expect(rows(page)).toHaveCount(everything)
+  await expect(chip(page, 'News')).toHaveAttribute('aria-pressed', 'false')
   expect(await fits(page)).toBe(true)
 })
 
-test('the group and the child survive a reload and Back, in the guide too, until Clear filters', async ({ page }) => {
+test('the group and the child survive a reload and Back, in the guide too, until All is chosen', async ({ page }) => {
   await enter(page)
-  await chip(page, 'Sports').click()
-  await picker(page).click()
-  await list(page).getByRole('button', { name: /^Hockey/ }).click()
+  await sports(page).click()
+  await entry(page, 'Hockey').click()
   await expect(rows(page)).toHaveText([/Old Time TV/])
 
   await page.reload()
-  await expect(chip(page, 'Sports')).toHaveAttribute('aria-pressed', 'true')
-  await expect(picker(page)).toHaveText('Hockey')
+  await expect(sports(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(sports(page)).toHaveText('Sports · Hockey')
   await expect(rows(page)).toHaveText([/Old Time TV/])
   await expect(chip(page, 'All')).toHaveAttribute('aria-pressed', 'false')
 
-  // The guide is filtered by the same choice: a child alone, then the parent with its children.
+  // The guide has the same row, and is filtered by the same choice: a child alone, then the parent with its children.
   await page.getByRole('button', { name: 'Guide', exact: true }).click()
   const guide = page.getByTestId('guide')
   await expect(guide.getByRole('button', { name: /^\d+ Old Time TV$/ })).toBeVisible()
   await expect(guide.getByRole('button', { name: /^\d+ Metro Sports 1$/ })).toHaveCount(0)
-  await picker(page).click()
-  await list(page).getByRole('button', { name: /^All Sports/ }).click()
+  expect(await inRow(page)).toEqual([...TOP_LEVEL.slice(0, 3), 'Sports · Hockey', ...TOP_LEVEL.slice(4)])
+  await sports(page).click()
+  expect(await names(entries(page))).toEqual(SPORTS_MENU)
+  await expect(entry(page, 'Hockey')).toHaveAttribute('aria-checked', 'true')
+  await entry(page, 'All Sports').click()
   for (const name of ['Metro Sports 1', 'Court Vision', 'Sunday League', 'Old Time TV']) await expect(guide.getByRole('button', { name: new RegExp(`^\\d+ ${name}$`) })).toBeVisible()
   await expect(guide.getByRole('button', { name: /^\d+ Harbor News 24$/ })).toHaveCount(0)
+  expect(await inRow(page)).toEqual(TOP_LEVEL)
   await page.getByRole('button', { name: 'Channels', exact: true }).click()
-  await picker(page).click()
-  await list(page).getByRole('button', { name: /^Basketball/ }).click()
+  await sports(page).click()
+  await entry(page, 'Basketball').click()
   await expect(rows(page)).toHaveText([/Court Vision/])
 
   // Away and Back.
   await page.getByRole('link', { name: 'Home', exact: true }).click()
   await expect(page.getByTestId('home')).toBeVisible()
   await page.goBack()
-  await expect(chip(page, 'Sports')).toHaveAttribute('aria-pressed', 'true')
-  await expect(picker(page)).toHaveText('Basketball')
+  await expect(sports(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(sports(page)).toHaveText('Sports · Basketball')
   await expect(rows(page)).toHaveText([/Court Vision/])
 
-  await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await chip(page, 'All').click()
   await expect(chip(page, 'All')).toHaveAttribute('aria-pressed', 'true')
-  await expect(chip(page, 'Sports')).toHaveAttribute('aria-pressed', 'false')
-  await expect(picker(page)).toHaveCount(0)
+  await expect(sports(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(sports(page)).toHaveText('Sports')
   await expect(rows(page).first()).toContainText('Harbor News 24')
   await page.reload()
   await expect(rows(page).first()).toContainText('Harbor News 24')
   await expect(chip(page, 'All')).toHaveAttribute('aria-pressed', 'true')
-  await expect(picker(page)).toHaveCount(0)
+  await expect(sports(page)).toHaveText('Sports')
 })
 
-test('by keyboard alone: arrows, Enter and Escape choose a child, and Tab walks the row in order', async ({ page }) => {
+test('by keyboard alone: Enter opens the menu, arrows and Tab stay in it, Enter chooses and Escape leaves the filter alone', async ({ page }) => {
   await enter(page)
   await expect(rows(page).first()).toBeVisible()
   await expect(page.locator('.fx[data-focused="true"]')).not.toHaveCount(0)
+  const everything = await rows(page).count()
   // Up from the channels is the row of chips, on the one in force; along the row to Sports.
   await walk(page, 'ArrowUp', chip(page, 'All'))
-  await walk(page, 'ArrowRight', chip(page, 'Sports'))
+  await walk(page, 'ArrowRight', sports(page))
   await page.keyboard.press('Enter')
-  await expect(rows(page)).toHaveText(SPORTS)
-  await expect(chip(page, 'Sports')).toHaveAttribute('data-focused', 'true')
-
-  // The drop-down is the next stop to the right; Enter opens it on the current choice.
-  await page.keyboard.press('ArrowRight')
-  await expect(picker(page)).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('Enter')
-  await expect(list(page).getByRole('button', { name: /^All Sports/ })).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowDown')
-  await page.keyboard.press('ArrowDown')
-  await expect(list(page).getByRole('button', { name: /^Football/ })).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('Enter')
-  await expect(list(page)).toHaveCount(0)
-  await expect(rows(page)).toHaveText([/Sunday League/])
-  await expect(picker(page)).toHaveText('Football')
-  await expect(picker(page)).toHaveAttribute('data-focused', 'true')
-
-  // Escape closes the list and changes nothing.
-  await page.keyboard.press('Enter')
-  await expect(list(page).getByRole('button', { name: /^Football/ })).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowDown')
-  await expect(list(page).getByRole('button', { name: /^Hockey/ })).toHaveAttribute('data-focused', 'true')
+  // The menu, on its first entry; nothing is chosen yet.
+  await expect(entry(page, 'All Sports')).toHaveAttribute('data-focused', 'true')
+  await expect(rows(page)).toHaveCount(everything)
+  // Escape: closed, focus on the chip, the filter as it was.
   await page.keyboard.press('Escape')
-  await expect(list(page)).toHaveCount(0)
-  await expect(picker(page)).toHaveText('Football')
-  await expect(picker(page)).toHaveAttribute('data-focused', 'true')
+  await expect(menu(page)).toHaveCount(0)
+  await expect(sports(page)).toHaveAttribute('data-focused', 'true')
+  await expect(chip(page, 'All')).toHaveAttribute('aria-pressed', 'true')
+  await expect(rows(page)).toHaveCount(everything)
+  await expect(page).toHaveURL(/\/live$/)
+
+  await page.keyboard.press('Enter')
+  await expect(entry(page, 'All Sports')).toHaveAttribute('data-focused', 'true')
+  // Up from the first entry, and Left and Right anywhere, go nowhere.
+  for (const key of ['ArrowUp', 'ArrowLeft', 'ArrowRight']) {
+    await page.keyboard.press(key)
+    await expect(entry(page, 'All Sports')).toHaveAttribute('data-focused', 'true')
+  }
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(entry(page, 'Football')).toHaveAttribute('data-focused', 'true')
+  for (const key of ['ArrowLeft', 'ArrowRight']) {
+    await page.keyboard.press(key)
+    await expect(entry(page, 'Football')).toHaveAttribute('data-focused', 'true')
+  }
+  // Tab walks the entries and comes round again; it does not leave the menu.
+  for (const stop of ['Hockey', 'All Sports', 'Basketball']) {
+    await page.keyboard.press('Tab')
+    await expect(entry(page, stop)).toHaveAttribute('data-focused', 'true')
+  }
+  await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Shift+Tab')
+  await expect(entry(page, 'Hockey')).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('ArrowDown')
+  await expect(entry(page, 'Hockey')).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('Enter')
+  await expect(menu(page)).toHaveCount(0)
+  await expect(rows(page)).toHaveText([/Sunday League/])
+  await expect(sports(page)).toHaveText('Sports · Football')
+  await expect(sports(page)).toHaveAttribute('data-focused', 'true')
+
+  // Open again: on the choice in force. Escape closes the list and changes nothing.
+  await page.keyboard.press('Enter')
+  await expect(entry(page, 'Football')).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('ArrowDown')
+  await expect(entry(page, 'Hockey')).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Escape')
+  await expect(menu(page)).toHaveCount(0)
+  await expect(sports(page)).toHaveText('Sports · Football')
+  await expect(sports(page)).toHaveAttribute('data-focused', 'true')
   await expect(rows(page)).toHaveText([/Sunday League/])
 
-  // Tab: News, Sports, its drop-down, the ×, Movies; Shift+Tab back the same way.
+  // Tab along the row: News, Sports, Movies. Nothing stands between the chips; Shift+Tab back the same way.
   await walk(page, 'ArrowLeft', chip(page, 'News'))
-  for (const stop of [chip(page, 'Sports'), picker(page), clear(page), chip(page, 'Movies')]) {
+  for (const stop of [sports(page), chip(page, 'Movies')]) {
     await page.keyboard.press('Tab')
     await expect(stop).toHaveAttribute('data-focused', 'true')
   }
-  for (const stop of [clear(page), picker(page), chip(page, 'Sports'), chip(page, 'News')]) {
+  for (const stop of [sports(page), chip(page, 'News')]) {
     await page.keyboard.press('Shift+Tab')
     await expect(stop).toHaveAttribute('data-focused', 'true')
   }
@@ -168,40 +248,88 @@ test('by keyboard alone: arrows, Enter and Escape choose a child, and Tab walks 
   await expect(page.locator('.fx[data-focused="true"]')).not.toHaveCount(0)
 })
 
+test('the menu stays inside the window: moved left at the end of the scrolled row, above the chip when there is no room below', async ({ page }) => {
+  await longRow(page)
+  const regional = groups(page).getByRole('button', { name: /^Regional/ }), list = page.locator('.chip-menu')
+  // The row overflows and the parent is its last chip, out of view until the row is scrolled to it.
+  expect(await groups(page).evaluate((row) => row.scrollWidth > row.clientWidth)).toBe(true)
+  await regional.click()
+  await expect(menu(page, 'Regional')).toBeVisible()
+  expect(await groups(page).evaluate((row) => row.scrollLeft)).toBeGreaterThan(0)
+  const at = (await regional.boundingBox())!, box = (await list.boundingBox())!
+  expect(at.x + at.width).toBeGreaterThan(1280 - 120)
+  expect(box.x).toBeGreaterThanOrEqual(0)
+  expect(box.x + box.width).toBeLessThanOrEqual(1280)
+  expect(box.x).toBeLessThan(at.x) // too wide to start at the chip's left edge
+  expect(box.y).toBeGreaterThanOrEqual(at.y + at.height)
+  // A long name is shortened on the chip and whole in its accessible name.
+  await entry(page, 'The Longest Running Regional Network Of Them All').click()
+  await expect(regional).toHaveAccessibleName('Regional · The Longest Running Regional Network Of Them All')
+  expect(await regional.locator('.chip-menu-choice').evaluate((el) => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow === 'ellipsis')).toBe(true)
+  expect((await regional.boundingBox())!.width).toBeLessThan(360)
+  expect(await fits(page)).toBe(true)
+
+  // A window too short for the list under the chip: it opens above, as tall as the room there, and scrolls inside itself.
+  await page.setViewportSize({ width: 1280, height: 300 })
+  await regional.click()
+  await expect(menu(page, 'Regional')).toBeVisible()
+  const chipAt = (await regional.boundingBox())!, above = (await list.boundingBox())!
+  expect(above.y).toBeGreaterThanOrEqual(0)
+  expect(above.y + above.height).toBeLessThanOrEqual(chipAt.y)
+  expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+  // The entry in force is brought into view inside it.
+  await expect(entry(page, 'The Longest Running Regional Network Of Them All')).toBeInViewport()
+  await page.keyboard.press('Escape')
+  await expect(menu(page, 'Regional')).toHaveCount(0)
+})
+
 test.describe('on a phone', () => {
   test.use(PHONE)
 
-  test('the chips stay one scrolling row and the drop-down takes the line under them', async ({ page }) => {
+  test('the chips stay one scrolling row and a parent opens its children in the bottom sheet', async ({ page }) => {
     await enter(page)
     await expect(rows(page).first()).toBeVisible()
     await expect(groups(page).getByRole('button')).toHaveText(TOP_LEVEL)
-    await chip(page, 'Sports').tap()
+    await sports(page).tap()
+    const sheet = page.getByRole('dialog', { name: 'Sports', exact: true })
+    await expect(sheet).toBeVisible()
+    expect(await names(entries(page))).toEqual(SPORTS_MENU)
+    const box = (await sheet.boundingBox())!
+    expect([box.x, box.width, Math.round(box.y + box.height)]).toEqual([0, 390, 844])
+    expect(await fits(page)).toBe(true)
+    await entry(page, 'All Sports').tap()
+    await expect(sheet).toHaveCount(0)
     await expect(rows(page)).toHaveText(SPORTS)
-    await expect(picker(page)).toHaveText('All Sports')
-    // Not in the row: under it, inside the page's width. The row gains only the × beside the chip in force.
-    await expect(groups(page).getByRole('button')).toHaveText([...TOP_LEVEL.slice(0, 4), '', ...TOP_LEVEL.slice(4)])
+    // The row is the same chips: nothing under it, nothing added to it.
+    expect(await inRow(page)).toEqual(TOP_LEVEL)
+    await expect(page.getByRole('button', { name: /clear/i })).toHaveCount(0)
     // (offsetTop: the chip in focus is drawn slightly larger.)
     expect(await groups(page).evaluate((row) => row.scrollWidth > row.clientWidth && new Set(Array.from(row.children, (el) => (el as HTMLElement).offsetTop)).size === 1)).toBe(true)
-    const row = (await groups(page).boundingBox())!, under = (await picker(page).boundingBox())!
-    expect(under.y).toBeGreaterThanOrEqual(row.y + row.height - 8)
-    expect(under.x).toBeGreaterThanOrEqual(0)
-    expect(under.x + under.width).toBeLessThanOrEqual(390)
+    const row = (await groups(page).boundingBox())!, first = (await rows(page).first().boundingBox())!
+    expect(first.y - (row.y + row.height)).toBeLessThan(24)
     expect(await fits(page)).toBe(true)
 
-    await picker(page).tap()
-    await expect(list(page).getByRole('button')).toHaveText(['All Sports (4)', 'Basketball (1)', 'Football (1)', 'Hockey (1)', 'Done'])
-    expect(await fits(page)).toBe(true)
-    await list(page).getByRole('button', { name: /^Hockey/ }).tap()
+    await sports(page).tap()
+    await expect(entry(page, 'All Sports')).toHaveAttribute('aria-checked', 'true')
+    await entry(page, 'Hockey').tap()
     await expect(rows(page)).toHaveText([/Old Time TV/])
-    await expect(picker(page)).toHaveText('Hockey')
-    await expect(chip(page, 'Sports')).toHaveAttribute('aria-pressed', 'true')
+    await expect(sports(page)).toHaveText('Sports · Hockey')
+    await expect(sports(page)).toHaveAttribute('aria-pressed', 'true')
+    expect(await inRow(page)).toEqual([...TOP_LEVEL.slice(0, 3), 'Sports · Hockey', ...TOP_LEVEL.slice(4)])
     expect(await fits(page)).toBe(true)
 
     await page.reload()
-    await expect(picker(page)).toHaveText('Hockey')
+    await expect(sports(page)).toHaveText('Sports · Hockey')
     await expect(rows(page)).toHaveText([/Old Time TV/])
-    await page.getByRole('button', { name: 'Clear filters', exact: true }).tap()
-    await expect(picker(page)).toHaveCount(0)
+    // A tap outside the sheet closes it; All takes the filter off.
+    await sports(page).tap()
+    await expect(sheet).toBeVisible()
+    await page.touchscreen.tap(195, 120)
+    await expect(sheet).toHaveCount(0)
+    await expect(rows(page)).toHaveText([/Old Time TV/])
+    await chip(page, 'All').scrollIntoViewIfNeeded()
+    await chip(page, 'All').tap()
+    await expect(sports(page)).toHaveText('Sports')
     await expect(chip(page, 'All')).toHaveAttribute('aria-pressed', 'true')
     expect(await fits(page)).toBe(true)
   })

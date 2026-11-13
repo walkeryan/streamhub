@@ -120,12 +120,15 @@ test.describe('on a 1600 by 830 window', () => {
     expect(await focusedRow(page)).toBe(1)
     // Right is the next programme on this channel; Down then lands on what is on when it starts.
     await page.keyboard.press('ArrowRight')
-    const start = (await focusedCell(page).boundingBox())!.x
+    // (Where the cells are laid out, not where they are drawn: the one in focus grows a little as it takes focus,
+    // which moved its edge past a cell that starts at the same minute.)
+    const laidOut = () => focusedCell(page).evaluate((el) => ({ x: (el as HTMLElement).offsetLeft, width: (el as HTMLElement).offsetWidth }))
+    const start = (await laidOut()).x
     await page.keyboard.press('ArrowDown')
-    const under = (await focusedCell(page).boundingBox())!
+    const under = await laidOut()
     expect(await focusedRow(page)).toBe(2)
-    expect(under.x).toBeLessThanOrEqual(start + 1)
-    expect(under.x + under.width).toBeGreaterThan(start + 1)
+    expect(under.x).toBeLessThanOrEqual(start)
+    expect(under.x + under.width).toBeGreaterThan(start)
     for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown')
     await page.keyboard.press('ArrowRight')
     await page.keyboard.press('ArrowRight')
@@ -269,7 +272,7 @@ test.describe('on a 1600 by 830 window', () => {
     await expect(page.getByText('1 channels', { exact: true })).toBeVisible()
     await page.getByTestId('guide').getByRole('button', { name: '2 Metro Sports 1', exact: true }).hover()
     await expect(page.getByLabel('Search channels or number')).toHaveValue('Metro')
-    const clear = page.getByRole('button', { name: 'Clear filters', exact: true })
+    const clear = page.getByRole('button', { name: 'Clear search', exact: true })
     expect((await clear.boundingBox())!.width).toBeLessThan(60)
     await clear.click()
     await expect(page.getByText('22 channels', { exact: true })).toBeVisible()
@@ -359,7 +362,7 @@ test.describe('on a phone', () => {
     await page.getByLabel('Search channels or number').fill('Metro')
     await expect(page.getByTestId('guide').getByRole('button', { name: '2 Metro Sports 1', exact: true })).toBeVisible()
     expect(await fits(page)).toBe(true)
-    await page.getByRole('button', { name: 'Clear filters', exact: true }).tap()
+    await page.getByRole('button', { name: 'Clear search', exact: true }).tap()
     await expect(page.getByLabel('Search channels or number')).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Options', exact: true }).tap()
