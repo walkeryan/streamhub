@@ -202,3 +202,29 @@ test.describe('on a phone', () => {
     expect(await fits(page)).toBe(true)
   })
 })
+
+test('Settings lists a child by its path, and a hidden parent takes its children with it', async ({ page }) => {
+  await enter(page, '/settings?tab=parental', 'owner')
+  const shown = (name: string) => page.getByRole('button', { name, exact: true })
+  for (const path of ['Sports', 'Sports / Basketball', 'Sports / Football', 'Sports / Hockey', 'News']) await expect(shown(`Shown · ${path}`)).toBeVisible()
+
+  // A child alone.
+  await shown('Shown · Sports / Football').click()
+  await expect(shown('Hidden · Sports / Football')).toHaveAttribute('aria-pressed', 'true')
+  await expect(shown('Shown · Sports')).toBeVisible()
+  await shown('Hidden · Sports / Football').click()
+  await expect(shown('Shown · Sports / Football')).toBeVisible()
+
+  // The parent: its children are hidden with it and are not separate switches until it is shown again.
+  await shown('Shown · Sports').click()
+  await expect(shown('Hidden · Sports')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('group-hidden-with-parent')).toHaveText(['Hidden with Sports · Basketball', 'Hidden with Sports · Football', 'Hidden with Sports · Hockey'])
+  await page.getByLabel('Search channel groups').fill('sports / ho')
+  await expect(page.getByTestId('group-hidden-with-parent')).toHaveText(['Hidden with Sports · Hockey'])
+  await page.getByLabel('Search channel groups').fill('')
+
+  await page.getByRole('link', { name: 'Live TV', exact: true }).click()
+  await expect(rows(page).first()).toBeVisible()
+  await expect(groups(page).getByRole('button')).toHaveText(TOP_LEVEL.filter((name) => name !== 'Sports'))
+  await expect(rows(page).filter({ hasText: /Metro Sports 1|Court Vision|Sunday League/ })).toHaveCount(0)
+})

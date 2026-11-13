@@ -234,7 +234,9 @@ function ParentalTab() {
   const groups = useChannelGroups({ language: 'all', include_hidden: true })
   const [groupSearch, setGroupSearch] = useState('')
   const [groupPage, setGroupPage] = useState(0)
-  const matchingGroups = (groups.data ?? []).filter((g) => g.name.toLowerCase().includes(groupSearch.trim().toLowerCase()))
+  const matchingGroups = (groups.data ?? []).filter((g) => g.path.toLowerCase().includes(groupSearch.trim().toLowerCase()))
+  // A hidden parent hides its children whatever their own setting: showing them again is the parent's switch.
+  const hiddenParents = new Set((groups.data ?? []).filter((g) => !g.parent && g.hidden).map((g) => `${g.source_id}|${g.name}`))
   const groupPageIndex = Math.min(groupPage, Math.max(0, Math.ceil(matchingGroups.length / 40) - 1))
   const qc = useQueryClient()
   const toggleGroup = async (id: string, hidden: boolean) => { await ok(api.PATCH('/channels/groups/{id}', { params: { path: { id } }, body: { hidden } })); void qc.invalidateQueries({ queryKey: ['channel-groups'] }); void qc.invalidateQueries({ queryKey: ['channels'] }) }
@@ -252,7 +254,9 @@ function ParentalTab() {
         <p className="muted">This display preference applies to all profiles. It does not block playback or restrict access to a group.</p>
         <FocusableInput focusKey="par:search" label="Search channel groups" placeholder="Search channel groups" value={groupSearch} onChange={(v) => { setGroupSearch(v); setGroupPage(0) }} />
         <FocusGroup focusKey="par:groups" className="flex gap-2 flex-wrap">
-          {matchingGroups.slice(groupPageIndex * 40, (groupPageIndex + 1) * 40).map((g) => <Chip key={g.id} focusKey={`par:g:${g.id}`} pressed={g.hidden} onEnter={() => void toggleGroup(g.id, !g.hidden)}>{g.hidden ? 'Hidden' : 'Shown'} · {g.name}</Chip>)}
+          {matchingGroups.slice(groupPageIndex * 40, (groupPageIndex + 1) * 40).map((g) => g.parent && hiddenParents.has(`${g.source_id}|${g.parent}`)
+            ? <span key={g.id} className="chip" style={{ opacity: 0.6 }} data-testid="group-hidden-with-parent">Hidden with {g.parent} · {g.name}</span>
+            : <Chip key={g.id} focusKey={`par:g:${g.id}`} pressed={g.hidden} onEnter={() => void toggleGroup(g.id, !g.hidden)}>{g.hidden ? 'Hidden' : 'Shown'} · {g.path}</Chip>)}
           {!matchingGroups.length && <span className="muted">No matching channel groups.</span>}
         </FocusGroup>
         <div className="flex gap-3 items-center flex-wrap"><Button focusKey="par:prev" disabled={!groupPageIndex} onEnter={() => setGroupPage(groupPageIndex - 1)}>Previous</Button><span className="label">Page {groupPageIndex + 1} of {Math.max(1, Math.ceil(matchingGroups.length / 40))}</span><Button focusKey="par:next" disabled={(groupPageIndex + 1) * 40 >= matchingGroups.length} onEnter={() => setGroupPage(groupPageIndex + 1)}>Next</Button></div>
