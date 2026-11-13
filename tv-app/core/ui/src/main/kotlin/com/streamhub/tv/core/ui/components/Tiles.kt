@@ -190,7 +190,8 @@ fun ChannelTile(
                     listOfNotNull(number?.toString(), title).joinToString("  "),
                     style = MaterialTheme.typography.labelLarge, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                Text(now?.title ?: "No programme info", style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // Without guide data the channel stands alone: its name is not repeated as a programme, nor its absence spelled out.
+                if (now != null) Text(now.title, style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 programmeProgress(now)?.let { ProgressLine(it, Modifier.padding(top = 6.dp), height = 3.dp) }
             }
         }

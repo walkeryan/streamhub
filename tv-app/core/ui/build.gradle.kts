@@ -19,6 +19,8 @@ dependencies {
     api(libs.compose.material.icons)
     api(libs.coil.compose)
     implementation(libs.androidx.datastore.preferences)
+    // WhileVisible: polling that stops with the screen.
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.zxing.core)

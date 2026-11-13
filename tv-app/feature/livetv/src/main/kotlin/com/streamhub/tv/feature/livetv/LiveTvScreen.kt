@@ -429,7 +429,8 @@ private fun ChannelRow(ch: Channel, playing: Boolean, onClick: () -> Unit, onLon
                     if (ch.isFavorite) Icon(Icons.Filled.Favorite, "Favorite", tint = t.accent, modifier = Modifier.padding(start = 6.dp).size(14.dp))
                     if (playing) Text("  ▶", color = t.accent, style = MaterialTheme.typography.labelSmall)
                 }
-                Text(ch.now?.title ?: "—", style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // No guide data (the server no longer sends a placeholder that repeats the name): the channel alone.
+                ch.now?.let { Text(it.title, style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 programmeProgress(ch.now)?.let { ProgressLine(it, Modifier.padding(top = 3.dp), height = 2.dp) }
             }
         }

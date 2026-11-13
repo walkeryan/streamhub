@@ -1,89 +1,83 @@
 package com.streamhub.tv.feature.home
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.streamhub.tv.core.data.model.SportsEvent
-import com.streamhub.tv.core.data.model.SportsFeed
-import com.streamhub.tv.core.ui.components.ShButton
+import com.streamhub.tv.core.data.repo.recordingStateMark
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
-import java.time.Instant
+import com.streamhub.tv.core.ui.theme.Tokens
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
-internal fun sportsCanWatch(event: SportsEvent, now: Instant): Boolean = event.status == "current" &&
-    runCatching { now >= Instant.parse(event.start) && now < Instant.parse(event.stop) }.getOrDefault(false)
-
-internal fun sportsStatusFilterLabel(status: String): String = when(status) {
-    "current" -> "On now"
-    "upcoming" -> "Upcoming"
-    "replay" -> "Replay listings"
-    "ended" -> "Earlier broadcasts"
-    else -> "All statuses"
-}
-
-internal fun sportsEventBadge(event: SportsEvent): String = when {
-    event.replay -> "Replay listing"
-    event.status == "current" && event.liveEvidence -> "LIVE · guide tagged"
-    else -> sportsStatusFilterLabel(event.status)
-}
-
-internal fun sportsEventTime(event: SportsEvent): String = runCatching {
-    val fmt = DateTimeFormatter.ofPattern("h:mm a").withZone(ZoneId.of("America/New_York"))
-    "${fmt.format(Instant.parse(event.start))}–${fmt.format(Instant.parse(event.stop))}"
-}.getOrDefault("Schedule time unavailable")
-
-/** Feed choice is not audio consent; the global playback coordinator performs that check. */
-internal fun sportsFeedPlaybackId(event: SportsEvent, feed: SportsFeed, now: Instant): String? =
-    feed.channelId.takeIf { sportsCanWatch(event,now) && event.feeds.any { it.channelId == feed.channelId && it.programmeId == feed.programmeId } }
-
+/** A few words on a filled tag: LIVE, HD. Text carries the meaning, the fill only the weight. */
 @Composable
-internal fun SportsEventCard(event: SportsEvent, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val t = LocalThemeTokens.current
-    FocusSurface(onClick = onClick, modifier = modifier.width(270.dp), shape = RoundedCornerShape(20.dp), scaleOnFocus = false) {
-        Column(Modifier.fillMaxWidth().height(250.dp).background(t.surfaceAlt).padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(sportsEventBadge(event), color = t.accent, style = MaterialTheme.typography.labelLarge)
-            Text(event.title, color = t.text, style = MaterialTheme.typography.titleLarge, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Text(sportsEventTime(event), color = t.text, style = MaterialTheme.typography.bodyLarge)
-            Text("${event.sport} · ${event.feeds.size} feed${if(event.feeds.size == 1) "" else "s"}", color = t.textMuted, style = MaterialTheme.typography.labelMedium)
-            Text(event.feeds.map { it.channelName }.distinct().joinToString(" · "), color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
+private fun Tag(text: String, fill: Color, ink: Color) {
+    Text(
+        text, color = ink, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+        modifier = Modifier.background(fill, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
+/** A game that is on: what it is, where, and since when. Select plays it (or asks which channel). */
 @Composable
-internal fun SportsFeedDialog(event: SportsEvent, onDismiss: () -> Unit, onWatch: (SportsFeed) -> Unit) {
+internal fun SportsLiveCard(event: SportsEvent, zone: ZoneId, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val t = LocalThemeTokens.current
-    val closeFocus = remember { FocusRequester() }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(Modifier.width(640.dp).heightIn(max = 540.dp).background(t.surface, RoundedCornerShape(20.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(event.title, color = t.text, style = MaterialTheme.typography.titleLarge, maxLines = 2)
-            Text("${sportsEventBadge(event)} · ${sportsEventTime(event)}", color = t.textMuted)
-            ShButton("Close", onDismiss, Modifier.focusRequester(closeFocus))
-            if (!sportsCanWatch(event, Instant.now())) Text("Not airing now. These feed listings do not provide catch-up playback.", color = t.textMuted)
-            Text("Guide-matched feeds. Playback checks audio and asks once if it is unverified.", color = t.textMuted)
-            LazyColumn(Modifier.weight(1f, fill=false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(event.feeds, key = { "${it.channelId}:${it.programmeId}" }) { feed ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("${feed.sourceName} · ${feed.channelName}", color = t.text)
-                        Text("${if(feed.languageVerified) "Audio" else "Provider language hint"}: ${feed.language ?: "Unknown"}", color = t.textMuted)
-                        if(sportsCanWatch(event, Instant.now())) ShButton("Choose feed", { if(sportsFeedPlaybackId(event,feed,Instant.now()) != null) onWatch(feed) })
-                    }
-                }
+    FocusSurface(onClick = onClick, modifier = modifier.size(Tokens.Tile.LandscapeW, Tokens.Tile.LandscapeH), containerColor = t.surfaceAlt) {
+        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (event.liveEvidence && !event.replay) Tag(sportsLiveBadge(event), t.danger, Color.White) else Tag(sportsLiveBadge(event), t.overlay, t.text)
+                sportsQuality(event)?.let { Tag(it, t.overlay, t.text) }
+                Text(event.sport, color = t.textMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            Text(sportsEventTitle(event), color = t.text, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(sportsLeagueLine(event), color = t.textMuted, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(sportsStarted(event, zone), color = t.textMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
     }
-    LaunchedEffect(Unit) { runCatching { closeFocus.requestFocus() } }
+}
+
+/** A game still to come: its local time first. [recordingState] puts the recorder's mark beside it. */
+@Composable
+internal fun SportsUpcomingCard(event: SportsEvent, zone: ZoneId, recordingState: String?, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val t = LocalThemeTokens.current
+    FocusSurface(onClick = onClick, modifier = modifier.size(Tokens.Tile.LandscapeW, 112.dp), containerColor = t.surfaceAlt) {
+        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                listOfNotNull(sportsTime(event.start, zone).takeIf { it.isNotEmpty() }, recordingStateMark(recordingState)).joinToString("  "),
+                color = t.accent, style = MaterialTheme.typography.labelLarge, maxLines = 1,
+            )
+            Text(sportsEventTitle(event), color = t.text, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text("${event.sport} · ${sportsLeagueLine(event)}", color = t.textMuted, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** A channel carrying a game without saying when: named, and nothing claimed about live or upcoming. */
+@Composable
+internal fun SportsGameFeedCard(event: SportsEvent, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val t = LocalThemeTokens.current
+    FocusSurface(onClick = onClick, modifier = modifier.size(Tokens.Tile.LandscapeW, Tokens.Tile.ChannelH), containerColor = t.surfaceAlt) {
+        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                sportsQuality(event)?.let { Tag(it, t.overlay, t.text) }
+                Text(event.sport, color = t.textMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text(sportsEventTitle(event), color = t.text, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(sportsLeagueLine(event), color = t.textMuted, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }

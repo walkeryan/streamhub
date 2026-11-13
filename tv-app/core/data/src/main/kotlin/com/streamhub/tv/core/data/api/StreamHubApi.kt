@@ -212,14 +212,15 @@ class StreamHubApi @Inject constructor(
         sportsRecordingParameters(filters,offset,limit).forEach { (key,value) -> parameter(key,value) }
     }
 
-    suspend fun sportsEvents(filters: NativeSportsFilters, offset: Int = 0, limit: Int = 40): SportsEventsPage = get("/sports/events") {
-        filters.language?.let { parameter("language", it) }
-        filters.sport?.let { parameter("sport", it) }
-        filters.query.trim().take(200).takeIf { it.isNotEmpty() }?.let { parameter("q",it) }
-        filters.date?.let { parameter("date", it) }
-        parameter("timezone", "America/New_York")
-        parameter("status", filters.status)
-        parameter("offset", offset)
+    /** Live, upcoming and game-channel events for [days] days from [date], days being the viewer's own ([timezone]). */
+    suspend fun sportsEvents(filters: NativeSportsFilters, date: String, days: Int, timezone: String, offset: Int = 0, limit: Int = 100): SportsEventsPage = get("/sports/events") {
+        sportsEventParameters(filters, date, days, timezone, offset, limit).forEach { (key, value) -> parameter(key, value) }
+    }
+
+    /** Always-on sports networks, by channel number. */
+    suspend fun sportsChannels(language: String? = null, q: String? = null, limit: Int = 24): SportsChannelsPage = get("/sports/channels") {
+        language?.let { parameter("language", it) }
+        q?.trim()?.take(200)?.takeIf { it.isNotEmpty() }?.let { parameter("q", it) }
         parameter("limit", limit)
     }
 
