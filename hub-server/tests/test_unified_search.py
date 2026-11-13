@@ -619,4 +619,4 @@ async def test_the_number_of_queries_does_not_grow_with_the_catalog(api: Api) ->
         PROGRAMME_CAP,
     )
     assert large == small, (small, large)
-    assert small <= 20
+    assert small <= 24

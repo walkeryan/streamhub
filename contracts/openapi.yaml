@@ -518,6 +518,7 @@ components:
         open_in_app: { type: array, items: { $ref: '#/components/schemas/Tile' }, description: "The results that only open in another app." }
         channels: { type: array, items: { $ref: '#/components/schemas/Channel' }, description: "By number (the exact number first) or name: whole name, start of the name, start of a word, then anywhere in it. The name is compared without quality marks or a country tag." }
         programmes: { type: array, items: { $ref: '#/components/schemas/SearchProgramme' }, description: "Guide broadcasts whose title matches, on now first, then by start. Placeholder programmes (a title that repeats the channel's name) are never listed." }
+        discovered: { type: array, items: {type: string}, description: "Ids of the results that metadata discovery added: titles the hub's own search (discover=false) does not list. Always empty without discovery." }
         sections:
           type: object
           required: [titles, channels, programmes]
@@ -1624,6 +1625,7 @@ paths:
         - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages first: a section that finds nothing in them is answered from every language instead. all = all; und = unknown; a language named here is taken at its word."} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: expand, in: query, schema: {type: string, description: "csv of titles, channels, programmes: return those sections in full (up to 100 each) instead of capped. The rows of a capped section are the first rows of the expanded one."} }
+        - { name: discover, in: query, schema: {type: boolean, default: true}, description: "false = only what the hub holds (its own titles, channels and broadcasts): no remote metadata provider is asked, so the answer is quick, and metadata_available still says whether discovery exists. A client shows that answer first and adds the titles named in the full answer's discovered list when it arrives. With discovery, all remote lookups of one search share a budget of about 2.5 s; past it the answer goes out with what has arrived. A provider's answer for a query is kept for a few minutes." }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResults' } } } } }
   /playback/buffer/lease:
     post:

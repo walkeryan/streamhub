@@ -499,7 +499,8 @@ test('Search lists a title no source has in the same grid, marked as such; the e
   const titles = page.getByTestId('search-titles')
   await expect(titles.getByRole('heading', { name: 'Movies & Shows', exact: true })).toBeVisible()
   await expect(titles.getByTestId('tile')).toHaveAttribute('aria-label', 'Velvet Antarctica')
-  await expect(titles.getByTestId('tile')).toContainText('Not available here')
+  // In search a tile says one thing: a tick when it plays here. This one does not.
+  await expect(titles.getByTestId('tile').getByTestId('tile-available')).toHaveCount(0)
   await expect(page.getByTestId('search-idle')).toHaveCount(0)
   await page.getByRole('textbox', { name: 'Search', exact: true }).fill('')
   await page.getByRole('button', { name: 'Popular movies', exact: true }).click()
