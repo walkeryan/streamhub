@@ -94,8 +94,7 @@ import com.streamhub.tv.feature.settings.SettingsScreen
 import com.streamhub.tv.feature.sources.SourcesScreen
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -189,13 +188,16 @@ class RootViewModel @Inject constructor(
         when (it) { true -> SharedHint.Shared; false -> SharedHint.Personal; null -> SharedHint.Unknown }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    /** The cold-start picker is wanted after all: the server says this is a shared TV and the hint did not. */
-    private val _gateRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val gateRequests: SharedFlow<Unit> = _gateRequests
+    /**
+     * The cold-start picker is wanted after all: the server says this is a shared TV and the hint did
+     * not. A state, not an event: the answer can arrive before the screen is there to hear it.
+     */
+    private val _gateWanted = MutableStateFlow(false)
+    val gateWanted: StateFlow<Boolean> = _gateWanted
     private var gateSettled = false
 
     /** The cold-start question "who is watching?" has been put, or does not arise: it is not put again in this run. */
-    fun settleGate() { gateSettled = true }
+    fun settleGate() { gateSettled = true; _gateWanted.value = false }
 
     init {
         // Whether there is a recorder behind the Recordings destination and the Record actions: asked
@@ -208,7 +210,7 @@ class RootViewModel @Inject constructor(
                 val access = if (me.state.value == MeState.Unknown) me.refresh() else me.state.value
                 if (access != MeState.Unknown && !gateSettled) {
                     gateSettled = true
-                    if (access.sharedDevice) _gateRequests.tryEmit(Unit)
+                    if (access.sharedDevice) _gateWanted.value = true
                 }
             }
         }
@@ -286,11 +288,12 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     }
     // The hint was missing or out of date and the server says this is a shared TV: ask now. Not while
     // the legal notice or pairing is on screen; onboarding asks the same question when it finishes.
-    LaunchedEffect(Unit) {
-        vm.gateRequests.collect {
-            if (nav.currentDestination?.route != Routes.ONBOARDING) {
-                nav.navigate(Routes.WHO_GATE) { popUpTo(nav.graph.id) { inclusive = true }; launchSingleTop = true }
-            }
+    val gateWanted by vm.gateWanted.collectAsStateWithLifecycle()
+    LaunchedEffect(gateWanted) {
+        if (gateWanted) {
+            val onboarding = nav.currentDestination?.route == Routes.ONBOARDING
+            vm.settleGate()
+            if (!onboarding) nav.navigate(Routes.WHO_GATE) { popUpTo(nav.graph.id) { inclusive = true }; launchSingleTop = true }
         }
     }
     CompositionLocalProvider(LocalPlayLauncher provides launcher) {

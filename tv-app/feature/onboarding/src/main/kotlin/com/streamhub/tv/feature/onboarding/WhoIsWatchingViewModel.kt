@@ -95,11 +95,13 @@ class WhoIsWatchingViewModel @Inject constructor(
 
     /**
      * @param keepCurrent picking the person already signed in just closes the picker (opened from the
-     * rail). On the cold-start picker it does not: whoever sits down has to prove they are that person.
+     * rail). On the cold-start picker it does not when they have a PIN: whoever sits down has to
+     * prove they are that person, so the switch is made again with the PIN. Without a PIN there is
+     * nothing to prove and nothing to switch.
      */
     fun pick(user: SwitchableUser, keepCurrent: Boolean) {
         if (_state.value.busy) return
-        if (keepCurrent && user.current) { _events.tryEmit(WhoEvent.Done); return }
+        if (user.current && (keepCurrent || !user.hasPin)) { _events.tryEmit(WhoEvent.Done); return }
         if (user.hasPin) _state.update { it.copy(pinFor = user, pinError = null, pinAttempt = it.pinAttempt + 1) }
         else attempt(user, null)
     }
