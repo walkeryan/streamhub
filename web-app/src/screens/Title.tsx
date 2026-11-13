@@ -267,7 +267,7 @@ function TitleDetails({ id }: { id: string }) {
             {audio.error && <ErrorState error={audio.error} onRetry={() => void audio.refetch()} />}
             {/* Two short lines per source, each cut with an ellipsis: a long label must never widen the sheet. */}
             {audio.data?.options.map((option, i) => <Button key={option.variant_id} focusKey={`pick:${i}`} className="source-choice" onEnter={() => chooseVariant(option)}
-              label={`${option.source_name}. ${audioDescription(option)}. ${option.provider_label}`}>
+              label={`${option.source_name} · ${audioDescription(option)}${option.provider_label ? ` · ${option.provider_label}` : ''}`}>
               <span className="truncate"><strong>{option.source_name}</strong>{option.provider_label && option.provider_label !== option.source_name ? ` · ${option.provider_label}` : ''}</span>
               <span className="label truncate">{audioDescription(option)}{!option.audio_verified && option.language_hint ? ` · Listed as ${languageName(option.language_hint)}` : ''}</span>
             </Button>)}
