@@ -637,7 +637,7 @@ components:
         audio_tracks: {type: array, items: {$ref: '#/components/schemas/AudioTrack'}, description: Tracks of the probed file (web VOD only).}
         audio_track: {type: integer, nullable: true, description: The one track the server encoded into this stream; null when the client receives the file's own tracks.}
         start_position_ms: {type: integer, nullable: true, description: "Set for restart-at-offset streams (web VOD served as HLS): media time zero of this stream is this position in the title, and duration_ms is the title's full length. To seek outside what the stream has produced, resolve again with start_position_ms."}
-        stream_epoch: {type: integer, nullable: true, description: "Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. Null for every other descriptor."}
+        stream_epoch: {type: integer, nullable: true, description: "Room joins only, and only when the room plays one shared stream (see RoomJoined): which start of that stream start_position_ms describes. It only ever increases within a room. Null for every other descriptor."}
         id: {type: string}
         mode: {type: string, enum: [direct, proxy, hls, handoff]}
         url: {type: string, nullable: true}
@@ -923,7 +923,13 @@ components:
         room closes. A seek restarts it at the new position before the seek's `state` is sent. That
         `state` carries the new `stream_epoch` and `stream_start_ms`: a client whose epoch differs
         reloads the same playlist URL (the descriptor's `url` does not change) and treats
-        `stream_start_ms` as its new time zero; segments of the previous epoch answer 403. A seek to
+        `stream_start_ms` as its new time zero; segments of an earlier epoch answer 403 with code
+        `stream_epoch_stale` (the status the stream routes use for media they refuse; the code is
+        what tells this refusal from the others), which a member who missed the `state` answers by
+        asking GET /rooms/{code}/descriptor. `stream_epoch` only ever increases within a room: it
+        counts every start of the room's stream, also one made after the room stood empty and its
+        stream was released, so a greater epoch is always the later stream and no epoch is ever
+        reused; it need not increase by one. A seek to
         a position the running stream already starts at (positions are floored to 5 s) keeps the
         epoch, and the client seeks within what it is playing. The stream's audio is the room's
         `audio_track`, else the first member's preferred or default track; `audio_track` in the
@@ -1525,7 +1531,7 @@ paths:
       responses:
         '200': { description: hls playlist }
         '401': { description: "as for /stream/{token}; segments answer the same" }
-        '403': { description: "as for /stream/{token}; segments answer the same" }
+        '403': { description: "as for /stream/{token}; segments answer the same. A segment (or nested playlist) URL also answers stream_epoch_stale: it belongs to an earlier stream_epoch of a watch room's shared stream, which a seek has since restarted. The member's playlist URL is still good: reload it, and ask GET /rooms/{code}/descriptor for the current stream_epoch and start_position_ms. This playlist URL itself never answers it. Any other segment that is not of the grant's stream answers forbidden." }
         '409': { description: "source_busy or user_stream_limit, as for /stream/{token}", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /favorites:

@@ -10,6 +10,8 @@ A seek restarts that session at the new position before the room's ``state`` eve
 Every member's playlist URL stays what it was; the ``state`` event carries ``stream_epoch`` and
 ``stream_start_ms``, and a client that sees a new epoch reloads its playlist, whose time zero is
 now ``stream_start_ms``. A seek that lands on the running session's own start does not restart it.
+The epoch counts every start of the room's stream and only ever goes up, also across a session
+released while the room stood empty; a segment of an earlier one is refused as ``stream_epoch_stale``.
 
 Titles from other sources cost no connection budget: each member gets their own descriptor.
 Live channels use the proxy's existing shared upstream, as for any two viewers of one channel.
@@ -60,7 +62,7 @@ class RoomSession:
     host_profile_id: str
     user_id: str | None  # who started it: the proxy session is tagged with a user like any other
     start_s: int
-    epoch: int = 1  # counts the session's starts; clients reload their playlist when it changes
+    epoch: int = 1  # ``Room.stream_epoch`` as of this start; clients reload their playlist when it changes
     urls: dict[str, str] = field(default_factory=dict)  # member id -> the playlist URL they were given
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
     joining: int = 0  # joins in flight: the session is theirs although the room has no member yet
@@ -203,7 +205,9 @@ class RoomPlayback:
                     host_profile_id=room.host_profile_id,
                     user_id=principal.user_id or None,
                     start_s=vod.start_s,
+                    epoch=room.stream_epoch + 1,
                 )
+                room.stream_epoch = session.epoch
                 self.proxy.keep(session.key)
             session.joining += 1
             try:
@@ -318,6 +322,11 @@ class RoomPlayback:
     def sid(self, grant: Any) -> str:
         return self._granted(grant).sid
 
+    def superseded(self, grant: Any, sid: str) -> bool:
+        """Is ``sid`` an earlier start of this room's stream: one a seek, or an empty room, has since replaced?"""
+        session = self._granted(grant)
+        return any(sid == StreamProxy.session_id(f"{session.key}:{epoch}") for epoch in range(1, session.epoch))
+
     # ------------------------------------------------------------------ the room's hooks
     def state_extra(self, room: Room) -> dict[str, Any]:
         session = self._sessions.get(room.code)
@@ -339,6 +348,7 @@ class RoomPlayback:
                 return
             # The new offset first: a playlist request that slips in must not restart the old one.
             session.start_s, session.epoch = start_s, session.epoch + 1
+            room.stream_epoch = session.epoch
             await self.proxy.stop_hls(session.key)
             await self._start(session)
 

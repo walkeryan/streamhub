@@ -110,6 +110,9 @@ class Room:
         self.state = RoomState(playing=live, position_ms=0, as_of_ms=now_ms)
         self.members: dict[str, Member] = {}
         self.closed = False
+        # Starts of the room's shared stream so far (see ``room_playback``). Counted here, not on
+        # the stream, so the count outlives a stream released while the room stood empty.
+        self.stream_epoch = 0
         self._wait: _Wait | None = None
         self._empty_since_ms = now_ms
 
