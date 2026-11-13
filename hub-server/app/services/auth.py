@@ -47,6 +47,9 @@ log = logging.getLogger(__name__)
 ALG = "HS256"
 USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I
 DEVICE_CODE_TTL = 600
+# How long the refresh token before the current one still works: two tabs, or a retried request,
+# refreshing with the same token at the same moment.
+REFRESH_GRACE_S = 60
 DEVICE_POLL_INTERVAL = 5
 
 
@@ -183,6 +186,7 @@ class AuthService:
         google_subject: str = "",
         user: User | None = None,
         generation: int = 0,
+        refresh_seq: int = 0,
     ) -> str:
         now = int(time.time())
         payload = {
@@ -205,6 +209,9 @@ class AuthService:
         if generation:
             # Which hand-over of a shared device this token belongs to; absent means the first.
             payload["sg"] = generation
+        if refresh_seq and typ == "refresh":
+            # Which rotation of the session's refresh token this is; absent means the first.
+            payload["rs"] = refresh_seq
         if owner_auth_time is not None:
             payload["oat"] = owner_auth_time
         return jwt.encode(payload, self._key, algorithm=ALG)
@@ -250,9 +257,12 @@ class AuthService:
             user = await ensure_user(s, row)
             if not (handover and user.status == "suspended"):
                 self._require_active(user)
-            generation = (await self.sessions.attach(s, session_id, user, row, meta)).generation
+            attached = await self.sessions.attach(s, session_id, user, row, meta)
+            generation, refresh_seq = attached.generation, attached.refresh_seq
             await s.commit()
-        return self._pair(profile, user, session_id, generation, owner_auth_time, owner_pin_version, google_subject)
+        return self._pair(
+            profile, user, session_id, generation, owner_auth_time, owner_pin_version, google_subject, refresh_seq
+        )
 
     def _pair(
         self,
@@ -263,8 +273,9 @@ class AuthService:
         owner_auth_time: float | None = None,
         owner_pin_version: int = 0,
         google_subject: str = "",
+        refresh_seq: int = 0,
     ) -> dict[str, str]:
-        args = (session_id, owner_auth_time, owner_pin_version, google_subject, user, generation)
+        args = (session_id, owner_auth_time, owner_pin_version, google_subject, user, generation, refresh_seq)
         return {
             "access_token": self._encode(profile, "access", self.access_ttl, *args),
             "refresh_token": self._encode(profile, "refresh", self.refresh_ttl, *args),
@@ -650,7 +661,7 @@ class AuthService:
             )
         else:
             # Nothing of the previous user's sign-in (their Google subject, their proofs) carries over.
-            tokens = self._pair(profile, user, row.sid, row.generation)
+            tokens = self._pair(profile, user, row.sid, row.generation, refresh_seq=row.refresh_seq)
         return profile, tokens, {**self.users.user_out(user, profile, role), "current": True}
 
     async def refresh(self, refresh_token: str, meta: SessionMeta | None = None) -> tuple[Profile, dict[str, str]]:
@@ -680,6 +691,8 @@ class AuthService:
         # Checks the profile version, the deny-list, the row when present, and the user's status.
         await self.session_valid(prof.id, int(p.get("ver", -1)), sid, handover=handover)
         await self.check_owner_entry(prof, int(p.get("opv", 0)))
+        if row is not None:
+            await self._rotate(sid, self._refresh_seq(p))
         return prof, await self.issue(
             prof,
             sid,
@@ -689,6 +702,47 @@ class AuthService:
             meta=meta,
             handover=handover,
         )
+
+    @staticmethod
+    def _refresh_seq(claims: dict[str, Any]) -> int:
+        """The ``rs`` claim. Absent (a token from before rotation, or a session's first) is 0; junk matches nothing."""
+        value = claims.get("rs", 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+    async def _rotate(self, sid: str, presented: int) -> None:
+        """Make the presented refresh token the previous one, or refuse it.
+
+        One guarded UPDATE moves the counter, so of several refreshes arriving together exactly
+        one rotates. The others, and a second tab a moment later, hold the token just before
+        the current one and are let through without rotating again. Anything older has been
+        superseded for longer than any honest client waits: a copy is being replayed, the
+        session ends for whoever holds it, and the owner of the device signs in again.
+        """
+        now = utcnow()
+        async with self._db.session() as s:
+            moved = (
+                await s.execute(
+                    update(AuthSession)
+                    .where(
+                        AuthSession.sid == sid, AuthSession.refresh_seq == presented, AuthSession.revoked_at.is_(None)
+                    )
+                    .values(refresh_seq=AuthSession.refresh_seq + 1, refresh_rotated_at=now)
+                    .returning(AuthSession.sid)
+                )
+            ).scalar_one_or_none()
+            if moved is not None:
+                await s.commit()
+                return
+            row = await s.get(AuthSession, sid)
+            rotated = row.refresh_rotated_at if row is not None else None
+            recent = rotated is not None and now - rotated <= timedelta(seconds=REFRESH_GRACE_S)
+            if row is not None and row.revoked_at is None and presented == row.refresh_seq - 1 and recent:
+                return
+            if row is not None and row.revoked_at is None:
+                await self.sessions.revoke_in(s, sid, self.refresh_ttl)
+                audit(s, None, "session.refresh_reuse", row.user_id, kind=row.kind, label=row.label)
+                await s.commit()
+        raise Unauthorized("Session revoked; sign in again", code="session_revoked")
 
     # ------------------------------------------------------------------ login
     @staticmethod

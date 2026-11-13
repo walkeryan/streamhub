@@ -145,6 +145,10 @@ class AuthSession(Base):
     # Carried in tokens as ``sg`` and bumped each time a shared device changes hands, so the
     # tokens of whoever used it before stay dead even when that same user comes back.
     generation: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Carried in refresh tokens as ``rs`` and bumped by every refresh: the token before the current
+    # one is honoured briefly, an older one replayed ends the session.
+    refresh_seq: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    refresh_rotated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class Invite(Base):

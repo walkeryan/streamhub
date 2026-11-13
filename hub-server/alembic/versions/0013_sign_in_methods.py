@@ -1,4 +1,5 @@
-"""More ways to sign in: a Plex identity and a username with a password on the user, named invites."""
+"""More ways to sign in: a Plex identity and a username with a password on the user, named
+invites, and sessions that count their refreshes."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -22,9 +23,16 @@ def upgrade() -> None:
     op.add_column("invite", sa.Column("display_name", sa.String(64)))
     op.add_column("invite", sa.Column("user_id", sa.String(32)))
     op.create_index("ix_invite_user_id", "invite", ["user_id"])
+    # Refresh tokens rotate: which one is current, and when it became so. Existing sessions start at 0,
+    # which is what a token minted before this carries.
+    op.add_column("auth_session", sa.Column("refresh_seq", sa.Integer(), nullable=False, server_default="0"))
+    op.add_column("auth_session", sa.Column("refresh_rotated_at", sa.DateTime()))
 
 
 def downgrade() -> None:
+    with op.batch_alter_table("auth_session") as batch:
+        batch.drop_column("refresh_rotated_at")
+        batch.drop_column("refresh_seq")
     op.drop_index("ix_invite_user_id", table_name="invite")
     with op.batch_alter_table("invite") as batch:
         batch.drop_column("user_id")
