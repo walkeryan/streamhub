@@ -27,7 +27,7 @@ export function Users() {
   const allowed = useCan('users')
   const [sp, setSp] = useSearchParams()
   const tab = (TABS.find((t) => t[0] === sp.get('tab'))?.[0] ?? 'people') as Tab
-  const users = useUsers()
+  const users = useUsers(allowed)
   const roles = useRoles(allowed)
   const ready = tab === 'people' ? !!users.data && !!roles.data : tab === 'roles' ? !!roles.data : true
   useRestoreFocus(ready, `users:tab:${tab}`)

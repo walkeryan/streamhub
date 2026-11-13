@@ -23,7 +23,7 @@ const useScope = () => useSession((s) => s.profile?.id ?? null)
 const path = (id: string) => ({ params: { path: { id } } })
 
 // Approvals, sign-ins and what people are watching change elsewhere, so the lists poll.
-export const useUsers = () => useQuery({ queryKey: ['users', useScope()], staleTime: 0, refetchInterval: 20_000, queryFn: () => unwrap<UserListItem[]>(api.GET('/users')) })
+export const useUsers = (enabled = true) => useQuery({ queryKey: ['users', useScope()], enabled, staleTime: 0, refetchInterval: 20_000, queryFn: () => unwrap<UserListItem[]>(api.GET('/users')) })
 export const useUser = (id: string | undefined) =>
   useQuery({ queryKey: ['users', useScope(), id], enabled: !!id, staleTime: 0, queryFn: () => unwrap<UserDetail>(api.GET('/users/{id}', path(id!))) })
 export const useRoles = (enabled = true) => useQuery({ queryKey: ['roles', useScope()], enabled, queryFn: () => unwrap<Role[]>(api.GET('/roles')) })
