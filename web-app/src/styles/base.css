@@ -413,3 +413,6 @@ h1, h2, h3, p { margin: 0; }
   .title-head { gap: 0.5rem; }
   .title-head .display { font-size: var(--text-title); }
 }
+
+/* People: sign-in, users, roles, who's watching. */
+.wait-steps { margin: 0; padding-left: 1.25rem; list-style: decimal; display: flex; flex-direction: column; gap: 0.5rem; }

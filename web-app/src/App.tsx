@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
+import { matchPath, Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './api/client'
 import type { Profile } from './api/types'
@@ -14,6 +14,7 @@ import { bootTheme, useTheme } from './lib/theme'
 import { useSession } from './store/session'
 import { DisclaimerGate } from './screens/Gate'
 import { LoginGate } from './screens/GoogleLogin'
+import { InviteLanding } from './screens/Invite'
 import { Home } from './screens/Home'
 import { Search } from './screens/Search'
 import { TitleScreen } from './screens/Title'
@@ -52,6 +53,7 @@ export function App() {
   useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')
+  const invite = matchPath('/invite/:token', useLocation().pathname)?.params.token
   const current = useQuery({
     queryKey: ['current-profile', profile?.id],
     enabled: !!profile && !googleComplete,
@@ -70,7 +72,9 @@ export function App() {
   useGlobalBack()
 
   let body
-  if (!profile || googleComplete) body = <LoginGate />
+  // An invitation is answered before anything else, whoever is or is not signed in.
+  if (invite !== undefined && !googleComplete) body = <InviteLanding token={invite} />
+  else if (!profile || googleComplete) body = <LoginGate />
   // Nothing is offered before the server has said what this user may do.
   else if (current.isPending || me.isPending) body = <div className="page-pad"><Skeleton style={{ height: '20rem' }} /></div>
   else if (current.error || me.error) body = (
