@@ -62,6 +62,8 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.data.model.ChannelGroup
+import com.streamhub.tv.core.ui.components.ChoiceListDialog
+import com.streamhub.tv.core.ui.components.ListChoice
 import com.streamhub.tv.core.ui.components.LocalPlayLauncher
 import com.streamhub.tv.core.ui.components.ProgressLine
 import com.streamhub.tv.core.ui.components.ShChip
@@ -162,13 +164,29 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
             }
         }
     }
-    val choices = remember(s.groups) { groupChoices(s.groups) }
-    LaunchedEffect(groupsOpen) {
-        if (!groupsOpen && restoreGroupFocus) {
+    // Chips are the top level; a group with children is one chip that opens a list of them.
+    val tree = remember(s.groups) { groupTree(s.groups) }
+    val chips = remember(tree, s.selectedGroup) { groupChips(tree, s.selectedGroup) }
+    // The chip whose list is open, by name; and the chip focus returns to when a list or the drawer closes.
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var groupAnchor by remember { mutableStateOf("all") }
+    val overlayOpen = groupsOpen || menuFor != null
+    LaunchedEffect(overlayOpen) {
+        if (!overlayOpen && restoreGroupFocus) {
             withFrameNanos { }
-            groupOpener.requestFocus()
+            runCatching { groupOpener.requestFocus() }
             restoreGroupFocus = false
         }
+    }
+    tree.firstOrNull { it.name == menuFor }?.let { node ->
+        // Opening chooses nothing: Back leaves the filter as it was.
+        ChoiceListDialog(
+            title = node.name,
+            choices = groupMenu(node).map { ListChoice(it.path, it.label, it.channelCount.toString()) },
+            selectedKey = s.selectedGroup,
+            onChoose = { vm.selectGroup(it); menuFor = null },
+            onDismiss = { menuFor = null },
+        )
     }
     actionsFor?.let { (channelId, programmeId) ->
         val ch = s.channels.firstOrNull { it.id == channelId }
@@ -220,36 +238,62 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                 ShChip(name, s.selectedLanguages?.contains(code) == true, { vm.toggleLanguage(code) })
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            ShButton("Groups: ${s.selectedGroup ?: "All groups"}", {
-                restoreGroupFocus = true
-                groupsOpen = true
-                vm.stopPreview()
-            }, Modifier.width(360.dp).focusRequester(groupOpener).leftOpensRail(rail)
-                .onFocusChanged { groupsFocused = it.isFocused }
-                .onPreviewKeyEvent { event ->
-                    if (!filtersOnly && event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown) {
-                        val firstId = s.channels.firstOrNull()?.id
-                        val visible = !s.loading && s.error == null && firstId != null &&
-                            channelListState.layoutInfo.visibleItemsInfo.any { it.key == firstId }
-                        if (visible) {
-                            // The common case needs no scroll or deferred effect. Never eat a
-                            // failed request: Compose can still perform its normal focus search.
-                            runCatching { firstChannel.requestFocus() }.getOrDefault(false)
-                        } else {
-                            if (s.loading || (firstId != null && s.error == null)) {
-                                entryFromGroups = true
-                                enterChannelsWhenReady = true
-                            }
-                            false
-                        }
-                    } else false
-                })
+        // Down from the groups lands on the first channel, also while a filter is still loading.
+        val downEntersChannels = Modifier.onPreviewKeyEvent { event ->
+            if (!filtersOnly && event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown) {
+                val firstId = s.channels.firstOrNull()?.id
+                val visible = !s.loading && s.error == null && firstId != null &&
+                    channelListState.layoutInfo.visibleItemsInfo.any { it.key == firstId }
+                if (visible) {
+                    // The common case needs no scroll or deferred effect. Never eat a
+                    // failed request: Compose can still perform its normal focus search.
+                    runCatching { firstChannel.requestFocus() }.getOrDefault(false)
+                } else {
+                    if (s.loading || (firstId != null && s.error == null)) {
+                        entryFromGroups = true
+                        enterChannelsWhenReady = true
+                    }
+                    false
+                }
+            } else false
+        }
+        fun Modifier.groupChip(key: String) = then(if (key == groupAnchor) Modifier.focusRequester(groupOpener) else Modifier).then(downEntersChannels)
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Groups: All, then the top level. A group with children opens a list and then names the child in force.
+            LazyRow(
+                Modifier.weight(1f).focusRestorer().onFocusChanged { groupsFocused = it.hasFocus },
+                contentPadding = PaddingValues(start = Tokens.Canvas.SafeMarginX, end = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item("all") {
+                    ShChip("All groups", s.selectedGroup == null, { groupAnchor = "all"; vm.selectGroup(null) }, Modifier.groupChip("all").leftOpensRail(rail))
+                }
+                items(chips, key = { "g:${it.name}" }) { node ->
+                    val key = "g:${node.name}"
+                    val chosen = tree.nodeFor(s.selectedGroup)?.name == node.name
+                    if (node.children.isEmpty()) {
+                        ShChip(node.name, chosen, { groupAnchor = key; if (!chosen) vm.selectGroup(node.path) }, Modifier.groupChip(key))
+                    } else {
+                        ShChip("${groupChipLabel(node, s.selectedGroup)} ▾", chosen, {
+                            groupAnchor = key
+                            restoreGroupFocus = true
+                            menuFor = node.name
+                            vm.stopPreview()
+                        }, Modifier.groupChip(key))
+                    }
+                }
+                if (tree.size > chips.size) item("more") {
+                    ShChip("More groups", false, {
+                        groupAnchor = "more"
+                        restoreGroupFocus = true
+                        groupsOpen = true
+                        vm.stopPreview()
+                    }, Modifier.groupChip("more"))
+                }
+            }
             Text(if (s.groupsLoading) "Updating groups…" else if (s.groupsError != null) "Group counts unavailable" else {
-                val count = if (s.selectedGroup == null) choices.sumOf { it.channelCount } else choices.firstOrNull { it.name == s.selectedGroup }?.channelCount ?: 0
-                "$count channels · ${choices.size} groups"
-            }, color = t.textMuted, style = MaterialTheme.typography.labelMedium)
+                "${groupChannelCount(tree, s.selectedGroup)} channels · ${tree.size} groups"
+            }, color = t.textMuted, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.padding(end = Tokens.Canvas.SafeMarginX))
         }
 
         s.notice?.let { Text(it, color = t.textMuted, modifier = Modifier.padding(horizontal = Tokens.Canvas.SafeMarginX)) }
@@ -259,7 +303,7 @@ fun LiveTvScreen(vm: LiveTvViewModel = hiltViewModel(), filtersOnly: Boolean = f
                 when {
                     s.loading && s.channels.isEmpty() -> Text("Loading channels…", color = t.textMuted, style = MaterialTheme.typography.bodyLarge)
                     s.error != null -> Column { Text("Couldn't load channels", color = t.danger); ShButton("Retry", { entryFromGroups = false; enterChannelsWhenReady = true; vm.load(s.offset) }, Modifier.focusRequester(firstChannel)) }
-                    s.channels.isEmpty() -> Column { Text(if (s.favoritesOnly) "No favorite channels yet. Choose a channel, then select Add favorite in its details." else "No channels match these filters.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge); ShButton("Change filters", { groupOpener.requestFocus() }, Modifier.focusRequester(firstChannel)) }
+                    s.channels.isEmpty() -> Column { Text(if (s.favoritesOnly) "No favorite channels yet. Choose a channel, then select Add favorite in its details." else "No channels match these filters.", color = t.textMuted, style = MaterialTheme.typography.bodyLarge); ShButton("Change filters", { runCatching { groupOpener.requestFocus() } }, Modifier.focusRequester(firstChannel)) }
                     else -> PivotScroll(leadingOffset = 72.dp) {
                         LazyColumn(
                             state = channelListState,
@@ -430,12 +474,12 @@ private fun GroupDrawer(
                 }
                 LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(4.dp)) {
-                    items(matches, key = { it.name }) { group ->
-                        FocusSurface(onClick = { onSelect(group.name) }, modifier = Modifier.fillMaxWidth().height(60.dp),
-                            containerColor = if (selected == group.name) t.surfaceAlt else t.surface,
+                    items(matches, key = { it.path }) { group ->
+                        FocusSurface(onClick = { onSelect(group.path) }, modifier = Modifier.fillMaxWidth().height(60.dp),
+                            containerColor = if (selected == group.path) t.surfaceAlt else t.surface,
                             focusedContainerColor = t.text, scaleOnFocus = false) { focused ->
                             Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text((if (selected == group.name) "✓ " else "") + group.name,
+                                Text((if (selected == group.path) "✓ " else "") + group.name,
                                     Modifier.weight(1f), color = if (focused) t.bg else t.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(if (loading || error != null) "—" else group.channelCount.toString(), color = if (focused) t.bg else t.textMuted,
                                     modifier = Modifier.padding(start = 10.dp))

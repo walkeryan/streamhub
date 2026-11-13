@@ -339,6 +339,12 @@ data class ChannelList(
     val limit: Int? = null,
 )
 
+/**
+ * A channel group of one source. Groups have two levels: [name] is the group's own name (for a child,
+ * the part after the parent), [parent] the parent's name (null at the top level) and [path] what
+ * `Channel.group` carries and `GET /channels?group=` accepts: `Parent / Child`, or the name of a
+ * top-level group. A parent counts its children's channels with its own.
+ */
 @Serializable
 data class ChannelGroup(
     val id: String,
@@ -347,7 +353,13 @@ data class ChannelGroup(
     @SerialName("channel_count") val channelCount: Int,
     val hidden: Boolean,
     @SerialName("language_override") val languageOverride: String? = null,
-)
+    val parent: String? = null,
+    /** Absent on servers older than nested groups: [groupPath] then falls back to the name. */
+    val path: String = "",
+) {
+    /** What selects this group on the wire. */
+    val groupPath: String get() = path.ifBlank { name }
+}
 
 @Serializable
 data class ChannelGroupPatch(
