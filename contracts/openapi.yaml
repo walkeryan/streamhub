@@ -440,7 +440,7 @@ components:
         source_id: {type: string}
         ext_id: {type: string}
         number: {type: integer}
-        name: {type: string}
+        name: {type: string, description: "As shown. An event-slot channel (a provider name such as \"(XX) (NETWORK 001) | Sport: Away at Home (date time)\") is called by its network and number, \"NETWORK 001\"; ids, numbers and search still follow the stored name."}
         logo: {type: string, nullable: true}
         group: {type: string}
         language: {type: string, description: "ISO 639-3 or 'und'"}
@@ -450,8 +450,8 @@ components:
         epg_id: {type: string, nullable: true}
         catchup_days: {type: integer, default: 0}
         is_favorite: {type: boolean}
-        now: { $ref: '#/components/schemas/Programme', nullable: true }
-        next: { $ref: '#/components/schemas/Programme', nullable: true }
+        now: { $ref: '#/components/schemas/Programme', nullable: true, description: "Null without guide data. A placeholder programme that only repeats the channel's name is not guide data and is never sent, here or in /epg. On an event-slot channel this is the game in its name while that game is live (see Programme.id)." }
+        next: { $ref: '#/components/schemas/Programme', nullable: true, description: "As now. On an event-slot channel: the game in its name until it starts." }
     ChannelGroup:
       type: object
       required: [id, source_id, name, channel_count, hidden]
@@ -460,7 +460,7 @@ components:
       type: object
       required: [id, channel_id, start, stop, title]
       properties:
-        id: {type: string}
+        id: {type: string, description: "prog:<n> for a guide entry. prog:slot-<channel row>-<start, epoch seconds> for the game of an event-slot channel: it has no guide entry and no catch-up, and can be recorded like any other programme while the channel still announces it."}
         channel_id: {type: string}
         start: {type: string, format: date-time}
         stop: {type: string, format: date-time}
@@ -1005,10 +1005,12 @@ components:
       required: [channel_id, channel_name, source_id, source_name, programme_id, language_verified]
       properties:
         channel_id: {type: string}
-        channel_name: {type: string}
+        channel_name: {type: string, description: "As shown: Channel.name"}
+        channel_number: {type: integer, nullable: true}
+        quality: {type: string, nullable: true, enum: [4K, UHD, FHD, HD, SD, null], description: "Picture quality the provider's channel name advertises, in plain or superscript letters; null when it names none."}
         source_id: {type: string}
         source_name: {type: string}
-        programme_id: {type: string}
+        programme_id: {type: string, description: "Programme.id of this event on this channel; pass it with channel_id and the event's start to POST /recordings."}
         language: {type: string, nullable: true}
         language_verified: {type: boolean}
     SportsEvent:
@@ -1016,15 +1018,41 @@ components:
       required: [id, title, sport, start, stop, status, replay, live_evidence, grouping_evidence, feeds]
       properties:
         id: {type: string}
-        title: {type: string}
-        sport: {type: string}
+        kind: {type: string, enum: [event, channel], default: event, description: "event = a guide programme classified as sport, or a dated event slot. channel = a game channel: an event slot whose name carries no date. It is listed with today's events and makes no claim about when it plays: status is unscheduled, start and stop are the bounds of the listed days."}
+        title: {type: string, description: "The event without provider decoration: for an event slot the text after its sport (\"Away at Home\"), for a guide programme its title."}
+        sport: {type: string, description: "The classifier's sport for a guide programme; for an event slot the sport its name gives (\"Field Hockey\", \"Men's Soccer\")."}
+        league: {type: string, nullable: true, description: "Network or league label of an event slot (\"NETWORK\" of \"(NETWORK 001) | …\"); null for a guide programme."}
+        home: {type: string, nullable: true, description: "With away: the two sides when the title is exactly \"A at B\" / \"A @ B\" (B is home) or \"A vs B\" / \"A v B\" (A is home). Null otherwise: nothing is guessed."}
+        away: {type: string, nullable: true}
         start: {type: string, format: date-time}
-        stop: {type: string, format: date-time}
-        status: {type: string, enum: [current, upcoming, ended]}
+        stop: {type: string, format: date-time, description: "For an event slot: start plus the source's event_duration_minutes (default 210)."}
+        status: {type: string, enum: [current, upcoming, ended, unscheduled], description: "current = airing now by a real guide programme or a dated event slot inside its window. An event slot whose window has passed is not listed at all. unscheduled only with kind channel."}
         replay: {type: boolean}
-        live_evidence: {type: boolean}
+        live_evidence: {type: boolean, description: "The guide labels the programme live, or a dated event slot is inside its window."}
         grouping_evidence: {type: string}
-        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}}
+        feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}, description: "Channels carrying the event, lowest channel number first. Two event slots with the same title, sport and start are one event."}
+    SportsChannel:
+      type: object
+      required: [channel_id, channel_name, channel_number, group, source_id]
+      properties:
+        channel_id: {type: string}
+        channel_name: {type: string, description: "The network's name without its country tag and quality marks"}
+        channel_number: {type: integer}
+        logo: {type: string, nullable: true}
+        group: {type: string}
+        quality: {type: string, nullable: true, enum: [4K, UHD, FHD, HD, SD, null]}
+        language: {type: string, nullable: true}
+        source_id: {type: string}
+        now: { $ref: '#/components/schemas/Programme', nullable: true, description: "What the guide says is on; null without real guide data." }
+    SportsChannelsPage:
+      type: object
+      required: [channels, total, limit, offset, truncated]
+      properties:
+        channels: {type: array, items: {$ref: '#/components/schemas/SportsChannel'}}
+        total: {type: integer}
+        limit: {type: integer}
+        offset: {type: integer}
+        truncated: {type: boolean}
     SportsRecording:
       type: object
       required: [title_id, title, source_id, source_name, sport, originally_available_at, duration_ms, audio_languages, audio_verified, language_hint, kind, live]
@@ -1446,19 +1474,39 @@ paths:
     get:
       parameters:
         - {in: query, name: date, schema: {type: string, format: date}}
-        - {in: query, name: timezone, schema: {type: string, default: America/New_York}}
-        - {in: query, name: status, schema: {type: string, enum: [all, current, upcoming, replay], default: all}}
+        - {in: query, name: timezone, schema: {type: string, default: America/New_York}, description: "The viewer's zone: it decides which calendar day date means."}
+        - {in: query, name: days, schema: {type: integer, minimum: 1, maximum: 7, default: 1}, description: Calendar days listed, from date}
+        - {in: query, name: status, schema: {type: string, enum: [all, active, current, upcoming, replay], default: all}, description: "active = current, upcoming and game channels (everything but ended)"}
         - {in: query, name: language, schema: {type: string}}
-        - {in: query, name: sport, schema: {type: string}}
+        - {in: query, name: sport, schema: {type: string, maxLength: 80}, description: "A name from the page's sports list; an unknown one matches nothing."}
         - {in: query, name: q, schema: {type: string, maxLength: 200}}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
       responses:
         '200':
-          description: Events grouped conservatively from provider EPG; current broadcasts do not imply live matches or verified audio.
+          description: >-
+            Sports guide programmes and event-slot channels, grouped conservatively, by start. A programme that only
+            repeats its channel's name is a placeholder and never an event. An event slot's embedded time is read in its
+            source's event_timezone (source config, IANA name, default UTC).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SportsEventsPage'}
+  /sports/channels:
+    get:
+      tags: [live]
+      summary: Always-on sports networks
+      description: Channels a sports group or their own name marks as sport and that are not event slots, by channel number.
+      parameters:
+        - {in: query, name: language, schema: {type: string}}
+        - {in: query, name: q, schema: {type: string, maxLength: 200}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SportsChannelsPage'}
   /sports:
     get:
       tags: [live]

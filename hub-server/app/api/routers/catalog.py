@@ -15,7 +15,7 @@ from app.services.adult import adult_scope
 from app.services.auth import Principal
 from app.services.errors import Forbidden, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
-from app.services.sports import sports_events, sports_on_now
+from app.services.sports import sports_channels, sports_events, sports_on_now
 from app.services.sports_recordings import sports_recordings
 from app.services.visibility import require_watch
 
@@ -91,9 +91,10 @@ async def sports_event_list(
     p: P,
     date: str | None = Query(None, max_length=10),
     timezone: str = Query("America/New_York", max_length=64),
+    days: int = Query(1, ge=1, le=7),
     language: str | None = None,
-    sport: str | None = None,
-    status: str = Query("all", pattern="^(all|current|upcoming|replay)$"),
+    sport: str | None = Query(None, max_length=80),
+    status: str = Query("all", pattern="^(all|active|current|upcoming|replay)$"),
     q: str | None = Query(None, max_length=200),
     limit: int = Query(40, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -103,12 +104,27 @@ async def sports_event_list(
         p.profile_id,
         date=date,
         timezone=timezone,
+        days=days,
         language=language,
         sport=sport,
         status=status,
         q=q,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/sports/channels", response_model=S.SportsChannelsPage, tags=["live"])
+async def sports_channel_list(
+    c: C,
+    p: P,
+    language: str | None = None,
+    q: str | None = Query(None, max_length=200),
+    limit: int = Query(40, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    return await c.recorder.annotate(
+        p, await sports_channels(c.channels, p.profile_id, language=language, q=q, limit=limit, offset=offset)
     )
 
 

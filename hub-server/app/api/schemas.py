@@ -604,6 +604,8 @@ class SportsFeed(_M):
     programme_id: str
     channel_id: str
     channel_name: str
+    channel_number: int | None = None
+    quality: str | None = None
     source_id: str
     source_name: str
     language: str | None = None
@@ -612,15 +614,39 @@ class SportsFeed(_M):
 
 class SportsEvent(_M):
     id: str
+    kind: Literal["event", "channel"] = "event"
     title: str
     sport: str
+    league: str | None = None
+    home: str | None = None
+    away: str | None = None
     start: datetime
     stop: datetime
-    status: Literal["current", "upcoming", "ended"]
+    status: Literal["current", "upcoming", "ended", "unscheduled"]
     replay: bool
     live_evidence: bool
     grouping_evidence: Literal["matching_title_and_time", "same_source_programme"]
     feeds: list[SportsFeed]
+
+
+class SportsChannel(_M):
+    channel_id: str
+    channel_name: str
+    channel_number: int
+    logo: str | None = None
+    group: str
+    quality: str | None = None
+    language: str | None = None
+    source_id: str
+    now: Programme | None = None
+
+
+class SportsChannelsPage(_M):
+    channels: list[SportsChannel]
+    total: int
+    limit: int
+    offset: int
+    truncated: bool
 
 
 class SportsEventsCoverage(_M):
