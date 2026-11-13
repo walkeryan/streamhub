@@ -45,6 +45,7 @@ from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
 from app.services.owner_reauth import OwnerReauthService
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
+from app.services.plex_auth import PlexAuthService
 from app.services.recorder import RecorderService
 from app.services.registry import SourceRegistry
 from app.services.requests import RequestService
@@ -85,6 +86,7 @@ class Container:
     sessions: SessionsService
     invites: InvitesService
     google_auth: GoogleAuthService
+    plex_auth: PlexAuthService
     language: LanguageChain
     tmdb: TmdbClient
     sources: SourceService
@@ -236,6 +238,20 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         recorder.capture = capture
         streams.external.append(capture.user_streams)
     google_auth = GoogleAuthService(settings, auth, lambda: app_settings.get("signup_mode"))
+
+    async def plex_owner_tokens() -> list[str]:
+        """The Plex account tokens behind the linked Plex servers: the owner's, by construction."""
+        rows = [r for r in await sources.list() if r.type == "plex" and r.enabled]
+        return [str(sources.decrypt_config(r).get("account_token") or "") for r in rows]
+
+    plex_auth = PlexAuthService(
+        ctx,
+        auth,
+        app_settings.get,
+        plex_owner_tokens,
+        # The legacy owner-PIN regime signs in with Google and the PIN, nothing else.
+        available=lambda: not content_policy.enabled,
+    )
     rooms = RoomHub(RoomRegistry(), RoomTokens(crypto))
     return Container(
         settings=settings,
@@ -251,6 +267,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         sessions=auth.sessions,
         invites=InvitesService(db),
         google_auth=google_auth,
+        plex_auth=plex_auth,
         language=language,
         tmdb=tmdb,
         sources=sources,

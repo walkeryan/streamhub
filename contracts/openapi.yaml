@@ -84,7 +84,7 @@ components:
       required: [id, kind, display_name, status, created_at]
       properties:
         id: {type: string}
-        kind: {type: string, enum: [google, managed]}
+        kind: {type: string, enum: [google, plex, password, managed], description: "How this user came to be. What they can sign in with now is sign_in_methods."}
         display_name: {type: string}
         email: {type: string, nullable: true}
         picture: {type: string, nullable: true}
@@ -96,9 +96,13 @@ components:
         has_pin: {type: boolean}
         on_shared_devices: {type: boolean}
         plex_account_linked: {type: boolean, description: "This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state."}
+        username: {type: string, nullable: true, description: "The name of username-and-password sign-in, lower case"}
+        plex_username: {type: string, nullable: true, description: "The Plex account this user signs in with. No Plex token is kept for it."}
+        sign_in_methods: {type: array, items: {$ref: '#/components/schemas/SignInMethod'}, description: "The ways this user can sign in from anywhere. Empty for a managed user, who is entered on the household's devices."}
         created_at: {type: string, format: date-time}
         approved_at: {type: string, format: date-time, nullable: true}
         last_seen_at: {type: string, format: date-time, nullable: true}
+    SignInMethod: {type: string, enum: [google, plex, password]}
     NowPlaying:
       type: object
       required: [id]
@@ -728,7 +732,10 @@ components:
         epg_refresh_hours: {type: integer}
         transcode_hw: {type: string, enum: [none, vaapi, nvenc, qsv]}
         proxy_mode: {type: string, enum: [auto, always, never]}
-        signup_mode: {type: string, enum: [approval, invite_only], description: "Who may sign in with Google unasked: anyone (then waits for approval) or invitees only"}
+        signup_mode: {type: string, enum: [approval, invite_only], description: "Who may sign in with Google or Plex unasked: anyone (then waits for approval) or invitees only"}
+        plex_sign_in: {type: boolean, description: "Offer \"Continue with Plex\" (system.manage to change). Default true."}
+        password_sign_in: {type: boolean, description: "Offer username and password sign-in (system.manage to change). Default true."}
+        plex_friends_auto_approve: {type: boolean, description: "Default false. When true and a Plex server is linked, a first Plex sign-in by an account that server is shared with (the linking account's friends at plex.tv, fetched with the stored token, cached for five minutes, nobody on any error) is an active user with the Friend role at once, in either signup_mode. Never the Owner role."}
         notify_webhook_set: {type: boolean, readOnly: true, description: "A notification webhook is stored. The address is never returned."}
         notify_webhook: {type: string, nullable: true, writeOnly: true, description: "PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it"}
         home_networks: {type: string, nullable: true, description: "Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges)"}
@@ -1089,9 +1096,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required]
+                required: [google_enabled, google_required, content_policy_enabled, owner_pin_configured, owner_pin_setup_required, plex_enabled]
                 properties:
                   google_enabled: {type: boolean}
+                  plex_enabled: {type: boolean, description: "\"Continue with Plex\" is offered"}
                   google_required: {type: boolean, description: "Google sign-in is the only way in for people"}
                   content_policy_enabled: {type: boolean}
                   owner_pin_configured: {type: boolean}
@@ -1112,6 +1120,42 @@ paths:
         Active user: tokens, with status "active". Unknown user in approval mode: status "pending"
         and a token good only for GET /auth/me. Owner PIN regime: PendingOwnerLogin.
       responses: { '200': { description: Google identity handoff, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}, {$ref: '#/components/schemas/PendingOwnerLogin'}] } } } } }
+  /auth/plex/start:
+    post:
+      security: []
+      summary: Begin "Continue with Plex"
+      description: >-
+        The server opens a strong PIN at plex.tv and answers Plex's own sign-in page
+        (https://app.plex.tv/auth#?clientID=…&code=…&forwardUrl=…). The browser goes there; Plex sends it
+        back to return_to with ?plex=<state> added. The PIN is bound to this browser by an HttpOnly,
+        SameSite=Lax cookie that lives ten minutes, and its id never leaves the server. Nothing is
+        registered with Plex for this. 403 plex_disabled when the method is off, 502 plex_unavailable
+        when plex.tv cannot be reached.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                return_to: {type: string, default: /, maxLength: 64, description: "/, /pair, /pair?code=XXXXXX or /settings. Anything else is /."}
+                invite: {type: string, maxLength: 64, description: "Invite token from /invite/<token>; held server-side for the sign-in, never sent to Plex"}
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [auth_url], properties: { auth_url: {type: string} } } } } }
+  /auth/plex/complete:
+    post:
+      security: []
+      summary: Finish "Continue with Plex" in the browser that started it
+      description: >-
+        Reads the PIN, asks plex.tv whose token it yields (account id, username, confirmed e-mail, avatar)
+        and discards the token: it is never stored or logged. The user is the Plex account id, never the
+        e-mail: an unknown account whose address matches another user's is a new user, not that one.
+        Answers as /auth/google/complete does: tokens with status "active", or status "pending" with a
+        token good only for GET /auth/me. 401 sign_in_expired for a state that is unknown, used, older
+        than ten minutes, started by another browser, or never completed at Plex; 403 invite_required
+        (invite-only mode, no usable invite), 403 user_suspended, 502 plex_unavailable.
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [state], properties: { state: {type: string, maxLength: 64, description: "The plex query parameter Plex's redirect came back with"} } } } }
+      responses: { '200': { description: ok, content: { application/json: { schema: { oneOf: [{allOf: [{$ref: '#/components/schemas/AuthTokens'}, {type: object, properties: {status: {type: string, enum: [active]}}}]}, {$ref: '#/components/schemas/PendingApproval'}] } } } } }
   /auth/me:
     get:
       summary: The caller's user, role, effective permissions and limits

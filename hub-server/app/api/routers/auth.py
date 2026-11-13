@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -10,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from app.api import schemas as S
 from app.api.deps import C, Handover, P, UsersAdmin, resolve, session_meta
 from app.infra.models import Profile as ProfileRow
+from app.services.context import is_https, public_base
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 
 router = APIRouter()
@@ -265,6 +267,7 @@ async def auth_config(c: C) -> dict[str, Any]:
         "owner_pin_configured": await c.owner_pin.configured(),
         "owner_pin_setup_required": not await c.owner_pin.configured(),
         "signup_mode": c.app_settings.get("signup_mode"),
+        "plex_enabled": c.plex_auth.enabled,
     }
 
 
@@ -318,6 +321,11 @@ async def google_complete(request: Request, response: Response, c: C) -> dict[st
     )
     response.delete_cookie("__Host-sh-google-handoff", secure=True, httponly=True, samesite="strict", path="/")
     response.headers["Cache-Control"] = "no-store"
+    return await _signed_in(request, c, prof, google=True)
+
+
+async def _signed_in(request: Request, c: C, prof: ProfileRow, *, google: bool = False) -> dict[str, Any]:
+    """What a finished Google or Plex sign-in answers: tokens, or the token a waiting user polls with."""
     identity = await c.users.identity(prof.id)
     if identity is None:
         raise Unauthorized("Sign-in completion expired; please start again")
@@ -330,7 +338,7 @@ async def google_complete(request: Request, response: Response, c: C) -> dict[st
         }
     if c.content_policy.enabled:
         # Legacy regime: Google proves the owner, the owner PIN completes the sign-in.
-        if "system.manage" not in identity.permissions:
+        if not google or "system.manage" not in identity.permissions:
             raise Forbidden("Only the owner signs in with Google here", code="owner_pin_required")
         return {
             "owner_pin_required": True,
@@ -340,3 +348,47 @@ async def google_complete(request: Request, response: Response, c: C) -> dict[st
         }
     tokens = await c.auth.issue(prof, meta=session_meta(request, "browser"))
     return {"status": "active", **await tokens_out(c, prof, tokens)}
+
+
+# ---------------------------------------------------------------- Plex sign-in
+def _plex_cookie() -> tuple[str, bool]:
+    """The cookie that ties a Plex sign-in to the browser that started it. ``__Host-`` needs
+    HTTPS; on a plain-HTTP home network the same cookie goes without the prefix."""
+    secure = is_https.get()
+    return ("__Host-sh-plex-state" if secure else "sh-plex-state"), secure
+
+
+def require_same_origin(request: Request, c: C) -> None:
+    """A cookie-bound completion is only ever asked for by our own page."""
+    origin = request.headers.get("origin")
+    parts = urlsplit(public_base.get())
+    if (
+        origin is not None
+        and origin != f"{parts.scheme}://{parts.netloc}"
+        and origin not in c.settings.cors_origin_list
+    ):
+        raise Forbidden("Same-origin sign-in completion required")
+
+
+@router.post("/auth/plex/start", response_model=S.PlexSignInUrl, tags=["auth"])
+async def plex_start(body: S.PlexSignInStart, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Begin "Continue with Plex": answers Plex's sign-in page for the browser to open."""
+    require_same_origin(request, c)
+    url, browser = await c.plex_auth.start(body.return_to, body.invite)
+    name, secure = _plex_cookie()
+    response.set_cookie(name, browser, max_age=600, secure=secure, httponly=True, samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return {"auth_url": url}
+
+
+@router.post("/auth/plex/complete", tags=["auth"])
+async def plex_complete(body: S.PlexSignInComplete, request: Request, response: Response, c: C) -> dict[str, Any]:
+    """Finish it, for the browser Plex sent back. Answers as ``/auth/google/complete`` does."""
+    require_same_origin(request, c)
+    name, secure = _plex_cookie()
+    response.delete_cookie(name, secure=secure, httponly=True, samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    tx = c.plex_auth.claim(body.state, request.cookies.get(name, ""))
+    account = await c.plex_auth.account(tx)
+    return await _signed_in(request, c, await c.plex_auth.sign_in(account, tx.invite))

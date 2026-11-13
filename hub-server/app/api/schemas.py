@@ -69,6 +69,19 @@ class LoginRequest(_M):
     password: str | None = None
 
 
+class PlexSignInStart(_M):
+    return_to: str = Field(default="/", max_length=64, description="/, /pair, /pair?code=XXXXXX or /settings")
+    invite: str = Field(default="", max_length=64, repr=False)
+
+
+class PlexSignInUrl(_M):
+    auth_url: str = Field(description="Plex's own sign-in page; the browser goes there and Plex sends it back")
+
+
+class PlexSignInComplete(_M):
+    state: str = Field(default="", max_length=64, repr=False)
+
+
 class RefreshRequest(_M):
     refresh_token: str = ""
 
@@ -488,6 +501,11 @@ class Settings(_M):
     transcode_hw: Literal["none", "vaapi", "nvenc", "qsv"] = "none"
     proxy_mode: Literal["auto", "always", "never"] = "auto"
     signup_mode: Literal["approval", "invite_only"] = "approval"
+    plex_sign_in: bool = True
+    password_sign_in: bool = True
+    plex_friends_auto_approve: bool = Field(
+        default=False, description="a first Plex sign-in by someone the owner's Plex server is shared with is a Friend"
+    )
     notify_webhook_set: bool = False
     home_networks: str | None = Field(default=None, description="system.manage only: the home networks, as CIDRs")
     home_shelves: list[str] | None = Field(default=None, description="system.manage only: Home's shelves, in order")
@@ -503,6 +521,9 @@ class SettingsPatch(_M):
     transcode_hw: Literal["none", "vaapi", "nvenc", "qsv"] | None = None
     proxy_mode: Literal["auto", "always", "never"] | None = None
     signup_mode: Literal["approval", "invite_only"] | None = None
+    plex_sign_in: StrictBool | None = None
+    password_sign_in: StrictBool | None = None
+    plex_friends_auto_approve: StrictBool | None = None
     notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
     home_networks: str | None = Field(default=None, max_length=1024, description="null restores the defaults")
     home_shelves: list[Annotated[str, Field(max_length=200)]] | None = Field(
@@ -771,9 +792,12 @@ class NowPlaying(_M):
     title: str | None = None
 
 
+SignInMethodL = Literal["google", "plex", "password"]
+
+
 class User(_M):
     id: str
-    kind: Literal["google", "managed"]
+    kind: Literal["google", "plex", "password", "managed"]
     display_name: str
     email: str | None = None
     picture: str | None = None
@@ -785,6 +809,9 @@ class User(_M):
     has_pin: bool = False
     on_shared_devices: bool = False
     plex_account_linked: bool = False
+    username: str | None = None
+    plex_username: str | None = None
+    sign_in_methods: list[SignInMethodL] = []
     created_at: datetime
     approved_at: datetime | None = None
     last_seen_at: datetime | None = None

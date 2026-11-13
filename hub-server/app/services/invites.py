@@ -11,6 +11,7 @@ import builtins
 import hashlib
 import re
 import secrets
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -30,6 +31,16 @@ MAX_USES = 50
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class Redeemed:
+    """One claimed use of an invite: the role it confers, who sent it, and who it was meant for."""
+
+    role: Role
+    inviter: str | None
+    invite_id: str
+    display_name: str | None = None
 
 
 def _may_confer(role: Role, permissions: frozenset[str], limits: Any) -> bool:
@@ -127,17 +138,18 @@ class InvitesService:
             await s.commit()
 
     @staticmethod
-    async def redeem_in(s: AsyncSession, token: str) -> tuple[Role, str | None, str] | None:
-        """Claim one use inside the caller's transaction: (role, inviter, invite id), or None.
+    async def redeem_in(s: AsyncSession, token: str) -> Redeemed | None:
+        """Claim one use inside the caller's transaction, or None.
 
         The use count moves in a single guarded UPDATE, so two sign-ins racing for the last
-        use cannot both win. An invite is only as good as its creator still is.
+        use cannot both win. An invite is only as good as its creator still is. A password
+        setup link (one that names a user) is not an invitation and admits nobody here.
         """
         if not TOKEN_RE.fullmatch(token or ""):
             return None
         now = utcnow()
         row = (await s.execute(select(Invite).where(Invite.token_hash == token_hash(token)))).scalar_one_or_none()
-        if row is None:
+        if row is None or row.user_id is not None:
             return None
         role = await s.get(Role, row.role_id)
         creator = await s.get(User, row.created_by_user_id) if row.created_by_user_id else None
@@ -160,4 +172,4 @@ class InvitesService:
         ).scalar_one_or_none()
         if claimed is None:
             return None
-        return role, row.created_by_user_id, row.id
+        return Redeemed(role, row.created_by_user_id, row.id, row.display_name)

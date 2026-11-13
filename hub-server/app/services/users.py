@@ -76,6 +76,16 @@ def standing(user: User, role: Role) -> tuple[frozenset[str], Limits]:
     )
 
 
+def sign_in_methods(user: User) -> list[str]:
+    """The ways this person can prove who they are from anywhere, in the order a screen lists them."""
+    held = (
+        ("google", user.google_subject),
+        ("plex", user.plex_account_id),
+        ("password", user.username and user.password_hash),
+    )
+    return [name for name, value in held if value]
+
+
 def mirror(profile: Profile, user: User, role: Role | None) -> None:
     """Keep the profile's legacy admin flag equal to what the user's access now says."""
     profile.is_admin = "system.manage" in access(user, role)[0]
@@ -137,6 +147,22 @@ class GoogleSignIn:
     user: User
     profile: Profile
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalIdentity:
+    """Someone an identity provider vouches for. ``subject`` is the provider's own stable id."""
+
+    provider: str  # google | plex
+    subject: str
+    email: str = ""
+    name: str = ""
+    picture: str | None = None
+    handle: str | None = None  # the Plex username; Google has none
+
+
+# Where each provider's stable id lives on the user.
+_SUBJECT = {"google": User.google_subject, "plex": User.plex_account_id}
 
 
 def _slug(name: str) -> str:
@@ -209,6 +235,9 @@ class UsersService:
             "has_pin": bool(profile and profile.pin_hash),
             "on_shared_devices": shared,
             "plex_account_linked": user.plex_account_linked,
+            "username": user.username,
+            "plex_username": user.plex_username if user.plex_account_id else None,
+            "sign_in_methods": sign_in_methods(user),
             "created_at": user.created_at,
             "approved_at": user.approved_at,
             "last_seen_at": user.last_seen_at,
@@ -693,7 +722,7 @@ class UsersService:
             await s.delete(role)
             await s.commit()
 
-    # ------------------------------------------------------------------ Google sign-in
+    # ------------------------------------------------------------------ Google and Plex sign-in
     async def google_sign_in(
         self,
         claims: dict[str, Any],
@@ -702,37 +731,84 @@ class UsersService:
         owner_profile_id: str,
         signup_mode: str,
         invite_token: str,
-        redeem: Callable[[AsyncSession, str], Awaitable[tuple[Role, str | None, str] | None]],
+        redeem: Callable[[AsyncSession, str], Awaitable[Any]],
     ) -> GoogleSignIn:
-        """Map a verified Google identity onto a user, creating one where the rules allow.
+        """Map a verified Google identity onto a user, creating one where the rules allow."""
+        email = str(claims.get("email") or "").strip().lower()
+        who = ExternalIdentity(
+            provider="google",
+            subject=str(claims["sub"]),
+            email=email,
+            name=str(claims.get("name") or "").strip(),
+            picture=str(claims.get("picture") or "")[:2048] or None,
+        )
+        return await self.external_sign_in(
+            who,
+            bootstrap_email=bootstrap_email,
+            owner_profile_id=owner_profile_id,
+            signup_mode=signup_mode,
+            invite_token=invite_token,
+            redeem=redeem,
+        )
+
+    @staticmethod
+    def _carry(user: User, who: ExternalIdentity) -> None:
+        """Keep what the provider says about a known user. The address and picture shown for a
+        user are Google's when they have Google, so Plex only fills them in for someone who has not."""
+        if who.provider == "google" or not user.google_subject:
+            user.email, user.picture = who.email or user.email, who.picture or user.picture
+        if who.provider == "plex":
+            user.plex_username = who.handle or user.plex_username
+
+    async def external_sign_in(
+        self,
+        who: ExternalIdentity,
+        *,
+        signup_mode: str,
+        invite_token: str,
+        redeem: Callable[[AsyncSession, str], Awaitable[Any]],
+        bootstrap_email: str = "",
+        owner_profile_id: str = "",
+        trusted_role_id: str | None = None,
+    ) -> GoogleSignIn:
+        """Map an identity a provider vouches for onto a user, creating one where the rules allow.
 
         Known subject: that user. Otherwise, in order: the bootstrap owner address claims
-        the Owner user that has no Google identity yet; a valid invite activates at once
-        with the invite's role; approval mode leaves a pending user; anything else is refused.
+        the Owner user that has no Google identity yet (Google only); a valid invite activates
+        at once with the invite's role; ``trusted_role_id`` (someone the owner's Plex server is
+        already shared with) activates at once with that role; approval mode leaves a pending
+        user; anything else is refused.
+
+        Identity is the provider's subject and nothing else. An address that matches another
+        user's is never a reason to treat two identities as one person: that is linking, and
+        linking is something a signed-in user does on purpose.
         """
-        subject = str(claims["sub"])
-        email = str(claims.get("email") or "").strip().lower()
-        picture = str(claims.get("picture") or "")[:2048] or None
-        name = (str(claims.get("name") or "").strip() or email.split("@", 1)[0] or "User")[:64]
+        subject, email, picture = who.subject, who.email, who.picture
+        column = _SUBJECT[who.provider]
+        name = (who.name or who.handle or email.split("@", 1)[0] or "User")[:64]
         pending_notice = False
         async with self._db.session() as s:
-            user = (await s.execute(select(User).where(User.google_subject == subject))).scalar_one_or_none()
+            user = (await s.execute(select(User).where(column == subject))).scalar_one_or_none()
             created = False
             if user is not None:
                 if user.status == "suspended":
                     raise Forbidden("This account is suspended", code="user_suspended")
                 profile = (await s.execute(select(Profile).where(Profile.user_id == user.id))).scalar_one()
-                user.email, user.picture = email or user.email, picture or user.picture
+                self._carry(user, who)
                 invited = await redeem(s, invite_token) if user.status == "pending" and invite_token else None
                 if invited is not None:
-                    role, inviter, invite_id = invited
+                    role = invited.role
                     user.status, user.role_id = "active", role.id
-                    user.approved_at, user.approved_by_user_id = utcnow(), inviter
+                    user.approved_at, user.approved_by_user_id = utcnow(), invited.inviter
                     profile.kids = role.id == "kid"
                     self._changed(user, profile, role)
-                    audit(s, user.id, "user.invite_accept", user.id, invite_id=invite_id, role_id=role.id)
+                    audit(s, user.id, "user.invite_accept", user.id, invite_id=invited.invite_id, role_id=role.id)
             else:
-                owner = await self._bootstrap_owner(s, email, bootstrap_email, owner_profile_id)
+                owner = (
+                    await self._bootstrap_owner(s, email, bootstrap_email, owner_profile_id)
+                    if who.provider == "google"
+                    else None
+                )
                 if owner is not None:
                     user, profile = owner
                     # Compare-and-set: of two sign-ins racing for the claim, exactly one gets it.
@@ -747,14 +823,18 @@ class UsersService:
                     audit(s, user.id, "user.google_link", user.id)
                 else:
                     invited = await redeem(s, invite_token) if invite_token else None
-                    if invited is None and signup_mode != "approval":
+                    trusted = await s.get(Role, trusted_role_id) if invited is None and trusted_role_id else None
+                    # Never the Owner role, whatever a caller names.
+                    trusted = trusted if trusted is not None and trusted.id != OWNER_ROLE else None
+                    if invited is None and trusted is None and signup_mode != "approval":
                         raise Forbidden("An invitation is required to sign in", code="invite_required")
-                    granted = invited[0] if invited else None
+                    granted = invited.role if invited else trusted
+                    if invited and invited.display_name:
+                        name = invited.display_name
                     user = User(
                         id=secrets.token_hex(8),
-                        kind="google",
-                        google_subject=subject,
-                        email=email,
+                        kind=who.provider,
+                        email=email or None,
                         display_name=name,
                         picture=picture,
                         status="active" if granted else "pending",
@@ -763,8 +843,11 @@ class UsersService:
                         denials=[],
                         limits={},
                         approved_at=utcnow() if granted else None,
-                        approved_by_user_id=invited[1] if invited else None,
+                        approved_by_user_id=invited.inviter if invited else None,
                     )
+                    setattr(user, column.key, subject)
+                    if who.provider == "plex":
+                        user.plex_username = who.handle
                     s.add(user)
                     await s.flush()
                     profile = Profile(
@@ -781,7 +864,16 @@ class UsersService:
                     s.add(profile)
                     created = True
                     if invited:
-                        audit(s, user.id, "user.invite_accept", user.id, invite_id=invited[2], role_id=invited[0].id)
+                        audit(
+                            s,
+                            user.id,
+                            "user.invite_accept",
+                            user.id,
+                            invite_id=invited.invite_id,
+                            role_id=invited.role.id,
+                        )
+                    elif trusted is not None:
+                        audit(s, user.id, "user.plex_friend_accept", user.id, role_id=trusted.id)
                     else:
                         audit(s, user.id, "user.signup", user.id, display_name=name, email=email)
                         await self._notify_managers(s, user)

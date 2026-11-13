@@ -90,8 +90,16 @@ class User(Base):
 
     __tablename__ = "user"
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    kind: Mapped[str] = mapped_column(String(16), default="managed")  # google | managed
+    kind: Mapped[str] = mapped_column(String(16), default="managed")  # google | plex | password | managed
     google_subject: Mapped[str | None] = mapped_column(String(256), unique=True, nullable=True)
+    # The Plex account this person signs in with: its id at plex.tv, never its e-mail. No Plex
+    # token is kept for it. (``plex_account_linked`` below is another matter: whose account the
+    # server's own Plex token belongs to.)
+    plex_account_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    plex_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Username and password sign-in. The name is stored lower-cased; the hash is scrypt.
+    username: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     display_name: Mapped[str] = mapped_column(String(64))
     picture: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -109,6 +117,11 @@ class User(Base):
     approved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     approved_by_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ux_user_plex_account_id", "plex_account_id", unique=True),
+        Index("ux_user_username", "username", unique=True),
+    )
 
 
 class AuthSession(Base):
@@ -146,6 +159,10 @@ class Invite(Base):
     max_uses: Mapped[int] = mapped_column(Integer, default=1)
     uses: Mapped[int] = mapped_column(Integer, default=0)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Who the inviter said this is for; the new user starts with that name.
+    display_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Set on a password setup link: it sets that one user's password and creates nobody.
+    user_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
 
 
 class AuditLog(Base):

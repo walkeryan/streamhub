@@ -63,6 +63,7 @@ async def test_missing_configuration_fails_closed(api: Api) -> None:
         "owner_pin_configured": False,
         "owner_pin_setup_required": True,
         "signup_mode": "approval",
+        "plex_enabled": True,
     }
     assert (await api.get("/auth/google/start")).status_code == 403
     assert (
