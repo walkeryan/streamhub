@@ -29,6 +29,8 @@ import { Pair } from './screens/Pair'
 const Player = lazy(() => import('./screens/Player').then((m) => ({ default: m.Player })))
 const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })))
+const Users = lazy(() => import('./screens/Users').then((m) => ({ default: m.Users })))
+const UserDetail = lazy(() => import('./screens/UserDetail').then((m) => ({ default: m.UserDetail })))
 
 bootTheme()
 
@@ -104,6 +106,8 @@ export function App() {
             <Route path="favorites" element={<Favorites />} />
             <Route path="requests" element={<Requests />} />
             <Route path="sources" element={<Sources />} />
+            <Route path="users" element={<Users />} />
+            <Route path="users/:id" element={<UserDetail />} />
             <Route path="settings" element={<Settings />} />
             <Route path="pair" element={<Pair />} />
             <Route path="*" element={<Navigate to="/" replace />} />

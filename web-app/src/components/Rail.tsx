@@ -26,12 +26,13 @@ const NAV: Destination[] = [
 ]
 /** A phone's bar holds five: Movies and Shows share Library (the screen has the switch), My List moves under More. */
 const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: 'Library', icon: 'film', at: ['/browse', '/discover'] }]
-/** Everything else, each offered only to a user who may use it. Recordings and Users join this
- *  list, with their capability, once those screens exist. */
+/** Everything else, each offered only to a user who may use it. Recordings joins this list, with
+ *  its capability, once that screen exists. */
 const MORE: Destination[] = [
   { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' },
   { to: '/requests', label: 'Requests', icon: 'list', needs: 'requests' },
   { to: '/sources', label: 'Sources', icon: 'source', needs: 'sources' },
+  { to: '/users', label: 'Users', icon: 'users', needs: 'users' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ]
 const testId = (label: string) => `nav-${label.toLowerCase().replace(' ', '-')}`
