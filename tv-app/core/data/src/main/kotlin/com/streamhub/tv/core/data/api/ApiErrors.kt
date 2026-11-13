@@ -2,6 +2,7 @@ package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.model.ActiveStream
 import com.streamhub.tv.core.data.model.Permissions
+import com.streamhub.tv.core.data.repo.SessionEnd
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.nio.channels.UnresolvedAddressException
@@ -48,11 +49,8 @@ object ApiErrors {
                 canRetry = true,
             )
             "forbidden" -> UserError("Not allowed", forbiddenBody(error.missing), canRetry = false)
-            "user_suspended" -> UserError(
-                "Account suspended",
-                "This account has been suspended. Ask the owner of this StreamHub server to reinstate it.",
-                canRetry = false,
-            )
+            "user_suspended" -> sessionEnded(SessionEnd.Suspended)
+            "session_revoked" -> sessionEnded(SessionEnd.Revoked)
             "approval_pending" -> UserError(
                 "Waiting for approval",
                 "The owner of this StreamHub server hasn't approved this account yet. Try again once they have.",
@@ -89,7 +87,7 @@ object ApiErrors {
                 canRetry = false,
             )
             else -> when (e.status) {
-                401 -> UserError("Sign-in expired", "This TV is no longer signed in to the server. Pair it again to continue.", canRetry = false)
+                401 -> sessionEnded(SessionEnd.Expired)
                 403 -> UserError("Not allowed", "This profile isn't allowed to do that.", canRetry = false)
                 404 -> UserError("No longer available", "The server can't find this any more. It may have been removed from its source.", canRetry = false)
                 in 500..599 -> UserError(
@@ -102,6 +100,21 @@ object ApiErrors {
                 else -> UserError("That didn't work", detail ?: "The server refused the request (error ${e.status}).", canRetry = e.status == 408 || e.status == 409 || e.status == 429)
             }
         }
+    }
+
+    /** Why this TV's session stopped working, for the dialog shown before the picker or the pairing screen. */
+    fun sessionEnded(end: SessionEnd): UserError = when (end) {
+        SessionEnd.Expired -> UserError("Sign-in expired", "This TV is no longer signed in to the server. Pair it again to continue.", canRetry = false)
+        SessionEnd.Revoked -> UserError(
+            "Signed out",
+            "This TV was signed out on the server, or its session was handed to someone else. Pair it again to continue.",
+            canRetry = false,
+        )
+        SessionEnd.Suspended -> UserError(
+            "Account suspended",
+            "This account has been suspended. Ask the owner of this StreamHub server to reinstate it.",
+            canRetry = false,
+        )
     }
 
     /** "You don't have permission for this." and, when the server names them, what is missing. */

@@ -121,11 +121,9 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             me.state.collectLatest { access ->
                 _state.update { it.copy(showRequests = access.can(Permissions.REQUESTS_CREATE) || access.can(Permissions.REQUESTS_APPROVE)) }
-                // "Who's watching?" replaces the profile list only where there really is a picker: a server
-                // that calls this a shared TV but has no picker yet keeps the list.
-                val picker = access.sharedDevice && try { switcher.switchable() != null }
-                    catch (e: CancellationException) { throw e } catch (_: Exception) { false }
-                _state.update { it.copy(sharedDevice = picker) }
+                // On a shared TV "Who's watching?" replaces the profile list: people are switched with
+                // POST /auth/switch (and their PIN), never by the older per-profile switch.
+                _state.update { it.copy(sharedDevice = access.sharedDevice) }
             }
         }
     }

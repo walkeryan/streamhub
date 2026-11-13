@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,7 +60,9 @@ import com.streamhub.tv.core.data.repo.PlayEvent
 import com.streamhub.tv.core.data.repo.RecordingAvailability
 import com.streamhub.tv.core.data.repo.RecordingsRepository
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
+import com.streamhub.tv.core.data.repo.SessionEnd
 import com.streamhub.tv.core.data.repo.SessionEvents
+import com.streamhub.tv.core.data.api.ApiErrors
 import com.streamhub.tv.core.ui.components.ErrorDialog
 import com.streamhub.tv.core.ui.components.HandoffQrDialog
 import com.streamhub.tv.core.ui.components.isDisclaimerAccepted
@@ -162,9 +165,12 @@ private fun railItems(access: MeState, recordings: RecordingAvailability): List<
     RailItem(Routes.SETTINGS, "Settings", Icons.Filled.Settings),
 )
 
+/** Where the account itself is the subject: a suspension is explained by the screen, not by a dialog over it. */
+private val ACCOUNT_ROUTES = setOf(Routes.ONBOARDING, Routes.WHO, Routes.WHO_GATE)
+
 @HiltViewModel
 class RootViewModel @Inject constructor(
-    sessionStore: SessionStore,
+    private val sessionStore: SessionStore,
     prefs: LocalPrefs,
     val coordinator: PlaybackCoordinator,
     val sessionEvents: SessionEvents,
@@ -198,6 +204,9 @@ class RootViewModel @Inject constructor(
 
     /** The cold-start question "who is watching?" has been put, or does not arise: it is not put again in this run. */
     fun settleGate() { gateSettled = true; _gateWanted.value = false }
+
+    /** Signs this TV out, keeping the server address, so the pairing screen starts with a fresh code. */
+    suspend fun unpair() { coordinator.clearForProfileSwitch(); sessionStore.clearTokens() }
 
     init {
         // Whether there is a recorder behind the Recordings destination and the Record actions: asked
@@ -258,11 +267,32 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
             }
         }
     }
+    // The session ended. Signed out or expired: the tokens are gone, so back to pairing, with the reason
+    // in a dialog over it. Suspended: the pairing is kept; explained once per person, then a shared TV
+    // goes to the picker (someone else may be able to take over) and a personal one stays where it is.
+    var sessionNotice by remember { mutableStateOf<SessionEnd?>(null) }
+    var suspensionSaidFor by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
-        vm.sessionEvents.expired.collect {
+        vm.sessionEvents.ended.collect { end ->
+            if (end == SessionEnd.Suspended) {
+                val person = vm.session.value?.profile?.id
+                if (nav.currentDestination?.route in ACCOUNT_ROUTES || suspensionSaidFor == person) return@collect
+                suspensionSaidFor = person
+                sessionNotice = end
+                return@collect
+            }
             audioChoice = null
             playError = null
             vm.coordinator.cancelPending()
+            sessionNotice = end
+            nav.navigate(Routes.ONBOARDING) { popUpTo(0) { inclusive = true } }
+        }
+    }
+    val pairAgain: () -> Unit = {
+        scope.launch {
+            // Tokens first: the pairing screen reads the session as it opens.
+            vm.unpair()
             nav.navigate(Routes.ONBOARDING) { popUpTo(0) { inclusive = true } }
         }
     }
@@ -298,7 +328,7 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
     }
     CompositionLocalProvider(LocalPlayLauncher provides launcher) {
         ScreenBackground {
-            AppShell(nav, start, profileName = s.profile?.name, access = access, recordings = recordings, sharedDevice = { vm.me.state.value.sharedDevice }, onGateSettled = vm::settleGate)
+            AppShell(nav, start, profileName = s.profile?.name, access = access, recordings = recordings, sharedDevice = { vm.me.state.value.sharedDevice }, onGateSettled = vm::settleGate, onPairAgain = pairAgain)
             audioChoice?.let { choice ->
                 AudioSourceDialog(choice.options, onDismiss = { audioChoice = null; vm.coordinator.cancelPending() }) { variant, confirmed ->
                     audioChoice = null
@@ -306,6 +336,15 @@ fun StreamHubRoot(vm: RootViewModel = hiltViewModel()) {
                 }
             }
             qr?.let { HandoffQrDialog(it.webUrl, it.serviceName) { qr = null } }
+            sessionNotice?.let { end ->
+                ErrorDialog(ApiErrors.sessionEnded(end), onRetry = {}, onDismiss = {
+                    sessionNotice = null
+                    if (end == SessionEnd.Suspended && (vm.me.state.value.sharedDevice || sharedHint == SharedHint.Shared) && nav.currentDestination?.route !in ACCOUNT_ROUTES) {
+                        vm.coordinator.cancelPending()
+                        nav.navigate(Routes.WHO_GATE) { popUpTo(nav.graph.id) { inclusive = true }; launchSingleTop = true }
+                    }
+                })
+            }
             // Play failures: a dialog the remote can answer, focused on Try again when retrying can help.
             playError?.let { error ->
                 ErrorDialog(
@@ -328,6 +367,7 @@ private fun AppShell(
     /** Asked at the moment of a press: the answer can arrive after the screen was composed. */
     sharedDevice: () -> Boolean,
     onGateSettled: () -> Unit,
+    onPairAgain: () -> Unit,
 ) {
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
@@ -386,7 +426,7 @@ private fun AppShell(
                     }
                     composable(Routes.WHO_GATE) {
                         // No picker on this server or for this device (404 / 403): straight into the app.
-                        WhoIsWatchingScreen(gate = true, onDone = enterApp, onAbsent = enterApp, onBack = {})
+                        WhoIsWatchingScreen(gate = true, onDone = enterApp, onAbsent = enterApp, onBack = {}, onPairAgain = onPairAgain)
                     }
                     composable(Routes.WHO) {
                         WhoIsWatchingScreen(
@@ -395,6 +435,7 @@ private fun AppShell(
                             // Asked for from the rail but the server has no picker: Settings has the profile list.
                             onAbsent = { nav.popBackStack(); nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
                             onBack = { nav.popBackStack() },
+                            onPairAgain = onPairAgain,
                         )
                     }
                     composable(Routes.HOME) { TopLevel(onTopLevelBack) { HomeScreen() } }
