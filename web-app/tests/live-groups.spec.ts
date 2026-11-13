@@ -22,6 +22,7 @@ const groups = (page: Page) => page.getByRole('group', { name: 'Channel groups',
 const chip = (page: Page, name: string) => groups(page).getByRole('button', { name, exact: true })
 const rows = (page: Page) => page.getByTestId('channel-row')
 const picker = (page: Page) => page.getByTestId('live-subgroup')
+const clear = (page: Page) => page.getByRole('button', { name: 'Clear filters', exact: true })
 const list = (page: Page) => page.getByRole('dialog', { name: 'Sports', exact: true })
 const fits = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
 async function walk(page: Page, key: string, target: Locator, limit = 16) {
@@ -42,8 +43,10 @@ test('chips are the top level; a parent offers its children in a drop-down besid
   await expect(rows(page)).toHaveText(SPORTS)
   await expect(picker(page)).toHaveText('All Sports')
   await expect(picker(page)).toHaveAccessibleName('Sports: All Sports')
-  // Directly after the chip it belongs to, on the chips' line.
-  expect(await groups(page).evaluate((row) => Array.from(row.children, (el) => el.textContent))).toEqual([...TOP_LEVEL.slice(0, 4), 'All Sports', ...TOP_LEVEL.slice(4)])
+  // Directly after the chip it belongs to, on the chips' line; then the small × that clears the filter.
+  expect(await groups(page).evaluate((row) => Array.from(row.children, (el) => el.textContent))).toEqual([...TOP_LEVEL.slice(0, 4), 'All Sports', '', ...TOP_LEVEL.slice(4)])
+  await expect(clear(page)).toHaveAccessibleName('Clear filters')
+  expect((await clear(page).boundingBox())!.width).toBeLessThan(60)
   expect(await groups(page).evaluate((row) => new Set(Array.from(row.children, (el) => (el as HTMLElement).offsetTop + (el as HTMLElement).offsetHeight / 2)).size)).toBe(1)
 
   await picker(page).click()
@@ -56,10 +59,14 @@ test('chips are the top level; a parent offers its children in a drop-down besid
   await expect(picker(page)).toHaveText('Football')
   await expect(page.getByText('1 channels', { exact: true })).toBeVisible()
 
-  // A plain group has no drop-down.
+  // A plain group has no drop-down; the × moves to the chip now in force, and is gone with the filter.
   await chip(page, 'News').click()
   await expect(picker(page)).toHaveCount(0)
   await expect(chip(page, 'Sports')).toHaveAttribute('aria-pressed', 'false')
+  expect(await groups(page).evaluate((row) => Array.from(row.children, (el) => el.textContent))).toEqual([...TOP_LEVEL.slice(0, 3), '', ...TOP_LEVEL.slice(3)])
+  await chip(page, 'All').click()
+  await expect(clear(page)).toHaveCount(0)
+  await chip(page, 'News').click()
   expect(await fits(page)).toBe(true)
 })
 
@@ -113,11 +120,8 @@ test('by keyboard alone: arrows, Enter and Escape choose a child, and Tab walks 
   await enter(page)
   await expect(rows(page).first()).toBeVisible()
   await expect(page.locator('.fx[data-focused="true"]')).not.toHaveCount(0)
-  // Up from the channels is the search field, the chips are the row under it; along the row to Sports.
-  await walk(page, 'ArrowUp', page.locator('[data-focus-key="live:search"]'))
-  await page.keyboard.press('ArrowDown')
-  await expect(groups(page).locator('[data-focused="true"]')).toHaveCount(1)
-  await walk(page, 'ArrowLeft', chip(page, 'All'))
+  // Up from the channels is the row of chips, on the one in force; along the row to Sports.
+  await walk(page, 'ArrowUp', chip(page, 'All'))
   await walk(page, 'ArrowRight', chip(page, 'Sports'))
   await page.keyboard.press('Enter')
   await expect(rows(page)).toHaveText(SPORTS)
@@ -148,13 +152,13 @@ test('by keyboard alone: arrows, Enter and Escape choose a child, and Tab walks 
   await expect(picker(page)).toHaveAttribute('data-focused', 'true')
   await expect(rows(page)).toHaveText([/Sunday League/])
 
-  // Tab: News, Sports, its drop-down, Movies; Shift+Tab back the same way.
+  // Tab: News, Sports, its drop-down, the ×, Movies; Shift+Tab back the same way.
   await walk(page, 'ArrowLeft', chip(page, 'News'))
-  for (const stop of [chip(page, 'Sports'), picker(page), chip(page, 'Movies')]) {
+  for (const stop of [chip(page, 'Sports'), picker(page), clear(page), chip(page, 'Movies')]) {
     await page.keyboard.press('Tab')
     await expect(stop).toHaveAttribute('data-focused', 'true')
   }
-  for (const stop of [picker(page), chip(page, 'Sports'), chip(page, 'News')]) {
+  for (const stop of [clear(page), picker(page), chip(page, 'Sports'), chip(page, 'News')]) {
     await page.keyboard.press('Shift+Tab')
     await expect(stop).toHaveAttribute('data-focused', 'true')
   }
@@ -174,8 +178,8 @@ test.describe('on a phone', () => {
     await chip(page, 'Sports').tap()
     await expect(rows(page)).toHaveText(SPORTS)
     await expect(picker(page)).toHaveText('All Sports')
-    // Not in the row: under it, inside the page's width.
-    await expect(groups(page).getByRole('button')).toHaveText(TOP_LEVEL)
+    // Not in the row: under it, inside the page's width. The row gains only the × beside the chip in force.
+    await expect(groups(page).getByRole('button')).toHaveText([...TOP_LEVEL.slice(0, 4), '', ...TOP_LEVEL.slice(4)])
     // (offsetTop: the chip in focus is drawn slightly larger.)
     expect(await groups(page).evaluate((row) => row.scrollWidth > row.clientWidth && new Set(Array.from(row.children, (el) => (el as HTMLElement).offsetTop)).size === 1)).toBe(true)
     const row = (await groups(page).boundingBox())!, under = (await picker(page).boundingBox())!

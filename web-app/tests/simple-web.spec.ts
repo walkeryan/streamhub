@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
-import { activeFilter, openFilters } from './helpers'
+import { activeFilter, closeLiveOptions, openFilters, openLiveOptions } from './helpers'
 
 // Phase 2b: the app opens on content, on a phone, a tablet and a TV browser, by touch and by remote.
 const PROFILES = {
@@ -416,17 +416,22 @@ test('Live TV leaves out a language or region row that offers one choice', async
   await enter(page, '/live', 'owner')
   await expect(page.getByTestId('channel-row').first()).toHaveAttribute('data-focused', 'true')
   await expect(page.getByTestId('live')).toContainText('22 channels')
-  await expect(page.getByRole('group', { name: 'Language', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('group', { name: 'Region', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /^Source:/ })).toHaveCount(0)
   await expect(page.getByTestId('live').getByText(/Region uses|sync with this profile/)).toHaveCount(0)
   await expect(page.getByTestId('live-preview')).toBeVisible() // wide screens keep the preview pane
+  // Language, region and source are choices in Options: none of them is offered here.
+  const options = await openLiveOptions(page)
+  await expect(options.getByRole('group', { name: 'Guide channels', exact: true })).toBeVisible()
+  await expect(options.getByRole('group', { name: 'Language', exact: true })).toHaveCount(0)
+  await expect(options.getByRole('group', { name: 'Region', exact: true })).toHaveCount(0)
+  await expect(options.getByRole('button', { name: /^Source:/ })).toHaveCount(0)
+  await closeLiveOptions(page)
 
   // Several languages and regions: both rows are back.
   const mixed = await other(browser)
   await enter(mixed.page, '/live')
-  await expect(mixed.page.getByRole('group', { name: 'Language', exact: true })).toBeVisible()
-  await expect(mixed.page.getByRole('group', { name: 'Region', exact: true })).toBeVisible()
+  const offered = await openLiveOptions(mixed.page)
+  await expect(offered.getByRole('group', { name: 'Language', exact: true })).toBeVisible()
+  await expect(offered.getByRole('group', { name: 'Region', exact: true })).toBeVisible()
   await mixed.context.close()
 })
 
