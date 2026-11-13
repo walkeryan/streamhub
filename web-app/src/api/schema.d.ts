@@ -90,7 +90,7 @@ export interface paths {
         };
         /**
          * The caller's user, role, effective permissions and limits
-         * @description The one call a user waiting for approval may make (every other answers 403 approval_pending). Once approved, the response carries full tokens, once, and the pending token stops working.
+         * @description The one call a user waiting for approval may make (every other answers 403 approval_pending). Also answers a user without remote.access away from the home network, where every other call is 403 remote_access_denied. Once approved, the response carries full tokens, once, and the pending token stops working.
          */
         get: {
             parameters: {
@@ -204,6 +204,182 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        /**
+         * Relabel a device, or mark it a shared household device
+         * @description A label is its user's to change (anyone's with users.manage). shared_device needs users.manage, on one's own device too; marking records the caller as the device's owner, unmarking clears it.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        shared_device?: boolean;
+                        /** @description empty clears it */
+                        label?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description the session as it now is */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthSession"];
+                    };
+                };
+                /** @description forbidden (shared_device without users.manage) | owner_required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/auth/switchable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who's watching? The users a shared device can be handed to
+         * @description Active users whose role (or own override) has on_shared_devices, owners and family first, then by name. Only a shared-device session may ask.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            users: components["schemas"]["SwitchableUser"][];
+                        };
+                    };
+                };
+                /** @description not_shared_device */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hand a shared device to another user
+         * @description Keeps the device's session and re-binds it to the target, with fresh tokens; the previous user's tokens for this device stop working. A target with a PIN needs it. A target with more access than the current user must have one. Switching to oneself changes nothing.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_id: string;
+                        pin?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description switched */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Switched"];
+                    };
+                };
+                /** @description pin_required | pin_invalid */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not_shared_device */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description not a user this device can switch to */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description pin_setup_required (the target has more access and no PIN) | switch_conflict (retry) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Five wrong PINs for this target in 15 minutes; respect Retry-After */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -910,12 +1086,24 @@ export interface paths {
                     "application/json": {
                         user_code?: string;
                         profile_id?: string;
+                        /**
+                         * @description Pair it as a shared household device (Who's watching?). true needs users.manage
+                         * @default false
+                         */
+                        shared_device?: boolean;
                     };
                 };
             };
             responses: {
                 /** @description ok */
                 204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description forbidden (shared_device without users.manage) */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -3457,6 +3645,8 @@ export interface paths {
                         limits?: components["schemas"]["LimitsInput"];
                         /** @description null follows the role */
                         on_shared_devices?: boolean | null;
+                        /** @description This user is the owner of the Plex account behind the server's Plex token. At most one user: setting it on one clears it on the others (each change is audited) */
+                        plex_account_linked?: boolean;
                     };
                 };
             };
@@ -4127,6 +4317,50 @@ export interface paths {
             };
         };
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/classification/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run one batch of rating lookups now (system.manage)
+         * @description A background job looks up TMDB certifications for catalog titles a batch at a time, so a user with a rating ceiling is not waiting on first views. This runs the next batch at once. Without a TMDB key it does nothing.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description what the batch did */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            classified: number;
+                            failed: number;
+                            /** @description Titles with a TMDB id still lacking fresh rating evidence */
+                            remaining: number;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -5040,6 +5274,59 @@ export interface paths {
         };
         trace?: never;
     };
+    "/app/tv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The newest TV app build this server hands out
+         * @description Read from tv-release.json beside the APK in the web client's downloads directory (format in hub-server/README.md). apk_url is a path on this server.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            version_code: number;
+                            version_name: string;
+                            /** @description /downloads/<file> */
+                            apk_url: string;
+                            /** @description 64 lower-case hex digits */
+                            sha256: string;
+                        };
+                    };
+                };
+                /** @description No release is published here (no manifest */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -5265,6 +5552,23 @@ export interface components {
             /** @description The session making this request */
             current: boolean;
         };
+        SwitchableUser: {
+            id: string;
+            display_name: string;
+            avatar: string | null;
+            picture: string | null;
+            role_name: string;
+            has_pin: boolean;
+            /** @description The user this device is signed in as */
+            current: boolean;
+        };
+        Switched: components["schemas"]["AuthTokens"] & {
+            /** @description The user now on the device. Every field of a picker entry and of /auth/me's user. */
+            user: components["schemas"]["User"] & {
+                /** @enum {boolean} */
+                current: true;
+            };
+        };
         UserDetail: components["schemas"]["UserListItem"] & {
             grants: components["schemas"]["Permission"][];
             denials: components["schemas"]["Permission"][];
@@ -5331,7 +5635,7 @@ export interface components {
             id: number;
             /** Format: date-time */
             at: string;
-            /** @description user.approve, user.role_change, user.suspend, role.update, invite.create, session.revoke, ... */
+            /** @description user.approve, user.role_change, user.suspend, role.update, invite.create, session.revoke, session.switch, session.update, ... */
             action: string;
             actor_user_id?: string | null;
             actor_name?: string | null;
@@ -5870,6 +6174,8 @@ export interface components {
             readonly notify_webhook_set?: boolean;
             /** @description PATCH only: http(s) address told about sign-ups waiting for approval; empty or null clears it */
             notify_webhook?: string | null;
+            /** @description Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges) */
+            home_networks?: string | null;
         };
         Disclaimer: {
             version: string;
