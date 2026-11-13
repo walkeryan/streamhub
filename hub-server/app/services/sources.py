@@ -31,6 +31,7 @@ from app.infra.logging import secret_registry
 from app.infra.models import Channel, ChannelGroup, Source, Title
 from app.services.disclaimer import DisclaimerService
 from app.services.errors import NotFound, PreconditionFailed, ServiceError
+from app.services.event_slots import SlotConfig
 from app.services.ids import normalise_title
 from app.services.registry import SourceRegistry, UnknownSourceType
 
@@ -64,6 +65,7 @@ class SourceService:
         self._disclaimer = disclaimer
         self.language = language
         self._providers: dict[str, tuple[Any, SourceProvider]] = {}
+        self._slot_configs: dict[str, tuple[str, SlotConfig]] = {}  # per call it would be a config decrypt
 
     # ------------------------------------------------------------------ config
     def decrypt_config(self, row: Source) -> dict[str, Any]:
@@ -115,6 +117,18 @@ class SourceService:
         value = self.decrypt_config(row).get("default_language")
         return normalise_code(value) if isinstance(value, str) else None
 
+    def slot_config(self, row: Source) -> SlotConfig:
+        """Where this source's event-slot names keep their clock, and how long a game is taken to last."""
+        hit = self._slot_configs.get(row.id)
+        if hit is not None and hit[0] == row.config_enc:
+            return hit[1]
+        config = SlotConfig.from_config(self.decrypt_config(row))
+        self._slot_configs[row.id] = (row.config_enc, config)
+        return config
+
+    async def slot_configs(self) -> dict[str, SlotConfig]:
+        return {row.id: self.slot_config(row) for row in await self.list()}
+
     def max_connections(self, row: Source) -> int | None:
         cfg = self.decrypt_config(row)
         v = cfg.get("max_connections") or (row.hints or {}).get("max_connections")
@@ -141,7 +155,7 @@ class SourceService:
         except Exception:
             summary = {}
         if row.type != SourceType.STREAMING_SERVICE.value:
-            summary = {**summary, "default_language": self.default_language(row)}
+            summary = {**summary, "default_language": self.default_language(row), **self.slot_config(row).summary()}
         return {
             "id": row.id,
             "type": row.type,

@@ -147,8 +147,6 @@ class CatalogService:
         These are lists (home rows, favorites, history), so adult rows are skipped like
         anywhere else unless the request included them.
         """
-        from app.services.channels import programme_dict  # local import avoids cycle
-
         out: dict[str, dict[str, Any]] = {}
         lib_keys: list[tuple[str, str]] = []
         ch_keys: list[tuple[str, str]] = []
@@ -173,7 +171,6 @@ class CatalogService:
                     t = ctx.title_tile(row)
                     t["id"] = ids.lib_id(sid, ext)  # keep the id the client stored
                     out[t["id"]] = t
-            now_map: dict[str, Any] = {}
             chans: list[Channel] = []
             for sid, ext in ch_keys:
                 ch = (
@@ -182,13 +179,17 @@ class CatalogService:
                 if ch:
                     chans.append(ch)
         if chans:
-            from app.services.channels import now_next
+            from app.services.channels import now_next, present_now_next
+            from app.services.event_slots import DEFAULT_SLOT_CONFIG, parse_event_slot
 
             nn = await now_next(self._db, chans)
+            # The slot clock is a source setting; it is read only when a slot is among the channels.
+            slots = any(parse_event_slot(ch.name) for ch in chans)
+            configs = await self.sources.slot_configs() if slots else {}
             for ch in chans:
-                now = nn.get((ch.source_id, ch.epg_id or ""), (None, None))[0]
-                now_map[ch.ext_id] = programme_dict(now, ch) if now else None
-                t = ctx.channel_tile(ch, now_map[ch.ext_id])
+                current, following = nn.get((ch.source_id, ch.epg_id or ""), (None, None))
+                config = configs.get(ch.source_id, DEFAULT_SLOT_CONFIG)
+                t = ctx.channel_tile(ch, present_now_next(ch, current, following, config)[0])
                 out[t["id"]] = t
         for media_type, tid in tmdb_keys:
             hub = ids.tmdb_id(media_type, tid)

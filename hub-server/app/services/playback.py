@@ -47,6 +47,7 @@ from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
 from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError
+from app.services.event_slots import display_name
 from app.services.media_probe import cached_probe
 from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
@@ -892,7 +893,7 @@ class PlaybackResolver:
             raise ServiceError("source cannot play live channels")
         info = row_to_channel(ch)
         target: StreamTarget | None
-        title = ch.name
+        title = display_name(ch.name)
         subtitle = None
         archive_start = archive_end = None
         if rewind_at is not None:

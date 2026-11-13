@@ -72,6 +72,8 @@ def test_integration_fields_are_published_as_the_backend_sends_them() -> None:
     for model, fields in {
         "Programme": ["is_sport", "teams"],
         "Recording": ["is_sport", "teams", "has_file"],
+        "SportsEvent": ["kind", "league", "home", "away", "status"],
+        "SportsChannel": ["channel_name", "channel_number", "quality", "language", "logo"],
         "RoomJoin": ["member_token", "client"],
         "Settings": ["home_networks", "home_shelves", "home_shelves_unknown"],
     }.items():

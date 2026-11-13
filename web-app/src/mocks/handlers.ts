@@ -9,6 +9,7 @@ import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } fro
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
 import { adultUnlocked, holds, mockProfile, ownProfile, peopleHandlers, setProfilePin } from './people'
+import { sportsChannels, sportsEvents, sportsNetworks } from './sports'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
@@ -40,7 +41,9 @@ const tileById = (id: string): Tile | undefined => {
   const seed = seedFor(id)
   if (seed) return tileOf(seed)
   const c = channels.find((x) => x.id === id)
-  return c ? channelTile(withNowNext(c)) : undefined
+  if (c) return channelTile(withNowNext(c))
+  const sport = sportsChannels.find((x) => x.id === id)
+  return sport && channelTile(sport)
 }
 
 const countryMatches = (value: string | null | undefined, country: string | null) =>
@@ -54,6 +57,8 @@ export const handlers = [
   ...roomHandlers,
   // recordings, rules and playing a finished recording (before the general resolve handler below)
   ...recordingHandlers,
+  http.get(`${B}/sports/events`, async ({ request }) => { await delay(60); return HttpResponse.json(sportsEvents(new URL(request.url).searchParams, withRecordingState)) }),
+  http.get(`${B}/sports/channels`, ({ request }) => HttpResponse.json(sportsNetworks(new URL(request.url).searchParams, withRecordingState))),
   http.get(`${B}/sports/recordings`, ({ request }) => {
     const params = new URL(request.url).searchParams
     return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])

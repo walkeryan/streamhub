@@ -9,6 +9,7 @@ from typing import Any
 from app.domain.entities import CatalogItem, ChannelInfo, MediaKind, SourceType
 from app.infra.models import Channel, Progress, Source, Title
 from app.services import ids
+from app.services.event_slots import display_name
 
 ImageFn = Callable[[Source | None, str | None, str | None], str | None]
 TOP_LEVEL_KINDS = {"movie", "show", "vod", "series"}
@@ -180,7 +181,7 @@ class TileContext:
         return {
             "id": cid,
             "kind": "channel",
-            "title": ch.name,
+            "title": display_name(ch.name),
             "subtitle": f"{ch.number}" if ch.number else None,
             "year": None,
             "poster": logo,

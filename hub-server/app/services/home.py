@@ -11,7 +11,7 @@ from app.services import ids
 from app.services.adult import adult_included, adult_scope
 from app.services.availability import AvailabilityService
 from app.services.catalog import NEW_RELEASES, CatalogService, is_replay_shelf, shelf_path
-from app.services.channels import ChannelService, programme_dict
+from app.services.channels import ChannelService
 from app.services.recommendations import recommendations
 from app.services.sources import SourceService
 from app.services.tiles import TileContext, meta_tile
@@ -63,7 +63,7 @@ class HomeService:
         pairs, _ = await self._channels.on_now(profile_id, 100)
         out = []
         for ch, prog in pairs:
-            out.append(ctx.channel_tile(ch, programme_dict(prog, ch) if prog else None))
+            out.append(ctx.channel_tile(ch, prog))
         out.sort(key=lambda tile: not tile["is_favorite"])  # stable: recent channels keep their order
         title = "On Now" if any(prog for _, prog in pairs) else "Explore live TV"
         return out[:20], title

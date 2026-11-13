@@ -3,48 +3,73 @@ import { useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
 import { api, unwrap } from '../api/client'
+import { useCreateRecordingRule, useDeleteRecording, useRecordings, useScheduleRecording } from '../api/hooks'
+import { useCan } from '../api/me'
 import type { components } from '../api/schema'
-import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
-import { usePlayAction } from '../components/playAction'
-import { CatalogPicker } from '../components/CatalogPicker'
+import type { Recording } from '../api/types'
+import { Button, Chip, ErrorState, LogoBlock, Modal, Skeleton } from '../components/ui'
 import { LanguageFilter } from '../components/LanguageFilter'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
-import { setFocus } from '../nav/spatial'
+import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
+import { RecordingBadge } from '../recordings/RecordingBadge'
+import { recordingOf } from '../lib/recordings'
 import { useSession } from '../store/session'
-import { LANG_NAMES, useDebounced, useNow } from '../lib/util'
+import { useUi } from '../store/ui'
+import { LANG_NAMES, fmtTime, useDebounced, useNow } from '../lib/util'
 
 type Event = components['schemas']['SportsEvent']
+type Feed = components['schemas']['SportsEventFeed']
 type EventsPage = components['schemas']['SportsEventsPage']
-type Status = 'all' | 'current' | 'upcoming' | 'replay'
-const KNOWN_SPORTS = ['American football', 'Basketball', 'Baseball', 'Hockey', 'Cricket', 'Soccer', 'Football', 'Tennis', 'Golf', 'Motorsport', 'Rugby', 'Combat sports', 'Sports']
-const PAGE = 40
-const ZONE = 'America/New_York'
-const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
-const moveDate = (date: string, delta: number) => new Date(Date.parse(`${date}T12:00:00Z`) + delta * 86400000).toISOString().slice(0, 10)
-const clock = (date: string, zone: string) => new Intl.DateTimeFormat(undefined, { timeZone: zone, hour: 'numeric', minute: '2-digit' }).format(new Date(date))
-const airing = (event: Event, now: number) => Date.parse(event.start) <= now && now < Date.parse(event.stop)
-const stateOf = (event: Event, now: number) => airing(event, now) ? 'On now' : Date.parse(event.start) > now ? 'Upcoming' : 'Ended'
+type Network = components['schemas']['SportsChannel']
+type NetworksPage = components['schemas']['SportsChannelsPage']
+
+const PAGE = 100
+const NETWORKS = 24
+// Days are the viewer's own: the server is told the zone, and every time is shown on the local clock.
+const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+const two = (n: number) => String(n).padStart(2, '0')
+const dayOf = (at: number | string | Date) => { const d = new Date(at); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}` }
+const dateOf = (day: string) => { const [y, m, d] = day.split('-').map(Number); return new Date(y!, m! - 1, d!) }
+const moveDay = (day: string, delta: number) => { const d = dateOf(day); d.setDate(d.getDate() + delta); return dayOf(d) }
+const dayLabel = (day: string, today: string) => day === today ? 'Today' : day === moveDay(today, 1) ? 'Tomorrow' : dateOf(day).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+const isLive = (event: Event, now: number) => event.kind !== 'channel' && Date.parse(event.start) <= now && now < Date.parse(event.stop)
+const isAhead = (event: Event, now: number) => event.kind !== 'channel' && Date.parse(event.start) > now
+const cardKey = (event: Event) => `sports:event:${event.id}`
+const channelLine = (feeds: Feed[]) => feeds.length === 1 ? `${feeds[0]!.channel_name}${feeds[0]!.channel_number ? ` · Ch ${feeds[0]!.channel_number}` : ''}` : `${feeds.length} channels`
+/** The household's recording of an event, on whichever of its channels it was scheduled. */
+const recordingFor = (recordings: Recording[] | undefined, event: Event) => event.feeds.map((feed) => recordingOf(recordings, { channel_id: feed.channel_id, start: event.start })).find(Boolean)
 const filterSchema = z.object({ language: z.string().max(256), sport: z.string().max(256) })
 const validateFilters = (raw: unknown) => { const parsed = filterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
 
 export function Sports() {
   const profileId = useSession((s) => s.profile?.id)
-  return <SportsEvents key={profileId} />
+  return <SportsScreen key={profileId} />
 }
 
-function SportsEvents() {
+/**
+ * Live games first, then what is coming, then the always-on networks. One press plays: a live game
+ * on one channel starts at once, one on several asks which, and a game still to come offers its
+ * time and, where this profile may record, the recorder.
+ */
+function SportsScreen() {
   const profile = useSession((s) => s.profile)
+  const go = useGo()
   const saved = useProfilePreference('sportsFilters.v1', { language: profile?.languages.length ? 'mine' : 'eng', sport: '' }, validateFilters)
   const { language, sport } = saved.value
   const setLanguage = (language: string) => saved.update((v) => ({ ...v, language }))
   const setSport = (sport: string) => saved.update((v) => ({ ...v, sport }))
+  const now = useNow(15_000)
+  const today = dayOf(now)
   const [search, setSearch] = useHistoryState('sports:search', '')
-  const [date, setDate] = useHistoryState('sports:date', today())
-  const [status, setStatus] = useHistoryState<Status>('sports:status', 'all')
+  const [picked, setDate] = useHistoryState('sports:date', today)
+  // A day that has passed has nothing left to offer: the screen never lists what is over.
+  const date = picked < today ? today : picked
   const [page, setPage] = useHistoryState('sports:page', 0)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [picker, setPicker] = useState<Event | null>(null)
+  const [sheet, setSheet] = useState<Event | null>(null)
   const [interacted, setInteracted] = useState(false)
   useEffect(() => {
     const mark = () => setInteracted(true)
@@ -53,159 +78,282 @@ function SportsEvents() {
     window.addEventListener('pointermove', mark, true)
     return () => { window.removeEventListener('keydown', mark, true); window.removeEventListener('pointerdown', mark, true); window.removeEventListener('pointermove', mark, true) }
   }, [])
-  const [selected, setSelected] = useState<Event | null>(null)
   const term = useDebounced(search, 300)
-  const now = useNow(1000)
-  const selectedAiring = !!selected && airing(selected, now)
-  useEffect(() => { if (selected && !selectedAiring) setFocus('sports:feeds:cancel') }, [selected, selectedAiring])
-  const filter = `${profile?.id}|${profile?.languages.join(',')}|${language}|${sport}|${term}|${date}|${status}`
+  const languages = language === 'mine' ? profile?.languages.join(',') || 'all' : language
+  const filter = `${profile?.id}|${languages}|${sport}|${term}|${date}`
   const [previousFilter, setPreviousFilter] = useState(filter)
-  if (previousFilter !== filter) { setPreviousFilter(filter); setPage(0); setSelected(null) }
+  if (previousFilter !== filter) { setPreviousFilter(filter); setPage(0); setPicker(null); setSheet(null) }
   const q = useQuery({
     queryKey: ['sports', profile?.id, 'events', filter, page],
     enabled: saved.ready && !!profile,
+    // Today's page runs into tomorrow, so an evening visit still has something to come.
     queryFn: ({ signal }) => unwrap<EventsPage>(api.GET('/sports/events', { signal, params: { query: {
-      date, timezone: ZONE, status, language: language === 'mine' ? profile?.languages.join(',') || 'all' : language,
+      date, timezone: ZONE, days: date === today ? 2 : 1, status: 'active', language: languages,
       sport: sport || undefined, q: term || undefined, limit: PAGE, offset: page * PAGE,
     } } })),
     staleTime: 15_000, refetchInterval: 30_000,
   })
-  const play = usePlayAction()
+  const networks = useQuery({
+    queryKey: ['sports', profile?.id, 'channels', languages, term],
+    enabled: saved.ready && !!profile,
+    queryFn: ({ signal }) => unwrap<NetworksPage>(api.GET('/sports/channels', { signal, params: { query: { language: languages, q: term || undefined, limit: NETWORKS } } })),
+    staleTime: 60_000, refetchInterval: 60_000,
+  })
+  const recordings = useRecordings(useCan('recordings'), false)
+  const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
   const data = q.data
-  const zone = data?.timezone ?? ZONE
+  const events = data?.events ?? []
+  const live = date === today ? events.filter((event) => isLive(event, now)) : []
+  // Another day's page still overlaps a late game of the evening before; that game belongs to its own day.
+  const ahead = events.filter((event) => isAhead(event, now) && dayOf(event.start) >= date)
+  const gameChannels = date === today ? events.filter((event) => event.kind === 'channel') : []
+  const days = [...new Set(ahead.map((event) => dayOf(event.start)))].sort()
+  const first = live[0] ?? ahead[0] ?? gameChannels[0]
+  // Where focus goes when nothing else claims it: the first game, or the sport chips.
+  const fallback = first ? cardKey(first) : 'sports:sport:all'
   useEffect(() => {
     if (!saved.ready || data || interacted) return
-    const frame = requestAnimationFrame(() => setFocus('sports:filters'))
+    const frame = requestAnimationFrame(() => setFocus('sports:sport:all'))
     return () => cancelAnimationFrame(frame)
   }, [saved.ready, data, interacted])
-  const firstEvent = ['On now', 'Upcoming', 'Ended'].flatMap((section) => data?.events.filter((event) => stateOf(event, now) === section) ?? [])[0]
-  useRestoreFocus(saved.ready && !!data && !interacted, firstEvent ? `sports:event:${firstEvent.id}` : 'sports:filters')
+  useRestoreFocus(saved.ready && !!data && !interacted, fallback)
   if (data && page > Math.max(0, Math.ceil(data.total / PAGE) - 1)) setPage(Math.max(0, Math.ceil(data.total / PAGE) - 1))
-  const close = () => setSelected(null)
-  if (!saved.ready) return <div className="page-pad" data-testid="sports"><h1 className="display">Sports</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="sports:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
-  return <div className="page-pad" data-testid="sports">
-    <h1 className="display mb-2">Sports</h1>
-    <p className="label mb-3">Guide broadcasts · On now does not necessarily mean a live match.</p>
-    <div className="sports-compact-toolbar">
-      <Button focusKey="sports:filters" onEnter={() => setFiltersOpen(true)} testId="sports-filters">Filters</Button>
-      <p className="label sports-filter-summary" data-testid="sports-filter-summary">{language === 'mine' ? (profile?.languages.map((code) => LANG_NAMES[code] ?? code).join(', ') || 'All languages') : language === 'all' ? 'All languages' : LANG_NAMES[language] ?? language} · {sport || 'All sports'} · {date === today() ? 'Today' : date}{search ? ` · “${search}”` : ''}</p>
+
+  const watch = async (channelId: string, from?: Event) => {
+    // Back from the player returns to the game that was chosen, not to a row of a closed picker.
+    // Navigation remembers the focused key, and a focus change is queued: wait for it.
+    if (from) { setPicker(null); await setFocus(cardKey(from)) }
+    go(`/play/${encodeURIComponent(channelId)}`)
+  }
+  // A game that ends while its channels are being chosen is no longer offered.
+  const pickerOver = !!picker && picker.kind !== 'channel' && !isLive(picker, now)
+  useEffect(() => { if (pickerOver) setPicker(null) }, [pickerOver])
+  // A game leaves the screen when it ends, or when a filter changes. If it held the focus, a remote
+  // would have nowhere to move from.
+  useEffect(() => {
+    // Focus changes are queued, and a closing sheet hands focus back to its opener first: look afterwards.
+    const id = window.setTimeout(() => {
+      const key = getCurrentFocusKey()
+      if (key?.startsWith('sports:') && !doesFocusableExist(key) && !document.querySelector('.scrim')) void setFocus(fallback)
+    }, 80)
+    return () => window.clearTimeout(id)
+  })
+  const open = (event: Event) => {
+    if (isAhead(event, Date.now())) setSheet(event)
+    else if (event.feeds.length === 1) void watch(event.feeds[0]!.channel_id)
+    else if (event.feeds.length > 1) setPicker(event)
+  }
+
+  if (!saved.ready) return <div className="page-pad sports" data-testid="sports"><h1 className="display">Sports</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="sports:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
+  const counts = data?.sports ?? []
+  const total = counts.reduce((sum, entry) => sum + entry.count, 0)
+  const languageLabel = language === 'mine' ? null : language === 'all' ? 'All languages' : LANG_NAMES[language] ?? language
+  return <div className="page-pad sports" data-testid="sports">
+    <div className="sports-head">
+      <h1 className="display">Sports</h1>
+      <div className="sports-tools">
+        {(search || languageLabel) && <p className="label truncate" data-testid="sports-filter-summary">{[search && `“${search}”`, languageLabel].filter(Boolean).join(' · ')}</p>}
+        <Button focusKey="sports:filters" ghost icon="search" onEnter={() => setFiltersOpen(true)} testId="sports-filters">Search and language</Button>
+      </div>
     </div>
-      <FocusGroup focusKey="sports:status" className="flex flex-wrap gap-2" label="Broadcast status">
-        {([['all', 'All broadcasts'], ['current', 'On now'], ['upcoming', 'Upcoming'], ['replay', 'Replays']] as const).map(([value, label]) => <Chip key={value} focusKey={`sports:status:${value}`} pressed={status === value} onEnter={() => setStatus(value)}>{label}</Chip>)}
+    <div className="sports-bar">
+      <FocusGroup focusKey="sports:sports" className="sports-chips" role="group" label="Sport">
+        <Chip focusKey="sports:sport:all" pressed={!sport} onEnter={() => setSport('')} testId="sports-chip">All{data ? ` · ${total}` : ''}</Chip>
+        {counts.map((entry) => <Chip key={entry.name} focusKey={`sports:sport:${entry.name}`} pressed={sport === entry.name} onEnter={() => setSport(entry.name)} testId="sports-chip">{entry.name} · {entry.count}</Chip>)}
+        {sport && data && !counts.some((entry) => entry.name === sport) && <Chip focusKey="sports:sport:saved" pressed onEnter={() => setSport('')} testId="sports-chip">{sport} · 0</Chip>}
       </FocusGroup>
+      <FocusGroup focusKey="sports:days" className="sports-days" role="group" label="Day">
+        <Chip focusKey="sports:day:today" pressed={date === today} onEnter={() => setDate(today)}>Today</Chip>
+        <Chip focusKey="sports:day:tomorrow" pressed={date === moveDay(today, 1)} onEnter={() => setDate(moveDay(today, 1))}>Tomorrow</Chip>
+        <Button focusKey="sports:day:prev" iconOnly icon="back" label="Previous day" disabled={date <= today} onEnter={() => setDate(moveDay(date, -1))} />
+        <Button focusKey="sports:day:next" iconOnly icon="chevR" label="Next day" onEnter={() => setDate(moveDay(date, 1))} />
+        {date > moveDay(today, 1) && <span className="label" data-testid="sports-date">{dayLabel(date, today)}</span>}
+      </FocusGroup>
+    </div>
     {saved.error && <p role="alert">{saved.error}</p>}
     {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : q.isPending ? <Skeleton style={{ height: '16rem' }} /> : data && <>
-      {data.truncated && <p role="status">Guide scan limit reached. Counts are a lower bound; narrow the date, sport or search for more precise results.</p>}
-      {!data.events.length ? <Empty title="No matching sports listings" hint="Try All sports, another day or language. No listings does not mean no sport is airing." /> : ['On now', 'Upcoming', 'Ended'].map((section) => {
-        const events = data.events.filter((event) => stateOf(event, now) === section)
-        return events.length > 0 && <section key={section} className="sports-events-section" aria-label={section}>
-          <h2 className="heading mb-3">{section === 'Ended' ? 'Earlier broadcasts' : section}</h2>
-          <FocusGroup focusKey={`sports:rail:${section}`} className="sports-event-rail" label={`${section} sports events`}>
-            {events.map((event) => <article key={event.id} data-testid="sports-listing" className="sports-event-item">
-              <Focusable focusKey={`sports:event:${event.id}`} className="sports-event-card fx-flat" label={`View feeds for ${event.title}`} onEnter={() => setSelected(event)}>
-                <div className="sports-event-header"><span className={event.live_evidence && !event.replay && airing(event, now) ? 'badge sports-live-badge' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence && airing(event, now) ? 'LIVE · guide label' : section}</span><span className="label">{event.sport}</span></div>
-                <h3 className="sports-event-title">{event.title}</h3>
-                <div className="sports-event-footer"><span>{clock(event.start, zone)}</span><span>{event.feeds.length ? `${event.feeds.length} ${event.feeds.length === 1 ? 'feed' : 'feeds'}` : 'No feed'}</span></div>
-              </Focusable>
-              <p className="label sports-event-caption">{event.feeds.length === 1 ? event.feeds[0]!.channel_name : `${event.feeds.length} channel feeds`}<br />{event.sport}</p>
-            </article>)}
-          </FocusGroup>
-        </section>
-      })}
-      <div className="flex gap-3 items-center flex-wrap mt-4">
+      {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
+        <h2 className="heading">Live now</h2>
+        {live.length ? <FocusGroup focusKey="sports:live" className="sports-grid" label="Live games">
+          {live.map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className="sports-card fx-flat" data-testid="sports-listing" data={{ kind: 'live' }}
+            label={`Watch ${event.title}, ${event.sport}, ${event.live_evidence ? 'live' : 'on now'}, ${event.feeds.length === 1 ? `on ${event.feeds[0]!.channel_name}` : `${event.feeds.length} channels`}`} onEnter={() => open(event)}>
+            <span className="sports-card-top">
+              <span className={event.live_evidence ? 'badge sports-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
+              {event.feeds.some((feed) => feed.quality) && <span className="badge">{event.feeds.find((feed) => feed.quality)!.quality}</span>}
+              <span className="label truncate sports-card-sport">{event.sport}</span>
+            </span>
+            <span className="sports-card-title">{event.title}</span>
+            <span className="label truncate">{channelLine(event.feeds)}</span>
+            <span className="label">Started {fmtTime(event.start)}</span>
+          </Focusable>)}
+        </FocusGroup> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
+      </section>}
+      <section className="sports-section" aria-label="Coming up" data-testid="sports-upcoming">
+        <h2 className="heading">Coming up</h2>
+        {!days.length && <p className="sports-quiet" role="status">{date === today ? 'Nothing more is listed for today or tomorrow.' : `No games are listed for ${dayLabel(date, today)}.`}{sport ? ' Try All sports.' : ''}</p>}
+        {days.map((day) => <FocusGroup key={day} focusKey={`sports:day-list:${day}`} className="sports-list" role="group" label={dayLabel(day, today)}>
+          <h3 className="label sports-day-head">{dayLabel(day, today)}</h3>
+          {ahead.filter((event) => dayOf(event.start) === day).map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className="sports-row fx-flat" data-testid="sports-listing" data={{ kind: 'upcoming' }}
+            label={`${event.title}, ${event.sport}, ${dayLabel(day, today)} at ${fmtTime(event.start)}`} onEnter={() => open(event)}>
+            <span className="sports-row-time">{fmtTime(event.start)}</span>
+            <span className="sports-row-main">
+              <span className="sports-row-title truncate">{event.title}</span>
+              <span className="label truncate">{event.sport} · {channelLine(event.feeds)}</span>
+            </span>
+            <RecordingBadge state={recordingFor(recordings.data?.recordings, event)?.state} short />
+          </Focusable>)}
+        </FocusGroup>)}
+      </section>
+      {data.total > PAGE && <FocusGroup focusKey="sports:pages" className="flex gap-3 items-center flex-wrap">
         <Button focusKey="sports:prev" disabled={!page} onEnter={() => setPage(page - 1)}>Previous</Button>
-        <span>{data.truncated ? 'At least ' : ''}{data.total.toLocaleString()} events · page {page + 1} of {Math.max(1, Math.ceil(data.total / PAGE))}</span>
+        <span className="label">Page {page + 1} of {Math.ceil(data.total / PAGE)}</span>
         <Button focusKey="sports:next" disabled={(page + 1) * PAGE >= data.total} onEnter={() => setPage(page + 1)}>Next</Button>
-      </div>
-      <p className="muted mb-4" role="status">{data.coverage.channels_with_sports_schedule.toLocaleString()} of {data.coverage.eligible_channels.toLocaleString()} eligible channels have sports in the inspected guide window. Missing or unclassified guide data may omit events. Updated {clock(data.as_of, zone)}.</p>
+      </FocusGroup>}
+      {data.truncated && <p className="label" role="status">This is a partial list. Pick a sport or search to narrow it.</p>}
     </>}
-    <SportsRecordings language={language === 'mine' ? profile?.languages.join(',') || 'all' : language} sport={sport} term={term} />
-    <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Sports filters" firstFocusKey="sports:search" wide>
-      <div className="flex flex-col gap-4">
-      <FocusableInput focusKey="sports:search" label="Search sports programmes or channels" value={search} onChange={setSearch} placeholder="Event, programme or channel" />
+    {(gameChannels.length > 0 || !!networks.data?.channels.length) && <section className="sports-section" aria-label="Sports channels" data-testid="sports-channels">
+      <h2 className="heading">Sports channels</h2>
+      <FocusGroup focusKey="sports:channels" className="sports-grid sports-grid-tight" label="Sports channels">
+        {gameChannels.map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className="sports-chan fx-flat" data-testid="sports-channel" data={{ kind: 'game' }}
+          label={`Watch ${event.title}, ${channelLine(event.feeds)}`} onEnter={() => open(event)}>
+          <LogoBlock name={event.league ?? event.title} />
+          <span className="sports-row-main">
+            <span className="sports-row-title truncate">{event.title}</span>
+            <span className="label truncate">{channelLine(event.feeds)}</span>
+          </span>
+          {event.feeds.some((feed) => feed.quality) && <span className="badge">{event.feeds.find((feed) => feed.quality)!.quality}</span>}
+        </Focusable>)}
+        {networks.data?.channels.map((channel: Network) => <Focusable key={channel.channel_id} focusKey={`sports:channel:${channel.channel_id}`} className="sports-chan fx-flat" data-testid="sports-channel" data={{ kind: 'network' }}
+          label={`Watch ${channel.channel_name}${channel.now ? `, now ${channel.now.title}` : ''}`} onEnter={() => void watch(channel.channel_id)}>
+          <LogoBlock name={channel.channel_name} logo={channel.logo} />
+          <span className="sports-row-main">
+            <span className="sports-row-title truncate">{channel.channel_name}</span>
+            <span className="label truncate">Ch {channel.channel_number}{channel.now ? ` · Now: ${channel.now.title}` : ''}</span>
+          </span>
+          {channel.quality && <span className="badge">{channel.quality}</span>}
+        </Focusable>)}
+      </FocusGroup>
+      {(networks.data?.total ?? 0) > NETWORKS && <p className="label">Showing {NETWORKS} of {networks.data!.total.toLocaleString()} sports channels. Search to find another, or browse them in Live TV.</p>}
+    </section>}
+    <SportsLibrary language={languages} sport={sport} term={term} />
+
+    <Modal open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Search and language" firstFocusKey="sports:search" variant="sheet" testId="sports-filter-panel">
+      <FocusableInput focusKey="sports:search" label="Search games, teams or channels" value={search} onChange={setSearch} placeholder="Team, game or channel" />
       <LanguageFilter scope="sports" value={language} onChange={setLanguage} />
-      <FocusGroup focusKey="sports:dates" className="flex flex-wrap gap-2 items-center" label="Sports date">
-        <Button focusKey="sports:day:prev" onEnter={() => setDate(moveDate(date, -1))}>Previous day</Button>
-        <Button focusKey="sports:day:today" onEnter={() => setDate(today())}>Today</Button>
-        <Button focusKey="sports:day:next" onEnter={() => setDate(moveDate(date, 1))}>Next day</Button>
-        <span className="label" data-testid="sports-date">{date} · {zone}</span>
+      {(saved.error || saved.saving) && <p className="label" role="status">{saved.error ?? 'Saving…'}</p>}
+      <FocusGroup focusKey="sports:filters:actions" className="flex gap-2 flex-wrap">
+        <Button focusKey="sports:filters:done" primary onEnter={() => setFiltersOpen(false)}>Done</Button>
+        {search && <Button focusKey="sports:filters:clear" ghost onEnter={() => setSearch('')}>Clear search</Button>}
       </FocusGroup>
-
-      <FocusGroup focusKey="sports:types" className="flex flex-wrap gap-2" label="Sport type">
-        <Chip focusKey="sports:all" pressed={!sport} onEnter={() => setSport('')}>All sports</Chip>
-        <CatalogPicker scope="sports:sport-picker" label="Sport" value={sport} selectedLabel={sport || 'All sports'} options={[...new Set([...KNOWN_SPORTS, ...(data?.sports.map((entry) => entry.name) ?? [])])].map((name) => ({ id: name, label: name, count: data?.sports.find((entry) => entry.name === name)?.count }))} onChange={setSport} />
-        {(data?.sports ?? []).map((kind) => <Chip key={kind.name} focusKey={`sports:type:${kind.name}`} pressed={sport === kind.name} onEnter={() => setSport(kind.name)}>{kind.name} · {kind.count}</Chip>)}
-        {sport && !data?.sports.some((kind) => kind.name === sport) && <Chip focusKey="sports:selected" pressed onEnter={() => setSport('')}>{sport} · Clear</Chip>}
-      </FocusGroup>
-
-        <p className="label" role="status">{saved.error ?? (saved.saving ? 'Saving filters…' : 'Language and sport sync with this profile.')}</p>
-        <p className="label">Guide listings include games, replays, highlights and studio shows. Missing metadata may omit events. Channel language hints do not verify spoken audio.</p>
-        <Button focusKey="sports:filters:done" onEnter={() => setFiltersOpen(false)}>Show events</Button>
-      </div>
     </Modal>
-    <Modal open={!!selected} onClose={close} title={selected?.title ?? 'Channel feeds'} firstFocusKey="sports:feeds:cancel" wide>
-      {selected && <>
-        <p>{stateOf(selected, now)}{selected.replay ? ' · Replay' : ''} · {clock(selected.start, zone)}–{clock(selected.stop, zone)} · {zone}</p>
-        <p className="label">Feeds are matched by guide title and broadcast time. Audio language is unverified unless explicitly marked verified; a channel language hint is not proof of spoken audio. Choosing Watch explicitly accepts that feed’s audio.</p>
-        {!airing(selected, now) && <p>{Date.parse(selected.start) > now ? 'Scheduled for later. Playback will be offered while this broadcast is airing.' : 'This broadcast has ended. Replay playback availability is not verified.'}</p>}
-        {selected.feeds.map((feed) => <div key={`${feed.channel_id}:${feed.programme_id}`} className="sports-feed-option">
-          <p><strong>{feed.channel_name}</strong> · {feed.source_name}</p>
-          <p className="label">{feed.language_verified ? `Verified audio: ${LANG_NAMES[feed.language ?? ''] ?? feed.language ?? 'Unknown'}` : `Audio unverified${feed.language ? ` · Channel hint: ${LANG_NAMES[feed.language] ?? feed.language}` : ''}`}</p>
-          {airing(selected, now) && <Button focusKey={`sports:feed:${feed.channel_id}:${feed.programme_id}`} onEnter={async () => { if (airing(selected, Date.now())) { await setFocus(`sports:event:${selected.id}`); void play({ id: feed.channel_id, kind: 'channel' }, null, { variantId: feed.channel_id, allowUnverifiedAudio: true }) } }}>Watch {feed.channel_name}</Button>}
-        </div>)}
-        {!selected.feeds.length && <p>No authorized channel feed is available for this listing.</p>}
+    <Modal open={!!picker} onClose={() => setPicker(null)} title={picker?.title ?? ''} firstFocusKey={picker ? `sports:feed:${picker.feeds[0]?.channel_id}` : 'sports:feeds:close'} variant="sheet" testId="sports-picker">
+      {picker && <>
+        <p className="muted">{picker.kind === 'channel' ? picker.sport : `${picker.sport} · Started ${fmtTime(picker.start)}`} · Choose a channel</p>
+        <FocusGroup focusKey="sports:feeds" className="sports-list" role="group" label="Channels">
+          {picker.feeds.map((feed) => <Focusable key={feed.channel_id} focusKey={`sports:feed:${feed.channel_id}`} className="sports-feed fx-flat" data-testid="sports-feed"
+            label={`Watch on ${feed.channel_name}`} onEnter={() => void watch(feed.channel_id, picker)}>
+            <span className="sports-row-main">
+              <span className="sports-row-title truncate">{feed.channel_name}</span>
+              <span className="label truncate">{[feed.channel_number ? `Ch ${feed.channel_number}` : null, feed.language ? LANG_NAMES[feed.language] ?? feed.language : null].filter(Boolean).join(' · ')}</span>
+            </span>
+            {feed.quality && <span className="badge">{feed.quality}</span>}
+          </Focusable>)}
+        </FocusGroup>
+        <Button focusKey="sports:feeds:close" className="fx-flat" ghost onEnter={() => setPicker(null)}>Close</Button>
       </>}
-      <Button focusKey="sports:feeds:cancel" onEnter={close}>Back to events</Button>
     </Modal>
+    {sheet && <EventSheet event={sheet} today={today} now={now} recordable={recordable} recordings={recordings.data?.recordings} onClose={() => setSheet(null)}
+      onWatch={() => { const event = sheet; setSheet(null); if (event.feeds.length === 1) void watch(event.feeds[0]!.channel_id); else setPicker(event) }} />}
   </div>
 }
 
+/** A game still to come: when it is on, and (where recording is on and allowed) this game or every game of a side. */
+function EventSheet({ event, today, now, recordable, recordings, onClose, onWatch }: {
+  event: Event; today: string; now: number; recordable: boolean; recordings: Recording[] | undefined; onClose: () => void; onWatch: () => void
+}) {
+  const toast = useUi((s) => s.toast)
+  const schedule = useScheduleRecording()
+  const cancel = useDeleteRecording()
+  const createRule = useCreateRecordingRule()
+  const [error, setError] = useState<string | null>(null)
+  const feed = event.feeds[0]
+  const existing = recordingFor(recordings, event)
+  const active = existing?.state === 'scheduled' || existing?.state === 'recording'
+  const started = isLive(event, now)
+  const busy = schedule.isPending || cancel.isPending || createRule.isPending
+  // Sides in the order the title names them.
+  const sides = [event.away, event.home].filter((side): side is string => !!side).sort((a, b) => event.title.indexOf(a) - event.title.indexOf(b))
+  const done = (text: string) => { toast(text, 'success'); onClose() }
+  const failed = (e: Error) => setError(e.message)
+  const one = () => {
+    if (busy || !feed) return
+    setError(null)
+    schedule.mutate({ programme_id: feed.programme_id, channel_id: feed.channel_id, start: event.start }, { onSuccess: (r) => done(r.state === 'recording' ? `Recording ${r.title} now.` : `${r.title} will be recorded at ${fmtTime(r.starts_at)}.`), onError: failed })
+  }
+  const stop = () => {
+    if (busy || !existing) return
+    setError(null)
+    cancel.mutate(existing.id, { onSuccess: () => done(`${existing.title} will not be recorded.`), onError: failed })
+  }
+  const everyGame = (team: string) => {
+    if (busy) return
+    setError(null)
+    createRule.mutate({ kind: 'team', match: team, channel_id: null, new_only: false, keep: null }, { onSuccess: () => done(`Every game for ${team} will be recorded.`), onError: failed })
+  }
+  const first = started ? 'sports:sheet:watch' : !recordable || !feed ? 'sports:sheet:close' : active ? 'sports:sheet:cancel' : 'sports:sheet:record'
+  return <Modal open onClose={onClose} title={event.title} firstFocusKey={first} variant="sheet" testId="sports-sheet">
+    <p className="sports-sheet-when">{started ? `Started ${fmtTime(event.start)}` : `${dayLabel(dayOf(event.start), today)} · ${fmtTime(event.start)}`}<RecordingBadge state={existing?.state} /></p>
+    <p className="muted truncate">{event.sport} · {channelLine(event.feeds)}</p>
+    {error && <p role="alert" data-testid="sports-sheet-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
+    <FocusGroup focusKey="sports:sheet" className="flex flex-col gap-2">
+      {started && <Button focusKey="sports:sheet:watch" className="fx-flat" primary icon="play" onEnter={onWatch}>Watch now</Button>}
+      {recordable && feed && (active
+        ? <Button focusKey="sports:sheet:cancel" className="fx-flat" danger icon="x" disabled={busy} onEnter={stop} testId="sports-record-cancel">{existing?.state === 'recording' ? 'Stop recording' : 'Do not record this game'}</Button>
+        : <Button focusKey="sports:sheet:record" className="fx-flat" primary={!started} icon="record" disabled={busy} onEnter={one} testId="sports-record">Record this game</Button>)}
+      {recordable && sides.map((team, i) => <Button key={team} focusKey={`sports:sheet:team:${i}`} className="fx-flat" disabled={busy} label={`Record every game for ${team}`} onEnter={() => everyGame(team)} testId="sports-record-team">
+        <span className="truncate">Record every {team} game</span>
+      </Button>)}
+      <Button focusKey="sports:sheet:close" className="fx-flat" ghost onEnter={onClose}>Close</Button>
+    </FocusGroup>
+  </Modal>
+}
 
-/** Library metadata is deliberately separate from guide events and broadcast dates. */
-function SportsRecordings({ language, sport, term }: { language: string; sport: string; term: string }) {
+/** Sports videos in the household's own library. They open on their title page, where a source is chosen like any other. */
+function SportsLibrary({ language, sport, term }: { language: string; sport: string; term: string }) {
   const profile = useSession((s) => s.profile)
   const go = useGo()
   const [page, setPage] = useState(0)
-  const filter = `${profile?.id}|${profile?.languages.join(',')}|${language}|${sport}|${term}`
+  const filter = `${profile?.id}|${language}|${sport}|${term}`
   const [previousFilter, setPreviousFilter] = useState(filter)
   if (previousFilter !== filter) { setPreviousFilter(filter); setPage(0) }
   const query = useQuery({
     queryKey: ['sports', profile?.id, 'recordings', filter, page],
     enabled: !!profile,
     queryFn: ({ signal }) => unwrap<components['schemas']['SportsRecordingsPage']>(api.GET('/sports/recordings', {
-      signal, params: { query: { language, sport: sport || undefined, q: term || undefined, limit: PAGE, offset: page * PAGE } },
+      signal, params: { query: { language, sport: sport || undefined, q: term || undefined, limit: 40, offset: page * 40 } },
     })),
-    staleTime: 15_000, refetchInterval: 30_000,
+    staleTime: 15_000, refetchInterval: 60_000,
   })
   const data = query.data
-  if (data && page > Math.max(0, Math.ceil(data.total / PAGE) - 1)) setPage(Math.max(0, Math.ceil(data.total / PAGE) - 1))
-  return <section className="sports-events-section" data-testid="sports-recordings" aria-label="Library sports videos and recordings">
-    <h2 className="heading mb-3">Library videos & recordings</h2>
-    <p className="label mb-3">On-demand library items, not live events. Sport, search and language filters apply; guide date and broadcast status do not. Unknown audio remains visible and requires a source choice.</p>
-    {query.error ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : query.isPending ? <Skeleton style={{ height: '10rem' }} /> : data && <>
-      {data.truncated && <p role="status">Library scan limit reached. Counts are a lower bound; narrow the sport or search.</p>}
-      {!data.items.length ? <Empty title="No matching library sports videos" hint="Only supported sports-tagged library videos with source media are included. Try All sports or another language; this is not a complete event archive." /> :
-        <FocusGroup focusKey="sports:recordings" className="sports-event-rail" label="Library sports recordings">
-          {data.items.map((item) => {
-            const exact = !!item.source_id && item.title_id.startsWith(`lib:${item.source_id}:`) && item.title_id.length > item.source_id.length + 5
-            const audio = item.audio_verified && item.audio_languages.length ? `Verified audio: ${item.audio_languages.map((code) => LANG_NAMES[code] ?? code).join(', ')}` : `Audio unverified${item.language_hint ? ` · Metadata hint: ${LANG_NAMES[item.language_hint] ?? item.language_hint}` : ''}`
-            return <article className="sports-event-item" data-testid="sports-recording" key={item.title_id}>
-              <div className="sports-event-card">
-                <div className="sports-event-header"><span className="badge">Library video · not live</span><span className="label">{item.sport}</span></div>
-                <h3 className="sports-event-title">{item.title}</h3>
-                <p className="label">{item.source_name}</p>
-                {item.originally_available_at && <p className="label">Original release date: {item.originally_available_at}</p>}
-                <p className="label">{audio}</p>
-                {exact ? <Button focusKey={`sports:recording:${item.title_id}`} onEnter={() => go(`/title/${encodeURIComponent(item.title_id)}?choose=1`)}>View recording and audio</Button> : <p role="status">No exact playable library match.</p>}
-              </div>
-            </article>
-          })}
-        </FocusGroup>}
-      <div className="flex flex-wrap gap-3 items-center mt-4">
-        <Button focusKey="sports:recordings:prev" disabled={!page} onEnter={() => setPage(page - 1)}>Previous recordings</Button>
-        <span>{data.truncated ? 'At least ' : ''}{data.total.toLocaleString()} library items · page {page + 1} of {Math.max(1, Math.ceil(data.total / PAGE))}</span>
-        <Button focusKey="sports:recordings:next" disabled={(page + 1) * PAGE >= data.total} onEnter={() => setPage(page + 1)}>Next recordings</Button>
-      </div>
-    </>}
+  if (data && page > Math.max(0, Math.ceil(data.total / 40) - 1)) setPage(Math.max(0, Math.ceil(data.total / 40) - 1))
+  if (!data?.items.length) return null
+  return <section className="sports-section" data-testid="sports-recordings" aria-label="From your library">
+    <h2 className="heading">From your library</h2>
+    <FocusGroup focusKey="sports:recordings" className="sports-grid sports-grid-tight" label="Sports videos in your library">
+      {data.items.map((item) => {
+        // Only an item that names its own source can be opened: nothing is matched by title.
+        const exact = !!item.source_id && item.title_id.startsWith(`lib:${item.source_id}:`) && item.title_id.length > item.source_id.length + 5
+        const meta = [item.sport, item.source_name, item.originally_available_at ? `Released ${item.originally_available_at}` : null].filter(Boolean).join(' · ')
+        const body = <span className="sports-row-main"><span className="sports-row-title truncate">{item.title}</span><span className="label truncate">{meta}</span></span>
+        return exact
+          ? <Focusable key={item.title_id} focusKey={`sports:recording:${item.title_id}`} className="sports-chan fx-flat" data-testid="sports-recording" label={`Open ${item.title}`} onEnter={() => go(`/title/${encodeURIComponent(item.title_id)}?choose=1`)}>{body}<span className="badge">Library</span></Focusable>
+          : <div key={item.title_id} className="sports-chan" data-testid="sports-recording" aria-disabled="true">{body}<span className="badge">Not playable</span></div>
+      })}
+    </FocusGroup>
+    {data.total > 40 && <FocusGroup focusKey="sports:recordings:pages" className="flex flex-wrap gap-3 items-center">
+      <Button focusKey="sports:recordings:prev" disabled={!page} onEnter={() => setPage(page - 1)}>Previous</Button>
+      <span className="label">Page {page + 1} of {Math.ceil(data.total / 40)}</span>
+      <Button focusKey="sports:recordings:next" disabled={(page + 1) * 40 >= data.total} onEnter={() => setPage(page + 1)}>Next</Button>
+    </FocusGroup>}
   </section>
 }
