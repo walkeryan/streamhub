@@ -23,7 +23,7 @@ from app.services.availability import ATTRIBUTION
 from app.services.channels import ChannelService, slot_named, slot_programme
 from app.services.event_slots import DEFAULT_SLOT_CONFIG, display_name, is_placeholder, parse_event_slot
 from app.services.search_match import token_match_rank
-from app.services.sports import sport_facts
+from app.services.sports import listing_matchup, split_matchup, sport_facts, sport_listing_clause
 
 # Shorter than this is not a query: one letter matches most of a catalog and says nothing.
 MIN_QUERY_LENGTH = 2
@@ -189,6 +189,9 @@ async def search_programmes(
 ) -> tuple[list[dict[str, Any]], int, bool]:
     """Guide broadcasts whose title matches, on now or starting soon: ``(entries, total, more)``.
 
+    A sport listing titled only by its label ("Live: College Football") is found, and shown, by
+    the matchup its description opens with; the rest of a description is never searched.
+
     One entry per (title, start); the channels carrying it are its feeds, lowest number first.
     A programme that repeats its channel's name is filler and an event slot's guide rows repeat
     the slot, so neither is a result: a slot's game comes from its name instead.
@@ -206,6 +209,7 @@ async def search_programmes(
     # Only a title with letters outside ASCII needs folding to be compared; few have any.
     key = func.canonical_title_key(Programme.title)
     accented = and_(Programme.title.op("GLOB")(_NON_ASCII), *(_contains(key, word) for word in typed))
+    described = and_(sport_listing_clause(), *(_contains(Programme.description, word) for word in typed))
     # The source id is compared as an expression so that a channel is looked up by its guide id.
     # Left as a bare column, SQLite reaches for the (source_id, ext_id) index and walks every channel
     # of the source for each programme: seconds, for a query that matches a few thousand rows.
@@ -215,7 +219,7 @@ async def search_programmes(
         .where(
             Programme.stop > now,
             Programme.start < until,
-            or_(plain, accented),
+            or_(plain, accented, described),
             func.lower(func.trim(Programme.title)) != func.lower(func.trim(Channel.name)),
             func.julianday(Programme.stop) - func.julianday(Programme.start) <= MAX_BROADCAST / timedelta(days=1),
         )
@@ -225,6 +229,7 @@ async def search_programmes(
             Programme.category,
             Programme.start,
             Programme.stop,
+            Programme.description,
             Channel.id,
             Channel.source_id,
             Channel.ext_id,
@@ -242,17 +247,22 @@ async def search_programmes(
         aired = (await s.execute(listed)).all()
         slot_channels = list((await s.execute(slots)).scalars())
     found: list[tuple[dict[str, Any], _Carrier]] = []
-    for pid, title, category, start, stop, *carrier in aired:
+    for pid, title, category, start, stop, description, *carrier in aired:
         ch = _Carrier(*carrier)
         if is_placeholder(title, ch.name) or parse_event_slot(ch.name) is not None:
             continue
-        if broadcast_matches(folded, words, fold(title)):
+        shown, _, _ = listing_matchup(title, category, description)
+        if broadcast_matches(folded, words, fold(title)) or (
+            shown != title and broadcast_matches(folded, words, fold(shown))
+        ):
             is_sport, teams = sport_facts(title, category)
+            if shown != title:
+                teams = tuple(split_matchup(shown))
             entry = {
                 "id": ids.prog_id(pid),
                 "start": start,
                 "stop": stop,
-                "title": title,
+                "title": shown,
                 "description": None,
                 "category": category,
                 "icon": None,
