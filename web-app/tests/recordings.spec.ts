@@ -266,7 +266,7 @@ test('Recordings follows the permissions: with neither there is no entry and the
   await signIn(page)
   // Family may view and schedule, and recording is on.
   await page.getByTestId('nav-more').click()
-  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Recordings', 'Settings'])
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Recordings', 'Settings'])
   await page.keyboard.press('Escape')
 
   await denyGuest(page, 'recordings.schedule')
@@ -283,7 +283,7 @@ test('Recordings follows the permissions: with neither there is no entry and the
   await page.reload()
   await expect(page.getByText('Recordings are not available')).toBeVisible()
   await page.getByTestId('nav-more').click()
-  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Settings'])
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Settings'])
 })
 
 test('while recording is not set up, only a holder of system.manage sees Recordings in More', async ({ page }) => {
@@ -292,7 +292,7 @@ test('while recording is not set up, only a holder of system.manage sees Recordi
   await page.reload()
   await expect(page.getByTestId('home')).toBeVisible()
   await page.getByTestId('nav-more').click()
-  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Settings'])
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Settings'])
   await page.goto('/recordings')
   await expect(page.getByText('Recording has not been set up on this server.')).toBeVisible()
 })
