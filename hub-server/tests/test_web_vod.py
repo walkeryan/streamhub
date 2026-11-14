@@ -355,7 +355,8 @@ async def test_a_non_default_track_in_the_preferred_language_needs_no_confirmati
     assert data["options"][0]["preferred_audio_track"] == 0 and not data["selection_required"]
     await set_languages(api, ["deu"])
     data = (await api.get("/playback/options", params={"id": "lib:iptv:7"})).json()
-    assert data["options"][0]["preferred_audio_track"] is None and data["selection_required"]
+    # No track in the profile's language: still nothing to confirm, the default track plays.
+    assert data["options"][0]["preferred_audio_track"] is None and not data["selection_required"]
 
 
 async def test_options_do_not_probe_sources_that_report_audio_or_forbid_proxying(api: Api) -> None:

@@ -21,13 +21,14 @@ async def test_real_http_fixture_boots_and_serves_actual_contract(tmp_path: Path
         assert results[0]["title"] == "Star Wars"
         assert any(row["id"] == "tmdb:movie:330459" and not row["sources"] for row in results)
         options = await client.get("/api/v1/playback/options", params={"id": "tmdb:movie:140607"}, headers=headers)
-        assert options.status_code == 200 and options.json()["selection_required"]
-        assert len(options.json()["options"]) == 2
+        # Never held for audio: a source is named even when none is verified.
+        assert options.status_code == 200 and not options.json()["selection_required"]
+        assert options.json()["automatic_variant_id"] and len(options.json()["options"]) == 2
         sports = await client.get("/api/v1/sports", headers=headers)
         assert sports.status_code == 200 and "Fixture A vs Fixture B" in sports.text
         generation = (await client.get("/api/v1/playback/generation", headers=headers)).json()["generation"]
         req = {"id": "tmdb:movie:140607", "recovery_generation": generation}
-        assert (await client.post("/api/v1/playback/resolve", json=req, headers=headers)).status_code == 409
+        assert (await client.post("/api/v1/playback/resolve", json=req, headers=headers)).status_code == 200
         chosen = await client.post(
             "/api/v1/playback/resolve",
             json={**req, "variant_id": "lib:fixture-iptv:en", "allow_unverified_audio": True},
