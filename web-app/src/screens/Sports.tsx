@@ -49,7 +49,12 @@ const SPORT_LABELS: Record<string, string> = { 'American football': 'Football', 
 const sportLabel = (sport: string) => SPORT_LABELS[sport] ?? sport
 const hueOf = (text: string) => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360
 /** A row's order: games we know the sides of first, each day in time order. */
-const rowOrder = (a: Event, b: Event) => dayOf(a.start).localeCompare(dayOf(b.start)) || Number(!a.matchup) - Number(!b.matchup) || Date.parse(a.start) - Date.parse(b.start)
+// A sport's row leads with its live games in the hub's order (networks' games first), then what is to come.
+const rowOrder = (now: number) => (a: Event, b: Event) => {
+  const live = Number(!isLive(a, now)) - Number(!isLive(b, now))
+  if (live || isLive(a, now)) return live
+  return dayOf(a.start).localeCompare(dayOf(b.start)) || Number(!a.matchup) - Number(!b.matchup) || Date.parse(a.start) - Date.parse(b.start)
+}
 const validateFilters = (raw: unknown) => { const parsed = filterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
 
 export function Sports() {
@@ -111,12 +116,22 @@ function SportsScreen() {
   // With no sport picked and nothing searched, the screen is rows of tiles: Live now, then one row per
   // sport, busiest first. Each row asks for its own sport's games so a busy sport cannot crowd out the rest.
   const rowsView = !sport && !term
+  // Live now asks for live games alone. A busy afternoon has more live listings than one page of the
+  // whole day, and the big game used to fall off the end of it.
+  const liveRow = useQuery({
+    queryKey: ['sports', profile?.id, 'live-row', `${profile?.id}|${languages}|${date}`],
+    enabled: saved.ready && !!profile && rowsView && date === today,
+    queryFn: ({ signal }) => unwrap<EventsPage>(api.GET('/sports/events', { signal, params: { query: {
+      date, timezone: ZONE, days: 1, status: 'current', language: languages, limit: ROW, offset: 0,
+    } } })),
+    staleTime: 15_000, refetchInterval: 30_000,
+  })
   const rowSports = rowsView ? [...(q.data?.sports ?? [])].sort((a, b) => Number(a.name === 'Sports') - Number(b.name === 'Sports') || b.count - a.count).map((entry) => entry.name) : []
   const rows = useQueries({ queries: rowSports.map((name) => ({
     queryKey: ['sports', profile?.id, 'row', `${profile?.id}|${languages}|${date}`, name],
     enabled: saved.ready && !!profile,
     queryFn: ({ signal }: { signal: AbortSignal }) => unwrap<EventsPage>(api.GET('/sports/events', { signal, params: { query: {
-      date, timezone: ZONE, days: date === today ? 2 : 1, status: 'upcoming', language: languages, sport: name, limit: ROW, offset: 0,
+      date, timezone: ZONE, days: date === today ? 2 : 1, status: 'active', language: languages, sport: name, limit: ROW, offset: 0,
     } } })),
     staleTime: 30_000, refetchInterval: 60_000,
   })) })
@@ -125,11 +140,13 @@ function SportsScreen() {
   const data = q.data
   const events = data?.events ?? []
   const live = date === today ? events.filter((event) => isLive(event, now)) : []
+  // Until its own answer comes, Live now shows what the day's page already knows to be live.
+  const liveTiles = liveRow.data ? liveRow.data.events.filter((event) => isLive(event, now)) : live
   // Another day's page still overlaps a late game of the evening before; that game belongs to its own day.
   const ahead = events.filter((event) => isAhead(event, now) && dayOf(event.start) >= date)
   const gameChannels = date === today ? events.filter((event) => event.kind === 'channel') : []
   const days = [...new Set(ahead.map((event) => dayOf(event.start)))].sort()
-  const first = live[0] ?? ahead[0] ?? gameChannels[0]
+  const first = (rowsView ? liveTiles[0] : live[0]) ?? ahead[0] ?? gameChannels[0]
   // Where focus goes when nothing else claims it: the first game, or the sport chips.
   const fallback = first ? cardKey(first) : 'sports:sport:all'
   useEffect(() => {
@@ -196,19 +213,19 @@ function SportsScreen() {
       {rowsView ? <>
         {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
           <h2 className="heading">Live now</h2>
-          {live.length ? <FocusGroup focusKey="sports:live" className="row-scroll sports-tiles" label="Live games">
-            {live.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} />)}
+          {liveTiles.length ? <FocusGroup focusKey="sports:live" className="row-scroll sports-tiles" label="Live games">
+            {liveTiles.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} />)}
           </FocusGroup> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
         </section>}
         {rowSports.map((name, i) => {
           const row = rows[i]?.data
-          const games = (row?.events ?? []).filter((event) => isAhead(event, now) && dayOf(event.start) >= date).sort(rowOrder)
+          const games = (row?.events ?? []).filter((event) => (date === today && isLive(event, now)) || (isAhead(event, now) && dayOf(event.start) >= date)).sort(rowOrder(now))
           if (!games.length) return null
           const label = sportLabel(name)
           return <section key={name} className="sports-section" aria-label={label} data-testid="sports-row" data-sport={name}>
             <h2 className="heading">{label}</h2>
             <FocusGroup focusKey={`sports:row:${name}`} className="row-scroll sports-tiles" label={label}>
-              {games.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} />)}
+              {games.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} row={name} />)}
               {(row?.total ?? 0) > games.length && <Focusable focusKey={`sports:more:${name}`} className="sports-tile sports-more fx-flat" data-testid="sports-see-all" label={`See all ${label}`} onEnter={() => setSport(name)}>
                 <span className="sports-more-text">See all</span>
                 <span className="label">{row!.total} {label.toLowerCase()} listings</span>
@@ -329,7 +346,8 @@ function SportsScreen() {
 }
 
 /** A game as a 16:9 tile: the matchup card when both sides are known, else its title over the sport's tint. */
-function GameTile({ event, now, today, recordings, onOpen }: { event: Event; now: number; today: string; recordings: Recording[] | undefined; onOpen: (event: Event) => void }) {
+/** `row`: the sport row it sits in. A live game is in Live now and in its sport's row, and a remote needs each tile to have its own key. */
+function GameTile({ event, now, today, recordings, onOpen, row }: { event: Event; now: number; today: string; recordings: Recording[] | undefined; onOpen: (event: Event) => void; row?: string }) {
   const on = isLive(event, now)
   const day = dayLabel(dayOf(event.start), today)
   const quality = event.feeds.find((feed) => feed.quality)?.quality
@@ -345,7 +363,7 @@ function GameTile({ event, now, today, recordings, onOpen }: { event: Event; now
   const label = on
     ? `Watch ${event.matchup ? matchupSpeech(event, event.matchup) : event.title}, ${event.sport}, ${event.replay ? 'replay' : event.live_evidence ? 'live' : 'on now'}, ${where}`
     : `${event.matchup ? matchupTitle(event.matchup) : event.title}, ${event.sport}, ${day} at ${fmtTime(event.start)}, ${where}`
-  return <Focusable focusKey={cardKey(event)} className={cn('sports-tile fx-flat', event.matchup ? 'sports-matchup' : 'sports-tile-plain')} data-testid="sports-listing"
+  return <Focusable focusKey={row ? `${cardKey(event)}:${row}` : cardKey(event)} className={cn('sports-tile fx-flat', event.matchup ? 'sports-matchup' : 'sports-tile-plain')} data-testid="sports-listing"
     data={{ kind: on ? 'live' : 'upcoming', matchup: !!event.matchup }} label={label} onEnter={() => onOpen(event)}
     style={event.matchup ? undefined : { '--sport-hue': hueOf(event.sport) } as CSSProperties}>
     {event.matchup ? <MatchupCard event={event} matchup={event.matchup} badge={badge} channel={channel} /> : <>

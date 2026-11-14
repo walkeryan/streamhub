@@ -331,6 +331,10 @@ _LIVE_LABEL = re.compile(r"(?:^live\s*[:\-]|\(live\)|\blive coverage\b)", re.IGN
 _MATCHUP = re.compile(r"\S.+\s(?:vs?\.?|versus|@)\s.+\S", re.IGNORECASE)
 _STATUSES = {"all", "active", "current", "upcoming", "replay"}
 SCAN_CAP = 5000
+# "2pm Lehigh at Richmond", "MNF 8:15pm Bills at Vikings": an event channel's guide names the game by
+# its clock time, in a block that starts hours before it. Such a listing is an event channel's, not a
+# network's broadcast.
+_CLOCK_LEAD = re.compile(r"^(?:[A-Z]{2,5}\s+)?\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\s", re.IGNORECASE)
 
 
 def _event_id(*parts: str) -> str:
@@ -451,6 +455,7 @@ async def sports_events(
     configs = await channels._sources.slot_configs() if slot_rows else {}
     grouped: dict[str, dict[str, Any]] = {}
     scheduled: set[int] = set()
+    slotted: set[str] = set()  # events an event channel lists: by its name, or by a clock-time title
 
     def feed(row: Any, programme_id: str, number: int) -> dict[str, Any]:
         return {
@@ -511,6 +516,8 @@ async def sports_events(
             },
         )
         event["feeds"].append(feed(row, ids.prog_id(row[6]), row[12]))
+        if _CLOCK_LEAD.match(shown):
+            slotted.add(event_id)
 
     folded = term.casefold()
     for row in slot_rows[:SCAN_CAP]:
@@ -541,6 +548,7 @@ async def sports_events(
         dated = state != "unscheduled"
         # Two channels carrying one game: same title, same sport, same kick-off.
         event_id = _event_id("slot", _same_title(slot.title), kind, window[0].isoformat() if dated else "undated")
+        slotted.add(event_id)
         event = grouped.setdefault(
             event_id,
             {
@@ -562,7 +570,20 @@ async def sports_events(
         )
         event["feeds"].append(feed(row, slot_programme_id(row[0], window[0] if dated else None), row[6]))
 
-    listed = sorted(grouped.values(), key=lambda e: (e["kind"] != "event", e["start"], e["title"].casefold(), e["id"]))
+    def prominence(event: dict[str, Any]) -> tuple[int, int]:
+        # A busy afternoon has more live listings than a page holds, and an event channel's name can
+        # claim a start hours before its game. Live listings therefore lead with a guide's games that
+        # name both sides (the networks' games), then event channels' games, then everything else
+        # live; what is still to come stays in order of time.
+        if event["status"] != "current":
+            return (1, 0)
+        game = bool(event["home"] and event["away"])
+        return (0, (0 if game else 2) + (event["id"] in slotted))
+
+    listed = sorted(
+        grouped.values(),
+        key=lambda e: (e["kind"] != "event", *prominence(e), e["start"], e["title"].casefold(), e["id"]),
+    )
     for event in listed:
         event["feeds"].sort(key=lambda f: (f["channel_number"], f["channel_id"]))
     counts = Counter(event["sport"] for event in listed)

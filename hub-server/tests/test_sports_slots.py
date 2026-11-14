@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.infra.models import Programme
 from app.services.sports import sports_events, sports_on_now
 from tests.conftest import Api
 from tests.test_channel_presentation import add_lineup, add_placeholders, add_programme, stamp
@@ -224,3 +225,35 @@ async def test_sports_channels_are_the_always_on_networks(api: Api) -> None:
     found = (await api.get("/sports/channels", params={"language": "all", "q": "combat"})).json()
     assert [c["channel_name"] for c in found["channels"]] == ["COMBAT"]
     assert (await api.client.get("/api/v1/sports/channels")).status_code == 401
+
+
+async def test_live_network_games_lead_the_live_listing(api: Api) -> None:
+    # A busy afternoon has more live listings than a page holds. Ordered by start alone, event
+    # channels whose names claim an early start crowded a network's big game off the first page.
+    source = await add_lineup(api, lineup(NOW))
+    await add_placeholders(api, source, NOW, skip=("combat", "footy"))
+    await add_programme(api, source, "footy", "Football: Rivermen at Highlanders", NOW - timedelta(minutes=10), 3)
+    await add_programme(api, source, "combat", "Boxing Weekly", NOW - timedelta(hours=2), 3)
+    # An event channel's guide names its game by clock time in a block that began hours earlier.
+    async with api.c.db.session() as s:
+        s.add(
+            Programme(
+                feed=source["id"],
+                epg_channel="news",
+                title="SNF 1pm Otters at Pelicans",
+                category="Sports",
+                start=NOW - timedelta(hours=6),
+                stop=NOW + timedelta(hours=18),
+            )
+        )
+        await s.commit()
+    live = titles(await events(api, status="current"))
+    assert live == [
+        ("Football: Rivermen at Highlanders", "event", "current"),
+        ("SNF 1pm Otters at Pelicans", "event", "current"),
+        ("Northfield at Lakeside", "event", "current"),
+        ("Boxing Weekly", "event", "current"),
+    ]
+    # What is still to come keeps its order by time, after everything live.
+    active = titles(await events(api, status="active"))
+    assert active[: len(live)] == live and all(status != "current" for _, _, status in active[len(live) :])
