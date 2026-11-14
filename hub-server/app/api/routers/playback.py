@@ -18,6 +18,7 @@ from app.api import schemas as S
 from app.api.deps import Admin, C, P, require_reachable
 from app.api.streaming import OwnedStreamingResponse, byte_range, file_range
 from app.domain.ports import ImageAuthProvider
+from app.infra.image_fit import LIGHT_BYTES, fit
 from app.proxy.stream_proxy import HlsSourceBusy, Viewer, VodPlan
 from app.services import ids
 from app.services.context import absolute, is_https
@@ -653,6 +654,12 @@ async def image_proxy(token: str, request: Request, c: C) -> Response:
     hit = await cache.get(source_id, url) if cache is not None else None
     if hit is not None:
         body, media_type = hit
+        if len(body) > LIGHT_BYTES:
+            # Kept before artwork was fitted: fitted now, once, and kept that way.
+            fitted = await asyncio.to_thread(fit, body, media_type)
+            if fitted[0] is not body and cache is not None:
+                body, media_type = fitted
+                await cache.put(source_id, url, body, media_type)
     else:
         try:
             async with c.http_factory(timeout=20.0, headers=headers) as client:
@@ -666,8 +673,11 @@ async def image_proxy(token: str, request: Request, c: C) -> Response:
             raise NotFound("image not found")
         # The fetch can outlive the grant (session revoked, policy changed): check again.
         await validate_image_grant(d, c.content_policy, c.auth)
-        if cache is not None and media_type.lower().startswith("image/"):
-            await cache.put(source_id, url, body, media_type)
+        if media_type.lower().startswith("image/"):
+            # Fitted before it is kept: the cache and every later viewer get the light copy.
+            body, media_type = await asyncio.to_thread(fit, body, media_type)
+            if cache is not None:
+                await cache.put(source_id, url, body, media_type)
     private = c.content_policy.enabled or "profile" in d or bool(d.get("home"))
     return Response(
         body,

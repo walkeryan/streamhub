@@ -25,6 +25,7 @@ import { useUi } from '../store/ui'
 import { ShareSheet } from '../room/ShareSheet'
 import { useCan } from '../api/me'
 import { useGo } from '../nav/back'
+import { handOff, inShell } from '../shell'
 
 /** Seasons shown as chips; a series with more gets one drop-down. */
 const MAX_SEASON_CHIPS = 8
@@ -144,7 +145,13 @@ function TitleDetails({ id }: { id: string }) {
   }
   const startRequest = () => { if (t.kind === 'show' && (t.request_seasons?.length ?? 0) > 1) setSeasonPick([]); else sendRequest() }
   const toggleFavorite = () => toggleFav.mutate({ kind: t.kind, id: t.id, on: !t.is_favorite })
-  const openTrailer = () => window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(`${t.title} ${t.year ?? ''} trailer`)}`, '_blank', 'noopener')
+  const openTrailer = () => {
+    // The TV app loads only this server's pages, so a new YouTube tab opens nowhere there. It is asked to
+    // play `trailer:<id>` instead: the server answers with a hand-off to the TV's YouTube app, at the
+    // trailer itself when TMDB knows it. A refusal is said by handOff.
+    if (inShell()) return void handOff({ v: 1, kind: 'title', id: `trailer:${t.id}` })
+    window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(`${t.title} ${t.year ?? ''} trailer`)}`, '_blank', 'noopener')
+  }
   const watchTogether = async () => {
     if (startingRoom) return
     // The room plays what Play would: the picked track's file, else the automatic variant.

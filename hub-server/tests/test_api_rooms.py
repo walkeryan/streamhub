@@ -358,6 +358,56 @@ def test_without_rooms_join_a_room_cannot_be_seen_or_entered(rig: Rig) -> None:
     assert rig.req("DELETE", f"/rooms/{theirs['code']}", barred).status_code == 204
 
 
+def test_rooms_are_public_by_default_and_listed_to_everyone_signed_in(rig: Rig) -> None:
+    # The owner's decision: someone invited to the server joins without being told a code.
+    guest = member_of(rig, "family", "Guest")
+    room = rig.room()
+    assert room["public"] is True and room["is_member"] is False
+    listed = rig.req("GET", "/rooms", guest)
+    assert listed.status_code == 200, listed.text
+    [seen] = listed.json()["rooms"]
+    assert seen["code"] == room["code"] and seen["host_name"] == room["host_name"] and seen["is_host"] is False
+    assert seen["title"]["id"] == rig.film
+    # Joining from the list is the ordinary join: the code comes with the listing.
+    assert rig.join_raw(seen["code"], guest).status_code == 200
+    assert rig.req("GET", "/rooms", guest).json()["rooms"][0]["is_member"] is True
+    # The host sees their own room too, marked as theirs.
+    assert rig.req("GET", "/rooms").json()["rooms"][0]["is_host"] is True
+
+
+def test_the_host_makes_a_room_private_and_public_again(rig: Rig) -> None:
+    guest = member_of(rig, "family", "Guest")
+    code = rig.room()["code"]
+    # Only the host decides.
+    refused = rig.req("PATCH", f"/rooms/{code}", guest, json={"public": False})
+    assert refused.status_code == 403 and refused.json()["code"] == "forbidden"
+    private = rig.req("PATCH", f"/rooms/{code}", json={"public": False})
+    assert private.status_code == 200 and private.json()["public"] is False
+    assert rig.req("GET", "/rooms", guest).json()["rooms"] == []
+    # A private room still opens with its code or link.
+    assert rig.req("GET", f"/rooms/{code}", guest).status_code == 200
+    assert rig.req("PATCH", f"/rooms/{code}", json={"public": True}).json()["public"] is True
+    assert [r["code"] for r in rig.req("GET", "/rooms", guest).json()["rooms"]] == [code]
+    # Created private, it is never listed.
+    hidden = rig.room(public=False)
+    assert hidden["public"] is False
+    assert hidden["code"] not in [r["code"] for r in rig.req("GET", "/rooms", guest).json()["rooms"]]
+    assert rig.req("PATCH", "/rooms/NOROOM", json={"public": True}).status_code == 404
+
+
+def test_the_list_leaves_out_what_a_profile_may_not_watch_or_join(rig: Rig) -> None:
+    rig.room()  # the film has no rating evidence
+    kid = member_of(rig, "kid", "Kid")
+    listed = rig.req("GET", "/rooms", kid)
+    # Left out, not refused: the list says nothing about titles above the ceiling.
+    assert listed.status_code == 200 and listed.json()["rooms"] == []
+    barred = member_of(rig, "family", "Barred", denials=["rooms.join"])
+    assert rig.req("GET", "/rooms", barred).json()["rooms"] == []
+    closed = rig.room()["code"]
+    assert rig.req("DELETE", f"/rooms/{closed}").status_code == 204
+    assert closed not in [r["code"] for r in rig.req("GET", "/rooms").json()["rooms"]]
+
+
 def test_a_room_is_closed_by_its_host_or_a_users_manager(rig: Rig) -> None:
     guest = member_of(rig, "family", "Guest")
     # system.manage used to be what closed anyone's room; it no longer is.

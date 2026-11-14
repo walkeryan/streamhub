@@ -23,18 +23,19 @@ const HOME: Destination = { to: '/', label: 'Home', icon: 'home' }
 const SEARCH: Destination = { to: '/search', label: 'Search', icon: 'search' }
 const LIVE: Destination = { to: '/live', label: 'Live TV', icon: 'tv', at: ['/guide'] }
 const MY_LIST: Destination = { to: '/favorites', label: 'My List', icon: 'bookmark' }
+const SPORTS: Destination = { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' }
 /** Wide screens: every place to watch is named in the top bar; the search box sits with More and the profile at its end. */
 const NAV: Destination[] = [
-  HOME, LIVE,
+  HOME, LIVE, SPORTS,
   { to: '/browse/movies', label: 'Movies', icon: 'film', at: ['/browse/vod', '/discover/movies'] },
   { to: '/browse/shows', label: 'Shows', icon: 'shows', at: ['/browse/series', '/discover/shows'] },
   MY_LIST,
 ]
 /** A phone's bar holds five: Movies and Shows share Library (the screen has the switch), My List moves under More. */
 const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: 'Library', icon: 'film', at: ['/browse', '/discover'] }]
-/** Everything else, each offered only to a user who may use it. */
+/** Everything else, each offered only to a user who may use it. Sports is a place to watch: a wide screen names it
+ *  in the top bar, where a TV remote reaches it in one move; only a phone's bar of five has no room for it. */
 const MORE: Destination[] = [
-  { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' },
   { to: '/requests', label: 'Requests', icon: 'list', needs: 'requests' },
   { to: '/recordings', label: 'Recordings', icon: 'record', needs: 'recordings' },
   { to: '/sources', label: 'Sources', icon: 'source', needs: 'sources' },
@@ -69,11 +70,13 @@ export function Rail() {
   const manages = can(access, 'settings.admin')
   const recordings = useRecordings(can(access, 'recordings') || manages, false)
   const recordingsOffered = !!recordings.data && (recordings.data.enabled ? can(access, 'recordings') : manages)
-  const more = [...(phone ? [MY_LIST] : []), ...MORE.filter((d) => (d.to === '/recordings' ? recordingsOffered : !d.needs || can(access, d.needs)))]
+  const offered = (d: Destination) => !d.needs || can(access, d.needs)
+  const nav = NAV.filter(offered)
+  const more = [...(phone ? [MY_LIST, SPORTS].filter(offered) : []), ...MORE.filter((d) => (d.to === '/recordings' ? recordingsOffered : !d.needs || can(access, d.needs)))]
   const open = (to: string) => { setMenu(false); go(to) }
   // Focus enters the bar on the entry for where the viewer is. A screen outside every section
   // (a title page) keeps the entry it was reached from.
-  const at = (phone ? BAR : [...NAV, SEARCH]).find(here)?.to ?? (more.some(here) ? 'more' : undefined)
+  const at = (phone ? BAR : [...nav, SEARCH]).find(here)?.to ?? (more.some(here) ? 'more' : undefined)
   const [entry, setEntry] = useState(at)
   if (at && at !== entry) setEntry(at)
   // On a shared household device the profile entry asks who is watching; elsewhere it opens the profile's settings.
@@ -89,7 +92,7 @@ export function Rail() {
       onFocusChange={setHasFocus} data-testid="rail">
       {!phone && <span className="rail-brand" onClick={() => open('/')}>StreamHub</span>}
       {/* A phone names each icon; the top bar has the room to say the name alone. */}
-      {(phone ? BAR : NAV).map((n) => (
+      {(phone ? BAR : nav).map((n) => (
         <Focusable key={n.label} focusKey={`rail:${n.to}`} className="rail-item fx-flat" role="link" label={n.label}
           aria-current={here(n) ? 'page' : undefined} data-testid={testId(n.label)} onEnter={() => open(n.to)}>
           {phone && <Icon name={n.icon} />}

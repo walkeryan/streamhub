@@ -71,13 +71,13 @@ const ELKS = team('Eastgate Elks', 'Eastgate', '#1f5f99', '#f0f0f0', 8, '8-1', '
 const WOLVES = team('Westbrook Wolves', 'Westbrook', '#5a5a5a', '#c8102e', 21, '7-2', '4-1 Summit Conference')
 const matchupSlots: Slot[] = [
   slot(41, 'VANTIX+', '041', 'College Football', 'Lakeview Kestrels at Brookfield Badgers', BOOT - 50 * MIN, { quality: 'HD', matchup: {
-    away: KESTRELS, home: BADGERS, status_detail: 'Q2 7:14', win_probability: { away: 14.6, home: 85.4, live: true }, art_url: matchupArt('Lakeview Kestrels at Brookfield Badgers'),
+    away: KESTRELS, home: BADGERS, status_detail: 'Q2 7:14', score: { away: 10, home: 17 }, win_probability: { away: 14.6, home: 85.4, live: true }, art_url: matchupArt('Lakeview Kestrels at Brookfield Badgers'),
   } }),
   slot(42, 'LUMEX TV', '042', 'College Football', 'Harbor Herons at Riverside Otters', BOOT - 12 * MIN, { matchup: {
-    away: HERONS, home: OTTERS, status_detail: 'Q1 3:52', art_url: null,
+    away: HERONS, home: OTTERS, status_detail: 'Q1 3:52', score: { away: 7, home: 0 }, art_url: null,
   } }),
   slot(43, 'VANTIX+', '043', 'College Football', 'Replay: Northfield Owls at Southgate Foxes', BOOT - 30 * MIN, { replay: true, home: 'Southgate Foxes', away: 'Northfield Owls', matchup: {
-    away: OWLS, home: FOXES, status_detail: null, art_url: matchupArt('Northfield Owls at Southgate Foxes'),
+    away: OWLS, home: FOXES, status_detail: null, score: { away: 21, home: 14 }, art_url: matchupArt('Northfield Owls at Southgate Foxes'),
   } }),
   slot(44, 'VANTIX+', '044', 'College Football', 'Eastgate Elks at Westbrook Wolves', later(150), { matchup: {
     away: ELKS, home: WOLVES, art_url: null,

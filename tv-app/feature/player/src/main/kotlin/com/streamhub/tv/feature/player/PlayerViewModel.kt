@@ -451,7 +451,8 @@ class PlayerViewModel @Inject constructor(
     private suspend fun loadChannelList(d: PlaybackDescriptor) {
         val ctx = d.channelContext
         val list = channelCache.resolve(ctx?.listId, d.id)
-        val idx = list.indexOfFirst { it.id == d.id }.takeIf { it >= 0 } ?: ctx?.index ?: -1
+        // The server's index counts in its own list; in any other it is another channel's row.
+        val idx = list.indexOfFirst { it.id == d.id }
         _state.update { it.copy(channels = list, index = idx, osdChannel = list.getOrNull(idx)) }
     }
 

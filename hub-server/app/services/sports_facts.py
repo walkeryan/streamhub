@@ -1,9 +1,9 @@
 """Team facts for football listings, from ESPN's public site API (no key).
 
 A football listing that names both sides is matched to one game of the day's scoreboard: the
-teams' names, colours, top-25 ranking and records, the game clock and, for a game on now, the win
-probability (the pregame prediction before kickoff, the live estimate during the game). Scores are
-never read out of it.
+teams' names, colours, top-25 ranking and records, the game clock, the score once the game is under
+way and, for a game on now, the win probability (the pregame prediction before kickoff, the live
+estimate during the game). A replay gets none of the clock, the score or the odds.
 
 Everything here is a best effort around the Sports response, never a part of it: lookups are lazy
 (only the days and games a page lists), cached in memory, bounded by a short budget per response,
@@ -124,6 +124,8 @@ class Game:
     detail: str | None
     home: Team
     away: Team
+    # Away then home, once the game is under way; a 0-0 before kickoff is not a score.
+    score: tuple[int, int] | None = None
 
 
 def _color(value: Any) -> str | None:
@@ -164,8 +166,27 @@ def _team(competitor: dict[str, Any], conference: str | None) -> Team:
     )
 
 
+def _points(competitor: dict[str, Any]) -> int | None:
+    """A side's score: ESPN sends it as a string ("21"), sometimes as a number; anything else is unknown."""
+    value = competitor.get("score")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    text = value.strip() if isinstance(value, str) else ""
+    return int(text) if text.isdigit() else None
+
+
+def _score(state: str, away: dict[str, Any], home: dict[str, Any]) -> tuple[int, int] | None:
+    """Both sides' points once the game is on or over; a side without a readable score is no score."""
+    if state not in ("in", "post"):
+        return None
+    points = (_points(away), _points(home))
+    return (points[0], points[1]) if points[0] is not None and points[1] is not None else None
+
+
 def _detail(status: dict[str, Any]) -> str | None:
-    """What a card shows of the clock: "Q2 7:14", "Halftime", "End of Q3", "OT 2:01", "Final". Never a score."""
+    """What a card shows of the clock: "Q2 7:14", "Halftime", "End of Q3", "OT 2:01", "Final"."""
     kind = status.get("type") or {}
     state = kind.get("state")
     if state == "post":
@@ -205,15 +226,17 @@ def parse_scoreboard(league: str, data: Any) -> list[Game]:
             )
             sides = {c.get("homeAway"): c for c in competition.get("competitors") or []}
             status = competition.get("status") or event.get("status") or {}
+            state = str((status.get("type") or {}).get("state") or "pre")
             games.append(
                 Game(
                     id=str(event["id"]),
                     league=league,
                     start=_when(competition.get("date") or event["date"]),
-                    state=str((status.get("type") or {}).get("state") or "pre"),
+                    state=state,
                     detail=_detail(status),
                     home=_team(sides["home"], conference),
                     away=_team(sides["away"], conference),
+                    score=_score(state, sides["away"], sides["home"]),
                 )
             )
         except (KeyError, IndexError, TypeError, ValueError, AttributeError):
@@ -455,9 +478,12 @@ class SportsFacts:
         self, event: dict[str, Any], game: Game | None, probability: dict[str, Any] | None, now: datetime
     ) -> dict[str, Any]:
         replay = bool(event.get("replay"))
+        score: dict[str, int] | None = None
         if game is not None:
             away, home = game.away.api(), game.home.api()
             league, detail = game.league, game.detail
+            if game.score is not None:
+                score = {"away": game.score[0], "home": game.score[1]}
         else:
             away, home = _guide_team(event["away"]), _guide_team(event["home"])
             league, detail = "football", None
@@ -468,8 +494,9 @@ class SportsFacts:
         return {
             "away": away,
             "home": home,
-            # A replay is shown without the clock or the odds: either gives the game away.
+            # A replay is shown without the clock, the score or the odds: each gives the game away.
             "status_detail": None if replay else detail,
+            "score": None if replay else score,
             "win_probability": None if replay else probability,
             "art_url": art_url,
         }

@@ -130,11 +130,13 @@ def test_football_and_league_hints() -> None:
     assert len(espn_days(datetime(2026, 11, 15, 3, 30, tzinfo=UTC))) == 2
 
 
-def test_scoreboard_is_parsed_without_scores() -> None:
+def test_scoreboard_is_parsed() -> None:
     games = parse_scoreboard(COLLEGE, fixture("scoreboard_college.json"))
     assert [g.id for g in games] == ["401990001", "401990002"]
     live, later = games
     assert live.state == "in" and live.detail == "Q2 7:14" and live.start == KICKOFF
+    # Away then home, as the card reads left to right.
+    assert live.score == (10, 17)
     assert live.home.api() == {
         "name": "Brookfield Badgers",
         "short_name": "Brookfield",
@@ -147,8 +149,29 @@ def test_scoreboard_is_parsed_without_scores() -> None:
     assert live.away.rank is None and live.away.color == "#2b4c9a" and live.away.record == "6-3"
     # Not a conference game: the conference record is not given a conference name.
     assert later.state == "pre" and later.detail is None
+    # A 0-0 before kickoff is not a score.
+    assert later.score is None
     assert later.away.rank == 5 and later.away.conference_record == "6-0"
+    # The score belongs to the game, not to a team's facts.
     assert "score" not in json.dumps([g.home.api() for g in games])
+
+
+@pytest.mark.parametrize(
+    ("away", "home", "expected"),
+    [
+        ("24", "21", (24, 21)),
+        (3, "0", (3, 0)),
+        ("", "7", None),
+        (None, "7", None),
+        ("-1", "7", None),
+        (True, "7", None),
+    ],
+)
+def test_score_is_read_or_left_out(away: Any, home: Any, expected: tuple[int, int] | None) -> None:
+    board = fixture("scoreboard_college.json")
+    for side in board["events"][0]["competitions"][0]["competitors"]:
+        side["score"] = away if side["homeAway"] == "away" else home
+    assert parse_scoreboard(COLLEGE, board)[0].score == expected
 
 
 @pytest.mark.parametrize(
@@ -177,7 +200,9 @@ def test_scoreboard_is_parsed_without_scores() -> None:
 def test_status_detail(status: dict[str, Any], expected: str) -> None:
     board = fixture("scoreboard_college.json")
     board["events"][0]["competitions"][0]["status"] = status
-    assert parse_scoreboard(COLLEGE, board)[0].detail == expected
+    game = parse_scoreboard(COLLEGE, board)[0]
+    # The score stays on through halftime, the breaks and the final whistle.
+    assert game.detail == expected and game.score == (10, 17)
 
 
 def test_unreadable_games_are_left_out() -> None:
@@ -231,6 +256,7 @@ async def test_annotate_live_game_with_facts_and_probability() -> None:
     assert matchup["home"]["name"] == "Brookfield Badgers" and matchup["away"]["name"] == "Lakeview Kestrels"
     assert matchup["home"]["rank"] == 12 and matchup["away"]["rank"] is None
     assert matchup["status_detail"] == "Q2 7:14"
+    assert matchup["score"] == {"away": 10, "home": 17}
     assert matchup["win_probability"] == {"away": 14.6, "home": 85.4, "live": True}
     assert matchup["art_url"] is None
     assert events[1]["matchup"] is None
@@ -249,6 +275,7 @@ async def test_pregame_prediction_and_upcoming_games_skip_the_summary() -> None:
     await facts.annotate([pre, upcoming])
     assert pre["matchup"]["win_probability"] == {"away": 61.8, "home": 38.2, "live": False}
     assert pre["matchup"]["away"]["rank"] == 5 and pre["matchup"]["status_detail"] is None
+    assert pre["matchup"]["score"] is None
     # A row shows no bar: no summary is asked for a game still to come.
     assert upcoming["matchup"]["win_probability"] is None and upcoming["matchup"]["home"]["rank"] == 12
     assert espn.asked("/summary") == 1
@@ -261,6 +288,7 @@ async def test_replay_shows_no_clock_or_probability() -> None:
     await facts.annotate([replay])
     assert replay["matchup"]["home"]["rank"] == 12
     assert replay["matchup"]["status_detail"] is None and replay["matchup"]["win_probability"] is None
+    assert replay["matchup"]["score"] is None
     assert espn.asked("/summary") == 0
 
 
@@ -288,6 +316,7 @@ async def test_unmatched_games_keep_guide_names() -> None:
             "conference_record": None,
         },
         "status_detail": None,
+        "score": None,
         "win_probability": None,
         "art_url": None,
     }

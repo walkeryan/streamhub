@@ -18,6 +18,7 @@
             {
               "id": "9001",
               "homeAway": "home",
+              "score": "17",
               "curatedRank": {"current": 12},
               "team": {
                 "id": "9001",
@@ -38,6 +39,7 @@
             {
               "id": "9002",
               "homeAway": "away",
+              "score": "10",
               "curatedRank": {"current": 99},
               "team": {
                 "id": "9002",
@@ -87,6 +89,7 @@
             {
               "id": "9003",
               "homeAway": "home",
+              "score": "0",
               "curatedRank": {"current": 99},
               "team": {
                 "id": "9003",
@@ -106,6 +109,7 @@
             {
               "id": "9004",
               "homeAway": "away",
+              "score": "0",
               "curatedRank": {"current": 5},
               "team": {
                 "id": "9004",

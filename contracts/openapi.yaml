@@ -988,6 +988,17 @@ components:
         id: {type: string, description: "title or channel id (lib:, tmdb:, ch:). A channel makes a live room. A show or season makes a room on one of its episodes (see POST /rooms)."}
         variant_id: {type: string, nullable: true, description: "source variant every member plays; validated when a member joins, and for a show when the room is created"}
         audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255}
+        public: {type: boolean, default: true, description: "listed by GET /rooms to everyone signed in who may join rooms and watch the title; the code and link work either way"}
+    RoomUpdate:
+      type: object
+      required: [public]
+      properties:
+        public: {type: boolean}
+    RoomList:
+      type: object
+      required: [rooms]
+      properties:
+        rooms: {type: array, items: { $ref: '#/components/schemas/Room' }}
     RoomJoin:
       type: object
       properties:
@@ -1042,6 +1053,8 @@ components:
         state: { $ref: '#/components/schemas/RoomState' }
         server_ms: {type: integer, description: "server epoch ms when this response was built"}
         title: { $ref: '#/components/schemas/RoomTitle' }
+        public: {type: boolean, default: true, description: "listed by GET /rooms"}
+        is_member: {type: boolean, default: false, description: "the current profile holds a seat in the room"}
     RoomJoined:
       type: object
       required: [member_token, member_id, expires_in_seconds, ws_path, descriptor]
@@ -1200,6 +1213,7 @@ components:
         away: {$ref: '#/components/schemas/MatchupTeam'}
         home: {$ref: '#/components/schemas/MatchupTeam'}
         status_detail: {type: string, nullable: true, description: "The clock of a game on now (\"Q2 7:14\", \"Halftime\", \"Final\"); null before kickoff and always null for a replay."}
+        score: {$ref: '#/components/schemas/MatchupScore', nullable: true, description: "Points once the game is under way or over, from the scoreboard; null before kickoff, without scoreboard facts, and always null for a replay."}
         win_probability: {$ref: '#/components/schemas/WinProbability', nullable: true, description: "Null when unknown (never a made-up 50/50), after the final whistle, for a game still to come and for a replay."}
         art_url: {type: string, nullable: true, description: "Signed, expiring URL of the generated helmet-vs-helmet image (16:9, no text). Null until the image exists or when art generation is off."}
     MatchupTeam:
@@ -1213,6 +1227,12 @@ components:
         rank: {type: integer, nullable: true, description: "Top-25 ranking; null when unranked."}
         record: {type: string, nullable: true, description: "Overall record (\"6-3\")."}
         conference_record: {type: string, nullable: true, description: "Conference record, with the conference's short name in a conference game (\"4-1 Lakes League\")."}
+    MatchupScore:
+      type: object
+      required: [away, home]
+      properties:
+        away: {type: integer, minimum: 0}
+        home: {type: integer, minimum: 0}
     WinProbability:
       type: object
       required: [away, home, live]
@@ -2119,7 +2139,22 @@ paths:
         '403': { description: "content_restricted, or not allowed to create rooms" }
         '404': { description: "unknown title; a show with no episode to play; a variant_id that is not a variant of the show" }
         '409': { description: room_limit }
+    get:
+      summary: The public rooms the current profile could join now
+      description: >-
+        Public rooms whose title the current profile may watch (rating ceiling and adult lock applied);
+        others are left out, not refused. Empty for a user without rooms.join.
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RoomList' } } } }
   /rooms/{code}:
+    patch:
+      summary: Make the room public or private (host only)
+      parameters: [{name: code, in: path, required: true, schema: {type: string}}]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/RoomUpdate' } } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '403': { description: not the host }
+        '404': { description: room_not_found }
     get:
       summary: The join screen (title, host, members, state)
       parameters: [{name: code, in: path, required: true, schema: {type: string}}]

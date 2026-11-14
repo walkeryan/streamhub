@@ -23,9 +23,17 @@ export function Initials({ name, className, style }: { name: string; className?:
  * <img> that never shows the browser's broken-image glyph: if `src` is empty or fails to load, `fallback` renders
  * instead. The error state is keyed to the URL, so a new src gets a fresh attempt.
  */
-export function SafeImg({ src, fallback, ...img }: { src: string | null | undefined; fallback: ReactNode } &
-  Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src' | 'onError'>) {
+export function SafeImg({ src, fallback, reveal, ...img }: { src: string | null | undefined; fallback: ReactNode
+  /** Hidden until it has fully loaded, then faded in (`data-loaded`): a slow image never paints top to bottom. */
+  reveal?: boolean } & Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src' | 'onError' | 'onLoad'>) {
   const [failed, setFailed] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState<string | null>(null)
   if (!src || failed === src) return <>{fallback}</>
-  return <img {...img} src={src} onError={() => setFailed(src)} />
+  return <img {...img} src={src} onError={() => setFailed(src)}
+    {...(reveal ? {
+      'data-loaded': loaded === src,
+      onLoad: () => setLoaded(src),
+      // Already in the cache: complete before React could listen for load.
+      ref: (el: HTMLImageElement | null) => { if (el?.complete && el.naturalWidth > 0 && loaded !== src) setLoaded(src) },
+    } : {})} />
 }

@@ -188,7 +188,7 @@ test('keyboard only: the bar to Movies, along a shelf to See all and back, then 
   const rail = page.getByTestId('rail')
   // Every place to watch is named before focus goes anywhere near the bar; at its end are the search
   // box and two icons with a name of their own.
-  await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Movies', 'Shows', 'My List'])
+  await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Sports', 'Movies', 'Shows', 'My List'])
   for (const label of await rail.locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
   await expect(rail.locator('.rail-icon')).toHaveCount(2)
   await expect(rail.getByRole('textbox', { name: 'Search', exact: true })).toBeVisible()
@@ -366,15 +366,14 @@ test('More offers only what the profile may use, and closes back onto its opener
   await page.getByTestId('nav-more').click()
   const menu = page.getByTestId('more-menu')
   // Family may use recordings, and recording is on; Sources and Users are the owner's.
-  await expect(menu.getByRole('link')).toHaveText(['Sports', 'Requests', 'Recordings', 'Settings'])
-  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Sports')
-  await page.keyboard.press('ArrowDown')
+  await expect(menu.getByRole('link')).toHaveText(['Requests', 'Recordings', 'Settings'])
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Requests')
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/requests$/)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('aria-current', 'page')
   await page.getByTestId('nav-more').click()
   // Back belongs to the menu once it has taken focus.
-  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Sports')
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Requests')
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('data-focused', 'true')
@@ -387,7 +386,7 @@ test('More offers only what the profile may use, and closes back onto its opener
   const owner = await other(browser)
   await enter(owner.page, '/', 'owner')
   await owner.page.getByTestId('nav-more').click()
-  await expect(owner.page.getByTestId('more-menu').getByRole('link')).toHaveText(['Sports', 'Requests', 'Recordings', 'Sources', 'Users', 'Settings'])
+  await expect(owner.page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Recordings', 'Sources', 'Users', 'Settings'])
   await owner.context.close()
 })
 
@@ -397,7 +396,7 @@ test('a tablet without hover reads every section name in the bar, on one row', a
   const rail = tablet.page.getByTestId('rail')
   await expect(rail.locator('.rail-item .lbl').first()).toBeVisible()
   expect(await tablet.page.evaluate(() => matchMedia('(hover: none)').matches)).toBe(true)
-  await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Movies', 'Shows', 'My List'])
+  await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Sports', 'Movies', 'Shows', 'My List'])
   for (const label of await rail.locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
   const bar = (await rail.boundingBox())!
   expect([bar.x, bar.y, bar.width]).toEqual([0, 0, 820])

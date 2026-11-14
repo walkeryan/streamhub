@@ -24,8 +24,10 @@ const percent = (value: number) => `${Math.round(value)}%`
 export function matchupSpeech(event: Event, matchup: Matchup): string {
   const { away, home } = matchup
   const odds = !event.replay && matchup.win_probability
+  const score = !event.replay && matchup.score
   return [
     `${ranked(away)}${away.name} versus ${ranked(home)}${home.name}`,
+    score && `${away.short_name} ${score.away}, ${home.short_name} ${score.home}`,
     !event.replay && matchup.status_detail,
     odds && `${odds.live ? 'win probability' : 'pregame win probability'} ${away.short_name} ${percent(odds.away)}, ${home.short_name} ${percent(odds.home)}`,
   ].filter(Boolean).join(', ')
@@ -73,12 +75,15 @@ function Side({ team, color, side }: { team: Team; color: string; side: 'away' |
   </span>
 }
 
-/** The inside of a Live now card for a football game: art, the teams, VS., the clock and the win probability. No scores. */
+/** The inside of a Live now card for a football game: art, the teams, the score (VS. before kickoff), the clock and the win probability. */
 export function MatchupCard({ event, matchup, badge, channel }: { event: Event; matchup: Matchup; badge: React.ReactNode; channel: string }) {
   const [away, home] = sideColors(matchup)
-  // A replay gives nothing of the game away: no clock and no odds, whatever arrives.
+  // A replay gives nothing of the game away: no clock, no score and no odds, whatever arrives.
   const detail = event.replay ? null : matchup.status_detail
+  const score = event.replay ? null : matchup.score
   const odds = event.replay ? null : matchup.win_probability
+  // Once there is a score the clock says where the game is; the kickoff time is history.
+  const clock = score && detail ? [detail] : [fmtTime(event.start), detail]
   return <>
     <MatchupArt matchup={matchup} className="matchup-art" />
     <span className="matchup-shade" aria-hidden="true" />
@@ -89,8 +94,12 @@ export function MatchupCard({ event, matchup, badge, channel }: { event: Event; 
     <span className="matchup-teams">
       <Side team={matchup.away} color={away} side="away" />
       <span className="matchup-mid">
-        <span className="matchup-vs">VS.</span>
-        <span className="matchup-clock" data-testid="matchup-clock">{[fmtTime(event.start), detail].filter(Boolean).join(' · ')}</span>
+        {score
+          ? <span className="matchup-score" data-testid="matchup-score">
+            <b data-testid="matchup-score-away">{score.away}</b><i aria-hidden="true">–</i><b data-testid="matchup-score-home">{score.home}</b>
+          </span>
+          : <span className="matchup-vs">VS.</span>}
+        <span className="matchup-clock" data-testid="matchup-clock">{clock.filter(Boolean).join(' · ')}</span>
       </span>
       <Side team={matchup.home} color={home} side="home" />
     </span>
