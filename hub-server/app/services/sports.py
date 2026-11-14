@@ -1,9 +1,10 @@
 """Sports listings from the source-scoped guide and from event-slot channel names.
 
 Nothing is inferred: a listing is sport when its own title or category says so, teams are
-only the two sides a title spells out ("A vs B", "A at B"), and a game is live when a real
-programme or a dated slot (``app.services.event_slots``) covers this moment. A placeholder
-programme that repeats its channel's name is not a listing at all.
+the two sides a title spells out ("A vs B", "A at B") or, for a sport listing whose title is
+only a label ("Live: College Football"), the two its description opens with ("A host B"), and
+a game is live when a real programme or a dated slot (``app.services.event_slots``) covers this
+moment. A placeholder programme that repeats its channel's name is not a listing at all.
 """
 
 from __future__ import annotations
@@ -107,6 +108,79 @@ def matchup_teams(title: str, category: str | None) -> list[str]:
     return split_matchup(title) if classify_sport(title, category) is not None else []
 
 
+# A label-only sport listing names its sides where its description starts: "The No. 20 Kestrels
+# (6-3, 4-2 League) host the Badgers (6-3) at Riverside Park." Only that first sentence, only these verbs.
+_RECORD = re.compile(r"\s*\([^()]*\)")
+# A sentence ends after a lower-case word ("...Seminoles. Pittsburgh"), not after "No." or "St.".
+_SENTENCE_END = re.compile(r"(?<=[a-z]{3})[.!?](?:\s|$)")
+_SIDE = (
+    r"(?:[Tt]he\s+)?(?:undefeated\s+)?(?:(?:[Nn]o\.|#)\s*\d+\s+)?([A-Z0-9][\w.'&-]*(?:\s+(?:[A-Z0-9][\w.'&-]*|of))*)"
+)
+_HOME_FIRST = ("host", "hosts", "welcome", "welcomes")
+_EVEN = ("take on", "takes on", "face", "faces", "meet", "meets", "battle", "battles", "play", "plays")
+_VERBS = "|".join(re.escape(v) for v in sorted((*_HOME_FIRST, *_EVEN, "visit", "visits"), key=len, reverse=True))
+_LEAD_MATCHUP = re.compile(rf"^\s*{_SIDE}\s+(?P<verb>{_VERBS})\s+{_SIDE}(?P<rest>.*)$")
+# "A travel to Pasadena to take on B": B is the side, Pasadena only where they play.
+_TRAVEL = re.compile(
+    rf"^\s*{_SIDE}\s+(?:travels?|heads?)\s+to\s+[^.]*?\s+to\s+(?:take on|face|meet|play|battle)\s+{_SIDE}(?P<rest>.*)$"
+)
+# After "visit X" a game goes on with where or when; "visit the Sunshine State for a..." is a place.
+_AFTER_VISIT = re.compile(r"^(?:$|[,;:]|\s+(?:at|in|on|this|tonight|today)\b)")
+# Capitalised words that end a side without being part of it: "host the Badgers Saturday".
+_NOT_A_NAME = re.compile(
+    r"(?:\s+(?:of|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Tonight|Today|In|On|At))+$"
+)
+
+
+def _side(text: str) -> str | None:
+    side = _NOT_A_NAME.sub("", text.rstrip(".'")).strip()
+    if not 1 < len(side) <= _SIDE_MAX or side.isdigit() or "'s" in side or "\u2019s" in side:
+        return None
+    return side
+
+
+def description_matchup(description: str | None) -> tuple[str, str | None, str | None] | None:
+    """``(title, home, away)`` from a description whose first sentence opens with its two sides.
+
+    "A host B" is "B at A" with A at home, "A visit B" and "A travel to <place> to take on B" are
+    "A at B", and an even verb ("take on", "face", "meet") is "A vs B" as a title would put it.
+    Rankings and records are not names. Anything else names no sides.
+    """
+    if not description:
+        return None
+    sentence = _SENTENCE_END.split(_RECORD.sub("", description[:400]), maxsplit=1)[0]
+    travel = _TRAVEL.match(sentence)
+    found = travel or _LEAD_MATCHUP.match(sentence)
+    if not found:
+        return None
+    first, second = _side(found.group(1)), _side(found.group(2 if travel else 3))
+    if first is None or second is None or first.casefold() == second.casefold():
+        return None
+    verb = "travel" if travel else found.group("verb")
+    if verb in ("visit", "visits") and not _AFTER_VISIT.match(found.group("rest")):
+        return None
+    if verb in _HOME_FIRST:
+        return f"{second} at {first}", first, second
+    if verb in ("travel", "visit", "visits"):
+        return f"{first} at {second}", second, first
+    return f"{first} vs {second}", first, second
+
+
+def listing_matchup(title: str, category: str | None, description: str | None) -> tuple[str, str | None, str | None]:
+    """``(shown title, home, away)`` of a sport listing: its own title when that names the sides,
+    else the matchup its description opens with, else its title and no sides."""
+    home, away = matchup_sides(title)
+    if home is not None or classify_sport(title, category) is None:
+        return title, home, away
+    return description_matchup(description) or (title, None, None)
+
+
+def sport_listing_clause() -> Any:
+    """SQL prefilter: guide rows whose category or title carries a sport word. The classifier decides."""
+    text = func.lower(func.coalesce(Programme.category, "") + " " + Programme.title)
+    return or_(*(text.like(f"%{word}%") for word in _KEYWORDS))
+
+
 @lru_cache(maxsize=4096)
 def sport_facts(title: str, category: str | None) -> tuple[bool, tuple[str, ...]]:
     """``(is_sport, teams)`` of a guide entry. Cached: a guide page repeats its listings."""
@@ -141,6 +215,7 @@ async def sports_on_now(
             Programme.category,
             Programme.start,
             Programme.stop,
+            Programme.description,
         )
         .join(Programme, (Programme.feed == ch.c.source_id) & (Programme.epg_channel == ch.c.epg_id))
         .join(Source, Source.id == ch.c.source_id)
@@ -161,7 +236,8 @@ async def sports_on_now(
             # Filler that repeats the channel's name would classify by the channel, not by a listing.
             if kind is None or is_placeholder(row[7], row[3]) or parse_event_slot(row[3]) is not None:
                 continue
-            if term and term not in f"{row[7]} {row[3]}".casefold():
+            shown, _, _ = listing_matchup(row[7], row[8], row[11])
+            if term and term not in f"{row[7]} {shown} {row[3]}".casefold():
                 continue
             counts[kind] += 1
             if sport and sport != kind:
@@ -172,7 +248,7 @@ async def sports_on_now(
                         "id": f"{row[0]}:{row[6]}",
                         "sport": kind,
                         "programme_id": ids.prog_id(row[6]),
-                        "title": row[7],
+                        "title": shown,
                         "category": row[8],
                         "start": row[9],
                         "stop": row[10],
@@ -315,13 +391,14 @@ async def sports_events(
             Programme.stop,
             Programme.epg_channel,
             ch.c.number,
+            Programme.description,
         )
         .join(Programme, (Programme.feed == ch.c.source_id) & (Programme.epg_channel == ch.c.epg_id))
         .join(Source, Source.id == ch.c.source_id)
         .where(
             Programme.stop > start,
             Programme.start < stop,
-            or_(*(text.like(f"%{word}%") for word in _KEYWORDS)),
+            sport_listing_clause(),
             # Filler rows are dropped before the cap; the exact comparison below collapses whitespace too.
             func.lower(func.trim(Programme.title)) != func.lower(func.trim(ch.c.name)),
         )
@@ -336,7 +413,14 @@ async def sports_events(
     term = (q or "").strip()
     if term:
         like = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        query = query.where(func.lower(Programme.title).like(f"%{like}%", escape="\\"))
+        # The description is read for the sides a label-only listing names there; the loop below
+        # keeps a row only when the search is in its title or in those sides.
+        query = query.where(
+            or_(
+                func.lower(Programme.title).like(f"%{like}%", escape="\\"),
+                func.lower(func.coalesce(Programme.description, "")).like(f"%{like}%", escape="\\"),
+            )
+        )
     if status == "current":
         query = query.where(Programme.start <= now, Programme.stop > now)
     elif status == "upcoming":
@@ -379,28 +463,32 @@ async def sports_events(
         if kind is None or is_placeholder(row[7], row[3]) or parse_event_slot(row[3]) is not None:
             continue
         scheduled.add(row[0])
+        shown, home, away = listing_matchup(row[7], row[8], row[13])
+        if term and term.casefold() not in f"{row[7]} {shown}".casefold():
+            continue
         label = f"{row[7]} {row[8] or ''}"
         replay = bool(REPLAY.search(label))
         if status == "replay" and not replay:
             continue
         # Only explicit matchups with identical title and exact schedule are
         # grouped across sources. Generic studio shows retain source/EPG identity.
-        matchup = bool(_MATCHUP.search(row[7]))
+        # A matchup read from the description is as explicit as one in the title: the stations
+        # carrying the same game at the same time are one event.
+        matchup = bool(_MATCHUP.search(row[7])) or shown != row[7]
         event_id = _event_id(
-            _same_title(row[7]),
+            _same_title(shown),
             kind,
             row[9].isoformat(),
             row[10].isoformat(),
             str(replay),
             "matchup" if matchup else f"{row[1]}:{row[11]}",
         )
-        home, away = matchup_sides(row[7])
         event = grouped.setdefault(
             event_id,
             {
                 "id": event_id,
                 "kind": "event",
-                "title": row[7],
+                "title": shown,
                 "sport": kind,
                 "league": None,
                 "home": home,
