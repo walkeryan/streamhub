@@ -341,6 +341,13 @@ def web_vod_plan(probe: dict[str, Any] | None, audio_track: int | None) -> str |
     return "copy"
 
 
+def _best_option(options: list[dict[str, Any]], preferred: list[str]) -> dict[str, Any] | None:
+    """The source to play without asking: the first (by priority) with preferred audio, else the first."""
+    return next((o for o in options if not preferred or o["preferred_audio_available"]), None) or (
+        options[0] if options else None
+    )
+
+
 class PlaybackResolver:
     def __init__(
         self,
@@ -734,13 +741,14 @@ class PlaybackResolver:
             rows = [row for row in rows if row.source_id == source_id]
         options = await self._audio_options(profile_id, rows, probe=True)
         preferred = await self._catalog.preferred_languages(profile_id, None)
-        automatic = next((o["variant_id"] for o in options if not preferred or o["preferred_audio_available"]), None)
+        automatic = _best_option(options, preferred)
         return {
             "id": hub_id,
             "preferred_languages": preferred,
             "options": options,
-            "automatic_variant_id": automatic,
-            "selection_required": bool(options and not automatic),
+            "automatic_variant_id": automatic["variant_id"] if automatic else None,
+            # Nothing is ever held for an audio choice (see ``_select_audio``).
+            "selection_required": False,
         }
 
     async def _select_audio(
@@ -754,37 +762,28 @@ class PlaybackResolver:
         audio_track: int | None = None,
         probe: bool = False,
     ) -> Title:
+        """The variant that plays: the one named, else the best guess for the profile's languages.
+
+        Never held for a confirmation (the owner's decision: "if there is only one stream, never ask me";
+        "if one Spanish one sneaks through, my ears aren't going to bleed"). Provider audio is almost
+        never verified, so a hold stood in front of nearly every film. Preferred languages still steer:
+        a source with verified or listed preferred audio wins, and the player picks a tagged track in
+        those languages when a file has several. The viewer can still pick any source themselves.
+        """
         if source_id:
             rows = [row for row in rows if row.source_id == source_id]
         options = await self._audio_options(profile_id, rows, probe=probe)
-        preferred = await self._catalog.preferred_languages(profile_id, None)
-        # Naming a variant together with one of its tracks is as explicit as confirming the variant.
-        explicit = bool(variant_id) and (allow_unverified_audio or audio_track is not None)
         if variant_id:
             selected = next((o for o in options if o["variant_id"] == variant_id), None)
             if selected is None:
                 raise NotFound("variant does not belong to this title or source")
-            if preferred and not selected["preferred_audio_available"] and not explicit:
-                raise Conflict(
-                    "Confirm this source's unverified or nonpreferred audio.", code="audio_selection_required"
-                )
         else:
-            selected = next((o for o in options if not preferred or o["preferred_audio_available"]), None)
+            selected = _best_option(options, await self._catalog.preferred_languages(profile_id, None))
             if selected is None:
-                if not options:
-                    raise NotFound("no playable variants for this title")
-                raise Conflict(
-                    "No verified preferred audio. Choose and confirm a source.", code="audio_selection_required"
-                )
+                raise NotFound("no playable variants for this title")
         row = next(r for r in rows if ids.lib_id(r.source_id, r.ext_id) == selected["variant_id"])
         if row.kind in ("show", "series", "season"):
             row = await self._next_episode(profile_id, row)
-            # Progress may change while the chooser is open or during another await.
-            # Recheck the actual episode, never inherit a previous episode's evidence.
-            info = audio_info(row.extra or {}, label=row.title, group=row.group_name, language=row.language)
-            wanted = preferred_track(probe_tracks(row.extra or {}), preferred)
-            if preferred and not preferred_audio(info, preferred) and wanted is None and not explicit:
-                raise Conflict("Confirm the next episode's audio source.", code="audio_selection_required")
         return row
 
     async def _resolve_trailer(self, profile_id: str, hub_id: str) -> dict[str, Any]:
@@ -967,7 +966,7 @@ class PlaybackResolver:
             kind="channel",
         )
         # A channel is never held for its audio: the preferred languages only steer the track choice.
-        desc.update(await self._runtime_audio(profile_id, ch.data or {}, consent=True))
+        desc.update(await self._runtime_audio(profile_id, ch.data or {}))
         desc["archive_start"] = archive_start
         desc["archive_end"] = archive_end
         desc["channel_context"] = ctx
@@ -1016,8 +1015,7 @@ class PlaybackResolver:
             if chosen is None:
                 raise NotFound("variant does not belong to this title or source")
         elif options:
-            preferred = await self._catalog.preferred_languages(profile_id, None)
-            chosen = next((o for o in options if not preferred or o["preferred_audio_available"]), options[0])
+            chosen = _best_option(options, await self._catalog.preferred_languages(profile_id, None)) or options[0]
         else:
             raise NotFound("no playable variants for this title")
         show = next(r for r in rows if ids.lib_id(r.source_id, r.ext_id) == chosen["variant_id"])
@@ -1099,7 +1097,7 @@ class PlaybackResolver:
             probe=cached_probe(row.extra),
         )
 
-        desc.update(await self._runtime_audio(profile_id, row.extra or {}, audio_consent))
+        desc.update(await self._runtime_audio(profile_id, row.extra or {}))
         if vod is not None and desc["audio_track"] is not None:
             # The server encodes exactly one track, so that track is the whole answer.
             track = vod.tracks[desc["audio_track"]]
@@ -1286,7 +1284,7 @@ class PlaybackResolver:
             "handoff": None,
             "drm": None,
         }
-        desc.update(await self._runtime_audio(profile_id, {"probe": probe} if probe else {}, consent=True))
+        desc.update(await self._runtime_audio(profile_id, {"probe": probe} if probe else {}))
         return desc
 
     async def _probe_recording(self, recording_id: str, path: Any) -> dict[str, Any] | None:
@@ -1304,12 +1302,13 @@ class PlaybackResolver:
             self._recording_probes[recording_id] = (stamp, found)
         return found
 
-    async def _runtime_audio(self, profile_id: str, extra: dict[str, Any], consent: bool) -> dict[str, Any]:
+    async def _runtime_audio(self, profile_id: str, extra: dict[str, Any]) -> dict[str, Any]:
         preferred = await self._catalog.preferred_languages(profile_id, None)
         info = audio_info(extra)
         return {
             "preferred_audio_languages": preferred,
-            "audio_language_required": bool(preferred) and not consent,
+            # Players steer to a preferred track when one is tagged, and never stop for one.
+            "audio_language_required": False,
             **{
                 key: info[key]
                 for key in ("audio_languages", "audio_verified", "audio_evidence", "default_audio_language")

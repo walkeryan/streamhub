@@ -29,11 +29,13 @@ internal fun runtimeAudioDecision(required:Boolean,preferred:List<String>,expose
     else -> RuntimeAudioDecision.Blocked
 }
 /**
- * Whether [decision] stops playback for the viewer. A channel never does (owner's decision: "if I open a channel,
- * don't prompt me at all"): IPTV tags almost no tracks, so the hold opened the audio menu on every zap. The player
- * still switches a channel to a tagged preferred track first; failing that, the channel's own default track plays.
+ * Whether [decision] stops playback for the viewer. Nothing does (owner's decisions: "if I open a channel, don't
+ * prompt me at all"; "if one Spanish one sneaks through, my ears aren't going to bleed"): providers tag almost no
+ * tracks, so the hold opened the audio menu on most films and every zap. The player still switches to a tagged
+ * preferred track first; failing that, the file's own default track plays, and Audio in the controls changes it.
  */
-internal fun audioHoldsForViewer(decision:RuntimeAudioDecision,channel:Boolean):Boolean = decision==RuntimeAudioDecision.Blocked && !channel
+@Suppress("UNUSED_PARAMETER")
+internal fun audioHoldsForViewer(decision:RuntimeAudioDecision,channel:Boolean):Boolean = false
 /** Approval is an exact current media epoch + immutable TrackGroup object, never a reusable index. */
 internal class RuntimeAudioApproval<T:Any> {
     private var value:Triple<Long,T,Int>?=null

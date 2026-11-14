@@ -311,22 +311,16 @@ class StreamHubPlayer(
             }
         }
         val wasBlocked=_state.value.audioBlocked
-        // A channel says nothing about its audio either: the channel banner shows on every zap, and a caveat
-        // there was the same nag in quieter words. Films and series keep the note.
-        _state.value=_state.value.copy(audioBlocked=false,audioNotice=if(channelPlayback(d.id)) null else when(decision) {
-            RuntimeAudioDecision.Unobservable->"Audio language unverified. You can change audio in playback controls."
-            else->null
-        },error=if(wasBlocked)null else _state.value.error)
+        // Nothing says "unverified" either: on a channel banner or a film's controls it was the same nag in
+        // quieter words. Audio in the playback controls is always there to change it.
+        _state.value=_state.value.copy(audioBlocked=false,audioNotice=null,error=if(wasBlocked)null else _state.value.error)
         if(waitingForAudio) {waitingForAudio=false;exoPlayer.playWhenReady=wantsPlayback}
         return true
     }
 
-    /** Never on a channel: choosing a track there is the whole consent, like opening the channel was. */
-    fun audioTrackNeedsConfirmation(option:TrackOption):Boolean = current?.let {
-        !channelPlayback(it.id) && needsRuntimeAudioCheck(it.audioLanguageRequired,it.preferredAudioLanguages) &&
-            !singleUntaggedAudio(_state.value.audioTracks.size,listOf(option.language)) &&
-            !preferredAudioSelected(it.preferredAudioLanguages,listOf(option.language))
-    } ?: true
+    /** Never: choosing a track is the whole consent, like pressing Play was. */
+    @Suppress("UNUSED_PARAMETER")
+    fun audioTrackNeedsConfirmation(option:TrackOption):Boolean = false
 
     private fun scheduleReconnect(reason: String) {
         val d = current ?: return

@@ -42,7 +42,6 @@ function TitleDetails({ id }: { id: string }) {
   const { data: t, error, refetch } = useTitle(id)
   const [params] = useSearchParams()
   const audio = usePlaybackOptions(t?.kind !== 'channel' && t?.sources.some((s) => s.playable_in_app) ? id : undefined)
-  const [confirmation, setConfirmation] = useState<PlaybackOption | null>(null)
   // null until the viewer picks one: the server then plays the preferred language, else the file's default.
   const [pickedTrack, setPickedTrack] = useState<number | null>(null)
   const qc = useQueryClient()
@@ -58,9 +57,9 @@ function TitleDetails({ id }: { id: string }) {
   const [more, setMore] = useState(false)
   useEffect(() => {
     if (!picker) return
-    const frame = requestAnimationFrame(() => setFocus(confirmation ? 'audio:cancel' : 'pick:cancel'))
+    const frame = requestAnimationFrame(() => setFocus('pick:cancel'))
     return () => cancelAnimationFrame(frame)
-  }, [picker, confirmation])
+  }, [picker])
   const seasonQ = useTitle(season ?? undefined)
   useAdaptiveAccent(t?.backdrop ?? t?.poster)
   const createRequest = useCreateRequest()
@@ -116,14 +115,18 @@ function TitleDetails({ id }: { id: string }) {
       // A picked track is an explicit choice of that file's audio, so it needs no second confirmation.
       if (trackOption && pickedTrack !== null) return void play(t, null, { variantId: trackOption.variant_id, audioTrack: pickedTrack })
       if (audio.data?.automatic_variant_id) return void play(t, null, { variantId: audio.data.automatic_variant_id })
+      // Never held for an audio choice (the owner's decision: "if one Spanish one sneaks through, my ears
+      // aren't going to bleed"): an older server that names no automatic source still plays its best one.
+      const best = options.find((o) => o.preferred_audio_available) ?? options[0]
+      if (best) return void play(t, null, { variantId: best.variant_id, allowUnverifiedAudio: true })
       setPicker('play'); return
     }
     if (handoff.length === 1) return void play(t, handoff[0])
     setPicker('play')
   }
+  // Picking a source is the choice: it plays, with no second "play this anyway?".
   const chooseVariant = (option: PlaybackOption) => {
-    if (audio.data?.automatic_variant_id !== option.variant_id) { setConfirmation(option); return }
-    setPicker(null); void play(t, null, { variantId: option.variant_id, audioTrack: option.variant_id === trackOption?.variant_id ? pickedTrack : null })
+    setPicker(null); void play(t, null, { variantId: option.variant_id, allowUnverifiedAudio: true, audioTrack: option.variant_id === trackOption?.variant_id ? pickedTrack : null })
   }
   const choose = (s: SourceBadge) => { setPicker(null); void play(t, s) }
   const sendRequest = (seasons?: number[]) => {
@@ -205,7 +208,7 @@ function TitleDetails({ id }: { id: string }) {
               </RequestStatus>
             )}
             <FocusGroup focusKey="title:actions" className={phone ? 'title-actions' : 'flex gap-3 flex-wrap items-center'} preferred="title:play" data={{ together: canPlay && mayStartRoom }}>
-              {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && !audio.data?.automatic_variant_id && pickedTrack === null ? 'Choose audio / source' : playLabel}</Button>}
+              {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && audio.data && !audio.data.options.length ? 'Choose audio / source' : playLabel}</Button>}
               {canPlay && mayStartRoom && <Button focusKey="title:together" icon="people" iconOnly={phone} label={phone ? 'Watch together' : undefined} disabled={startingRoom} onEnter={() => void watchTogether()} testId="title-together">{phone ? null : startingRoom ? 'Starting a room…' : 'Watch together'}</Button>}
               {!phone && choosable && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
               {canRequest && <Button focusKey="title:request" primary={!handoff.length} icon="plus" onEnter={startRequest} testId="title-request">{t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'}</Button>}
@@ -265,14 +268,9 @@ function TitleDetails({ id }: { id: string }) {
         </section>
       </div>
 
-      <Modal open={picker !== null} onClose={() => { setPicker(null); setConfirmation(null) }} title={confirmation ? 'Confirm audio choice' : canPlay ? (phone ? 'Audio & version' : 'Choose audio and source') : 'Open in'} firstFocusKey="pick:cancel" variant="sheet">
+      <Modal open={picker !== null} onClose={() => setPicker(null)} title={canPlay ? (phone ? 'Audio & version' : 'Choose audio and source') : 'Open in'} firstFocusKey="pick:cancel" variant="sheet">
         <div className="flex flex-col gap-2">
-          {confirmation ? <>
-            <p>{confirmation.audio_verified ? audioDescription(confirmation) : 'Audio language is unverified.'} This source is not automatically selected for your language preferences.</p>
-            <p className="label">{confirmation.provider_label}</p>
-            <Button focusKey="audio:cancel" onEnter={() => setConfirmation(null)}>Back to sources</Button>
-            <Button focusKey="audio:confirm" onEnter={() => { const selected = confirmation; setConfirmation(null); setPicker(null); void play(t, null, { variantId: selected.variant_id, allowUnverifiedAudio: true, audioTrack: selected.variant_id === trackOption?.variant_id ? pickedTrack : null }) }}>Play this source anyway</Button>
-          </> : canPlay ? <>
+          {canPlay ? <>
             {phone && audioChips}
             {phone && tracks.length > 0 && <h2 className="label">Version</h2>}
             {audio.isPending && <p role="status">Checking available sources…</p>}
@@ -285,7 +283,7 @@ function TitleDetails({ id }: { id: string }) {
             </Button>)}
             {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}
           </> : handoff.map((s, i) => <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>{s.name}</Button>)}
-          <Button focusKey="pick:cancel" ghost onEnter={() => { setPicker(null); setConfirmation(null) }}>Cancel</Button>
+          <Button focusKey="pick:cancel" ghost onEnter={() => setPicker(null)}>Cancel</Button>
         </div>
       </Modal>
 

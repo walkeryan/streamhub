@@ -283,13 +283,11 @@ def test_resolver_refusals_reach_the_member_unchanged(rig: Rig) -> None:
     expected = rig.req("POST", "/playback/resolve", json={**resolve, "variant_id": "lib:other:zzz"})
     r = rig.join_raw(code)
     assert (r.status_code, r.json()) == (404, expected.json())
-    # 409: this profile's audio preference cannot be verified for the title
+    assert rig.req("GET", f"/rooms/{code}").json()["members"] == []
+    # Audio is never a refusal: a member whose languages the title's audio does not match still joins.
     code = rig.room()["code"]
     assert rig.req("PATCH", f"/profiles/{rig.admin_id}", json={"languages": ["fr"]}).status_code == 200
-    expected = rig.req("POST", "/playback/resolve", json=resolve)
-    r = rig.join_raw(code)
-    assert (r.status_code, r.json()) == (409, expected.json()) and r.json()["code"] == "audio_selection_required"
-    assert rig.req("GET", f"/rooms/{code}").json()["members"] == []
+    assert rig.join_raw(code).status_code == 200
 
 
 def test_member_who_may_not_watch_the_title_is_refused(rig: Rig) -> None:

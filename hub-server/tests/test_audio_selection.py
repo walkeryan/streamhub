@@ -5,7 +5,7 @@ import pytest
 
 from app.infra.models import Title
 from app.services.audio_selection import audio_info, preferred_audio, provider_audio_extra
-from app.services.errors import Conflict, NotFound
+from app.services.errors import NotFound
 from app.services.playback import PlaybackResolver
 
 
@@ -66,13 +66,17 @@ async def test_same_source_variants_preserved():
     assert await r._select_audio("p", [en, fr], None, False) is en
 
 
-async def test_unknown_requires_exact_consent():
+async def test_unknown_or_foreign_audio_plays_without_asking():
+    # The owner's decision: never held for an audio choice; preferred languages only steer.
     r = resolver()
     en, fr = row("en"), row("fr", tracks("fra"))
-    for variant, consent in [(None, False), (None, True), ("lib:iptv:en", False)]:
-        with pytest.raises(Conflict) as error:
-            await r._select_audio("p", [en, fr], variant, consent)
-        assert error.value.code == "audio_selection_required"
+    for variant, consent in [(None, False), (None, True)]:
+        assert await r._select_audio("p", [en, fr], variant, consent) is en  # first by priority
+    assert await r._select_audio("p", [fr], None, False) is fr  # the only source, foreign or not
+    assert await r._select_audio("p", [en, fr], "lib:iptv:en", False) is en
+    # A verified preferred source still wins over the order.
+    english = row("zz", tracks("eng"))
+    assert await r._select_audio("p", [en, fr, english], None, False) is english
     assert await r._select_audio("p", [en, fr], "lib:iptv:en", True) is en
     assert await r._select_audio("p", [en, fr], "lib:iptv:fr", True) is fr
     with pytest.raises(NotFound):
@@ -95,8 +99,8 @@ async def test_series_checks_episode_audio():
     show.kind = "series"
     episode = row("ep", tracks("fra"))
     r._next_episode = AsyncMock(return_value=episode)
-    with pytest.raises(Conflict):
-        await r._select_audio("p", [show], None, False)
+    # The next episode plays even when its own audio is foreign.
+    assert await r._select_audio("p", [show], None, False) is episode
     assert await r._select_audio("p", [show], "lib:iptv:show", True) is episode
 
 
@@ -121,14 +125,14 @@ async def test_options_and_resolve_enforce_same_identity_and_preference(api):
     assert response.status_code == 200, response.text
     data = response.json()
     assert len(data["options"]) == 2
-    assert data["selection_required"] and data["automatic_variant_id"] is None
+    # Nothing is required of the viewer: the first source by priority plays when none is verified.
+    assert data["selection_required"] is False and data["automatic_variant_id"] == "lib:iptv:en"
     assert not data["options"][0]["audio_verified"]
-    denied = await api.post("/playback/resolve", json={"id": "tmdb:movie:140607"})
-    assert denied.status_code == 409
-    assert denied.json()["code"] == "audio_selection_required"
     with pytest.MonkeyPatch.context() as patch:
         resolve_title = AsyncMock(return_value={})
         patch.setattr(api.c.playback, "_resolve_title", resolve_title)
+        await api.c.playback.resolve(api.profile_id, "tmdb:movie:140607")
+        assert resolve_title.call_args.args[1].ext_id == "en"
         await api.c.playback.resolve(
             api.profile_id, "tmdb:movie:140607", variant_id="lib:iptv:en", allow_unverified_audio=True
         )
@@ -173,13 +177,14 @@ def test_plex_audio_evidence_belongs_to_selected_part_only():
     assert not preferred_audio(audio_info(item.extra), ["eng"])
 
 
-async def test_episode_progress_race_does_not_skip_audio_check():
+async def test_the_episode_resolved_is_the_one_played_even_if_progress_moved():
     r = resolver()
     show = row("show")
     show.kind = "series"
-    r._next_episode = AsyncMock(side_effect=[row("en", tracks("eng")), row("fr", tracks("fra"))])
-    with pytest.raises(Conflict):
-        await r._select_audio("p", [show], None, False)
+    later = row("fr", tracks("fra"))
+    r._next_episode = AsyncMock(side_effect=[row("en", tracks("eng")), later])
+    # Progress moved while options were read: the episode played is the one asked for at resolve.
+    assert await r._select_audio("p", [show], None, False) is later
 
 
 async def test_invalid_tmdb_type_rejected_and_library_episode_has_own_progress_id():
@@ -198,14 +203,13 @@ async def test_invalid_tmdb_type_rejected_and_library_episode_has_own_progress_i
 
 async def test_runtime_descriptor_retains_preferences_and_actual_evidence():
     r = resolver()
-    verified = await r._runtime_audio("p", tracks("eng"), False)
-    assert verified["audio_language_required"] is True
+    verified = await r._runtime_audio("p", tracks("eng"))
+    # Players steer to a preferred track and never stop for one.
+    assert verified["audio_language_required"] is False
     assert verified["preferred_audio_languages"] == ["eng"]
     assert verified["default_audio_language"] == "eng"
     assert verified["audio_evidence"] == "audio_track_metadata"
-    consented = await r._runtime_audio("p", {"language": "en"}, True)
-    assert consented["audio_language_required"] is False
-    assert consented["preferred_audio_languages"] == ["eng"]
-    assert consented["audio_verified"] is False
-    r._catalog.preferred_languages.return_value = []
-    assert (await r._runtime_audio("p", {}, False))["audio_language_required"] is False
+    unknown = await r._runtime_audio("p", {"language": "en"})
+    assert unknown["audio_language_required"] is False
+    assert unknown["preferred_audio_languages"] == ["eng"]
+    assert unknown["audio_verified"] is False

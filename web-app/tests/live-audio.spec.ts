@@ -130,7 +130,8 @@ test('Sports says nothing about audio: the player asks, as for any channel, when
 test('Title source chooser distinguishes verified tracks from the actual default audio', async ({ page }) => {
   await signIn(page)
   await page.goto('/title/tmdb%3Amovie%3Amulti')
-  await page.getByTestId('title-play').click()
+  // Play plays; the chooser is the viewer's own errand, from Choose source.
+  await page.getByTestId('title-source').click()
   await expect(page.getByRole('dialog')).toContainText('Verified tracks: English, French · Default audio: French')
   expect(await bodies(page)).toEqual([])
 })
