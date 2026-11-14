@@ -35,6 +35,7 @@ coil = "3.5.0"
 zxing = "3.5.4"
 palette = "1.0.0"
 junit = "4.13.2"
+robolectric = "4.14.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -89,6 +90,8 @@ coil-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3", version.re
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
 junit = { module = "junit:junit", version.ref = "junit" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+media3-test-utils = { module = "androidx.media3:media3-test-utils", version.ref = "media3" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

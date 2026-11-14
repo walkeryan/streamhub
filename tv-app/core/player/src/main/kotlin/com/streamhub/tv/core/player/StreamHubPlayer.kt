@@ -16,9 +16,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
-import androidx.media3.extractor.DefaultExtractorsFactory
-import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
-import androidx.media3.extractor.ts.TsExtractor
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.sameSwitchSession
@@ -133,14 +130,7 @@ class StreamHubPlayer(
         .setReadTimeoutMs(15_000)
         .setUserAgent(DEFAULT_UA)
 
-    private val extractors = DefaultExtractorsFactory()
-        // Many IPTV streams start mid-GOP / without IDR; detect access units for H.264 without AUDs.
-        .setTsExtractorFlags(
-            DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS,
-        )
-        .setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
-
-    private val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, extractors)
+    private val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory, streamExtractors())
         .setLoadErrorHandlingPolicy(RefusalAwareLoadErrorPolicy(6))
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
