@@ -38,6 +38,7 @@ from app.services.classifier import ClassificationJob
 from app.services.content_policy import ContentPolicy
 from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
+from app.services.helmets import Helmets
 from app.services.home import HomeService
 from app.services.invites import InvitesService
 from app.services.matchup_art import MatchupArt
@@ -271,6 +272,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         client_factory=http_factory,
         sign=crypto.sign_json,
         policy=content_policy,
+        helmets=Helmets(settings.helmet_overrides_path),
     )
     sports_facts = SportsFacts(http_factory, enabled=settings.sports_facts_enabled, art=matchup_art)
     return Container(

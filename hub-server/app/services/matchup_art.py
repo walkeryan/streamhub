@@ -33,6 +33,7 @@ import httpx
 from app.infra.logging import secret_registry
 from app.services.context import absolute
 from app.services.errors import Forbidden
+from app.services.helmets import Helmets
 from app.services.image_grants import IMAGE_TTL, UNBOUND_TTL
 from app.services.sports_facts import normalise_name
 
@@ -49,22 +50,37 @@ KEY = re.compile(r"^[0-9a-f]{32}$")
 STATE_FILE = "state.json"
 
 PROMPT = (
-    "Photorealistic broadcast background: the {away} American football helmet on the left versus the {home} "
-    "helmet on the right, each team's real helmet design and logo clearly visible, face to face in mid-air above "
-    "a football field at night, flying turf, debris and sparks between them, stadium lights bokeh, cinematic "
-    "lighting, 16:9, no other text, no watermark."
+    "Photorealistic broadcast background: {away} on the left versus {home} on the right, face to face in "
+    "mid-air above a football field at night, flying turf, debris and sparks between them, stadium lights "
+    "bokeh, cinematic lighting, 16:9, no other text, no watermark."
 )
 
 
-def matchup_key(away: str, home: str, league: str) -> str:
-    """One image per (away, home, league): the same pairing on another channel, or in a replay,
-    reuses it; swapped sides are another image (the helmets face the other way)."""
-    text = f"{normalise_name(away)}|{normalise_name(home)}|{league.casefold()}"
+def helmet_phrase(team: str, description: str | None) -> str:
+    """How the prompt names one side's helmet: its curated description, else the generic phrase.
+
+    Never colours as codes: given a hex colour the model paints the whole shell in it.
+    """
+    team = " ".join(team.split())
+    if description:
+        owner = f"{team}'" if team.endswith("s") else f"{team}'s"
+        return f"{owner} {description}"
+    return f"the {team} American football helmet with its real design and logo clearly visible"
+
+
+def matchup_key(
+    away: str, home: str, league: str, away_helmet: str | None = None, home_helmet: str | None = None
+) -> str:
+    """One image per (away, home, league) and the two helmet descriptions: the same pairing on
+    another channel, or in a replay, reuses it; swapped sides are another image (the helmets face
+    the other way); a corrected description is a new image, not the old wrong one."""
+    helmets = hashlib.sha256(f"{away_helmet or ''}|{home_helmet or ''}".encode()).hexdigest()[:16]
+    text = f"{normalise_name(away)}|{normalise_name(home)}|{league.casefold()}|{helmets}"
     return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
-def matchup_prompt(away: str, home: str) -> str:
-    return PROMPT.format(away=away.strip(), home=home.strip())
+def matchup_prompt(away: str, home: str, away_helmet: str | None = None, home_helmet: str | None = None) -> str:
+    return PROMPT.format(away=helmet_phrase(away, away_helmet), home=helmet_phrase(home, home_helmet))
 
 
 def image_type(body: bytes) -> str | None:
@@ -156,9 +172,11 @@ class MatchupArt:
         client_factory: Callable[..., httpx.AsyncClient],
         sign: Callable[[Any], str],
         policy: Any = None,
+        helmets: Helmets | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.root = root
+        self.helmets = helmets
         self._api_key = api_key or None
         secret_registry.add(self._api_key)
         self.model = model or DEFAULT_MODEL
@@ -167,7 +185,7 @@ class MatchupArt:
         self._sign = sign
         self.policy = policy
         self._clock = clock
-        self._queue: asyncio.Queue[tuple[str, str, str]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._queued: set[str] = set()
         self._present: set[str] = set()
         self._worker: asyncio.Task[None] | None = None
@@ -249,14 +267,14 @@ class MatchupArt:
         return isinstance(failure, dict) and _number(failure.get("until")) and failure["until"] > self._clock()
 
     # ---- asking
-    def request(self, key: str, away: str, home: str) -> bool:
+    def request(self, key: str, prompt: str) -> bool:
         """Queue the image for ``key``: not when it exists, is queued, rests after failures, or the day is spent."""
         if not self.enabled or key in self._queued or self.has(key) or self._resting(key):
             return False
         if self.used_today + len(self._queued) >= self.daily_limit:
             return False
         self._queued.add(key)
-        self._queue.put_nowait((key, away, home))
+        self._queue.put_nowait((key, prompt))
         return True
 
     def url(self, key: str) -> str | None:
@@ -267,10 +285,12 @@ class MatchupArt:
 
     def url_for(self, away: str, home: str, league: str, *, generate: bool = True) -> str | None:
         """The signed URL of this pairing's image; without one, the image is asked for (when ``generate``)."""
-        key = matchup_key(away, home, league)
+        away_helmet = self.helmets.describe(away) if self.helmets else None
+        home_helmet = self.helmets.describe(home) if self.helmets else None
+        key = matchup_key(away, home, league, away_helmet, home_helmet)
         found = self.url(key)
         if found is None and generate and not self.has(key):
-            self.request(key, away, home)
+            self.request(key, matchup_prompt(away, home, away_helmet, home_helmet))
         return found
 
     @property
@@ -294,13 +314,13 @@ class MatchupArt:
 
     async def process_next(self) -> bool:
         """Make the next queued image (one request). True when an image was written."""
-        key, away, home = await self._queue.get()
+        key, prompt = await self._queue.get()
         try:
-            return await self._generate(key, away, home)
+            return await self._generate(key, prompt)
         finally:
             self._queued.discard(key)
 
-    async def _generate(self, key: str, away: str, home: str) -> bool:
+    async def _generate(self, key: str, prompt: str) -> bool:
         if self.has(key) or self._resting(key):
             return False
         if self.used_today >= self.daily_limit:
@@ -309,7 +329,7 @@ class MatchupArt:
         self._state["count"] += 1
         await asyncio.to_thread(self._save)
         try:
-            body = await self._call(matchup_prompt(away, home))
+            body = await self._call(prompt)
             await asyncio.to_thread(self._write, key, body)
         except asyncio.CancelledError:
             raise

@@ -35,6 +35,7 @@ from app.services.matchup_art import (
 )
 
 API_KEY = "xai-fixture-key-0123456789"
+PROMPT_LB = matchup_prompt("Lakeview", "Brookfield")
 # Not a picture of anything: a JPEG start-of-image marker and filler.
 PLACEHOLDER = b"\xff\xd8\xff\xe0" + b"\x00" * 60 + b"\xff\xd9"
 
@@ -83,7 +84,10 @@ def test_key_and_prompt() -> None:
     assert key != matchup_key("Brookfield Badgers", "Lakeview Kestrels", "college-football")
     assert key != matchup_key("Lakeview Kestrels", "Brookfield Badgers", "nfl")
     prompt = matchup_prompt("Lakeview Kestrels", "Brookfield Badgers")
-    assert "Lakeview Kestrels American football helmet on the left" in prompt
+    assert (
+        "the Lakeview Kestrels American football helmet with its real design and logo clearly visible on the left"
+        in prompt
+    )
     assert "Brookfield Badgers" in prompt and "no other text" in prompt and "no watermark" in prompt
     assert image_type(PLACEHOLDER) == "image/jpeg" and image_type(b"<svg/>") is None
 
@@ -106,7 +110,7 @@ async def test_queue_generates_once_and_dedupes(tmp_path: Path) -> None:
     url = art.url_for("Lakeview", "Brookfield", "football")
     assert url is not None and "/api/v1/sports/art/" in url
     # Made once: asking again queues nothing.
-    assert art.request(key, "Lakeview", "Brookfield") is False and art.pending == 0
+    assert art.request(key, PROMPT_LB) is False and art.pending == 0
     assert await art.read(key) == (PLACEHOLDER, "image/jpeg")
 
 
@@ -132,10 +136,16 @@ async def test_daily_cap_persists_across_restart(tmp_path: Path) -> None:
     assert art.used_today == 3
     restarted = make(tmp_path, api, clock)
     assert restarted.used_today == 3
-    assert restarted.request(matchup_key("Team 4", "Brookfield", "football"), "Team 4", "Brookfield") is False
+    assert (
+        restarted.request(matchup_key("Team 4", "Brookfield", "football"), matchup_prompt("Team 4", "Brookfield"))
+        is False
+    )
     # A new UTC day starts a new count.
     clock.now += 86400
-    assert restarted.request(matchup_key("Team 4", "Brookfield", "football"), "Team 4", "Brookfield") is True
+    assert (
+        restarted.request(matchup_key("Team 4", "Brookfield", "football"), matchup_prompt("Team 4", "Brookfield"))
+        is True
+    )
     assert await restarted.process_next() is True and restarted.used_today == 1
 
 
@@ -146,18 +156,18 @@ async def test_failures_retry_twice_then_rest_a_day(tmp_path: Path, caplog: pyte
     key = matchup_key("Lakeview", "Brookfield", "football")
     caplog.set_level(logging.INFO)
     for attempt in range(3):
-        assert art.request(key, "Lakeview", "Brookfield") is True, attempt
+        assert art.request(key, PROMPT_LB) is True, attempt
         assert await art.process_next() is False
         # Not asked again at once.
-        assert art.request(key, "Lakeview", "Brookfield") is False
+        assert art.request(key, PROMPT_LB) is False
         clock.now += RETRY_AFTER_S + 1
     # Three failures: left alone for a day, also after a restart.
     assert len(api.requests) == 3
     restarted = make(tmp_path, api, clock, daily_limit=50)
-    assert restarted.request(key, "Lakeview", "Brookfield") is False
+    assert restarted.request(key, PROMPT_LB) is False
     clock.now += GIVE_UP_S
     api.status = 200
-    assert restarted.request(key, "Lakeview", "Brookfield") is True
+    assert restarted.request(key, PROMPT_LB) is True
     assert await restarted.process_next() is True
     # The key never reaches a log line, even through the formatter.
     handler_filter, formatter = RedactionFilter(), TextFormatter()
@@ -175,7 +185,7 @@ async def test_unreadable_answers_are_failures(tmp_path: Path) -> None:
     api.body = {"data": [{"b64_json": base64.b64encode(b"<svg/>").decode()}]}
     art = make(tmp_path, api)
     key = matchup_key("Lakeview", "Brookfield", "football")
-    art.request(key, "Lakeview", "Brookfield")
+    art.request(key, PROMPT_LB)
     assert await art.process_next() is False and not art.has(key)
     assert not list(art.root.glob("*.jpg"))
 
@@ -259,7 +269,7 @@ async def test_facts_ask_for_art_by_scoreboard_names_for_games_on_now_or_soon(tm
     assert art.pending == 1
     await art.process_next()
     prompt = json.loads(api.requests[0].content)["prompt"]
-    assert "Lakeview Kestrels American football helmet on the left" in prompt and "Brookfield Badgers" in prompt
+    assert "the Lakeview Kestrels American football helmet" in prompt and "the Brookfield Badgers American" in prompt
     again = event("Brookfield Badgers", "Lakeview Kestrels")
     await facts.annotate([again])
     assert again["matchup"]["art_url"] and "/api/v1/sports/art/" in again["matchup"]["art_url"]

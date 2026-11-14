@@ -133,6 +133,10 @@ class AppSettings(BaseSettings):
         return self.config_dir / "art" / "matchups"
 
     @property
+    def helmet_overrides_path(self) -> Path:
+        return self.config_dir / "art" / "helmets.json"
+
+    @property
     def playlist_dir(self) -> Path:
         return self.config_dir / "playlists"
 
