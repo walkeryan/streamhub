@@ -58,7 +58,19 @@ fun browseFacetParameters(sourceId: String? = null, language: String? = null, ca
     @SerialName("source_name") val sourceName: String,
     val language: String? = null,
     @SerialName("language_verified") val languageVerified: Boolean = false,
+    @SerialName("channel_number") val channelNumber: Int? = null,
+    /** 4K | UHD | FHD | HD | SD, as the provider's channel name advertises; null when it names none. */
+    val quality: String? = null,
 )
+
+/** SportsEvent.kind and .status values, as text: one this build does not know still decodes. */
+object SportsKinds {
+    const val EVENT = "event"
+    /** A game channel: an event slot whose name carries no date. It claims no time; its status is unscheduled. */
+    const val CHANNEL = "channel"
+    const val UNSCHEDULED = "unscheduled"
+}
+
 @Serializable data class SportsEvent(
     val id: String, val title: String, val sport: String,
     val start: String, val stop: String, val status: String,
@@ -66,7 +78,46 @@ fun browseFacetParameters(sourceId: String? = null, language: String? = null, ca
     @SerialName("live_evidence") val liveEvidence: Boolean = false,
     @SerialName("grouping_evidence") val groupingEvidence: String? = null,
     val feeds: List<SportsFeed> = emptyList(),
+    val kind: String = SportsKinds.EVENT,
+    /** Network or league label of an event slot; null for a guide programme. */
+    val league: String? = null,
+    /** With [away]: the two sides when the title spells out a matchup. Null otherwise: nothing is guessed. */
+    val home: String? = null,
+    val away: String? = null,
 )
+
+/** GET /sports/channels: an always-on sports network. [now] is null without real guide data. */
+@Serializable data class SportsChannel(
+    @SerialName("channel_id") val channelId: String,
+    @SerialName("channel_name") val channelName: String,
+    @SerialName("channel_number") val channelNumber: Int = 0,
+    val logo: String? = null,
+    val group: String = "",
+    val quality: String? = null,
+    val language: String? = null,
+    @SerialName("source_id") val sourceId: String = "",
+    val now: Programme? = null,
+)
+@Serializable data class SportsChannelsPage(
+    val channels: List<SportsChannel> = emptyList(), val total: Int = 0,
+    val limit: Int = 40, val offset: Int = 0, val truncated: Boolean = false,
+)
+
+/**
+ * Query for GET /sports/events as the Sports screen asks it: everything that is not over
+ * (`status=active`: live, upcoming and game channels) for [days] calendar days from [date] in the
+ * viewer's own [timezone].
+ */
+fun sportsEventParameters(filters: NativeSportsFilters, date: String, days: Int, timezone: String, offset: Int, limit: Int = 100): Map<String, String> = buildMap {
+    filters.language?.let { put("language", it) }
+    filters.sport?.let { put("sport", it) }
+    filters.query.trim().take(200).takeIf { it.isNotEmpty() }?.let { put("q", it) }
+    put("date", date)
+    put("timezone", timezone)
+    put("days", days.coerceIn(1, 7).toString())
+    put("status", "active")
+    put("offset", offset.coerceAtLeast(0).toString()); put("limit", limit.coerceIn(1, 100).toString())
+}
 @Serializable data class SportsEventCoverage(
     @SerialName("eligible_channels") val eligibleChannels: Int = 0,
     @SerialName("channels_with_sports_schedule") val scheduledChannels: Int = 0,

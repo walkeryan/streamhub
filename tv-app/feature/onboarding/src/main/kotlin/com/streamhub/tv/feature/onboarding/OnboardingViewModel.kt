@@ -48,6 +48,8 @@ class OnboardingViewModel @Inject constructor(
     private val _state = MutableStateFlow(OnboardingState())
     val state: StateFlow<OnboardingState> = _state.asStateFlow()
     private var pollJob: Job? = null
+    /** Asked to start at the address ([startAtServer]); the first step read from the session must not override it. */
+    private var atServer = false
 
     init {
         viewModelScope.launch {
@@ -67,6 +69,7 @@ class OnboardingViewModel @Inject constructor(
                     },
                 )
             }
+            if (atServer && _state.value.step != OnboardingStep.Disclaimer) _state.update { it.copy(step = OnboardingStep.Server) }
             if (_state.value.step == OnboardingStep.Disclaimer && !s.serverUrl.isNullOrBlank()) loadDisclaimer()
             if (_state.value.step == OnboardingStep.Pairing) startPairing()
         }
@@ -153,6 +156,11 @@ class OnboardingViewModel @Inject constructor(
         me.clear()
         runCatching { me.refresh() }
         _state.update { it.copy(step = OnboardingStep.Done) }
+    }
+
+    fun startAtServer() {
+        atServer = true
+        if (_state.value.step == OnboardingStep.Pairing) backToServer()
     }
 
     fun backToServer() {

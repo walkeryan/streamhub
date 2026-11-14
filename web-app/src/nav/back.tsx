@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useSession } from '../store/session'
 import { useLocation, useNavigate } from 'react-router'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from './spatial'
+import { handOffUrl, inShell, setShellBack } from '../shell'
 
 /* ---------------- Back stack: Escape / Backspace / platform Back ---------------- */
 type BackHandler = () => boolean | void
@@ -39,6 +40,17 @@ export function useGlobalBack(): void {
   const atRoot = useRef(true)
   atRoot.current = loc.key === 'default'
   useEffect(() => {
+    /** One press of Back. False only on the home screen with nothing to close. */
+    const handle = (): boolean => {
+      if (runBack()) return true
+      // In the Android TV app the first entry of this page's history is the bottom: going back from it
+      // would leave the app's page (an entry replaced at start has a key, so the key alone cannot say).
+      const bottom = atRoot.current || (inShell() && !Number((window.history.state as { idx?: unknown } | null)?.idx))
+      if (!bottom) navigate(-1)
+      else if (location.pathname !== '/') navigate('/', { replace: true })
+      else return false
+      return true
+    }
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
       const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
@@ -46,12 +58,12 @@ export function useGlobalBack(): void {
       if (!isBack) return
       if (e.defaultPrevented) return
       e.preventDefault()
-      if (runBack()) return
-      if (!atRoot.current) navigate(-1)
-      else if (location.pathname !== '/') navigate('/', { replace: true })
+      handle()
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // The Android TV app's Back key asks the same question (window.streamhubShell.back()).
+    setShellBack(handle)
+    return () => { window.removeEventListener('keydown', onKey); setShellBack(null) }
   }, [navigate])
 }
 
@@ -76,6 +88,8 @@ export function useGo() {
   const navigate = useNavigate()
   const loc = useLocation()
   return (to: string, opts?: { replace?: boolean }) => {
+    // Inside the Android TV app its own player plays: this screen stays as it is, focus included.
+    if (to.startsWith('/play/') && handOffUrl(to)) return
     memory.set(loc.key, getCurrentFocusKey())
     const session = useSession.getState()
     const index = window.history.state?.idx

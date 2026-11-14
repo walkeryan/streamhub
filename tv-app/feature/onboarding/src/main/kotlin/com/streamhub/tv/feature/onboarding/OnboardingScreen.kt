@@ -46,7 +46,9 @@ import com.streamhub.tv.core.ui.theme.Tokens
 import kotlinx.coroutines.delay
 
 @Composable
-fun OnboardingScreen(onDone: () -> Unit, vm: OnboardingViewModel = hiltViewModel()) {
+fun OnboardingScreen(onDone: () -> Unit, startAtServer: Boolean = false, vm: OnboardingViewModel = hiltViewModel()) {
+    // "Change server" from the shell: the address first, even though one is known.
+    LaunchedEffect(vm, startAtServer) { if (startAtServer) vm.startAtServer() }
     val s by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(s.step) { if (s.step == OnboardingStep.Done) onDone() }
     ScreenBackground {

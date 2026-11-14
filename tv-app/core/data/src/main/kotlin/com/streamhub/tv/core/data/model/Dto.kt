@@ -74,8 +74,18 @@ data class Profile(
     @SerialName("content_restricted") val contentRestricted: Boolean = false,
 )
 
+/**
+ * PUT /profiles/{id}/pin. Changing or clearing one's own existing PIN needs proof that this is still
+ * its owner: [currentPin] (or [currentPassword]). A first PIN needs neither. `pin` null clears.
+ */
 @Serializable
-data class PinUpdate(val pin: String?)
+data class PinUpdate(
+    val pin: String?,
+    @SerialName("current_pin") val currentPin: String? = null,
+    @SerialName("current_password") val currentPassword: String? = null,
+) {
+    override fun toString(): String = "PinUpdate(pin=[REDACTED], currentPin=[REDACTED], currentPassword=[REDACTED])"
+}
 
 // ---- Disclaimer --------------------------------------------------------------------------------
 
@@ -202,6 +212,8 @@ data class Tile(
     @SerialName("request_state") val requestState: String? = null,
     /** No in-app source, a request manager is configured and the profile may request. */
     val requestable: Boolean = false,
+    /** What that same request is doing right now; set exactly when [requestState] is (by servers that report progress). */
+    @SerialName("request_progress") val requestProgress: TileRequestProgress? = null,
 ) {
     val playableInApp: Boolean get() = sources.any { it.playableInApp }
 }
@@ -255,19 +267,101 @@ data class TitleDetail(
     val requestable: Boolean = false,
     /** Requestable series only: season numbers a request may pick from (empty = whole series only). */
     @SerialName("request_seasons") val requestSeasons: List<Int> = emptyList(),
+    @SerialName("request_progress") val requestProgress: TileRequestProgress? = null,
 ) {
-    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable)
+    fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable, requestProgress)
 }
 
+/**
+ * GET /search: one search across titles, live channels and guide broadcasts (on now, or starting
+ * within 48 hours). Every field is defaulted so the answer of a server older than a field decodes.
+ */
 @Serializable
 data class SearchResponse(
+    /** Titles, best first. Null only from servers that sent [playHere] and [openInApp] instead. */
     val results: List<Tile>? = null,
+    @SerialName("metadata_available") val metadataAvailable: Boolean? = null,
     @SerialName("discovery_note") val discoveryNote: String? = null,
     @SerialName("play_here") val playHere: List<Tile> = emptyList(),
     @SerialName("open_in_app") val openInApp: List<Tile> = emptyList(),
     val channels: List<Channel> = emptyList(),
+    val programmes: List<SearchProgramme> = emptyList(),
+    /**
+     * Ids of the results metadata discovery added: the titles the hub's own search (`discover=false`)
+     * does not list. Null from a server that does not name them.
+     */
+    val discovered: List<String>? = null,
+    val sections: SearchSections = SearchSections(),
+    /** The order to show the sections in (`programmes`, `channels`, `titles`); channels first for a channel's number or whole name. */
+    val order: List<String> = emptyList(),
     val attribution: String? = null,
+) {
+    /** The titles of the answer, whichever shape the server sent them in. */
+    val titles: List<Tile> get() = results ?: (playHere + openInApp)
+}
+
+/** How many a search section found, and whether it holds more than were returned (ask again with `expand`). */
+@Serializable
+data class SearchSection(val count: Int = 0, val more: Boolean = false)
+
+@Serializable
+data class SearchSections(
+    val titles: SearchSection = SearchSection(),
+    val channels: SearchSection = SearchSection(),
+    val programmes: SearchSection = SearchSection(),
 )
+
+/** One channel carrying a [SearchProgramme]. */
+@Serializable
+data class SearchFeed(
+    @SerialName("programme_id") val programmeId: String,
+    @SerialName("channel_id") val channelId: String,
+    @SerialName("channel_number") val channelNumber: Int = 0,
+    @SerialName("channel_name") val channelName: String = "",
+    @SerialName("channel_logo") val channelLogo: String? = null,
+)
+
+/**
+ * One broadcast of a search: a [Programme] as the guide lists it on the first channel carrying it
+ * (allOf in the contract, flattened here), and every channel with the same title at the same start
+ * as a feed. Can be recorded like any programme.
+ */
+@Serializable
+data class SearchProgramme(
+    val id: String,
+    @SerialName("channel_id") val channelId: String,
+    val start: String,
+    val stop: String,
+    val title: String,
+    val description: String? = null,
+    val category: String? = null,
+    val icon: String? = null,
+    @SerialName("catchup_available") val catchupAvailable: Boolean = false,
+    @SerialName("recording_state") val recordingState: String? = null,
+    @SerialName("is_sport") val isSport: Boolean = false,
+    val teams: List<String> = emptyList(),
+    @SerialName("on_now") val onNow: Boolean = false,
+    @SerialName("channel_number") val channelNumber: Int = 0,
+    @SerialName("channel_name") val channelName: String = "",
+    @SerialName("channel_logo") val channelLogo: String? = null,
+    val feeds: List<SearchFeed> = emptyList(),
+) {
+    fun asProgramme() = Programme(id, channelId, start, stop, title, description, category, icon, catchupAvailable, recordingState, isSport, teams)
+}
+
+/**
+ * Query for GET /search as the TV asks it, twice for every query. [discover] false is what the hub
+ * itself holds (its titles, channels and broadcasts) and answers at once; true also asks the
+ * metadata provider, for titles only. [expand] names the sections wanted in full.
+ */
+fun searchParameters(q: String, discover: Boolean, expand: Collection<String> = emptyList()): Map<String, String> = buildMap {
+    put("q", q.trim().take(200))
+    expand.filter { it in SEARCH_SECTIONS }.distinct().sorted().takeIf { it.isNotEmpty() }?.let { put("expand", it.joinToString(",")) }
+    if (discover) put("kinds", "movie,show") else put("discover", "false")
+}
+
+/** The section names of GET /search (`order`, `sections`, `expand`). */
+val SEARCH_SECTIONS = listOf("programmes", "channels", "titles")
 
 @Serializable
 data class BrowsePage(
@@ -339,6 +433,12 @@ data class ChannelList(
     val limit: Int? = null,
 )
 
+/**
+ * A channel group of one source. Groups have two levels: [name] is the group's own name (for a child,
+ * the part after the parent), [parent] the parent's name (null at the top level) and [path] what
+ * `Channel.group` carries and `GET /channels?group=` accepts: `Parent / Child`, or the name of a
+ * top-level group. A parent counts its children's channels with its own.
+ */
 @Serializable
 data class ChannelGroup(
     val id: String,
@@ -347,7 +447,13 @@ data class ChannelGroup(
     @SerialName("channel_count") val channelCount: Int,
     val hidden: Boolean,
     @SerialName("language_override") val languageOverride: String? = null,
-)
+    val parent: String? = null,
+    /** Absent on servers older than nested groups: [groupPath] then falls back to the name. */
+    val path: String = "",
+) {
+    /** What selects this group on the wire. */
+    val groupPath: String get() = path.ifBlank { name }
+}
 
 @Serializable
 data class ChannelGroupPatch(
@@ -370,6 +476,12 @@ data class PlaybackRequest(
     @SerialName("variant_id") val variantId: String? = null,
     @SerialName("allow_unverified_audio") val allowUnverifiedAudio: Boolean = false,
     @SerialName("rewind_at") val rewindAt: String? = null,
+    /**
+     * Set only on the one silent re-resolve after a stream answered 403 `playback_paused`: the
+     * generation GET /playback/generation gave just before. Left out otherwise.
+     */
+    @SerialName("recovery_generation") val recoveryGeneration: String? = null,
+    // No max_height: the quality cap is for the web player and is ignored for android_tv, so it is never sent.
 )
 
 @Serializable
@@ -430,6 +542,49 @@ data class PlaybackDescriptor(
      * stream [startPositionMs] describes. Null for every other descriptor.
      */
     @SerialName("stream_epoch") val streamEpoch: Int? = null,
+    /** What is playing and how it reaches this TV, for the player's stream information; null for a hand-off. Informational only. */
+    @SerialName("media_info") val mediaInfo: MediaInfo? = null,
+)
+
+/**
+ * What is playing and how it is delivered (PlaybackDescriptor.media_info). The file's facts come from
+ * the server's media probe, the delivery from what it planned for this stream. A field the server
+ * does not know is left out. Never a URL, a host name or a credential.
+ */
+@Serializable
+data class MediaInfo(
+    /** The owner's name for the source; for a recording, the channel it was recorded from. */
+    @SerialName("source_name") val sourceName: String? = null,
+    /** ffprobe format name of the file, e.g. matroska, mov, mpegts. */
+    val container: String? = null,
+    @SerialName("bitrate_kbps") val bitrateKbps: Int? = null,
+    val video: MediaInfoVideo? = null,
+    val audio: MediaInfoAudio? = null,
+    /** direct | remux | transcode */
+    val delivery: String = "direct",
+    /** transcode only: hardware | software. */
+    val encoder: String? = null,
+    @SerialName("output_width") val outputWidth: Int? = null,
+    @SerialName("output_height") val outputHeight: Int? = null,
+    @SerialName("max_height") val maxHeight: Int? = null,
+)
+
+@Serializable
+data class MediaInfoVideo(
+    val codec: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    @SerialName("frame_rate") val frameRate: Double? = null,
+    /** sdr | hdr10 | hlg */
+    @SerialName("dynamic_range") val dynamicRange: String? = null,
+)
+
+@Serializable
+data class MediaInfoAudio(
+    /** Codec in the file; a remux or a transcode delivers it as AAC stereo. */
+    val codec: String? = null,
+    val channels: Int? = null,
+    val language: String? = null,
 )
 
 @Serializable
@@ -537,6 +692,15 @@ data class PlaybackOptions(
     @SerialName("google_required") val googleRequired: Boolean = true,
     @SerialName("content_policy_enabled") val contentPolicyEnabled: Boolean = false,
     @SerialName("owner_pin_configured") val ownerPinConfigured: Boolean = false,
+    /** "Continue with Plex" and username-and-password sign-in are offered (on the web: a TV pairs with a code). */
+    @SerialName("plex_enabled") val plexEnabled: Boolean = false,
+    @SerialName("password_enabled") val passwordEnabled: Boolean = false,
+    /**
+     * The household profile picker (GET /profiles without a token, POST /auth/login) is open to this
+     * request: it comes from the home network and google_required is false. Null from a server that
+     * does not say, which is treated as before.
+     */
+    @SerialName("profiles_enabled") val profilesEnabled: Boolean? = null,
 )
 @Serializable data class OwnerPinStart(@SerialName("profile_id") val profileId: String, val action: String = "profile_switch")
 @Serializable data class OwnerPinChallenge(

@@ -51,7 +51,7 @@ class PlaybackCoordinator @Inject constructor(
     private var inFlight: Job? = null
     /** The attempt behind the last [PlayEvent.Error], kept whole so a retry passes the same checks. */
     private var lastFailed: Attempt? = null
-    private data class Attempt(val request: PlaybackRequest, val preflight: Boolean, val expectedOwner: CatalogScope?)
+    private data class Attempt(val request: PlaybackRequest, val preflight: Boolean, val expectedOwner: CatalogScope?, val startPositionMs: Long? = null)
     private var choiceOwner: CatalogScope? = null
     private var activeOwner: String? = null
     private var stopActive: (suspend () -> Unit)? = null
@@ -66,6 +66,18 @@ class PlaybackCoordinator @Inject constructor(
         submit(PlaybackRequest(id = id, sourceId = sourceId, catchupProgrammeId = catchupProgrammeId))
     }
 
+    /**
+     * Play pressed in the web app shown by the shell. A variant the web app already chose (its own
+     * audio check, or the viewer's consent) is resolved as it is; without one this TV checks the audio
+     * itself and may ask. [startPositionMs] starts the player there instead of at the resume position.
+     */
+    fun playFromShell(request: PlaybackRequest, startPositionMs: Long? = null) {
+        submit(request, preflight = request.variantId == null, startPositionMs = startPositionMs)
+    }
+
+    /** A failure that happened before anything could be resolved (a room seat that could not be taken up). */
+    fun reportError(error: UserError) { _events.tryEmit(PlayEvent.Error(error)) }
+
     fun chooseAudio(request: PlaybackRequest, variantId: String, confirmed: Boolean) {
         submit(request.copy(variantId = variantId, allowUnverifiedAudio = confirmed), preflight = false, expectedOwner=choiceOwner ?: return)
     }
@@ -73,7 +85,7 @@ class PlaybackCoordinator @Inject constructor(
     fun cancelPending() { inFlight?.cancel(); choiceOwner=null }
 
     /** "Try again" on the error dialog. A no-op once the failure has been dismissed or superseded. */
-    fun retryLast() { val attempt = lastFailed ?: return; submit(attempt.request, attempt.preflight, attempt.expectedOwner) }
+    fun retryLast() { val attempt = lastFailed ?: return; submit(attempt.request, attempt.preflight, attempt.expectedOwner, attempt.startPositionMs) }
     fun dismissError() { lastFailed = null }
 
     /**
@@ -92,7 +104,7 @@ class PlaybackCoordinator @Inject constructor(
         if(activeOwner==owner) { activeOwner=null; stopActive=null }
     }
 
-    private fun submit(request: PlaybackRequest, preflight: Boolean = true, expectedOwner: CatalogScope? = null) {
+    private fun submit(request: PlaybackRequest, preflight: Boolean = true, expectedOwner: CatalogScope? = null, startPositionMs: Long? = null) {
         inFlight?.cancel()
         lastFailed = null
         inFlight = scope.launch {
@@ -108,12 +120,12 @@ class PlaybackCoordinator @Inject constructor(
                 if(sessions.current().catalogScope()!=owner) return@launch
                 when (result) {
                     is AudioPlaybackAttempt.Choice -> { choiceOwner=owner; _events.emit(PlayEvent.ChooseAudio(result.request, result.options)) }
-                    is AudioPlaybackAttempt.Ready -> { choiceOwner=null; dispatch(result.descriptor, result.request) }
+                    is AudioPlaybackAttempt.Ready -> { choiceOwner=null; dispatch(startPositionMs?.let { at -> result.descriptor.copy(resumePositionMs = at) } ?: result.descriptor, result.request) }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                lastFailed = Attempt(request, preflight, expectedOwner)
+                lastFailed = Attempt(request, preflight, expectedOwner, startPositionMs)
                 _events.emit(PlayEvent.Error(describePlayFailure(request.id, e)))
             }
         }

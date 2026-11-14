@@ -21,6 +21,8 @@ import { useSession } from '../store/session'
 import { useAccess } from '../api/me'
 import { can } from '../lib/can'
 import { Player } from './Player'
+import { handOff, inShell } from '../shell'
+import { roomPlay } from '../shellProtocol'
 
 const KIND_LABEL: Record<string, string> = { movie: 'Movie', show: 'Series', episode: 'Episode', channel: 'Live channel' }
 
@@ -73,8 +75,11 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
     setJoining(true); setRefusal(null)
     try {
       const { generation } = await unwrap<{ generation: string }>(api.GET('/playback/generation'))
+      // Inside the Android TV app the seat is taken for the TV's player, which takes it up with its member token.
+      const shell = inShell()
       // A seat this tab still holds (a reload, a connection that came back) is kept, not doubled.
-      const joined = await joinRoom(code, { client: 'web', prefer_hls: prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio, member_token: seatToken(code) })
+      const joined = await joinRoom(code, { client: shell ? 'android_tv' : 'web', prefer_hls: shell ? false : prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio, member_token: seatToken(code) })
+      if (shell) { handOff(roomPlay(code, joined.member_token, allowUnverifiedAudio)); return }
       setSession(new RoomSession(known, joined, { generation, allowUnverifiedAudio, startAtMs }))
       setSeat((n) => n + 1)
     } catch (e) {

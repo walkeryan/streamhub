@@ -31,8 +31,8 @@ android {
         applicationId = "com.streamhub.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 6
-        versionName = "1.1.4"
+        versionCode = 8
+        versionName = "1.2.1"
     }
 
     buildTypes {
@@ -81,17 +81,7 @@ dependencies {
     implementation(project(":core:data"))
     implementation(project(":core:player"))
     implementation(project(":feature:onboarding"))
-    implementation(project(":feature:home"))
-    implementation(project(":feature:search"))
-    implementation(project(":feature:livetv"))
-    implementation(project(":feature:guide"))
-    implementation(project(":feature:details"))
     implementation(project(":feature:player"))
-    implementation(project(":feature:favorites"))
-    implementation(project(":feature:sources"))
-    implementation(project(":feature:settings"))
-    implementation(project(":feature:recordings"))
-    implementation(project(":feature:requests"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -112,4 +102,7 @@ dependencies {
     implementation(libs.ktor.client.cio)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     debugImplementation(libs.compose.ui.tooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

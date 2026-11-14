@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import kotlinx.coroutines.CancellationException
 import com.streamhub.tv.core.data.repo.boundProgressRequest
 import com.streamhub.tv.core.data.repo.bindProgressSession
+import com.streamhub.tv.core.data.auth.AccessTokenSource
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.*
 import io.ktor.client.HttpClient
@@ -47,6 +48,7 @@ sealed interface PollResult<out T> {
 class StreamHubApi @Inject constructor(
     private val client: HttpClient,
     private val session: SessionStore,
+    private val webTokens: AccessTokenSource,
 ) {
     private suspend fun url(path: String): String {
         val base = session.current().apiBase ?: throw ApiException(0, null, "Server URL not set")
@@ -125,8 +127,13 @@ class StreamHubApi @Inject constructor(
     suspend fun homeLayout(profileId: String): HomeLayout = get("/profiles/${id(profileId)}/home_layout")
     suspend fun putHomeLayout(profileId: String, layout: HomeLayout): HomeLayout =
         client.put(url("/profiles/${id(profileId)}/home_layout")) { setBody(layout) }.ok()
-    suspend fun setPin(profileId: String, pin: String?) =
-        client.put(url("/profiles/${id(profileId)}/pin")) { setBody(PinUpdate(pin)) }.unit()
+    /**
+     * Sets, changes or (with [pin] null) clears a profile's PIN. Changing or clearing an existing PIN of
+     * one's own needs [currentPin]: 403 `current_pin_required` without it, 403 `pin_invalid` when it is
+     * wrong (five guesses in fifteen minutes, then 429).
+     */
+    suspend fun setPin(profileId: String, pin: String?, currentPin: String? = null) =
+        client.put(url("/profiles/${id(profileId)}/pin")) { setBody(PinUpdate(pin, currentPin)) }.unit()
 
     // ---- Disclaimer ----------------------------------------------------------------------------
 
@@ -163,11 +170,12 @@ class StreamHubApi @Inject constructor(
 
     suspend fun home(): HomeResponse = get("/home")
 
-    suspend fun search(q: String, kinds: List<MediaKind>? = null, limit: Int = 40, languages: List<String>? = null, sourceId: String? = null): SearchResponse = get("/search") {
-        parameter("q", q)
-        applySearchFilters(languages, sourceId)
-        kinds?.let { k -> parameter("kinds", k.joinToString(",") { it.wire }) }
-        parameter("limit", limit)
+    /**
+     * One search across titles, channels and guide broadcasts. Asked twice per query: [discover] false
+     * for what the hub holds, then true for the titles the metadata provider adds (see [searchParameters]).
+     */
+    suspend fun search(q: String, discover: Boolean, expand: Collection<String> = emptyList()): SearchResponse = get("/search") {
+        searchParameters(q, discover, expand).forEach { (key, value) -> parameter(key, value) }
     }
 
     suspend fun title(titleId: String): TitleDetail = get("/titles/${id(titleId)}")
@@ -212,14 +220,15 @@ class StreamHubApi @Inject constructor(
         sportsRecordingParameters(filters,offset,limit).forEach { (key,value) -> parameter(key,value) }
     }
 
-    suspend fun sportsEvents(filters: NativeSportsFilters, offset: Int = 0, limit: Int = 40): SportsEventsPage = get("/sports/events") {
-        filters.language?.let { parameter("language", it) }
-        filters.sport?.let { parameter("sport", it) }
-        filters.query.trim().take(200).takeIf { it.isNotEmpty() }?.let { parameter("q",it) }
-        filters.date?.let { parameter("date", it) }
-        parameter("timezone", "America/New_York")
-        parameter("status", filters.status)
-        parameter("offset", offset)
+    /** Live, upcoming and game-channel events for [days] days from [date], days being the viewer's own ([timezone]). */
+    suspend fun sportsEvents(filters: NativeSportsFilters, date: String, days: Int, timezone: String, offset: Int = 0, limit: Int = 100): SportsEventsPage = get("/sports/events") {
+        sportsEventParameters(filters, date, days, timezone, offset, limit).forEach { (key, value) -> parameter(key, value) }
+    }
+
+    /** Always-on sports networks, by channel number. */
+    suspend fun sportsChannels(language: String? = null, q: String? = null, limit: Int = 24): SportsChannelsPage = get("/sports/channels") {
+        language?.let { parameter("language", it) }
+        q?.trim()?.take(200)?.takeIf { it.isNotEmpty() }?.let { parameter("q", it) }
         parameter("limit", limit)
     }
 
@@ -320,9 +329,19 @@ class StreamHubApi @Inject constructor(
 
     suspend fun reportProgress(report: ProgressReport, owner:Session):Boolean {
         val request=boundProgressRequest(owner,session.current(),report) ?: return false
-        client.post(request.url) {
+        val response=client.post(request.url) {
             bindProgressSession(request)
-        }.unit()
+        }
+        // A report carries its token outside the bearer plugin, so an access token that aged out during
+        // a long film is renewed here: the web app is asked for a current one and the report sent once more,
+        // still bound to the same owner (a token for another person is not sent).
+        if(response.status==HttpStatusCode.Unauthorized && session.current().webOwned) {
+            webTokens.currentAccessToken(request.accessToken) ?: response.unit()
+            val again=boundProgressRequest(owner,session.current(),report) ?: return false
+            client.post(again.url) { bindProgressSession(again) }.unit()
+            return true
+        }
+        response.unit()
         return true
     }
 
@@ -371,6 +390,10 @@ class StreamHubApi @Inject constructor(
     suspend fun requests(all: Boolean = false): RequestsResponse = get("/requests") { parameter("scope", if (all) "all" else "mine") }
     /** 201 created, or 200 when an open request for this title already exists: both answer with the request. */
     suspend fun createRequest(req: RequestCreate): MediaRequest = client.post(url("/requests")) { setBody(req) }.ok()
+    /** One request, for its requester or whoever may approve; its stored progress, refreshed first when stale. */
+    suspend fun request(requestId: String): MediaRequest = get("/requests/${id(requestId)}")
+    /** Asks the request manager about this request now (at most every 5 s; sooner calls answer the stored progress). */
+    suspend fun refreshRequest(requestId: String): MediaRequest = client.post(url("/requests/${id(requestId)}/refresh")).ok()
     suspend fun approveRequest(requestId: String, note: String? = null): MediaRequest =
         client.post(url("/requests/${id(requestId)}/approve")) { setBody(RequestDecision(note)) }.ok()
     suspend fun declineRequest(requestId: String, note: String? = null): MediaRequest =

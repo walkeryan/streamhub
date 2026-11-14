@@ -148,10 +148,11 @@ fun recordingStateMark(state: String?): String? = when (state) {
 fun Recording.isUpcoming(): Boolean = state == RecordingStates.SCHEDULED || state == RecordingStates.RECORDING
 
 /**
- * Has a file to play as `rec:<id>`: a finished recording, and one that failed part-way but kept
- * what it had (the server reports its size).
+ * Has a file to play as `rec:<id>`: the server's own word (`has_file`), which is also false for a
+ * finished recording whose file has since been removed. Only a server that does not send it is
+ * guessed for, as before: done, or failed with something written.
  */
-fun Recording.isPlayable(): Boolean = state == RecordingStates.DONE || (state == RecordingStates.FAILED && (sizeBytes ?: 0) > 0)
+fun Recording.isPlayable(): Boolean = hasFile ?: (state == RecordingStates.DONE || (state == RecordingStates.FAILED && (sizeBytes ?: 0) > 0))
 
 /** The id POST /playback/resolve plays a recording under; progress is reported under the same id. */
 fun Recording.playbackId(): String = "rec:$id"

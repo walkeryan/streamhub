@@ -38,6 +38,8 @@ import coil3.size.Size
 import com.streamhub.tv.core.data.model.Channel
 import com.streamhub.tv.core.data.model.Programme
 import com.streamhub.tv.core.data.model.Tile
+import com.streamhub.tv.core.data.repo.requestStatus
+import com.streamhub.tv.core.data.repo.tileRequest
 import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
@@ -72,12 +74,16 @@ fun PosterTile(
     modifier: Modifier = Modifier,
     onFocus: (Tile) -> Unit = {},
     onLongClick: (() -> Unit)? = null,
-    /** A few words over the top of the artwork ("Not available", "Requested"); null for none. */
+    /** A few words over the top of the artwork (a tick, "Requested"); null for none. */
     badge: String? = null,
+    /** The source chips at the foot of the artwork. Off where the badge alone says whether the title plays here. */
+    showSources: Boolean = true,
 ) {
     val t = LocalThemeTokens.current
     var isFocused by remember { mutableStateOf(false) }
     val art = rememberAdaptiveArt(tile.poster)
+    // A request in progress for a title that does not play here: a small chip, and while it downloads a thin bar.
+    val request = remember(tile.requestState, tile.requestProgress, tile.sources) { tileRequest(tile)?.let(::requestStatus) }
     Column(modifier.width(Tokens.Tile.PosterW)) {
         FocusSurface(
             onClick = onClick,
@@ -106,14 +112,17 @@ fun PosterTile(
             tile.progressPct?.takeIf { it > 0 }?.let {
                 ProgressLine((it / 100.0).toFloat(), Modifier.align(Alignment.BottomCenter).padding(6.dp))
             }
-            SourceBadges(tile.sources, Modifier.align(Alignment.BottomEnd).padding(6.dp).padding(bottom = 8.dp), max = 1)
+            if (showSources) SourceBadges(tile.sources, Modifier.align(Alignment.BottomEnd).padding(6.dp).padding(bottom = 8.dp), max = 1)
             if (badge != null) {
                 Text(
                     badge,
                     style = MaterialTheme.typography.labelSmall, color = t.text, maxLines = 1,
                     modifier = Modifier.align(Alignment.TopStart).padding(6.dp).background(t.overlay, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
                 )
+            } else if (request != null) {
+                RequestChip(request, Modifier.align(Alignment.TopStart).padding(6.dp), compact = true)
             }
+            request?.bar?.let { RequestProgressBar(it, Modifier.align(Alignment.BottomCenter).padding(horizontal = 6.dp, vertical = 6.dp), height = 4.dp) }
         }
         Box(Modifier.height(40.dp).padding(top = 8.dp)) {
             if (isFocused || tile.poster == null) {
@@ -190,7 +199,8 @@ fun ChannelTile(
                     listOfNotNull(number?.toString(), title).joinToString("  "),
                     style = MaterialTheme.typography.labelLarge, color = t.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                Text(now?.title ?: "No programme info", style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // Without guide data the channel stands alone: its name is not repeated as a programme, nor its absence spelled out.
+                if (now != null) Text(now.title, style = MaterialTheme.typography.labelSmall, color = t.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 programmeProgress(now)?.let { ProgressLine(it, Modifier.padding(top = 6.dp), height = 3.dp) }
             }
         }

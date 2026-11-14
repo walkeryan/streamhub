@@ -16,8 +16,16 @@ object StreamRefusals {
      *  - 403 `remote_access_denied`: the user may only watch on the home network
      *  - 403 `content_restricted`: the user's rating ceiling changed and no longer admits the title
      *  - 409 `user_stream_limit`: the user's limit is now used by their other streams
+     *  - 403 `stream_epoch_stale`: a segment of an earlier start of a watch room's shared stream, which a
+     *    seek has since restarted. Asking for it again answers the same; the member's descriptor
+     *    (GET /rooms/{code}/descriptor) says where the room's stream is now.
+     *  - 403 `playback_paused`: the stream was issued before the server restarted, or an administrator
+     *    stopped playback. The address is dead either way; a fresh resolve tells the two apart.
      */
-    val CODES: Set<String> = setOf("session_revoked", "user_suspended", "session_stale", "remote_access_denied", "content_restricted", "user_stream_limit")
+    val CODES: Set<String> = setOf("session_revoked", "user_suspended", "session_stale", "remote_access_denied", "content_restricted", "user_stream_limit", STREAM_EPOCH_STALE, PLAYBACK_PAUSED)
+
+    const val STREAM_EPOCH_STALE = "stream_epoch_stale"
+    const val PLAYBACK_PAUSED = "playback_paused"
 
     /** Asking for the stream again is worth it once the session has been refreshed (or found to be over). */
     val ABOUT_THE_SESSION: Set<String> = setOf("session_revoked", "user_suspended", "session_stale")

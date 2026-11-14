@@ -15,6 +15,8 @@ dependencies {
     ksp(libs.hilt.compiler)
     ksp(libs.kotlin.metadata.jvm)
     implementation(libs.kotlinx.coroutines.android)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.media3.test.utils)
     // Optional software audio decoding (AC-3 / E-AC-3 / DTS on TVs without those decoders):
     //   ./gradlew :app:assembleDebug -Pstreamhub.ffmpegDecoder=true
     // Off by default: the prebuilt FFmpeg build is GPL-3.0 and the default APK must not inherit that.

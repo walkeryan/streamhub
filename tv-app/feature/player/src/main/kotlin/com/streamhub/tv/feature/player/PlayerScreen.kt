@@ -31,6 +31,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.window.Dialog
 import com.streamhub.tv.core.player.TrackOption
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -491,7 +492,36 @@ private fun MiniList(channels: List<Channel>, currentId: String?, onPick: (Chann
     }
 }
 
-/** Menu: audio track · subtitles · aspect ratio · sleep timer. Every track is listed; undecodable ones are disabled. */
+/**
+ * "Stream info": the descriptor's media_info (source, container, codecs, resolution, delivery,
+ * encoder) and Media3's own numbers (resolution, dropped frames, buffered seconds, bandwidth
+ * estimate), read again every second while it is open. Back or Close returns to the menu.
+ */
+@Composable
+private fun StreamInfoDialog(vm: PlayerViewModel, s: PlayerScreenState, onDismiss: () -> Unit) {
+    val t = LocalThemeTokens.current
+    val close = remember { FocusRequester() }
+    val info = s.descriptor?.mediaInfo
+    val lines by produceState(streamInfoLines(info, vm.player.stats()), info) {
+        while (true) { value = streamInfoLines(info, vm.player.stats()); delay(1_000) }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(Modifier.width(560.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Stream info", style = MaterialTheme.typography.titleLarge, color = t.text)
+            if (info == null) Text("The server sent no details for this stream.", color = t.textMuted, style = MaterialTheme.typography.bodySmall)
+            lines.forEach { line ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(line.label, Modifier.width(170.dp), color = t.textMuted, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                    Text(line.value, Modifier.weight(1f), color = t.text, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            ShButton("Close", onDismiss, Modifier.padding(top = 8.dp).focusRequester(close))
+        }
+        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { close.requestFocus() } }
+    }
+}
+
+/** Menu: audio track · subtitles · aspect ratio · sleep timer · stream info. Every track is listed; undecodable ones are disabled. */
 @Composable
 private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiState) {
     val t = LocalThemeTokens.current
@@ -500,6 +530,8 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
     var confirmation by remember {mutableStateOf<TrackOption?>(null)}
     var confirmOpener by remember {mutableStateOf<FocusRequester?>(null)}
     var trackMessage by remember {mutableStateOf<String?>(null)}
+    var streamInfo by remember { mutableStateOf(false) }
+    val infoOpener = remember { FocusRequester() }
     val dismissTrack:()->Unit={confirmation=null;menuScope.launch {withFrameNanos{};runCatching {(confirmOpener ?: first).requestFocus()}}}
     LaunchedEffect(ps.audioTracks) {
         if(confirmation!=null && confirmation !in ps.audioTracks) {confirmation=null;trackMessage="Audio tracks changed. Choose again.";withFrameNanos{};runCatching{first.requestFocus()}}
@@ -566,9 +598,12 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PlayerViewModel.SLEEP_OPTIONS.forEach { m -> ShChip(m?.let { "$it" } ?: "Off", s.sleepMinutes == m, { vm.setSleep(m) }) }
         }
+        // What is playing and how it gets here: the server's facts and the player's own numbers.
+        ShButton("Stream info", { streamInfo = true }, Modifier.focusRequester(infoOpener))
         if (ps.error != null) ShButton("Retry stream", vm::retry)
         ShButton("Close controls",vm::hideOverlay)
     }
+    if (streamInfo) StreamInfoDialog(vm, s) { streamInfo = false; menuScope.launch { withFrameNanos { }; runCatching { infoOpener.requestFocus() } } }
     confirmation?.let {track ->
         val cancelFocus=remember {FocusRequester()}
         Dialog(onDismissRequest=dismissTrack) {
