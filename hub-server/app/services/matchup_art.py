@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import hashlib
 import json
 import logging
@@ -249,13 +248,17 @@ class MatchupArt:
         if self._state["day"] != today:
             self._state["day"], self._state["count"] = today, 0
 
-    def _save(self) -> None:
-        with contextlib.suppress(OSError):
+    def _save(self) -> bool:
+        """Write the cap and failures; False when the folder cannot be written."""
+        try:
             self.root.mkdir(parents=True, exist_ok=True)
             path = self.root / STATE_FILE
             partial = path.with_name(f"{STATE_FILE}.{secrets.token_hex(4)}.part")
             partial.write_text(json.dumps(self._state, separators=(",", ":")))
             os.replace(partial, path)
+        except OSError:
+            return False
+        return True
 
     @property
     def used_today(self) -> int:
@@ -325,9 +328,13 @@ class MatchupArt:
             return False
         if self.used_today >= self.daily_limit:
             return False
-        # Counted before the request, and on disk: a crash mid-request still spent it.
+        # Counted before the request, and on disk: a crash mid-request still spent it. A folder that
+        # cannot be written would lose every paid image, so nothing is asked for until it can.
         self._state["count"] += 1
-        await asyncio.to_thread(self._save)
+        if not await asyncio.to_thread(self._save):
+            self._state["count"] -= 1
+            log.warning("matchup art folder not writable", extra={"art_key": key})
+            return False
         try:
             body = await self._call(prompt)
             await asyncio.to_thread(self._write, key, body)

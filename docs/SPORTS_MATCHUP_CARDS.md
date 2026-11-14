@@ -1,9 +1,12 @@
 # Sports matchup cards
 
-On the Sports screen, a live American football game (NFL or college) whose listing names both teams is
-shown as a broadcast-style card: the two teams' helmets face to face in a generated image, the names in
-the teams' colours, the top-25 ranking, the records, a big "VS.", the clock, and a win probability bar in
-the two colours. Coming up rows get a small copy of the image and the rankings before the names. Scores
+The Sports screen opens as rows of 16:9 tiles, like Movies: Live now, then one row per sport (busiest
+first), each holding today's and tomorrow's games with a "See all" tile that opens that sport's list.
+An American football game (NFL or college) whose listing names both teams is drawn as a broadcast-style
+card, on its tile and at the top of its sheet: the two teams' helmets face to face in a generated image,
+the names in the teams' colours, the top-25 ranking, the records, a big "VS.", the clock, and (live) a
+win probability bar in the two colours. Other games get their title over a tint of their sport. Picking a
+sport or searching shows the list, whose rows carry a small copy of the image and the rankings. Scores
 are never shown, and a replay shows neither the clock nor the win probability. The design is in
 [superpowers/specs/2026-11-14-sports-matchup-cards-design.md](superpowers/specs/2026-11-14-sports-matchup-cards-design.md).
 
@@ -22,7 +25,7 @@ The images are made with xAI's image API, one per pairing (away team, home team,
 every channel and in replays. They are stored as files under `CONFIG_DIR/art/matchups/`, never in the
 database, and reach the browser through signed, expiring URLs like the hub's other artwork. Until an
 image exists the card shows the two team colours split on the diagonal; the image fades in once it is
-there. Images are asked for games on now and games starting within three hours.
+there. Images are asked for games on now and games starting within 16 hours (the rest of the day's slate).
 
 ### Helmet descriptions
 

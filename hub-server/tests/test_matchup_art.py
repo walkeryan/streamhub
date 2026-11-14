@@ -180,6 +180,16 @@ async def test_failures_retry_twice_then_rest_a_day(tmp_path: Path, caplog: pyte
     assert API_KEY not in caplog.text
 
 
+async def test_unwritable_folder_spends_nothing(tmp_path: Path) -> None:
+    api = ImageApi()
+    blocker = tmp_path / "art"
+    blocker.write_text("a file where the folder should be")
+    art = make(tmp_path, api)
+    assert art.url_for("Lakeview", "Brookfield", "football") is None
+    assert await art.process_next() is False
+    assert api.requests == [] and art.used_today == 0
+
+
 async def test_unreadable_answers_are_failures(tmp_path: Path) -> None:
     api = ImageApi()
     api.body = {"data": [{"b64_json": base64.b64encode(b"<svg/>").decode()}]}
@@ -254,7 +264,7 @@ async def test_bound_grant_checks_the_session() -> None:
     assert art_payload(KEY, policy(applies=True)) is None
 
 
-async def test_facts_ask_for_art_by_scoreboard_names_for_games_on_now_or_soon(tmp_path: Path) -> None:
+async def test_facts_ask_for_art_by_scoreboard_names_for_the_days_games(tmp_path: Path) -> None:
     from datetime import timedelta
 
     from app.services.sports_facts import SportsFacts
@@ -263,9 +273,9 @@ async def test_facts_ask_for_art_by_scoreboard_names_for_games_on_now_or_soon(tm
     api = ImageApi()
     art = make(tmp_path, api, daily_limit=10)
     facts = SportsFacts(Espn().factory, art=art, now=lambda: KICKOFF)
-    later = {**event("Riverside", "Harbor", KICKOFF + timedelta(hours=3, minutes=30)), "status": "upcoming"}
+    later = {**event("Riverside", "Harbor", KICKOFF + timedelta(hours=17)), "status": "upcoming"}
     await facts.annotate([event("Lakeview", "Brookfield"), later])
-    # The live game is asked for; the one more than three hours away is not.
+    # The live game is asked for; the one tomorrow is not.
     assert art.pending == 1
     await art.process_next()
     prompt = json.loads(api.requests[0].content)["prompt"]

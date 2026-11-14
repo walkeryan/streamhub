@@ -51,8 +51,9 @@ PREGAME_TTL = 30 * 60.0
 FAILURE_TTL = 60.0
 REQUEST_TIMEOUT_S = 8.0
 BUDGET_S = 1.5
-# Art is only asked for games on now or this close to kickoff: no image for a game nobody is about to watch.
-ART_LEAD = timedelta(hours=3)
+# Art is asked for games on now and the rest of the day's slate, so a morning visit finds every tile
+# drawn; not for games further off, which may still move or lose their channel.
+ART_LEAD = timedelta(hours=16)
 UNRANKED = 99
 TOP = 25
 
