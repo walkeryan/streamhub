@@ -40,6 +40,7 @@ from app.services.disclaimer import DisclaimerService
 from app.services.google_auth import GoogleAuthService
 from app.services.home import HomeService
 from app.services.invites import InvitesService
+from app.services.matchup_art import MatchupArt
 from app.services.media_probe import MediaProbe
 from app.services.notices import NoticeService
 from app.services.owner_pin import OwnerPinService
@@ -57,6 +58,7 @@ from app.services.services_registry import ServiceRegistryService
 from app.services.sessions import SessionsService
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
+from app.services.sports_facts import SportsFacts
 from app.services.streams import GrantGuard, StreamRegistry
 from app.services.sync import SyncScheduler, SyncService
 from app.services.themes import ThemeService
@@ -125,6 +127,8 @@ class Container:
     rooms: RoomHub
     room_playback: RoomPlayback
     recorder: RecorderService
+    matchup_art: MatchupArt
+    sports_facts: SportsFacts
     http_factory: Any
     capture: Capture | None = None
 
@@ -259,6 +263,16 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         available=lambda: not content_policy.enabled,
     )
     rooms = RoomHub(RoomRegistry(), RoomTokens(crypto))
+    matchup_art = MatchupArt(
+        settings.matchup_art_dir,
+        api_key=settings.xai_api_key,
+        model=settings.matchup_art_model,
+        daily_limit=settings.matchup_art_daily_limit,
+        client_factory=http_factory,
+        sign=crypto.sign_json,
+        policy=content_policy,
+    )
+    sports_facts = SportsFacts(http_factory, enabled=settings.sports_facts_enabled, art=matchup_art)
     return Container(
         settings=settings,
         db=db,
@@ -314,6 +328,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
             playback, proxy, db=db, sources=sources, content_policy=content_policy, settings=app_settings, hub=rooms
         ),
         recorder=recorder,
+        matchup_art=matchup_art,
+        sports_facts=sports_facts,
         http_factory=http_factory,
         capture=capture,
     )
@@ -339,6 +355,7 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
     if start_background:
         c.proxy.start()
         c.rooms.start()
+        c.matchup_art.start()
         if c.settings.enable_scheduler:
             c.scheduler.start()
 
@@ -346,6 +363,8 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
 async def shutdown(c: Container) -> None:
     c.scheduler.shutdown()
     await c.rooms.shutdown()
+    await c.sports_facts.shutdown()
+    await c.matchup_art.shutdown()
     await c.room_playback.shutdown()
     await c.recorder.shutdown()
     if c.capture is not None:

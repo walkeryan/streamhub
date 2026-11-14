@@ -786,6 +786,30 @@ class SportsFeed(_M):
     language_verified: bool = False
 
 
+class MatchupTeam(_M):
+    name: str
+    short_name: str
+    color: str | None = None
+    alt_color: str | None = None
+    rank: int | None = None
+    record: str | None = None
+    conference_record: str | None = None
+
+
+class WinProbability(_M):
+    away: float
+    home: float
+    live: bool
+
+
+class SportsMatchup(_M):
+    away: MatchupTeam
+    home: MatchupTeam
+    status_detail: str | None = None
+    win_probability: WinProbability | None = None
+    art_url: str | None = None
+
+
 class SportsEvent(_M):
     id: str
     kind: Literal["event", "channel"] = "event"
@@ -801,6 +825,7 @@ class SportsEvent(_M):
     live_evidence: bool
     grouping_evidence: Literal["matching_title_and_time", "same_source_programme"]
     feeds: list[SportsFeed]
+    matchup: SportsMatchup | None = None
 
 
 class SportsChannel(_M):

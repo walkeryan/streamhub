@@ -49,6 +49,9 @@ def settings(tmp_path: Path) -> AppSettings:
         iptv_org_channels_url="http://iptv-org.invalid/channels.json",
         # Never probe media for real, even where ffprobe is installed; probe tests inject a stub.
         ffprobe_path=str(tmp_path / "no-ffprobe"),
+        # No test asks the public scoreboard or the image API; the facts and art tests mock them.
+        sports_facts_enabled=False,
+        xai_api_key=None,
     )
 
 
