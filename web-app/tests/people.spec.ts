@@ -736,7 +736,7 @@ test.describe("who's watching", () => {
     // Kids has a PIN: wrong, then right, on the keypad.
     await card(page, 'Kids').click()
     await expect(pin(page).getByRole('heading', { name: 'PIN for Kids' })).toBeVisible()
-    await expect(key(page, '1')).toHaveAttribute('data-focused', 'true')
+    await expect(key(page, '5')).toHaveAttribute('data-focused', 'true')
     await expect(page.getByTestId('pin-ok')).toHaveAttribute('aria-disabled', 'true')
     for (const digit of '9999') await key(page, digit).click()
     await expect(pin(page).getByTestId('pin-dots').locator('i')).toHaveCount(4)
