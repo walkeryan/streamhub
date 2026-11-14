@@ -16,6 +16,7 @@ from app.services.adult import require_adult
 from app.services.auth import Principal
 from app.services.errors import Forbidden, PermissionDenied, Unauthorized
 from app.services.network import FORWARDING_HEADERS, client_address, from_home, vouched_for
+from app.services.public_address import with_public
 from app.services.sessions import SessionMeta
 from app.services.visibility import require_watch, reset_watch, set_watch
 
@@ -80,7 +81,10 @@ def at_home(request: HTTPConnection, c: Container) -> bool:
         request.client.host if request.client else None,
         headers,
         c.settings.forwarded_allow_ips,
-        str(c.app_settings.get("home_networks") or ""),
+        with_public(
+            str(c.app_settings.get("home_networks") or ""),
+            c.public_address if c.app_settings.get("home_public_address") else None,
+        ),
         vouched=vouched_for(request.client.port if request.client else None),
     )
 

@@ -14,7 +14,7 @@ import { sportsChannels, sportsEvents, sportsNetworks } from './sports'
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
 const srcs: Source[] = [...sources]
-let settings = { tmdb_api_key_set: false, region: 'US', sleep_timer_min: null as number | null, epg_refresh_hours: 12, transcode_hw: 'none', proxy_mode: 'auto' }
+let settings = { tmdb_api_key_set: false, region: 'US', sleep_timer_min: null as number | null, epg_refresh_hours: 12, transcode_hw: 'none', proxy_mode: 'auto', home_public_address: false }
 // The shelves Home shows after New Releases, in order; empty = Home chooses. Kept for the tab, like the other fixtures a spec changes.
 const HOME_SHELVES = 'mock.home_shelves'
 const homeShelves = (): string[] => { try { return JSON.parse(sessionStorage.getItem(HOME_SHELVES) ?? '[]') as string[] } catch { return [] } }
@@ -26,7 +26,11 @@ const knownShelf = (entry: string): boolean => {
 /** GET /settings: the two home_shelves fields are null for a caller without system.manage. */
 const settingsFor = (request: Request) => {
   const manages = holds(request, 'system.manage')
-  return { ...settings, request_manager_configured: requestManagerConfigured(), home_shelves: manages ? homeShelves() : null, home_shelves_unknown: manages ? homeShelves().filter((e) => !knownShelf(e)) : null }
+  return {
+    ...settings, request_manager_configured: requestManagerConfigured(), home_shelves: manages ? homeShelves() : null, home_shelves_unknown: manages ? homeShelves().filter((e) => !knownShelf(e)) : null,
+    // The household's address in the mock is a documentation one.
+    home_public_address: manages ? settings.home_public_address : null, home_public_address_seen: manages && settings.home_public_address ? '198.51.100.23' : null,
+  }
 }
 let pinPolls = 0
 const hiddenGroups = new Set<string>()

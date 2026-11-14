@@ -29,6 +29,8 @@ DEFAULTS: dict[str, Any] = {
     "plex_friends_auto_approve": False,
     # Where a user without remote.access may use the server from.
     "home_networks": DEFAULT_HOME_NETWORKS,
+    # Count the household's own internet address as home too (see app/services/public_address.py).
+    "home_public_address": False,
     # The shelves Home shows, in order ("Name", "movies:Name", "shows:Name"); empty: Home chooses.
     "home_shelves": [],
 }
@@ -37,7 +39,7 @@ ALLOWED = {
     "proxy_mode": {"auto", "always", "never"},
     "signup_mode": {"approval", "invite_only"},
 }
-SWITCHES = ("plex_sign_in", "password_sign_in", "plex_friends_auto_approve")
+SWITCHES = ("plex_sign_in", "password_sign_in", "plex_friends_auto_approve", "home_public_address")
 MAX_HOME_SHELVES = 24
 TMDB_KEY = "tmdb_api_key_enc"
 REQUEST_MANAGER_URL = "request_manager_url"

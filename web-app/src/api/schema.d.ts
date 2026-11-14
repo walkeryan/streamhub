@@ -7274,6 +7274,10 @@ export interface components {
             notify_webhook?: string | null;
             /** @description Comma-separated addresses and CIDR blocks a user without remote.access may use the server from. Null for callers without system.manage; PATCH null restores the defaults (private, loopback, link-local and 100.64.0.0/10 ranges) */
             home_networks?: string | null;
+            /** @description Default false. When true the hub looks up the address it reaches the internet from (every ten minutes, and at once when switched on; the last address found is kept if a lookup fails) and counts that one address as home too, so a household device that opens the hub by its public name through a trusted tunnel or proxy is on the home network. Off where the internet address is shared with others (carrier-grade NAT). Null for callers without system.manage. */
+            home_public_address?: boolean | null;
+            /** @description The household's internet address as last looked up; null while home_public_address is off, before a lookup succeeded, or for callers without system.manage. */
+            readonly home_public_address_seen?: string | null;
             /** @description The shelves Home shows after New Releases, in order (at most 12 are shown). An entry is a shelf (category) name, or movies:Name / shows:Name for one side only. Empty: Home chooses its shelves. Stored trimmed, without blanks or repeats. Null for callers without system.manage; PATCH null or [] clears it. */
             home_shelves?: string[] | null;
             /** @description The entries of home_shelves that name no shelf of an enabled source right now. They are kept (the shelf may arrive with a later sync) and skipped by Home. Null for callers without system.manage. */
