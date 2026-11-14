@@ -809,10 +809,16 @@ class WinProbability(_M):
     live: bool
 
 
+class MatchupScore(_M):
+    away: int
+    home: int
+
+
 class SportsMatchup(_M):
     away: MatchupTeam
     home: MatchupTeam
     status_detail: str | None = None
+    score: MatchupScore | None = None
     win_probability: WinProbability | None = None
     art_url: str | None = None
 

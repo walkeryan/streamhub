@@ -61,6 +61,7 @@ async def test_football_events_carry_matchups_and_others_do_not(api: Api) -> Non
     assert matchup["home"]["short_name"] == "Brookfield" and matchup["home"]["rank"] == 12
     assert matchup["away"]["color"] == "#2b4c9a" and matchup["away"]["conference_record"] == "4-1 Lakes League"
     assert matchup["status_detail"] == "Q2 7:14"
+    assert matchup["score"] == {"away": 10, "home": 17}
     assert matchup["win_probability"] == {"away": 14.6, "home": 85.4, "live": True}
     # No key, no art: nothing is queued and no URL is made up.
     assert matchup["art_url"] is None and api.c.matchup_art.pending == 0

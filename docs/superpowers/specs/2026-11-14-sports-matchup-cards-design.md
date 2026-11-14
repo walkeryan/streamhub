@@ -18,7 +18,9 @@ A Live now card for a football game with two known teams becomes a broadcast-sty
 - A **win probability bar** across the bottom: away colour from the left, home colour from the right,
   split exactly by the probabilities, with each percentage at its end. Pregame prediction before
   kickoff, live probability during the game. No bar when no probability is known (never a fake 50/50).
-- **No scores**, ever. A **replay** listing shows no clock and no win probability (spoilers).
+- **Score** (amended 2026-11-14): once a game is under way the score takes the place of VS. (away on
+  the left), and the clock under it drops the kickoff time. A **replay** listing shows no clock, no
+  score and no win probability (spoilers).
 - Until the art exists the card shows the same text over a diagonal split of the two team colours; the
   art fades in when ready (the screen already refetches every 30 s).
 - Coming up rows get a small art thumbnail (or colour split) and the ranking inline before the names.

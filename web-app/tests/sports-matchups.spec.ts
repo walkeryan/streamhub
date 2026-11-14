@@ -13,7 +13,7 @@ async function open(page: Page) {
 const card = (page: Page, text: string) => page.getByTestId('sports-live').getByTestId('sports-listing').filter({ hasText: text })
 const color = (el: Locator) => el.evaluate((node) => getComputedStyle(node).color)
 
-test('a live football game is a matchup card: colours, ranking, records, VS., the clock and the odds', async ({ page }) => {
+test('a live football game is a matchup card: colours, ranking, records, the score, the clock and the odds', async ({ page }) => {
   await open(page)
   const game = card(page, 'Lakeview')
   await expect(game).toHaveCount(1)
@@ -27,11 +27,13 @@ test('a live football game is a matchup card: colours, ranking, records, VS., th
   await expect(game.getByTestId('matchup-away').getByTestId('matchup-rank')).toHaveCount(0)
   await expect(game.getByTestId('matchup-away')).toContainText('6-3 · 4-1 Lakes League')
   await expect(game.getByTestId('matchup-home')).toContainText('8-1 · 5-1 Lakes League')
-  await expect(game).toContainText('VS.')
-  await expect(game.getByTestId('matchup-clock')).toHaveText(/^\d{1,2}:\d{2}\s?[AP]M · Q2 7:14$/)
+  // The score stands where VS. was, away on the left; the clock under it, without the kickoff time.
+  await expect(game).not.toContainText('VS.')
+  await expect(game.getByTestId('matchup-score-away')).toHaveText('10')
+  await expect(game.getByTestId('matchup-score-home')).toHaveText('17')
+  await expect(game.getByTestId('matchup-clock')).toHaveText('Q2 7:14')
   await expect(game).toContainText('LIVE')
   await expect(game).toContainText('VANTIX+ 041 · Ch 941')
-  await expect(game).not.toContainText(/score/i)
   // The bar splits exactly by the odds, away colour from the left.
   const bar = game.getByTestId('matchup-odds')
   await expect(bar).toContainText('15%')
@@ -43,7 +45,7 @@ test('a live football game is a matchup card: colours, ranking, records, VS., th
   // The art fades in over the colours once it has loaded.
   await expect(game.getByTestId('matchup-art')).toHaveAttribute('data-art', 'image')
   await expect(game.getByTestId('matchup-art').locator('img')).toHaveAttribute('data-loaded', 'true')
-  await expect(game).toHaveAttribute('aria-label', /^Watch Lakeview Kestrels versus number 12 Brookfield Badgers, Q2 7:14, win probability Lakeview 15%, Brookfield 85%, College Football, live, on VANTIX\+ 041$/)
+  await expect(game).toHaveAttribute('aria-label', /^Watch Lakeview Kestrels versus number 12 Brookfield Badgers, Lakeview 10, Brookfield 17, Q2 7:14, win probability Lakeview 15%, Brookfield 85%, College Football, live, on VANTIX\+ 041$/)
 })
 
 test('without odds there is no bar, and without art the two colours stand in', async ({ page }) => {
@@ -52,6 +54,7 @@ test('without odds there is no bar, and without art the two colours stand in', a
   await expect(game.getByTestId('matchup-away').getByTestId('matchup-rank')).toHaveText('#5')
   await expect(game.getByTestId('matchup-home').getByTestId('matchup-rank')).toHaveCount(0)
   await expect(game.getByTestId('matchup-clock')).toContainText('Q1 3:52')
+  await expect(game.getByTestId('matchup-score')).toHaveText('7–0')
   await expect(game.getByTestId('matchup-odds')).toHaveCount(0)
   await expect(game).not.toContainText(/%|probability/i)
   const art = game.getByTestId('matchup-art')
@@ -63,13 +66,16 @@ test('without odds there is no bar, and without art the two colours stand in', a
   expect(background).toContain('rgb(15, 107, 92)')
 })
 
-test('a replay shows no clock and no odds', async ({ page }) => {
+test('a replay shows no clock, no score and no odds', async ({ page }) => {
   await open(page)
   const game = card(page, 'Southgate')
   await expect(game).toContainText('Replay')
   await expect(game).not.toContainText('LIVE')
   await expect(game.getByTestId('matchup-home').getByTestId('matchup-name')).toHaveText('Southgate')
   await expect(game.getByTestId('matchup-clock')).toHaveText(/^\d{1,2}:\d{2}\s?[AP]M$/)
+  // The fixture sends this replay a score: it stays hidden, VS. as before kickoff.
+  await expect(game.getByTestId('matchup-score')).toHaveCount(0)
+  await expect(game).toContainText('VS.')
   await expect(game.getByTestId('matchup-odds')).toHaveCount(0)
   await expect(game).toHaveAttribute('aria-label', /^Watch number 18 Northfield Owls versus Southgate Foxes, College Football, replay, on VANTIX\+ 043$/)
 })

@@ -1200,6 +1200,7 @@ components:
         away: {$ref: '#/components/schemas/MatchupTeam'}
         home: {$ref: '#/components/schemas/MatchupTeam'}
         status_detail: {type: string, nullable: true, description: "The clock of a game on now (\"Q2 7:14\", \"Halftime\", \"Final\"); null before kickoff and always null for a replay."}
+        score: {$ref: '#/components/schemas/MatchupScore', nullable: true, description: "Points once the game is under way or over, from the scoreboard; null before kickoff, without scoreboard facts, and always null for a replay."}
         win_probability: {$ref: '#/components/schemas/WinProbability', nullable: true, description: "Null when unknown (never a made-up 50/50), after the final whistle, for a game still to come and for a replay."}
         art_url: {type: string, nullable: true, description: "Signed, expiring URL of the generated helmet-vs-helmet image (16:9, no text). Null until the image exists or when art generation is off."}
     MatchupTeam:
@@ -1213,6 +1214,12 @@ components:
         rank: {type: integer, nullable: true, description: "Top-25 ranking; null when unranked."}
         record: {type: string, nullable: true, description: "Overall record (\"6-3\")."}
         conference_record: {type: string, nullable: true, description: "Conference record, with the conference's short name in a conference game (\"4-1 Lakes League\")."}
+    MatchupScore:
+      type: object
+      required: [away, home]
+      properties:
+        away: {type: integer, minimum: 0}
+        home: {type: integer, minimum: 0}
     WinProbability:
       type: object
       required: [away, home, live]
