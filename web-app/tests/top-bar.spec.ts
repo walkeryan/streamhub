@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 // Wide screens navigate from one bar across the top: every section named, nothing opening over the screen,
 // and a remote reaches it with Up.
 const GUEST = { id: 'p2', name: 'Guest', avatar: null, is_admin: false, theme_id: 'midnight', languages: ['eng', 'spa'], has_pin: false, kids: false, disclaimer_accepted_version: '1.0' }
-const SECTIONS = ['Home', 'Live TV', 'Movies', 'Shows', 'My List']
+const SECTIONS = ['Home', 'Live TV', 'Sports', 'Movies', 'Shows', 'My List']
 
 /** Start signed in, past the first-run notice. */
 async function enter(page: Page, path = '/') {
@@ -49,7 +49,7 @@ for (const [width, height] of [[1920, 1080], [1024, 768]] as const) {
       const play = page.getByTestId('hero-play')
       await expect(play).toHaveAttribute('data-focused', 'true')
 
-      // Wordmark, the five sections by name, then Search, More and the profile; no hover, no focus needed.
+      // Wordmark, the six sections by name, then Search, More and the profile; no hover, no focus needed.
       await expect(rail(page).getByText('StreamHub', { exact: true })).toBeVisible()
       await expect(rail(page).locator('.rail-item .lbl')).toHaveText(SECTIONS)
       for (const label of await rail(page).locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
@@ -79,7 +79,7 @@ for (const [width, height] of [[1920, 1080], [1024, 768]] as const) {
       await page.keyboard.press('ArrowUp')
       await page.keyboard.press('ArrowLeft')
       await expect(home).toHaveAttribute('data-focused', 'true')
-      const order = ['nav-live-tv', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-search', 'nav-more', 'nav-profile']
+      const order = ['nav-live-tv', 'nav-sports', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-search', 'nav-more', 'nav-profile']
       for (const next of order) {
         await page.keyboard.press('ArrowRight')
         await expect(page.getByTestId(next)).toHaveAttribute('data-focused', 'true')

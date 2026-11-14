@@ -50,15 +50,27 @@ class ChannelListCache @Inject constructor(private val api: StreamHubApi, privat
 
     suspend fun resolve(listId: String?, currentChannelId: String): List<Channel> {
         val owner = scope()
-        synchronized(lists) { lists[owner to listId.orEmpty()] }?.let { return it }
-        if (listId != null) {
-            try {
-                return put(api.channels(listId = listId), owner).channels
-            } catch (e: CancellationException) { throw e } catch (_: Exception) { /* expired server list */ }
-        }
-        synchronized(lists) {
-            lastKey?.takeIf { it.first == owner }?.let { lists[it] }
-        }?.takeIf { l -> l.any { it.id == currentChannelId } }?.let { return it }
-        return try { fetch().channels } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
+        return zapListFor(
+            currentChannelId,
+            { synchronized(lists) { lists[owner to listId.orEmpty()] } },
+            {
+                if (listId == null) null
+                else try { put(api.channels(listId = listId), owner).channels }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { null /* expired server list */ }
+            },
+            { synchronized(lists) { lastKey?.takeIf { it.first == owner }?.let { lists[it] } } },
+        ) ?: try { fetch().channels } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
     }
+}
+
+/**
+ * The first of [candidates] (each asked only when the ones before it did not do) that holds the channel
+ * playing. A list without it is never used: the player would put another channel under the banner and
+ * count Up/Down from a row that is not the one on screen. A list id names filters, not contents, so a
+ * copy remembered under it can be one the channel has since left, and a list from another screen (the
+ * last one browsed) need not hold a channel opened from search.
+ */
+internal suspend fun zapListFor(channelId: String, vararg candidates: suspend () -> List<Channel>?): List<Channel>? {
+    for (candidate in candidates) candidate()?.takeIf { l -> l.any { it.id == channelId } }?.let { return it }
+    return null
 }
