@@ -448,6 +448,8 @@ async def test_settings(api: Api) -> None:
         "plex_friends_auto_approve": False,
         "notify_webhook_set": False,
         "home_networks": DEFAULT_HOME_NETWORKS,
+        "home_public_address": False,
+        "home_public_address_seen": None,
         "home_shelves": [],
         "home_shelves_unknown": [],
     }
