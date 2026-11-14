@@ -219,6 +219,24 @@ async def test_kid_browse_shows_only_what_the_ceiling_admits(seeded: Api) -> Non
     assert await movies(parent) == MOVIES - {ADULT_PG} and await shows(parent) == SHOWS
 
 
+async def test_a_new_rating_reaches_a_kids_next_request(seeded: Api) -> None:
+    """The keys a ceiling admits are built once and reused; a rating written after that still counts."""
+    from app.services.classification import ClassificationStore
+
+    api = seeded
+    kid = await member(api, "kid", "Kid")
+    assert await movies(kid) == {G, PG}
+    # A new row is noticed in the table itself...
+    async with api.c.db.session() as s:
+        s.add(rated("tmdb:movie:105", "G"))
+        await s.commit()
+    assert await movies(kid) == {G, PG, UNRATED}
+    # ...and a changed rating, written the way the metadata client writes it, through the store.
+    fresh = {**evidence("tmdb:movie:103", "PG"), "retrieved_at": datetime.now(UTC).isoformat()}
+    await ClassificationStore(api.c.db).record("tmdb:movie:103", fresh)
+    assert await movies(kid) == {G, PG, PG13, UNRATED}
+
+
 async def test_kid_search_and_home(seeded: Api) -> None:
     api = seeded
     kid = await member(api, "kid", "Kid")

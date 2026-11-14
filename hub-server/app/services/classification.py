@@ -10,6 +10,9 @@ from sqlalchemy.dialects.sqlite import insert
 from app.infra.db import Database
 from app.infra.models import AgeClassification
 
+# Bumped whenever a classification is written, so caches built from them know to rebuild.
+CHANGES = [0]
+
 MOVIE_CODES = {"G", "PG", "PG-13", "R", "NC-17"}
 TV_CODES = {"TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"}
 UNRATED = {"NR", "UR", "UNRATED", "NOT RATED", "N/A"}
@@ -147,3 +150,5 @@ class ClassificationStore:
                 )
             )
             await session.commit()
+        # The content policy keeps the keys a rating ceiling admits; a new rating makes them stale.
+        CHANGES[0] += 1
