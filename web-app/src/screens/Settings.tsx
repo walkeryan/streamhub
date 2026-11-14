@@ -13,6 +13,7 @@ import { inShell } from '../shell'
 import { StreamRecovery } from '../components/StreamRecovery'
 import { RequestManagerSettings } from '../components/RequestManagerSettings'
 import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
+import { HomeNetworkSettings } from '../components/HomeNetworkSettings'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -337,6 +338,7 @@ function DevicesTab() {
           <Button focusKey="devname:cancel" onEnter={() => setRenaming(null)}>Cancel</Button>
         </div>
       </Modal>
+      <HomeNetworkSettings />
     </div>
   )
 }

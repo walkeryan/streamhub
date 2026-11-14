@@ -49,6 +49,7 @@ from app.services.owner_reauth import OwnerReauthService
 from app.services.passwords import PasswordAuth
 from app.services.playback import ActiveStreams, PlaybackResolver, StreamTokens
 from app.services.plex_auth import PlexAuthService
+from app.services.public_address import PublicAddress
 from app.services.recorder import RecorderService
 from app.services.registry import SourceRegistry
 from app.services.requests import RequestService
@@ -130,6 +131,7 @@ class Container:
     recorder: RecorderService
     matchup_art: MatchupArt
     sports_facts: SportsFacts
+    public_address: PublicAddress
     http_factory: Any
     capture: Capture | None = None
 
@@ -332,6 +334,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         recorder=recorder,
         matchup_art=matchup_art,
         sports_facts=sports_facts,
+        public_address=PublicAddress(http_factory, enabled=lambda: bool(app_settings.get("home_public_address"))),
         http_factory=http_factory,
         capture=capture,
     )
@@ -358,6 +361,7 @@ async def startup(c: Container, *, start_background: bool = True) -> None:
         c.proxy.start()
         c.rooms.start()
         c.matchup_art.start()
+        c.public_address.start()
         if c.settings.enable_scheduler:
             c.scheduler.start()
 
@@ -367,6 +371,7 @@ async def shutdown(c: Container) -> None:
     await c.rooms.shutdown()
     await c.sports_facts.shutdown()
     await c.matchup_art.shutdown()
+    await c.public_address.shutdown()
     await c.room_playback.shutdown()
     await c.recorder.shutdown()
     if c.capture is not None:

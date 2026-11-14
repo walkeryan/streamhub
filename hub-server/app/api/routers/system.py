@@ -32,8 +32,19 @@ async def create_theme(body: S.Theme, c: C, p: Admin) -> dict[str, Any]:
 async def _settings(c: C, p: Principal, settings: dict[str, Any]) -> dict[str, Any]:
     if not p.can("system.manage"):
         # How the household's network is laid out, and which shelves exist, is the administrator's to know.
-        return {**settings, "home_networks": None, "home_shelves": None, "home_shelves_unknown": None}
-    return {**settings, "home_shelves_unknown": await c.catalog.unknown_shelves(settings["home_shelves"])}
+        return {
+            **settings,
+            "home_networks": None,
+            "home_public_address": None,
+            "home_shelves": None,
+            "home_shelves_unknown": None,
+        }
+    seen = c.public_address.address if settings.get("home_public_address") else None
+    return {
+        **settings,
+        "home_public_address_seen": seen,
+        "home_shelves_unknown": await c.catalog.unknown_shelves(settings["home_shelves"]),
+    }
 
 
 @router.get("/settings", response_model=S.Settings, tags=["system"])
@@ -44,9 +55,13 @@ async def get_settings(c: C, p: P) -> dict[str, Any]:
 @router.patch("/settings", response_model=S.Settings, tags=["system"])
 async def patch_settings(body: S.SettingsPatch, c: C, p: Admin) -> dict[str, Any]:
     try:
-        return await _settings(c, p, await c.app_settings.update(body.model_dump(exclude_unset=True)))
+        settings = await c.app_settings.update(body.model_dump(exclude_unset=True))
     except ValueError as exc:
         raise ServiceError(str(exc)) from exc
+    if body.home_public_address:
+        # Turned on: look the address up now rather than at the next round, so the answer shows it.
+        await c.public_address.refresh()
+    return await _settings(c, p, settings)
 
 
 @router.put("/settings/tmdb_key", status_code=204, tags=["system"])

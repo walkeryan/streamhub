@@ -912,6 +912,8 @@ test.describe('devices', () => {
     await expect(device(page, 'Kitchen tablet')).toContainText('Last seen 3 h ago')
     // Marking a device as shared is for those who manage users.
     await expect(page.getByTestId('device-shared')).toHaveCount(0)
+    // So is where home is.
+    await expect(page.getByTestId('home-network')).toHaveCount(0)
 
     await device(page, 'Kitchen tablet').getByTestId('device-rename').click()
     const name = page.getByLabel('Device name', { exact: true })
@@ -937,6 +939,17 @@ test.describe('devices', () => {
     await expect(here).toContainText('Shared')
     await page.reload()
     await expect(page.getByTestId('who-is-watching')).toHaveAttribute('data-mandatory', 'true')
+  })
+
+  test('an owner counts the household internet address as home and sees which address that is', async ({ page }) => {
+    await enter(page, '/settings?tab=devices')
+    await expect(page.getByTestId('home-public-off')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('home-public-seen')).toHaveCount(0)
+    await page.getByTestId('home-public-on').click()
+    await expect(page.getByTestId('home-public-on')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('home-public-seen')).toHaveText('Your internet address right now: 198.51.100.23')
+    await page.getByTestId('home-public-off').click()
+    await expect(page.getByTestId('home-public-seen')).toHaveCount(0)
   })
 
   test('a device signed out since the list was read says so and leaves the list; no Devices tab without users', async ({ page, context }) => {

@@ -661,6 +661,12 @@ class Settings(_M):
     )
     notify_webhook_set: bool = False
     home_networks: str | None = Field(default=None, description="system.manage only: the home networks, as CIDRs")
+    home_public_address: bool | None = Field(
+        default=None, description="system.manage only: the household's own internet address counts as home"
+    )
+    home_public_address_seen: str | None = Field(
+        default=None, description="system.manage only: that address as last looked up; null when off or unknown"
+    )
     home_shelves: list[str] | None = Field(default=None, description="system.manage only: Home's shelves, in order")
     home_shelves_unknown: list[str] | None = Field(
         default=None, description="system.manage only: the home_shelves entries no shelf has right now"
@@ -679,6 +685,7 @@ class SettingsPatch(_M):
     plex_friends_auto_approve: StrictBool | None = None
     notify_webhook: str | None = Field(default=None, max_length=1024, description="empty or null clears it")
     home_networks: str | None = Field(default=None, max_length=1024, description="null restores the defaults")
+    home_public_address: StrictBool | None = None
     home_shelves: list[Annotated[str, Field(max_length=200)]] | None = Field(
         default=None, max_length=24, description="null or empty lets Home choose its shelves"
     )
