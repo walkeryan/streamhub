@@ -1201,6 +1201,11 @@ class RoomCreate(_M):
     id: str = Field(min_length=1, max_length=512)
     variant_id: str | None = Field(default=None, max_length=512)
     audio_track: int | None = Field(default=None, ge=0, le=255)
+    public: bool = True
+
+
+class RoomUpdate(_M):
+    public: bool
 
 
 class RoomJoin(_M):
@@ -1252,6 +1257,12 @@ class Room(_M):
     state: RoomState
     server_ms: int
     title: RoomTitle
+    public: bool = True
+    is_member: bool = False
+
+
+class RoomList(_M):
+    rooms: list[Room]
 
 
 class RoomJoined(_M):

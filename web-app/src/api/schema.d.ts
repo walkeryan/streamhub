@@ -5582,7 +5582,30 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * The public rooms the current profile could join now
+         * @description Public rooms whose title the current profile may watch (rating ceiling and adult lock applied); others are left out, not refused. Empty for a user without rooms.join.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RoomList"];
+                    };
+                };
+            };
+        };
         put?: never;
         /**
          * Create a watch room for a title or channel
@@ -5722,7 +5745,47 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        patch?: never;
+        /** Make the room public or private (host only) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RoomUpdate"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Room"];
+                    };
+                };
+                /** @description not the host */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description room_not_found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/rooms/{code}/join": {
@@ -7434,6 +7497,17 @@ export interface components {
             /** @description source variant every member plays; validated when a member joins, and for a show when the room is created */
             variant_id?: string | null;
             audio_track?: number | null;
+            /**
+             * @description listed by GET /rooms to everyone signed in who may join rooms and watch the title; the code and link work either way
+             * @default true
+             */
+            public: boolean;
+        };
+        RoomUpdate: {
+            public: boolean;
+        };
+        RoomList: {
+            rooms: components["schemas"]["Room"][];
         };
         RoomJoin: {
             /**
@@ -7502,6 +7576,16 @@ export interface components {
             /** @description server epoch ms when this response was built */
             server_ms: number;
             title: components["schemas"]["RoomTitle"];
+            /**
+             * @description listed by GET /rooms
+             * @default true
+             */
+            public: boolean;
+            /**
+             * @description the current profile holds a seat in the room
+             * @default false
+             */
+            is_member: boolean;
         };
         /**
          * @description A seat in the room. Open the room WebSocket at `ws_path` with `?member_token=<member_token>`

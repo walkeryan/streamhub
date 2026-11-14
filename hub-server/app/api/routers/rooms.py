@@ -67,6 +67,8 @@ def _out(c: Container, room: Room, p: Principal, title: dict[str, Any]) -> dict[
         "state": {k: state[k] for k in ("playing", "position_ms", "as_of_ms")},
         "server_ms": c.rooms.clock(),
         "title": title,
+        "public": room.public,
+        "is_member": any(m.profile_id == p.profile_id for m in room.members.values()),
     }
 
 
@@ -95,8 +97,40 @@ async def create_room(body: S.RoomCreate, c: C, p: P) -> dict[str, Any]:
         audio_track=body.audio_track,
         live=ref.startswith("ch:"),
         series=series,
+        public=body.public,
     )
     return _out(c, room, p, title)
+
+
+@router.get("/rooms", response_model=S.RoomList, tags=["rooms"])
+async def list_rooms(c: C, p: P) -> dict[str, Any]:
+    """The public rooms this caller could join now: each one's title must be one they may watch.
+
+    A room on a title above their rating ceiling or behind the adult lock is left out, not refused:
+    the list says nothing of what they may not see.
+    """
+    if not room_policy.can_join(p):
+        return {"rooms": []}
+    found = []
+    for room in c.rooms.registry.rooms():
+        if not room.public or room.closed:
+            continue
+        try:
+            title = await _title(c, p, room.ref, room.series)
+        except ServiceError:
+            continue
+        found.append(_out(c, room, p, title))
+    return {"rooms": found}
+
+
+@router.patch("/rooms/{code}", response_model=S.Room, tags=["rooms"])
+async def update_room(code: str, body: S.RoomUpdate, c: C, p: P) -> dict[str, Any]:
+    """The host opens their room to everyone signed in, or makes it private (code and link only)."""
+    room = _room(c, code)
+    if not room.is_host(p.profile_id):
+        raise Forbidden("Only the host can change who sees this room.")
+    room.public = body.public
+    return _out(c, room, p, await _title(c, p, room.ref, room.series))
 
 
 @router.get("/rooms/{code}", response_model=S.Room, tags=["rooms"])

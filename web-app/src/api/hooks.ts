@@ -398,11 +398,23 @@ export const useRequestManager = (enabled: boolean) =>
   useQuery({ queryKey: ['request-manager', useProfileId()], enabled, queryFn: () => unwrap<RequestManagerSettings>(api.GET('/settings/request_manager')) })
 
 /* ---------- watch rooms ---------- */
-export const createRoom = (body: { id: string; variant_id?: string | null; audio_track?: number | null }) => unwrap<Room>(api.POST('/rooms', { body }))
+// Public unless asked otherwise: listed on Home for everyone signed in who may join and watch the title.
+export const createRoom = (body: { id: string; variant_id?: string | null; audio_track?: number | null; public?: boolean }) => unwrap<Room>(api.POST('/rooms', { body: { public: true, ...body } }))
 export const joinRoom = (code: string, body: RoomJoin) => unwrap<RoomJoined>(api.POST('/rooms/{code}/join', { params: { path: { code } }, body }))
 /** A member's descriptor as it is now. The member token is the credential; the seat does not change. */
 export const roomDescriptor = (code: string, query: RoomDescriptorQuery) => unwrap<PlaybackDescriptor>(tokenless.GET('/rooms/{code}/descriptor', { params: { path: { code }, query } }))
 export const closeRoom = (code: string) => ok(api.DELETE('/rooms/{code}', { params: { path: { code } } }))
+/** The host opens the room to everyone signed in, or makes it private (its code and link still work). */
+export const setRoomPublic = (code: string, on: boolean) => unwrap<Room>(api.PATCH('/rooms/{code}', { params: { path: { code } }, body: { public: on } }))
+/** Public rooms this profile could join now; Home's banner. Polled: rooms open and end on their own. */
+export const usePublicRooms = (enabled = true) =>
+  useQuery({
+    queryKey: ['rooms', useProfileId()],
+    enabled,
+    retry: false,
+    refetchInterval: 20_000,
+    queryFn: async () => (await unwrap<{ rooms: Room[] }>(api.GET('/rooms'))).rooms,
+  })
 /** The join screen: who is in the room changes while it is open, so it polls. A refusal is an answer, not a fault to retry. */
 export const useRoomInfo = (code: string | undefined, poll = true) =>
   useQuery({
