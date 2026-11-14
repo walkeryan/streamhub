@@ -7662,6 +7662,42 @@ export interface components {
             grouping_evidence: string;
             /** @description Channels carrying the event, lowest channel number first. Two event slots with the same title, sport and start are one event. */
             feeds: components["schemas"]["SportsEventFeed"][];
+            /** @description A dated American football game with both sides known: the teams as a public scoreboard knows them (or the guide's names when no game matches), the clock, the win probability and generated art. Null for everything else, and whenever the facts are not known in time. Never a score. */
+            matchup?: components["schemas"]["SportsMatchup"];
+        };
+        SportsMatchup: {
+            away: components["schemas"]["MatchupTeam"];
+            home: components["schemas"]["MatchupTeam"];
+            /** @description The clock of a game on now ("Q2 7:14", "Halftime", "Final"); null before kickoff and always null for a replay. */
+            status_detail?: string | null;
+            /** @description Null when unknown (never a made-up 50/50), after the final whistle, for a game still to come and for a replay. */
+            win_probability?: components["schemas"]["WinProbability"];
+            /** @description Signed, expiring URL of the generated helmet-vs-helmet image (16:9, no text). Null until the image exists or when art generation is off. */
+            art_url?: string | null;
+        };
+        MatchupTeam: {
+            /** @description Full display name ("Lakeview Kestrels"). */
+            name: string;
+            /** @description The name a card shows ("Lakeview"). */
+            short_name: string;
+            /** @description Primary colour, #rrggbb. */
+            color?: string | null;
+            /** @description Alternate colour, #rrggbb. */
+            alt_color?: string | null;
+            /** @description Top-25 ranking; null when unranked. */
+            rank?: number | null;
+            /** @description Overall record ("6-3"). */
+            record?: string | null;
+            /** @description Conference record, with the conference's short name in a conference game ("4-1 Lakes League"). */
+            conference_record?: string | null;
+        };
+        WinProbability: {
+            /** @description 0..100 */
+            away: number;
+            /** @description 0..100; away + home = 100 */
+            home: number;
+            /** @description true: the in-game estimate; false: the pregame prediction. */
+            live: boolean;
         };
         SportsChannel: {
             channel_id: string;

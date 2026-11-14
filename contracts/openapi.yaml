@@ -1190,6 +1190,34 @@ components:
         live_evidence: {type: boolean, description: "The guide labels the programme live, or a dated event slot is inside its window."}
         grouping_evidence: {type: string}
         feeds: {type: array, items: {$ref: '#/components/schemas/SportsEventFeed'}, description: "Channels carrying the event, lowest channel number first. Two event slots with the same title, sport and start are one event."}
+        matchup: {$ref: '#/components/schemas/SportsMatchup', nullable: true, description: "A dated American football game with both sides known: the teams as a public scoreboard knows them (or the guide's names when no game matches), the clock, the win probability and generated art. Null for everything else, and whenever the facts are not known in time. Never a score."}
+    SportsMatchup:
+      type: object
+      required: [away, home]
+      properties:
+        away: {$ref: '#/components/schemas/MatchupTeam'}
+        home: {$ref: '#/components/schemas/MatchupTeam'}
+        status_detail: {type: string, nullable: true, description: "The clock of a game on now (\"Q2 7:14\", \"Halftime\", \"Final\"); null before kickoff and always null for a replay."}
+        win_probability: {$ref: '#/components/schemas/WinProbability', nullable: true, description: "Null when unknown (never a made-up 50/50), after the final whistle, for a game still to come and for a replay."}
+        art_url: {type: string, nullable: true, description: "Signed, expiring URL of the generated helmet-vs-helmet image (16:9, no text). Null until the image exists or when art generation is off."}
+    MatchupTeam:
+      type: object
+      required: [name, short_name]
+      properties:
+        name: {type: string, description: "Full display name (\"Lakeview Kestrels\")."}
+        short_name: {type: string, description: "The name a card shows (\"Lakeview\")."}
+        color: {type: string, nullable: true, description: "Primary colour, #rrggbb."}
+        alt_color: {type: string, nullable: true, description: "Alternate colour, #rrggbb."}
+        rank: {type: integer, nullable: true, description: "Top-25 ranking; null when unranked."}
+        record: {type: string, nullable: true, description: "Overall record (\"6-3\")."}
+        conference_record: {type: string, nullable: true, description: "Conference record, with the conference's short name in a conference game (\"4-1 Lakes League\")."}
+    WinProbability:
+      type: object
+      required: [away, home, live]
+      properties:
+        away: {type: number, description: "0..100"}
+        home: {type: number, description: "0..100; away + home = 100"}
+        live: {type: boolean, description: "true: the in-game estimate; false: the pregame prediction."}
     SportsChannel:
       type: object
       required: [channel_id, channel_name, channel_number, group, source_id]
