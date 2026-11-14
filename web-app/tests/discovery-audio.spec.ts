@@ -47,32 +47,25 @@ test('canonical ranking, unavailable discovery and Back/refresh preserve query',
   await page.screenshot({ path: '/tmp/streamhub-discovery-mobile.png' })
 })
 
-test('unknown audio requires deliberate variant confirmation; no silent French resolve', async ({ page }) => {
+test('the only source plays at once even with unverified audio, and picking a source needs no second step', async ({ page }) => {
+  // The owner's photo: one source, "Audio unverified · Listed as …", and a chooser in front of it. This
+  // fixture answers like an older server (no automatic source); the page still plays the best one.
   await signIn(page)
   await page.goto('/title/tmdb%3Amovie%3A140607')
+  await expect(page.getByTestId('title-play')).toHaveText('Play')
   await expect(page.getByTestId('title-play')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
-  await expect(page.getByRole('dialog')).toContainText('Audio unverified')
-  expect(await page.evaluate(() => sessionStorage.getItem('test.resolve'))).toBeNull()
-  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowUp')
-  await page.keyboard.press('Enter')
-  await expect(page.getByRole('dialog')).toContainText('Audio language is unverified.')
-  await expect(page.getByRole('button', { name: 'Back to sources', exact: true })).toHaveAttribute('data-focused', 'true')
-  await expect(page.locator('.fx[data-focused="true"]')).toHaveCount(1)
-  expect(await page.evaluate(() => document.activeElement === document.querySelector('.fx[data-focused="true"]'))).toBe(true)
-  await page.waitForTimeout(250)
-  await page.screenshot({ path: '/tmp/streamhub-audio-confirmation.png' })
-  await page.keyboard.press('Escape')
-  await expect(page.getByTestId('title-play')).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('Enter')
-  await page.getByRole('button', { name: /My library · Audio unverified/ }).click()
-  await page.getByRole('button', { name: 'Play this source anyway' }).click()
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.resolve'))).not.toBeNull()
   expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem('test.resolve')))!)).toMatchObject({ variant_id: 'lib:iptv:fr', allow_unverified_audio: true })
-  expect(page.url()).not.toContain('allow_audio=')
-  await page.reload()
-  await expect.poll(async () => JSON.parse((await page.evaluate(() => sessionStorage.getItem('test.resolve')))!)).toMatchObject({ variant_id: 'lib:iptv:fr', allow_unverified_audio: false })
+  await expect(page.getByText('Play this source anyway')).toHaveCount(0)
+  // Choosing a source from the sheet plays it straight away.
+  await page.goto('/title/tmdb%3Amovie%3A140607')
+  await page.evaluate(() => sessionStorage.removeItem('test.resolve'))
+  await page.getByTestId('title-source').click()
+  await page.getByRole('button', { name: /My library · Audio unverified/ }).click()
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.resolve'))).not.toBeNull()
+  expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem('test.resolve')))!)).toMatchObject({ variant_id: 'lib:iptv:fr', allow_unverified_audio: true })
+  await expect(page.getByRole('dialog')).toHaveCount(0)
 })
 
 test('late search responses cannot replace a newer query', async ({ page }) => {

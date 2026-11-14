@@ -289,13 +289,16 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
             // A successful strict server preflight remains authoritative when the
             // browser exposes no tracks; this does not verify their language.
             const allowed = !!opts.muted || (tracks.length === 0 && owned.audioReady?.() !== false) || audioAllowed(preferred, tracks, consent.current)
-            if (!allowed) {
-              video.muted = true; video.pause(); clearWaiting(); setAudioBlocked(true); setState('paused')
-              if (selectedAudio.current === null) {
-                const match = preferredAudioTrack(preferred, tracks)
-                if (match !== null && wantedAudio.current !== match) { wantedAudio.current = match; owned.setAudio(match) }
+            // Never stopped for the audio (the owner's decision: "if one Spanish one sneaks through, my ears
+            // aren't going to bleed"): a tagged preferred track is switched to first, held silent only while
+            // that switch lands; failing that, the current audio plays and the Audio menu can change it.
+            if (!allowed && selectedAudio.current === null) {
+              const match = preferredAudioTrack(preferred, tracks)
+              if (match !== null && wantedAudio.current !== match) {
+                wantedAudio.current = match; owned.setAudio(match)
+                video.muted = true; video.pause(); clearWaiting()
+                return false
               }
-              return false
             }
             setAudioBlocked(false)
             video.muted = !!opts.muted || silenced.current

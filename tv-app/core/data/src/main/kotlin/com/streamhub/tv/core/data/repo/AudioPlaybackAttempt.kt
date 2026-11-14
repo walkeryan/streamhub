@@ -16,11 +16,13 @@ fun channelPlayback(id: String): Boolean = id.startsWith("ch:") || id.startsWith
 /**
  * One request owns its consent. Cancellation wins even if an HTTP adapter returns late.
  *
- * A channel never comes back as a [AudioPlaybackAttempt.Choice] (the owner's decision: "if I open a
- * channel, don't prompt me at all"). IPTV carries a provider language hint, not audio tracks, so the
- * chooser stood in front of every zap; a channel has one source, so there was nothing to choose. Opening
- * it is the consent, sent explicitly so a server that still checks channel audio plays it too, and the
- * player still picks a tagged track in the profile's languages when a stream has several.
+ * Nothing comes back as a [AudioPlaybackAttempt.Choice] any more (the owner's decisions: "if I open a
+ * channel, don't prompt me at all"; "it should never ask me if there is only one stream"; "if one
+ * Spanish one sneaks through, my ears aren't going to bleed"). Provider audio is almost never verified,
+ * so the chooser stood in front of nearly every film and every zap. The server's automatic variant (a
+ * source with preferred audio first) plays, else the first source; pressing Play is the consent, sent
+ * explicitly so a server that still checks audio plays it too, and the player still picks a tagged
+ * track in the profile's languages when a file has several. The type stays for callers that match on it.
  */
 suspend fun audioPlaybackAttempt(
     request: PlaybackRequest,
@@ -30,18 +32,16 @@ suspend fun audioPlaybackAttempt(
     beforeResolve: suspend () -> Unit = {},
 ): AudioPlaybackAttempt {
     val channel = channelPlayback(request.id)
-    var selected = if (channel && request.variantId != null) request.copy(allowUnverifiedAudio = true) else request
+    // A source the viewer (or the web app) already named is played as named.
+    var selected = if (request.variantId != null) request.copy(allowUnverifiedAudio = true) else request
     if (preflight && (request.id.startsWith("tmdb:") || request.id.startsWith("lib:") || channel)) {
         val choices = options(request.id, request.sourceId)
         currentCoroutineContext().ensureActive()
-        if (channel && choices.options.isNotEmpty()) {
-            val own = choices.options.firstOrNull { it.variantId == choices.automaticVariantId } ?: choices.options.first()
-            selected = request.copy(variantId = own.variantId, allowUnverifiedAudio = true)
-        } else if (choices.options.isNotEmpty()) {
-            val automatic = choices.options.firstOrNull { it.variantId == choices.automaticVariantId }
-                ?.takeIf { it.preferredAudioAvailable || choices.preferredLanguages.isEmpty() }
-            if (automatic == null) return AudioPlaybackAttempt.Choice(request, choices)
-            selected = request.copy(variantId = automatic.variantId, allowUnverifiedAudio = false)
+        if (choices.options.isNotEmpty()) {
+            val best = choices.options.firstOrNull { it.variantId == choices.automaticVariantId }
+                ?: choices.options.firstOrNull { it.preferredAudioAvailable }
+                ?: choices.options.first()
+            selected = request.copy(variantId = best.variantId, allowUnverifiedAudio = true)
         }
     }
     currentCoroutineContext().ensureActive()

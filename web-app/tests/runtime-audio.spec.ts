@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { signIn } from './helpers'
 
 for (const scenario of ['preferred', 'unknown', 'foreign'] as const) {
-  test(`runtime ${scenario} audio remains muted until confirmed or explicitly chosen`, async ({ page }) => {
+  test(`runtime ${scenario} audio never stops playback`, async ({ page }) => {
     // Deterministic engine fixture exercises the real hook/UI, not provider media.
     await page.route('**/src/player/engine.ts', route => route.fulfill({ contentType: 'application/javascript', body: `
       export async function attachSource(video, descriptor, options) {
@@ -15,25 +15,23 @@ for (const scenario of ['preferred', 'unknown', 'foreign'] as const) {
     await signIn(page)
     await page.getByRole('link', { name: 'Live TV', exact: true }).click()
     await page.getByTestId('channel-row').first().click()
-    await expect(page.getByTestId('runtime-audio-blocked')).toBeVisible()
-    const mutedPaused = () => page.getByTestId('video').evaluate((v: HTMLVideoElement) => v.muted && v.paused)
-    expect(await mutedPaused()).toBe(true)
+    type Fixture = { runtimeAudio?: { requested: number | null; confirm(): void; change(): void } }
+    // The fixture engine is attached (not a real stream that happens to play).
+    await expect.poll(() => page.evaluate(() => !!(window as unknown as Fixture).runtimeAudio)).toBe(true)
     if (scenario === 'preferred') {
-      expect(await page.evaluate(() => (window as unknown as { runtimeAudio: { requested: number | null; confirm(): void; change(): void } }).runtimeAudio.requested)).toBe(1)
-      await page.evaluate(() => (window as unknown as { runtimeAudio: { requested: number | null; confirm(): void; change(): void } }).runtimeAudio.confirm())
-    } else if (scenario === 'unknown') {
-      await expect(page.getByRole('button', { name: 'Default audio · language unknown', exact: true })).toHaveAttribute('data-focused', 'true')
-      await page.keyboard.press('Enter')
-    } else {
-      await page.getByRole('button', { name: 'Continue with current audio', exact: true }).click()
+      // A tagged preferred track is switched to first, silent only while the switch lands.
+      await expect.poll(() => page.evaluate(() => (window as unknown as Fixture).runtimeAudio!.requested)).toBe(1)
+      await page.evaluate(() => (window as unknown as Fixture).runtimeAudio!.confirm())
     }
-    await expect(page.getByTestId('runtime-audio-blocked')).toHaveCount(0)
+    // Unknown or foreign audio plays as it is: nothing stops for a confirmation.
     await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
-    await page.evaluate(() => (window as unknown as { runtimeAudio: { requested: number | null; confirm(): void; change(): void } }).runtimeAudio.change())
-    await expect(page.getByTestId('runtime-audio-blocked')).toBeVisible()
-    expect(await mutedPaused()).toBe(true)
-    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('runtime-audio-blocked')).toHaveCount(0)
+    expect(await page.getByTestId('video').evaluate((v: HTMLVideoElement) => v.muted)).toBe(false)
+    // The stream changing its audio mid-play does not stop it either.
+    await page.evaluate(() => (window as unknown as Fixture).runtimeAudio!.change())
+    await page.waitForTimeout(300)
+    await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
+    await expect(page.getByTestId('runtime-audio-blocked')).toHaveCount(0)
     await expect(page.getByTestId('player-menu')).toHaveCount(0)
-    expect(await mutedPaused()).toBe(true)
   })
 }

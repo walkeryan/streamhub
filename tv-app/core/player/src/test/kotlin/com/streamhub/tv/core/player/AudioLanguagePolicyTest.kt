@@ -72,11 +72,12 @@ class AudioLanguagePolicyTest {
         assertFalse(preferredAudioSelected(listOf("eng"),listOf(null)))
     }
 
-    @Test fun aLiveChannelNeverHoldsForTheViewerWhileFilmsStillDo() {
-        // Two foreign tracks, or several untagged ones: a film stops for a choice, a channel plays.
+    @Test fun nothingHoldsForTheViewer() {
+        // Two foreign tracks, or several untagged ones: still Blocked as a finding, but a film plays like a channel.
         listOf(runtimeAudioDecision(false,listOf("eng"),2,listOf("fra"),false),runtimeAudioDecision(true,listOf("eng"),2,listOf(null),false)).forEach { decision ->
             assertEquals(RuntimeAudioDecision.Blocked,decision)
-            assertTrue(audioHoldsForViewer(decision,channel=false))
+            // Nothing is held for the viewer, film or channel: the default track plays.
+            assertFalse(audioHoldsForViewer(decision,channel=false))
             assertFalse(audioHoldsForViewer(decision,channel=true))
         }
         listOf(RuntimeAudioDecision.Allowed,RuntimeAudioDecision.Unobservable).forEach { assertFalse(audioHoldsForViewer(it,channel=false)) }

@@ -11,12 +11,13 @@ import org.junit.Test
 class AudioPlaybackAttemptTest {
     private val choice = PlaybackOptions("tmdb:movie:11", listOf(PlaybackOption("lib:s:1", "s", "IPTV", "EN - Star Wars")))
 
-    @Test fun choosingDoesNotResolveOrAutoplay() = runTest {
-        var resolves = 0
-        val result = audioPlaybackAttempt(PlaybackRequest(choice.id), true, { _, _ -> choice }, { resolves++; error("unexpected resolve") })
-        assertTrue(result is AudioPlaybackAttempt.Choice)
-        assertEquals(0, resolves)
-        assertFalse((result as AudioPlaybackAttempt.Choice).request.allowUnverifiedAudio)
+    @Test fun theOnlySourcePlaysWithoutAChoiceEvenUnverified() = runTest {
+        // The owner's photo: one IPTV source, "Audio unverified · Listed as English", and a chooser in front of it.
+        val film = choice.copy(preferredLanguages = listOf("eng"))
+        val requests = mutableListOf<PlaybackRequest>()
+        val result = audioPlaybackAttempt(PlaybackRequest(film.id), true, { _, _ -> film }, { requests += it; PlaybackDescriptor(it.id, PlaybackMode.PROXY) })
+        assertTrue(result is AudioPlaybackAttempt.Ready)
+        assertEquals(PlaybackRequest(film.id, variantId = "lib:s:1", allowUnverifiedAudio = true), requests.single())
     }
 
     @Test fun cancelOrProfileChangeSuppressesLateChoice() = runTest {
@@ -40,9 +41,10 @@ class AudioPlaybackAttemptTest {
             audioPlaybackAttempt(consent, false, { _, _ -> error("must not reselect") }, { requests += it; error("fixture stops before media") })
         } catch (_: IllegalStateException) { }
         assertEquals(listOf(consent), requests)
-        val fresh = audioPlaybackAttempt(PlaybackRequest("tmdb:movie:12"), true, { _, _ -> choice }, { error("must ask") }) as AudioPlaybackAttempt.Choice
-        assertNull(fresh.request.variantId)
-        assertFalse(fresh.request.allowUnverifiedAudio)
+        // A variant named without consent (the web app's automatic pick) is played as named, consent added.
+        val named = PlaybackRequest(choice.id, variantId = "lib:s:1")
+        val ready = audioPlaybackAttempt(named, false, { _, _ -> error("must not reselect") }, { PlaybackDescriptor(it.id, PlaybackMode.PROXY) }) as AudioPlaybackAttempt.Ready
+        assertEquals(named.copy(allowUnverifiedAudio = true), ready.request)
     }
     @Test fun liveUnknownAudioPlaysTheChannelWithoutAChoice() = runTest {
         // Today's server: a provider hint only, no automatic variant. The channel still plays, consent sent explicitly.
@@ -74,11 +76,17 @@ class AudioPlaybackAttemptTest {
         }
     }
 
-    @Test fun filmsStillAskWhenNoVerifiedPreferredAudio() = runTest {
-        val film=choice.copy(preferredLanguages=listOf("eng"))
-        assertTrue(audioPlaybackAttempt(PlaybackRequest(film.id),true,{_,_->film},{error("must choose")}) is AudioPlaybackAttempt.Choice)
-        val unverified=film.copy(automaticVariantId="lib:s:1")
-        assertTrue(audioPlaybackAttempt(PlaybackRequest(film.id),true,{_,_->unverified},{error("must choose")}) is AudioPlaybackAttempt.Choice)
+    @Test fun filmsNeverAskAndPreferredAudioStillSteers() = runTest {
+        val spanish = PlaybackOption("lib:s:1", "s", "IPTV", "ES - Star Wars")
+        val english = PlaybackOption("lib:s:2", "s", "IPTV", "EN - Star Wars", preferredAudioAvailable = true)
+        val film = PlaybackOptions("tmdb:movie:11", listOf(spanish, english), preferredLanguages = listOf("eng"))
+        suspend fun played(options: PlaybackOptions) =
+            (audioPlaybackAttempt(PlaybackRequest(options.id), true, { _, _ -> options }, { PlaybackDescriptor(it.id, PlaybackMode.PROXY) }) as AudioPlaybackAttempt.Ready).request
+        // The server's automatic pick wins; without one, a source with preferred audio; failing that, the first.
+        assertEquals("lib:s:1", played(film.copy(automaticVariantId = "lib:s:1")).variantId)
+        assertEquals("lib:s:2", played(film).variantId)
+        assertEquals("lib:s:1", played(film.copy(options = listOf(spanish, english.copy(preferredAudioAvailable = false)))).variantId)
+        assertTrue(played(film).allowUnverifiedAudio)
     }
 
     @Test fun verifiedAutomaticVariantResolvesWithoutConsentOrChooser() = runTest {
@@ -88,7 +96,7 @@ class AudioPlaybackAttemptTest {
         assertTrue(result is AudioPlaybackAttempt.Ready)
         assertEquals(1, requests.size)
         assertEquals("lib:s:1", requests.single().variantId)
-        assertFalse(requests.single().allowUnverifiedAudio)
+        assertTrue(requests.single().allowUnverifiedAudio)
     }
 
 }
