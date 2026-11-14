@@ -1,10 +1,12 @@
 import type { components } from '../api/schema'
 import type { Channel, Programme } from '../api/types'
-import { logo } from './art'
+import { logo, matchupArt } from './art'
 
 type SportsEvent = components['schemas']['SportsEvent']
 type SportsFeed = components['schemas']['SportsEventFeed']
 type SportsChannel = components['schemas']['SportsChannel']
+type Matchup = components['schemas']['SportsMatchup']
+type MatchupTeam = components['schemas']['MatchupTeam']
 
 /**
  * A provider's game-day line-up as the hub stores it, and the reading the server makes of it:
@@ -24,6 +26,7 @@ const onDay = (days: number, hour: number, minute = 0) => localDay(BOOT) + days 
 interface Slot {
   ext: number; number: number; stored: string; shown: string; quality: SportsFeed['quality']; language: string
   league: string; sport: string; title: string; home: string | null; away: string | null; start: number | null
+  replay?: boolean; matchup?: Matchup
 }
 const stamp = (at: number) => new Date(at).toISOString().slice(0, 19).replace('T', ' ')
 const slot = (ext: number, network: string, n: string, sport: string, title: string, start: number | null, extra: Partial<Slot> = {}): Slot => {
@@ -49,6 +52,41 @@ const slots: Slot[] = [
   slot(8, 'VANTIX+', '008', "Men's Soccer", 'Stale Town at Old Harbor', BOOT - 42 * DAY),
   slot(21, 'CORVAN LEAGUE', '02', 'Sports', 'Kestrels at Badgers', null, { quality: 'HD' }),
 ]
+
+/**
+ * Football games with team facts, as the server annotates them from the public scoreboard (every team
+ * is made up): a ranked side against an unranked one with art and live odds, a game without odds or
+ * art yet (the colours stand in), a replay (no clock, no odds), and games still to come. Listed only
+ * when sessionStorage['mock.sports'] is 'matchups', so the default line-up stays as it is.
+ */
+const team = (name: string, short_name: string, color: string, alt_color: string, rank: number | null, record: string, conference_record: string | null): MatchupTeam =>
+  ({ name, short_name, color, alt_color, rank, record, conference_record })
+const KESTRELS = team('Lakeview Kestrels', 'Lakeview', '#2b4c9a', '#ffffff', null, '6-3', '4-1 Lakes League')
+const BADGERS = team('Brookfield Badgers', 'Brookfield', '#7a1f3d', '#f2c14e', 12, '8-1', '5-1 Lakes League')
+const HERONS = team('Harbor Herons', 'Harbor', '#e05a1b', '#1b1b1b', 5, '9-0', '6-0')
+const OTTERS = team('Riverside Otters', 'Riverside', '#0f6b5c', '#c0c0c0', null, '4-5', '2-3')
+const OWLS = team('Northfield Owls', 'Northfield', '#3d2a6b', '#d9d9d9', 18, '7-2', '4-2 Summit Conference')
+const FOXES = team('Southgate Foxes', 'Southgate', '#b5651d', '#222222', null, '5-4', '3-3 Summit Conference')
+const ELKS = team('Eastgate Elks', 'Eastgate', '#1f5f99', '#f0f0f0', 8, '8-1', '5-0 Summit Conference')
+const WOLVES = team('Westbrook Wolves', 'Westbrook', '#5a5a5a', '#c8102e', 21, '7-2', '4-1 Summit Conference')
+const matchupSlots: Slot[] = [
+  slot(41, 'VANTIX+', '041', 'College Football', 'Lakeview Kestrels at Brookfield Badgers', BOOT - 50 * MIN, { quality: 'HD', matchup: {
+    away: KESTRELS, home: BADGERS, status_detail: 'Q2 7:14', win_probability: { away: 14.6, home: 85.4, live: true }, art_url: matchupArt('Lakeview Kestrels at Brookfield Badgers'),
+  } }),
+  slot(42, 'LUMEX TV', '042', 'College Football', 'Harbor Herons at Riverside Otters', BOOT - 12 * MIN, { matchup: {
+    away: HERONS, home: OTTERS, status_detail: 'Q1 3:52', art_url: null,
+  } }),
+  slot(43, 'VANTIX+', '043', 'College Football', 'Replay: Northfield Owls at Southgate Foxes', BOOT - 30 * MIN, { replay: true, home: 'Southgate Foxes', away: 'Northfield Owls', matchup: {
+    away: OWLS, home: FOXES, status_detail: null, art_url: matchupArt('Northfield Owls at Southgate Foxes'),
+  } }),
+  slot(44, 'VANTIX+', '044', 'College Football', 'Eastgate Elks at Westbrook Wolves', later(150), { matchup: {
+    away: ELKS, home: WOLVES, art_url: null,
+  } }),
+  slot(45, 'LUMEX TV', '045', 'College Football', 'Riverside Otters at Lakeview Kestrels', onDay(1, 15, 30), { matchup: {
+    away: OTTERS, home: KESTRELS, art_url: matchupArt('Riverside Otters at Lakeview Kestrels'),
+  } }),
+]
+const withMatchups = () => { try { return sessionStorage.getItem('mock.sports') === 'matchups' } catch { return false } }
 
 interface Network { ext: number; stored: string; shown: string; quality: SportsChannel['quality']; listing?: { title: string; teams: string[] } }
 const networks: Network[] = [
@@ -82,7 +120,7 @@ const listingOf = (n: Network): Programme | undefined => n.listing && {
 
 /** Channels of the line-up as /channels would list them: shown names, the game of a slot, never filler. */
 export const sportsChannels: Channel[] = [
-  ...slots.map((s) => base(s.ext, s.number, s.shown, 'Game day', s.language)),
+  ...[...slots, ...matchupSlots].map((s) => base(s.ext, s.number, s.shown, 'Game day', s.language)),
   ...networks.map((n) => base(n.ext, 900 + n.ext, n.stored, 'Sports networks')),
 ]
 /** Every guide entry a sports fixture can be recorded from, for the fixture recorder. */
@@ -101,20 +139,21 @@ export function sportsEvents(params: URLSearchParams, serve: (p: Programme) => u
   const languages = !language || language === 'all' ? null : language.split(',')
   const q = params.get('q')?.trim().toLowerCase() ?? ''
   const grouped = new Map<string, SportsEvent>()
-  for (const s of slots) {
+  for (const s of withMatchups() ? [...slots, ...matchupSlots] : slots) {
     if (languages && !languages.includes(s.language)) continue
     // The slot's name is its schedule. Its guide rows repeat that name and are never read as listings.
     const live = s.start !== null && s.start <= now && now < s.start + EVENT_LENGTH
     if (s.start !== null && s.start + EVENT_LENGTH <= now) continue
     if (s.start === null ? !(from <= now && now < to) || !['all', 'active'].includes(status) : !(s.start + EVENT_LENGTH > from && s.start < to)) continue
-    if ((status === 'current' && !live) || (status === 'upcoming' && (live || s.start === null)) || status === 'replay') continue
+    if ((status === 'current' && !live) || (status === 'upcoming' && (live || s.start === null)) || (status === 'replay' && !s.replay)) continue
     if (q && !`${s.title} ${s.shown} ${s.sport}`.toLowerCase().includes(q)) continue
     const game = gameOf(s)
     const id = `${s.title}|${s.sport}|${s.start ?? 'undated'}`
     const event = grouped.get(id) ?? {
       id: `ev${[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(36)}`, kind: s.start === null ? 'channel' : 'event', title: s.title, sport: s.sport, league: s.league, home: s.home, away: s.away,
       start: new Date(s.start ?? from).toISOString(), stop: new Date(s.start === null ? to : s.start + EVENT_LENGTH).toISOString(),
-      status: s.start === null ? 'unscheduled' : live ? 'current' : 'upcoming', replay: false, live_evidence: live, grouping_evidence: 'matching_title_and_time', feeds: [],
+      status: s.start === null ? 'unscheduled' : live ? 'current' : 'upcoming', replay: !!s.replay, live_evidence: live && !s.replay, grouping_evidence: 'matching_title_and_time', feeds: [],
+      ...(s.matchup ? { matchup: s.matchup } : {}),
     }
     event.feeds.push({
       programme_id: game?.id ?? `prog:slot-${s.ext}-0`, channel_id: idOf(s.ext), channel_name: s.shown, channel_number: s.number, quality: s.quality,
