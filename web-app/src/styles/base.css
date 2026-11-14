@@ -245,6 +245,11 @@ h1, h2, h3, p { margin: 0; }
 .tile-landscape { width: var(--tile-landscape-w); height: var(--tile-landscape-h); }
 .tile-channel { width: var(--tile-channel-w); height: var(--tile-channel-h); }
 .tile img.art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* Shown once whole: a poster still arriving leaves the tile's own surface, never a half-painted image.
+   Hidden at once (a tile given a new poster never fades the old one out), faded in when it is there. */
+.tile img.art[data-loaded="false"] { opacity: 0; }
+.tile img.art[data-loaded="true"] { transition: opacity 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .tile img.art[data-loaded="true"] { transition: none; } }
 .tile .cap {
   position: absolute; inset: auto 0 0 0; padding: 1.5rem 0.625rem 0.5rem;
   background: linear-gradient(to top, var(--t-scrim-bottom), var(--t-scrim-top));

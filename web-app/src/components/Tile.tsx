@@ -70,7 +70,7 @@ export const MediaTile = memo(function MediaTile(p: {
     >
       {({ focused }) => (
         <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className="tile" style={{ position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
-          <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} fallback={<Fallback title={p.tile.title} />} />
+          <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} reveal fallback={<Fallback title={p.tile.title} />} />
           <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
           {/* A request on its way says where it is, in place of where the title plays. */}
           {request ? <RequestTileStatus progress={request} of={p.tile.title} /> : p.mark === 'availability' ? (
