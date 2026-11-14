@@ -75,6 +75,19 @@ test('a refused hand-off is said, and still no web player starts', async ({ page
   await expect(page.getByTestId('player')).toHaveCount(0)
 })
 
+test('Trailer asks the TV for the trailer, which it opens in its YouTube app; no browser window opens', async ({ page }) => {
+  await enter(page)
+  await page.goto(`/title/${encodeURIComponent(FILM)}`)
+  await expect(page.getByTestId('title-play')).toBeVisible()
+  const opened: string[] = []
+  page.on('popup', (p) => opened.push(p.url()))
+  await page.getByRole('button', { name: 'Trailer' }).click()
+  await expect.poll(async () => (await shellState(page)).plays.length).toBe(1)
+  expect(JSON.parse((await shellState(page)).plays[0]!)).toEqual({ v: 1, kind: 'title', id: `trailer:${FILM}` })
+  await expect(page).toHaveURL(new RegExp(`/title/${encodeURIComponent(FILM)}`))
+  expect(opened).toEqual([])
+})
+
 test('Back from the TV remote closes an open dialog first, goes back next, and says no on the home screen', async ({ page }) => {
   await enter(page)
   await page.goto('/')
