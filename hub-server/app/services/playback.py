@@ -677,14 +677,13 @@ class PlaybackResolver:
     async def _check_channel_audio(
         self, profile_id: str, hub_id: str, variant_id: str | None, allow_unverified_audio: bool
     ) -> None:
+        """A channel plays when it is opened: the household asked never to be stopped to confirm a
+        channel's audio. Almost no channel carries track evidence, so a confirmation stood in front
+        of every channel change. A channel has one source, so there is nothing to choose between;
+        the player still picks a track in the profile's languages when a stream tags its tracks."""
         option = await self._channel_audio_option(profile_id, hub_id)
         if variant_id is not None and variant_id != option["variant_id"]:
             raise NotFound("audio variant does not belong to this channel")
-        preferred = await self._catalog.preferred_languages(profile_id, None)
-        if preferred and not option["preferred_audio_available"] and not (variant_id and allow_unverified_audio):
-            raise Conflict(
-                "No verified preferred audio. Confirm this channel's audio source.", code="audio_selection_required"
-            )
 
     async def options(self, profile_id: str, hub_id: str, source_id: str | None = None) -> dict[str, Any]:
         await self._require_content(profile_id, hub_id)
@@ -704,14 +703,14 @@ class PlaybackResolver:
             option = await self._channel_audio_option(profile_id, channel_id)
             if source_id and source_id != option["source_id"]:
                 raise NotFound("channel does not belong to the selected source")
+            # A channel is never held for an audio choice (see ``_check_channel_audio``).
             preferred = await self._catalog.preferred_languages(profile_id, None)
-            automatic = option["variant_id"] if not preferred or option["preferred_audio_available"] else None
             return {
                 "id": hub_id,
                 "preferred_languages": preferred,
                 "options": [option],
-                "automatic_variant_id": automatic,
-                "selection_required": automatic is None,
+                "automatic_variant_id": option["variant_id"],
+                "selection_required": False,
             }
         if h.scheme == "lib":
             row = await self._catalog.title_row(h.a, h.b)
@@ -967,7 +966,8 @@ class PlaybackResolver:
             policy_until=archive_end,
             kind="channel",
         )
-        desc.update(await self._runtime_audio(profile_id, ch.data or {}, audio_consent))
+        # A channel is never held for its audio: the preferred languages only steer the track choice.
+        desc.update(await self._runtime_audio(profile_id, ch.data or {}, consent=True))
         desc["archive_start"] = archive_start
         desc["archive_end"] = archive_end
         desc["channel_context"] = ctx

@@ -40,8 +40,9 @@ async def test_pair_http_capacity_one_and_source_audio_auth_gates(api, monkeypat
         row = (await session.execute(select(Channel).where(Channel.source_id == source))).scalars().first()
         row.data = {**row.data, **tracks("fra")}
         await session.commit()
+    # A channel is never held for its audio, so only the capacity gate answers.
     denied = await api.post("/playback/multiview", json=request)
-    assert denied.status_code == 409 and denied.json()["code"] == "audio_selection_required"
+    assert denied.status_code == 409 and denied.json()["code"] == "multiview_capacity"
     start.assert_not_awaited()
 
 
