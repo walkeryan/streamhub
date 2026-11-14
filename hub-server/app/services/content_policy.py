@@ -9,6 +9,7 @@ only runs for a user those limits restrict. ``applies_to`` is the one question a
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import AsyncIterator
 from contextvars import ContextVar
@@ -34,6 +35,7 @@ from app.infra.models import (
     Title,
     User,
 )
+from app.services import classification as _classification
 from app.services.classification import MOVIE_CODES, TV_CODES
 from app.services.errors import Conflict, Forbidden, NotFound, ServiceError
 from app.services.permissions import MOVIE_ORDER, TV_ORDER, Limits, effective_limits
@@ -49,6 +51,10 @@ active_policy: ContextVar[tuple[ContentPolicy, Profile] | None] = ContextVar("co
 
 # Where ``ContentPolicy.profile`` leaves the user's effective limits on the row it returns.
 _LIMITS = "_policy_limits"
+# The subject keys a profile's ceiling admits and refuses, attached by ``profile`` for one request.
+_KEYS = "_policy_keys"
+# How long a built key set is reused before it is checked against the clock (evidence ages out).
+KEYS_TTL_S = 300.0
 
 
 def restricts(limits: Limits) -> bool:
@@ -72,6 +78,8 @@ class ContentPolicy:
     def __init__(self, db: Database, settings: Any) -> None:
         self.db, self.settings = db, settings
         self.owner_pin: Any = None
+        # rule signature -> (built at, what it was built from, admitted keys JSON, refused keys JSON)
+        self._keys: dict[tuple[Any, ...], tuple[float, tuple[Any, ...], str, str]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -105,7 +113,61 @@ class ContentPolicy:
                 if user is not None and role is not None:
                     limits = effective_limits(role.limits or {}, user.limits or {})
         setattr(row, _LIMITS, limits)
+        if self.restricts(row):
+            await self._attach_keys(row)
         return row
+
+    async def _attach_keys(self, profile: Profile) -> None:
+        """Work out once which titles this profile's ceiling admits and refuses, and attach them.
+
+        The rating clause would otherwise rebuild the same set inside every query: a subquery that
+        parses the JSON evidence of every classification row, tens of thousands of them, for each of
+        the thirty or so queries a page makes. The set depends only on the rules and the
+        classifications, so it is built once and reused until a classification changes (counted,
+        and noticed in the table itself) or ``KEYS_TTL_S`` passes (evidence ages out with time). Only the
+        classification store writes ratings; a row edited in place by anything else is picked up when the
+        set next expires.
+        """
+        values = self.values(profile)
+        signature = (
+            self.enabled,
+            tuple(values["allowed_movie_codes"]),
+            tuple(values["allowed_tv_codes"]),
+            bool(values["allow_unknown"]),
+        )
+        reset = active_policy.set(None)
+        try:
+            async with self.db.session() as session:
+                count, newest = (
+                    await session.execute(select(func.count(), func.max(AgeClassification.observed_at)))
+                ).one()
+                stamp = (_classification.CHANGES[0], int(count or 0), str(newest))
+                now = time.monotonic()
+                held = self._keys.get(signature)
+                if held is None or held[1] != stamp or now - held[0] >= KEYS_TTL_S:
+                    admitted = (
+                        await session.execute(select(AgeClassification.subject_key).where(*self._proven(profile)))
+                    ).scalars()
+                    refused = (
+                        await session.execute(
+                            select(AgeClassification.subject_key).where(
+                                *self._typed(), self.above_clause(AgeClassification.evidence, profile)
+                            )
+                        )
+                    ).scalars()
+                    held = (now, stamp, json.dumps(sorted(admitted)), json.dumps(sorted(refused)))
+                    if len(self._keys) >= 64:
+                        self._keys.clear()
+                    self._keys[signature] = held
+        finally:
+            active_policy.reset(reset)
+        setattr(profile, _KEYS, (held[2], held[3]))
+
+    @staticmethod
+    def _listed(keys_json: str) -> Any:
+        """The keys of a JSON array as a one-column subquery: one bound value, however many keys."""
+        listed = func.json_each(literal(keys_json)).table_valued("value")
+        return select(listed.c.value)
 
     async def scope(self, profile_id: str) -> tuple[ContentPolicy, Profile] | None:
         """What to set ``active_policy`` to for work done on a profile's behalf outside a request."""
@@ -217,6 +279,9 @@ class ContentPolicy:
 
     def _admitted(self, cols: Any, profile: Profile) -> Any:
         """A movie or show row with fresh proof that it is within the ceiling."""
+        keys = getattr(profile, _KEYS, None)
+        if keys is not None:
+            return and_(cols.tmdb_id > 0, self._subject(cols).in_(self._listed(keys[0])))
         return and_(
             cols.tmdb_id > 0,
             self._subject(cols).in_(select(AgeClassification.subject_key).where(*self._proven(profile))),
@@ -224,6 +289,11 @@ class ContentPolicy:
 
     def _refused(self, cols: Any, profile: Profile) -> Any:
         """A movie or show row marked adult, or known to be rated above the ceiling."""
+        keys = getattr(profile, _KEYS, None)
+        if keys is not None:
+            # Like the subquery below, a row without a TMDB id matches nothing: false, never NULL.
+            rated = func.coalesce(self._subject(cols).in_(self._listed(keys[1])), False)
+            return or_(cols.adult.is_(True), rated)
         rated_above = exists(
             select(1).where(
                 AgeClassification.subject_key == self._subject(cols),
