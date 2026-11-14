@@ -34,8 +34,12 @@ log = logging.getLogger(__name__)
 
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/football"
 COLLEGE, NFL = "college-football", "nfl"
-# College is read for FBS (group 80), whose Saturday slate is far more than the default page.
-_PARAMS: dict[str, dict[str, str]] = {COLLEGE: {"groups": "80", "limit": "300"}, NFL: {}}
+# College is read for FBS (group 80) and FCS (group 81), each a slate far longer than the default page;
+# the two answers are one day's games.
+_GROUPS: dict[str, tuple[dict[str, str], ...]] = {
+    COLLEGE: ({"groups": "80", "limit": "300"}, {"groups": "81", "limit": "300"}),
+    NFL: ({},),
+}
 # ESPN's scoreboard days are US Eastern calendar days.
 ESPN_DAY = ZoneInfo("America/New_York")
 # A guide's start and the scoreboard's kickoff are the same game within this much.
@@ -188,7 +192,8 @@ def _when(value: Any) -> datetime:
 def parse_scoreboard(league: str, data: Any) -> list[Game]:
     """The games of a scoreboard answer. A game that does not read cleanly is left out, not guessed."""
     games: list[Game] = []
-    for event in (data or {}).get("events") or []:
+    events = data.get("events") if isinstance(data, dict) else None
+    for event in events if isinstance(events, list) else []:
         try:
             competition = (event.get("competitions") or [])[0]
             groups = competition.get("groups") or {}
@@ -364,8 +369,16 @@ class SportsFacts:
 
     def _board(self, league: str, day: date) -> Callable[[], Awaitable[tuple[Any, float]]]:
         async def fetch() -> tuple[Any, float]:
-            data = await self._get(f"{ESPN}/{league}/scoreboard", {"dates": day.strftime("%Y%m%d"), **_PARAMS[league]})
-            games = parse_scoreboard(league, data)
+            url, dates = f"{ESPN}/{league}/scoreboard", day.strftime("%Y%m%d")
+            answers = await asyncio.gather(
+                *(self._get(url, {"dates": dates, **group}) for group in _GROUPS[league]), return_exceptions=True
+            )
+            read = [answer for answer in answers if not isinstance(answer, BaseException)]
+            if not read:
+                failure = answers[0]
+                raise failure if isinstance(failure, BaseException) else RuntimeError("no scoreboard")
+            # One game listed by both groups is one game.
+            games = list({g.id: g for data in reversed(read) for g in parse_scoreboard(league, data)}.values())
             # Refreshed every minute while a game is on or about to be: its clock and state change.
             soon = self._now() + timedelta(seconds=IDLE_TTL)
             busy = any(g.state == "in" or (g.state == "pre" and g.start <= soon) for g in games)

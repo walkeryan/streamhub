@@ -56,8 +56,9 @@ def event(home: str, away: str, start: datetime = KICKOFF, **extra: Any) -> dict
 class Espn:
     """A scoreboard and summaries served by an ``httpx.MockTransport``, counting what was asked."""
 
-    def __init__(self, board: Any = None, summaries: dict[str, Any] | None = None) -> None:
+    def __init__(self, board: Any = None, summaries: dict[str, Any] | None = None, fcs: Any = None) -> None:
         self.board = board if board is not None else fixture("scoreboard_college.json")
+        self.fcs = fcs if fcs is not None else {"events": []}
         self.summaries = (
             summaries
             if summaries is not None
@@ -79,7 +80,7 @@ class Espn:
         if request.url.path.endswith("/scoreboard"):
             if "/nfl/" in request.url.path:
                 return httpx.Response(200, json={"events": []})
-            return httpx.Response(200, json=self.board)
+            return httpx.Response(200, json=self.fcs if request.url.params.get("groups") == "81" else self.board)
         if request.url.path.endswith("/summary"):
             found = self.summaries.get(request.url.params.get("event", ""))
             return httpx.Response(200, json=found) if found else httpx.Response(404)
@@ -233,10 +234,11 @@ async def test_annotate_live_game_with_facts_and_probability() -> None:
     assert matchup["win_probability"] == {"away": 14.6, "home": 85.4, "live": True}
     assert matchup["art_url"] is None
     assert events[1]["matchup"] is None
-    # College named nowhere: both scoreboards are read, once each.
-    assert espn.asked("/scoreboard") == 2 and espn.asked("/summary") == 1
-    sent = next(url for url in espn.calls if "college-football/scoreboard" in url.path)
-    assert sent.params["dates"] == "20261114" and sent.params["groups"] == "80"
+    # College named nowhere: both leagues are read, once each, and college for FBS and FCS.
+    assert espn.asked("/scoreboard") == 3 and espn.asked("/summary") == 1
+    sent = [url for url in espn.calls if "college-football/scoreboard" in url.path]
+    assert {url.params["groups"] for url in sent} == {"80", "81"}
+    assert all(url.params["dates"] == "20261114" and url.params["limit"] == "300" for url in sent)
 
 
 async def test_pregame_prediction_and_upcoming_games_skip_the_summary() -> None:
@@ -300,12 +302,12 @@ async def test_cache_expiry_live_and_idle() -> None:
     facts = SportsFacts(espn.factory, clock=clock, now=lambda: KICKOFF)
     await facts.annotate([event("Brookfield", "Lakeview")])
     await facts.annotate([event("Brookfield", "Lakeview")])
-    assert espn.asked("/scoreboard") == 2 and espn.asked("/summary") == 1
-    # A game is on: its scoreboard and the live summary are a minute old at most. The other
-    # scoreboard, with nothing on, keeps its fifteen minutes.
+    assert espn.asked("/scoreboard") == 3 and espn.asked("/summary") == 1
+    # A game is on: its scoreboard (FBS and FCS) and the live summary are a minute old at most.
+    # The other league's, with nothing on, keeps its fifteen minutes.
     clock.now += 61
     await facts.annotate([event("Brookfield", "Lakeview")])
-    assert espn.asked("/scoreboard") == 3 and espn.asked("/summary") == 2
+    assert espn.asked("/scoreboard") == 5 and espn.asked("/summary") == 2
     # Nothing on and nothing about to start: fifteen minutes.
     espn.board = {"events": [e for e in fixture("scoreboard_college.json")["events"] if e["id"] == "401990002"]}
     espn.board["events"][0]["date"] = espn.board["events"][0]["competitions"][0]["date"] = "2026-11-14T23:30Z"
@@ -317,7 +319,7 @@ async def test_cache_expiry_live_and_idle() -> None:
     assert espn.asked("/scoreboard") == calls
     clock.now += 301
     await facts.annotate([event("Brookfield", "Lakeview")])
-    assert espn.asked("/scoreboard") == calls + 2
+    assert espn.asked("/scoreboard") == calls + 3
 
 
 async def test_failures_degrade_to_no_facts_and_are_not_retried_at_once() -> None:
@@ -367,3 +369,35 @@ async def test_disabled_asks_nothing() -> None:
     listed = event("Brookfield", "Lakeview")
     await facts.annotate([listed])
     assert espn.calls == [] and listed["matchup"]["home"]["name"] == "Brookfield"
+
+
+async def test_fcs_games_are_read_and_merged_with_fbs() -> None:
+    fcs = fixture("scoreboard_fcs.json")
+    # A game both groups list is one game.
+    fcs["events"].append(copy.deepcopy(fixture("scoreboard_college.json")["events"][0]))
+    espn = Espn(fcs=fcs)
+    facts = SportsFacts(espn.factory, now=lambda: KICKOFF)
+    fcs_game = event("Millbrook Mallards", "Ridgeway", datetime(2026, 11, 14, 19, tzinfo=UTC))
+    fbs_game = event("Brookfield", "Lakeview")
+    await facts.annotate([fcs_game, fbs_game])
+    assert fcs_game["matchup"]["home"]["name"] == "Millbrook Mallards"
+    assert fcs_game["matchup"]["away"]["conference_record"] == "3-4 Prairie Valley"
+    assert fcs_game["matchup"]["status_detail"] == "Q1 15:00"
+    # Listed twice, matched once: a duplicate would have been an ambiguity, so no match.
+    assert fbs_game["matchup"]["home"]["rank"] == 12
+
+
+async def test_one_group_failing_keeps_the_other() -> None:
+    espn = Espn(fcs=fixture("scoreboard_fcs.json"))
+    original = espn.handle
+
+    async def fbs_down(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("groups") == "80":
+            return httpx.Response(503)
+        return await original(request)
+
+    espn.handle = fbs_down  # type: ignore[method-assign]
+    facts = SportsFacts(espn.factory, now=lambda: KICKOFF)
+    fcs_game = event("Millbrook", "Ridgeway", datetime(2026, 11, 14, 19, tzinfo=UTC))
+    await facts.annotate([fcs_game])
+    assert fcs_game["matchup"]["home"]["color"] == "#1d4f2a"
