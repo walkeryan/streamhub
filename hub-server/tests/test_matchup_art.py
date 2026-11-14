@@ -242,3 +242,24 @@ async def test_bound_grant_checks_the_session() -> None:
             await validate_art_grant({**payload, **change}, policy(applies=True), auth)
     # No session to bind to: no URL.
     assert art_payload(KEY, policy(applies=True)) is None
+
+
+async def test_facts_ask_for_art_by_scoreboard_names_for_games_on_now_or_soon(tmp_path: Path) -> None:
+    from datetime import timedelta
+
+    from app.services.sports_facts import SportsFacts
+    from tests.test_sports_facts import KICKOFF, Espn, event
+
+    api = ImageApi()
+    art = make(tmp_path, api, daily_limit=10)
+    facts = SportsFacts(Espn().factory, art=art, now=lambda: KICKOFF)
+    later = {**event("Riverside", "Harbor", KICKOFF + timedelta(hours=3, minutes=30)), "status": "upcoming"}
+    await facts.annotate([event("Lakeview", "Brookfield"), later])
+    # The live game is asked for; the one more than three hours away is not.
+    assert art.pending == 1
+    await art.process_next()
+    prompt = json.loads(api.requests[0].content)["prompt"]
+    assert "Lakeview Kestrels American football helmet on the left" in prompt and "Brookfield Badgers" in prompt
+    again = event("Brookfield Badgers", "Lakeview Kestrels")
+    await facts.annotate([again])
+    assert again["matchup"]["art_url"] and "/api/v1/sports/art/" in again["matchup"]["art_url"]
