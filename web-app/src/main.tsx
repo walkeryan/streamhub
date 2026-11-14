@@ -7,6 +7,7 @@ import './styles/base.css'
 import { App } from './App'
 import { queryClient } from './api/queryClient'
 import { startSpatialNavigation } from './nav/spatial'
+import { startGamepadNavigation } from './nav/gamepad'
 import { installShell } from './shell'
 
 async function boot() {
@@ -17,6 +18,7 @@ async function boot() {
     await startMocks()
   }
   startSpatialNavigation()
+  startGamepadNavigation()
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
