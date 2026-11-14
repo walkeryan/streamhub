@@ -21,6 +21,7 @@ import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.sameSwitchSession
 import kotlinx.coroutines.CoroutineStart
 import com.streamhub.tv.core.data.repo.OwnedProgressJobs
+import com.streamhub.tv.core.data.repo.channelPlayback
 import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.StreamHubApi
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
@@ -288,30 +289,41 @@ class StreamHubPlayer(
         }
         val explicit=selectedTracks.isNotEmpty() && selectedTracks.all {(group,index)->audioApproval.accepts(mediaEpoch,group,index)}
         val decision=runtimeAudioDecision(d.audioLanguageRequired,d.preferredAudioLanguages,audio.size,audio.filter{it.selected}.map{it.language},explicit)
-        if(decision==RuntimeAudioDecision.Blocked || (decision==RuntimeAudioDecision.Unobservable && exoPlayer.playbackState!=Player.STATE_READY)) {
-            exoPlayer.playWhenReady=false;waitingForAudio=true
+        val unready=decision==RuntimeAudioDecision.Unobservable && exoPlayer.playbackState!=Player.STATE_READY
+        if(decision==RuntimeAudioDecision.Blocked || unready) {
             // A known foreign default must not win over an available tagged preferred track.
             val preferred=preferredAudioIndex(d.preferredAudioLanguages,audio.map {it.language})?.let {audio[it]}
             if(preferred!=null) {
                 val group=exoPlayer.currentTracks.groups.getOrNull(preferred.groupIndex)
                 if(group!=null && group.isTrackSupported(preferred.trackIndex) && requestedPreferredAudio!=(group.mediaTrackGroup to preferred.trackIndex)) {
+                    exoPlayer.playWhenReady=false;waitingForAudio=true
                     requestedPreferredAudio=group.mediaTrackGroup to preferred.trackIndex
                     exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon()
                         .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup,preferred.trackIndex)).build()
                     return false
                 }
             }
-            if(exoPlayer.playbackState==Player.STATE_READY) _state.value=_state.value.copy(audioBlocked=true,audioNotice="Preferred audio is unavailable or unverified. Choose Audio in playback controls.")
-            return false
+            // A channel with no preferred track to switch to plays its own default below, never paused for a choice.
+            if(unready || audioHoldsForViewer(decision,channelPlayback(d.id))) {
+                exoPlayer.playWhenReady=false;waitingForAudio=true
+                if(exoPlayer.playbackState==Player.STATE_READY) _state.value=_state.value.copy(audioBlocked=true,audioNotice="Preferred audio is unavailable or unverified. Choose Audio in playback controls.")
+                return false
+            }
         }
         val wasBlocked=_state.value.audioBlocked
-        _state.value=_state.value.copy(audioBlocked=false,audioNotice=if(decision==RuntimeAudioDecision.Unobservable) "Audio language unverified. You can change audio in playback controls." else null,error=if(wasBlocked)null else _state.value.error)
+        // A channel says nothing about its audio either: the channel banner shows on every zap, and a caveat
+        // there was the same nag in quieter words. Films and series keep the note.
+        _state.value=_state.value.copy(audioBlocked=false,audioNotice=if(channelPlayback(d.id)) null else when(decision) {
+            RuntimeAudioDecision.Unobservable->"Audio language unverified. You can change audio in playback controls."
+            else->null
+        },error=if(wasBlocked)null else _state.value.error)
         if(waitingForAudio) {waitingForAudio=false;exoPlayer.playWhenReady=wantsPlayback}
         return true
     }
 
+    /** Never on a channel: choosing a track there is the whole consent, like opening the channel was. */
     fun audioTrackNeedsConfirmation(option:TrackOption):Boolean = current?.let {
-        needsRuntimeAudioCheck(it.audioLanguageRequired,it.preferredAudioLanguages) &&
+        !channelPlayback(it.id) && needsRuntimeAudioCheck(it.audioLanguageRequired,it.preferredAudioLanguages) &&
             !singleUntaggedAudio(_state.value.audioTracks.size,listOf(option.language)) &&
             !preferredAudioSelected(it.preferredAudioLanguages,listOf(option.language))
     } ?: true
