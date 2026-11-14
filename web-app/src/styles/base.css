@@ -624,9 +624,63 @@ h1, h2, h3, p { margin: 0; }
 /* The game's name heads its sheet: wrapped inside the sheet, three lines at most. */
 [data-testid='sports-picker'] > .title-xl, [data-testid='sports-sheet'] > .title-xl { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 [data-testid='sports-picker'] .btn, [data-testid='sports-sheet'] .btn { max-width: 100%; }
+/* Football matchup card: generated art (or the two team colours split on the diagonal until it exists)
+   under the teams, a big VS., the clock and the win probability. Sizes follow the card's own width
+   (cqi, with rem fallbacks); a name in a dark team colour stays legible through its white outline. */
+.sports-grid-wide { grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr)); }
+.sports-card.sports-matchup {
+  position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 0;
+  aspect-ratio: 16 / 9; min-height: 0; padding: 0; overflow: hidden; container-type: inline-size;
+  background: var(--t-surface-alt); color: #fff; border-color: transparent;
+}
+.matchup-art { position: absolute; inset: 0; background: linear-gradient(135deg, var(--away) 0 50%, var(--home) 50% 100%); }
+.matchup-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--dur-hero-crossfade) var(--ease); }
+.matchup-art img[data-loaded='true'] { opacity: 1; }
+.matchup-shade {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgb(0 0 0 / 0.55) 0, transparent 22%), linear-gradient(180deg, transparent 42%, rgb(0 0 0 / 0.65) 70%, rgb(0 0 0 / 0.88) 100%);
+}
+.matchup-top, .matchup-teams, .matchup-odds-label, .matchup-odds { position: relative; }
+.matchup-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; padding: 0.75rem 0.875rem 0; }
+.matchup-top .badge { flex: none; height: auto; padding: 0.1875rem 0.5625rem; border-radius: var(--radius-sm); font-size: var(--text-label); letter-spacing: 0.06em; }
+.matchup-channel { min-width: 0; padding: 0.1875rem 0.5625rem; border-radius: var(--radius-sm); background: rgb(0 0 0 / 0.5); font-size: var(--text-label); font-weight: 600; color: #e9edf3; }
+.matchup-teams {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end;
+  margin-top: auto; padding: 0 3.2cqi 1.2cqi;
+}
+.sports-matchup:not(:has(.matchup-odds)) .matchup-teams { padding-bottom: 4cqi; }
+.matchup-team { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15em; min-width: 0; }
+.matchup-home { align-items: flex-end; text-align: right; }
+.matchup-name {
+  display: block; max-width: 100%; padding: 0 0.125rem; overflow: hidden; white-space: nowrap;
+  font-size: 1.5rem; font-size: clamp(0.875rem, 5.4cqi, 2.5rem); font-weight: 900; line-height: 1.05;
+  text-transform: uppercase; letter-spacing: 0.01em;
+  /* The outline: eight white offsets, then a soft drop shadow off the art. */
+  text-shadow: 2px 0 #fff, -2px 0 #fff, 0 2px #fff, 0 -2px #fff, 1.5px 1.5px #fff, -1.5px 1.5px #fff, 1.5px -1.5px #fff, -1.5px -1.5px #fff, 0 4px 14px rgb(0 0 0 / 0.8);
+}
+.matchup-rank {
+  margin-bottom: 0.25em; padding: 0.05em 0.5em; border: 1.5px solid #fff; border-radius: var(--radius-sm);
+  font-size: var(--text-label); font-size: clamp(0.6875rem, 2.3cqi, 1rem); font-weight: 800; letter-spacing: 0.04em; color: #fff;
+}
+.matchup-records { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-label); font-size: clamp(0.6875rem, 2.5cqi, 1.0625rem); font-weight: 600; color: #d6dbe3; }
+.matchup-mid { display: flex; flex-direction: column; align-items: center; padding: 0 0.625rem 0.125rem; }
+.matchup-vs { font-size: 2.25rem; font-size: clamp(1.5rem, 7.9cqi, 3.5rem); font-weight: 900; font-style: italic; line-height: 0.9; color: #fff; text-shadow: 0 0 18px color-mix(in srgb, var(--t-accent) 80%, transparent), 0 2px 6px #000; }
+.matchup-clock { margin-top: 0.4em; white-space: nowrap; font-size: var(--text-label); font-size: clamp(0.6875rem, 2.3cqi, 1rem); font-weight: 600; font-variant-numeric: tabular-nums; color: #e9edf3; }
+.matchup-odds-label { align-self: center; padding-bottom: 0.25rem; font-size: 0.625rem; font-size: clamp(0.5625rem, 1.8cqi, 0.8125rem); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #c9d0da; }
+.matchup-odds { display: block; flex: none; height: 1.375rem; height: clamp(1.125rem, 3.9cqi, 1.75rem); font-size: var(--text-label); font-size: clamp(0.6875rem, 2.1cqi, 0.9375rem); font-weight: 800; letter-spacing: 0.03em; color: #fff; }
+.matchup-odds-away { position: absolute; inset: 0 auto 0 0; border-right: 2px solid #fff; }
+.matchup-odds b { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; text-shadow: 0 1px 2px rgb(0 0 0 / 0.65); }
+.matchup-odds-a { left: 0.625rem; }
+.matchup-odds-h { right: 0.625rem; }
+/* Coming up: a small copy of the art (or the colours) and each side's ranking before its name. */
+.sports-row.sports-row-matchup { grid-template-columns: 5.25rem 4.5rem minmax(0, 1fr) auto; }
+.matchup-thumb { position: relative; width: 4.5rem; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); overflow: hidden; }
+.matchup-rank-inline { margin-right: 0.3em; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--t-accent); }
 @media (max-width: 540px) {
   .sports { gap: 1.25rem; }
   .sports-row { grid-template-columns: 4.5rem minmax(0, 1fr) auto; padding-inline: 0.75rem; }
+  .sports-row.sports-row-matchup { grid-template-columns: 4rem 3.5rem minmax(0, 1fr) auto; }
+  .matchup-thumb { width: 3.5rem; }
 }
 
 /* Movies and Shows: the title and Filter on one band (on a phone the Movies/Shows switch, with Filter at

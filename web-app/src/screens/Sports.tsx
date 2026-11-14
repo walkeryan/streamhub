@@ -17,7 +17,8 @@ import { RecordingBadge } from '../recordings/RecordingBadge'
 import { recordingOf } from '../lib/recordings'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
-import { LANG_NAMES, fmtTime, useDebounced, useNow } from '../lib/util'
+import { LANG_NAMES, cn, fmtTime, useDebounced, useNow } from '../lib/util'
+import { MatchupArt, MatchupCard, MatchupTitle, matchupSpeech, matchupTitle } from './SportsMatchup'
 
 type Event = components['schemas']['SportsEvent']
 type Feed = components['schemas']['SportsEventFeed']
@@ -174,18 +175,29 @@ function SportsScreen() {
     {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : q.isPending ? <Skeleton style={{ height: '16rem' }} /> : data && <>
       {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
         <h2 className="heading">Live now</h2>
-        {live.length ? <FocusGroup focusKey="sports:live" className="sports-grid" label="Live games">
-          {live.map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className="sports-card fx-flat" data-testid="sports-listing" data={{ kind: 'live' }}
-            label={`Watch ${event.title}, ${event.sport}, ${event.live_evidence ? 'live' : 'on now'}, ${event.feeds.length === 1 ? `on ${event.feeds[0]!.channel_name}` : `${event.feeds.length} channels`}`} onEnter={() => open(event)}>
-            <span className="sports-card-top">
-              <span className={event.live_evidence ? 'badge sports-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
-              {event.feeds.some((feed) => feed.quality) && <span className="badge">{event.feeds.find((feed) => feed.quality)!.quality}</span>}
-              <span className="label truncate sports-card-sport">{event.sport}</span>
-            </span>
-            <span className="sports-card-title">{event.title}</span>
-            <span className="label truncate">{channelLine(event.feeds)}</span>
-            <span className="label">Started {fmtTime(event.start)}</span>
-          </Focusable>)}
+        {live.length ? <FocusGroup focusKey="sports:live" className={cn('sports-grid', live.some((event) => event.matchup) && 'sports-grid-wide')} label="Live games">
+          {live.map((event) => {
+            const badge = <span className={event.live_evidence ? 'badge sports-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
+            const where = event.feeds.length === 1 ? `on ${event.feeds[0]!.channel_name}` : `${event.feeds.length} channels`
+            const state = event.replay ? 'replay' : event.live_evidence ? 'live' : 'on now'
+            // A football game with both sides known is a matchup card; the remote moves over it like any other card.
+            return event.matchup
+              ? <Focusable key={event.id} focusKey={cardKey(event)} className="sports-card sports-matchup fx-flat" data-testid="sports-listing" data={{ kind: 'live', matchup: true }}
+                label={`Watch ${matchupSpeech(event, event.matchup)}, ${event.sport}, ${state}, ${where}`} onEnter={() => open(event)}>
+                <MatchupCard event={event} matchup={event.matchup} badge={badge} channel={channelLine(event.feeds)} />
+              </Focusable>
+              : <Focusable key={event.id} focusKey={cardKey(event)} className="sports-card fx-flat" data-testid="sports-listing" data={{ kind: 'live' }}
+                label={`Watch ${event.title}, ${event.sport}, ${event.live_evidence ? 'live' : 'on now'}, ${where}`} onEnter={() => open(event)}>
+                <span className="sports-card-top">
+                  {badge}
+                  {event.feeds.some((feed) => feed.quality) && <span className="badge">{event.feeds.find((feed) => feed.quality)!.quality}</span>}
+                  <span className="label truncate sports-card-sport">{event.sport}</span>
+                </span>
+                <span className="sports-card-title">{event.title}</span>
+                <span className="label truncate">{channelLine(event.feeds)}</span>
+                <span className="label">Started {fmtTime(event.start)}</span>
+              </Focusable>
+          })}
         </FocusGroup> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
       </section>}
       <section className="sports-section" aria-label="Coming up" data-testid="sports-upcoming">
@@ -193,11 +205,12 @@ function SportsScreen() {
         {!days.length && <p className="sports-quiet" role="status">{date === today ? 'Nothing more is listed for today or tomorrow.' : `No games are listed for ${dayLabel(date, today)}.`}{sport ? ' Try All sports.' : ''}</p>}
         {days.map((day) => <FocusGroup key={day} focusKey={`sports:day-list:${day}`} className="sports-list" role="group" label={dayLabel(day, today)}>
           <h3 className="label sports-day-head">{dayLabel(day, today)}</h3>
-          {ahead.filter((event) => dayOf(event.start) === day).map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className="sports-row fx-flat" data-testid="sports-listing" data={{ kind: 'upcoming' }}
-            label={`${event.title}, ${event.sport}, ${dayLabel(day, today)} at ${fmtTime(event.start)}`} onEnter={() => open(event)}>
+          {ahead.filter((event) => dayOf(event.start) === day).map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className={cn('sports-row fx-flat', event.matchup && 'sports-row-matchup')} data-testid="sports-listing" data={{ kind: 'upcoming' }}
+            label={`${event.matchup ? matchupTitle(event.matchup) : event.title}, ${event.sport}, ${dayLabel(day, today)} at ${fmtTime(event.start)}`} onEnter={() => open(event)}>
             <span className="sports-row-time">{fmtTime(event.start)}</span>
+            {event.matchup && <MatchupArt matchup={event.matchup} className="matchup-thumb" />}
             <span className="sports-row-main">
-              <span className="sports-row-title truncate">{event.title}</span>
+              <span className="sports-row-title truncate">{event.matchup ? <MatchupTitle matchup={event.matchup} /> : event.title}</span>
               <span className="label truncate">{event.sport} · {channelLine(event.feeds)}</span>
             </span>
             <RecordingBadge state={recordingFor(recordings.data?.recordings, event)?.state} short />
