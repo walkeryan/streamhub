@@ -2,6 +2,8 @@ import type { components, paths } from './schema'
 
 type S = components['schemas']
 export type Profile = S['Profile']
+/** The TV build this server hands out (GET /app/tv; 404 when none is published). */
+export type TvAppRelease = paths['/app/tv']['get']['responses'][200]['content']['application/json']
 export type Source = S['Source']
 export type SourceCreate = S['SourceCreate']
 export type Tile = S['Tile']

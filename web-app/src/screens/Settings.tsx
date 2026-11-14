@@ -17,7 +17,7 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ok } from '../api/client'
-import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useSettings } from '../api/hooks'
+import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useSettings, useTvRelease } from '../api/hooks'
 import type { Profile } from '../api/types'
 import { Button, Chip, ErrorState, Modal } from '../components/ui'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
@@ -344,6 +344,8 @@ function DevicesTab() {
 /* ------------------------------ about ------------------------------ */
 function AboutTab() {
   const d = useDisclaimer()
+  const releaseQuery = useTvRelease()
+  const release = releaseQuery.data
   const me = useCurrent()
   return (
     <div className="flex flex-col gap-5" data-testid="about">
@@ -351,9 +353,11 @@ function AboutTab() {
       {/* Inside the Android TV app the TV updates itself (TV settings on its error screen). */}
       {!inShell() && <section className="flex flex-col gap-3 panel">
         <h2 className="heading">Android TV app</h2>
-        <p>Debug build 1b991e9 · Android 7 or newer · 29 MB. The webpage may include newer features than this APK.</p>
-        <AndroidDownload focusKey="about:android" />
-        <p className="muted">If Android reports a signing conflict, this APK cannot update that installation. Keep your existing app and data; do not uninstall to work around it.</p>
+        {release ? <>
+          <p>Version {release.version_name} · Android 7 or newer. The TV shows this website full screen and plays video natively; once installed it updates itself from this server.</p>
+          <AndroidDownload focusKey="about:android" release={release} />
+          <p className="muted">If Android reports a signing conflict, this APK cannot update that installation. Keep your existing app and data; do not uninstall to work around it.</p>
+        </> : <p className="muted" data-testid="android-unpublished">{releaseQuery.isPending ? 'Checking for the TV app…' : 'No TV app is published on this server.'}</p>}
       </section>}
       <section className="flex flex-col gap-3 panel" data-testid="attribution">
         <div className="flex items-center gap-3"><AttrLogo src="/attribution/tmdb.svg" fallback="TMDB" /><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p></div>
