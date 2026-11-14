@@ -101,7 +101,7 @@ test('a game to come shows its art or colours and each side ranking before its n
   await expect(elks.getByTestId('matchup-rank')).toHaveText(['#8', '#21'])
   await expect(elks.getByTestId('matchup-art')).toHaveAttribute('data-art', 'colors')
   await expect(elks).toHaveAttribute('aria-label', /^#8 Eastgate Elks at #21 Westbrook Wolves, College Football, (Today|Tomorrow) at /)
-  const otters = coming.getByTestId('sports-listing').filter({ hasText: 'Riverside' })
+  const otters = coming.locator('[data-kind=upcoming]').filter({ hasText: 'Riverside' })
   await expect(otters.getByTestId('matchup-name')).toHaveText(['Riverside', 'Lakeview'])
   await expect(otters.getByTestId('matchup-rank')).toHaveCount(0)
   await expect(otters.getByTestId('matchup-art')).toHaveAttribute('data-art', 'image')

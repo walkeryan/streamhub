@@ -23,7 +23,10 @@ test('the screen lists live games, what is coming by day and the networks, and n
   await expect(row('Lacrosse')).toHaveText([/Tomorrow.*VANTIX\+ 005 · Ch 905.*Millbrook at Lakeside.*1:00 PM · Lacrosse/])
   await expect(row('Rugby')).toHaveText([/Tomorrow.*2 channels.*Otters vs Herons.*7:30 PM · Rugby/])
   await expect(row("Men's Soccer")).toContainText(['Oakdale at Port Linden'])
-  await expect(page.getByTestId('sports-row').getByTestId('sports-listing').filter({ hasText: 'Riverton Rovers' })).toHaveCount(0)
+  // A game on the air leads its own sport's row too, so looking under its sport finds it.
+  await expect(row('Other football').first()).toContainText('Riverton Rovers vs Harbor City')
+  await expect(row('Other football').first()).toContainText('LIVE')
+  await expect(row('Field Hockey').first()).toContainText('Northfield at Lakeside')
   // A time is the viewer's local time: no zone is named anywhere.
   await expect(page.getByTestId('sports')).not.toContainText(/America\/|UTC|GMT/)
   // The name left over from weeks ago, raw provider names and audio caveats never show.
@@ -115,7 +118,9 @@ test('a remote alone goes from the screen to a picker, a sheet and the player, a
   await expect(sheet).toHaveCount(0)
   await expect(focused(page)).toHaveAttribute('aria-label', row!)
   // Up to the live games and into the player with Enter; Back comes home to the same card.
-  for (let step = 0; step < 4 && await focused(page).getAttribute('data-kind') !== 'live'; step++) await page.keyboard.press('ArrowUp')
+  // A live game is also first in its sport's row, so climb until the focus is in Live now itself.
+  const inLive = page.getByTestId('sports-live').locator('.fx[data-focused="true"]')
+  for (let step = 0; step < 8 && await inLive.count() === 0; step++) await page.keyboard.press('ArrowUp')
   for (let step = 0; step < 3 && await first.getAttribute('data-focused') !== 'true'; step++) await page.keyboard.press('ArrowLeft')
   await expect(first).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
@@ -169,7 +174,8 @@ for (const [width, height] of [[390, 844], [768, 1024], [1280, 720], [1920, 1080
     await asOwner(page)
     await page.setViewportSize({ width, height })
     await page.goto('/sports')
-    await expect(page.getByTestId('sports-listing')).toHaveCount(4)
+    // Two live games, each in Live now and in its sport's row, and two to come.
+    await expect(page.getByTestId('sports-listing')).toHaveCount(6)
     await expect(page.getByTestId('sports-channel')).toHaveCount(3)
     expect(await fits(page)).toBe(true)
     // No card, row or badge is wider than the screen's own content box; a row of tiles scrolls inside its own box.
