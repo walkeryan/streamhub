@@ -80,7 +80,7 @@ def test_integration_fields_are_published_as_the_backend_sends_them() -> None:
         "Programme": ["is_sport", "teams"],
         "Recording": ["is_sport", "teams", "has_file"],
         "SportsEvent": ["kind", "league", "home", "away", "status", "matchup"],
-        "SportsMatchup": ["status_detail", "win_probability", "art_url"],
+        "SportsMatchup": ["status_detail", "score", "win_probability", "art_url"],
         "MatchupTeam": ["color", "rank", "record", "conference_record"],
         "SportsChannel": ["channel_name", "channel_number", "quality", "language", "logo"],
         "RoomJoin": ["member_token", "client"],

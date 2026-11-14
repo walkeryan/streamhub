@@ -7674,6 +7674,8 @@ export interface components {
             home: components["schemas"]["MatchupTeam"];
             /** @description The clock of a game on now ("Q2 7:14", "Halftime", "Final"); null before kickoff and always null for a replay. */
             status_detail?: string | null;
+            /** @description Points once the game is under way or over, from the scoreboard; null before kickoff, without scoreboard facts, and always null for a replay. */
+            score?: components["schemas"]["MatchupScore"];
             /** @description Null when unknown (never a made-up 50/50), after the final whistle, for a game still to come and for a replay. */
             win_probability?: components["schemas"]["WinProbability"];
             /** @description Signed, expiring URL of the generated helmet-vs-helmet image (16:9, no text). Null until the image exists or when art generation is off. */
@@ -7694,6 +7696,10 @@ export interface components {
             record?: string | null;
             /** @description Conference record, with the conference's short name in a conference game ("4-1 Lakes League"). */
             conference_record?: string | null;
+        };
+        MatchupScore: {
+            away: number;
+            home: number;
         };
         WinProbability: {
             /** @description 0..100 */

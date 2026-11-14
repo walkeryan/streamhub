@@ -665,6 +665,10 @@ h1, h2, h3, p { margin: 0; }
 .matchup-records { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-label); font-size: clamp(0.6875rem, 2.5cqi, 1.0625rem); font-weight: 600; color: #d6dbe3; }
 .matchup-mid { display: flex; flex-direction: column; align-items: center; padding: 0 0.625rem 0.125rem; }
 .matchup-vs { font-size: 2.25rem; font-size: clamp(1.5rem, 7.9cqi, 3.5rem); font-weight: 900; font-style: italic; line-height: 0.9; color: #fff; text-shadow: 0 0 18px color-mix(in srgb, var(--t-accent) 80%, transparent), 0 2px 6px #000; }
+/* The score takes VS.'s place once the game is under way: as loud, upright, and narrower so two-digit
+   scores leave the names their room. */
+.matchup-score { display: flex; align-items: baseline; gap: 0.22em; font-size: 2rem; font-size: clamp(1.375rem, 6.8cqi, 3.125rem); font-weight: 900; line-height: 0.9; font-variant-numeric: tabular-nums; white-space: nowrap; color: #fff; text-shadow: 0 0 18px color-mix(in srgb, var(--t-accent) 80%, transparent), 0 2px 6px #000; }
+.matchup-score i { font-style: normal; font-weight: 700; opacity: 0.7; }
 .matchup-clock { margin-top: 0.4em; white-space: nowrap; font-size: var(--text-label); font-size: clamp(0.6875rem, 2.3cqi, 1rem); font-weight: 600; font-variant-numeric: tabular-nums; color: #e9edf3; }
 .matchup-odds-label { align-self: center; padding-bottom: 0.25rem; font-size: 0.625rem; font-size: clamp(0.5625rem, 1.8cqi, 0.8125rem); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #c9d0da; }
 .matchup-odds { display: block; flex: none; height: 1.375rem; height: clamp(1.125rem, 3.9cqi, 1.75rem); font-size: var(--text-label); font-size: clamp(0.6875rem, 2.1cqi, 0.9375rem); font-weight: 800; letter-spacing: 0.03em; color: #fff; }
