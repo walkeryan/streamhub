@@ -94,15 +94,28 @@ test('other games keep their cards, and the remote moves over matchup cards as b
 
 test('a game to come shows its art or colours and each side ranking before its name', async ({ page }) => {
   await open(page)
-  const coming = page.getByTestId('sports-upcoming')
-  const elks = coming.getByTestId('sports-listing').filter({ hasText: 'Eastgate Elks' })
-  await expect(elks).toContainText('#8Eastgate Elks at #21Westbrook Wolves')
+  // Games to come are tiles in their sport's row, drawn like the live card.
+  const coming = page.getByTestId('sports-row').filter({ has: page.getByRole('heading', { name: 'College Football' }) })
+  const elks = coming.getByTestId('sports-listing').filter({ hasText: 'Eastgate' })
+  await expect(elks.getByTestId('matchup-name')).toHaveText(['Eastgate', 'Westbrook'])
+  await expect(elks.getByTestId('matchup-rank')).toHaveText(['#8', '#21'])
   await expect(elks.getByTestId('matchup-art')).toHaveAttribute('data-art', 'colors')
   await expect(elks).toHaveAttribute('aria-label', /^#8 Eastgate Elks at #21 Westbrook Wolves, College Football, (Today|Tomorrow) at /)
-  const otters = coming.getByTestId('sports-listing').filter({ hasText: 'Riverside Otters at' })
-  await expect(otters).toContainText('Riverside Otters at Lakeview Kestrels')
-  await expect(otters.locator('.matchup-rank-inline')).toHaveCount(0)
+  const otters = coming.getByTestId('sports-listing').filter({ hasText: 'Riverside' })
+  await expect(otters.getByTestId('matchup-name')).toHaveText(['Riverside', 'Lakeview'])
+  await expect(otters.getByTestId('matchup-rank')).toHaveCount(0)
   await expect(otters.getByTestId('matchup-art')).toHaveAttribute('data-art', 'image')
+  // Its sheet opens on the same card.
+  await elks.click()
+  const sheet = page.getByTestId('sports-sheet')
+  await expect(sheet.getByTestId('sports-sheet-card').getByTestId('matchup-rank')).toHaveText(['#8', '#21'])
+  await expect(sheet.getByTestId('sports-sheet-card')).toContainText(/Today|Tomorrow/)
+  await page.keyboard.press('Escape')
+  await expect(sheet).toHaveCount(0)
+  // A sport chosen: the list, with each side's ranking before its name.
+  await page.getByRole('button', { name: /^College Football · / }).click()
+  const row = page.getByTestId('sports-upcoming').getByTestId('sports-listing').filter({ hasText: 'Eastgate Elks' })
+  await expect(row).toContainText('#8Eastgate Elks at #21Westbrook Wolves')
 })
 
 for (const [width, height] of [[390, 844], [1280, 720], [1920, 1080]] as const) {

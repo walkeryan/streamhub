@@ -18,10 +18,12 @@ test('the screen lists live games, what is coming by day and the networks, and n
   await expect(live.nth(1)).toContainText('Northfield at Lakeside')
   await expect(live.nth(1)).toContainText('2 channels')
   for (const card of [live.nth(0), live.nth(1)]) { await expect(card).toContainText('LIVE'); await expect(card).toContainText(/Started \d{1,2}:\d{2}/) }
-  const coming = page.getByTestId('sports-upcoming')
-  await expect(coming.getByRole('group')).toHaveCount(2)
-  await expect(coming.getByRole('group', { name: 'Tomorrow' }).getByTestId('sports-listing')).toHaveText([/1:00 PM.*Millbrook at Lakeside.*Lacrosse · VANTIX\+ 005 · Ch 905/, /7:30 PM.*Otters vs Herons.*Rugby · 2 channels/])
-  await expect(coming).toContainText('Oakdale at Port Linden')
+  // What is to come: one row of tiles per sport, each game once, with its day, time and channel.
+  const row = (sport: string) => page.getByTestId('sports-row').filter({ has: page.getByRole('heading', { name: sport, exact: true }) }).getByTestId('sports-listing')
+  await expect(row('Lacrosse')).toHaveText([/Tomorrow.*VANTIX\+ 005 · Ch 905.*Millbrook at Lakeside.*1:00 PM · Lacrosse/])
+  await expect(row('Rugby')).toHaveText([/Tomorrow.*2 channels.*Otters vs Herons.*7:30 PM · Rugby/])
+  await expect(row("Men's Soccer")).toContainText(['Oakdale at Port Linden'])
+  await expect(page.getByTestId('sports-row').getByTestId('sports-listing').filter({ hasText: 'Riverton Rovers' })).toHaveCount(0)
   // A time is the viewer's local time: no zone is named anywhere.
   await expect(page.getByTestId('sports')).not.toContainText(/America\/|UTC|GMT/)
   // The name left over from weeks ago, raw provider names and audio caveats never show.
@@ -39,7 +41,7 @@ test('the screen lists live games, what is coming by day and the networks, and n
   await page.getByRole('button', { name: 'Tomorrow', exact: true }).click()
   await expect(page.getByTestId('sports-listing')).toHaveText([/Millbrook at Lakeside/, /Otters vs Herons/])
   await page.getByRole('button', { name: 'Next day', exact: true }).click()
-  await expect(page.getByTestId('sports-listing')).toHaveText([/6:00 PM.*Eastgate Town at Westbrook/])
+  await expect(page.getByTestId('sports-listing')).toHaveText([/Eastgate Town at Westbrook.*6:00 PM/])
 })
 
 test('a live game on one channel plays at once', async ({ page }) => {
@@ -170,8 +172,8 @@ for (const [width, height] of [[390, 844], [768, 1024], [1280, 720], [1920, 1080
     await expect(page.getByTestId('sports-listing')).toHaveCount(4)
     await expect(page.getByTestId('sports-channel')).toHaveCount(3)
     expect(await fits(page)).toBe(true)
-    // No card, row or badge is wider than the screen's own content box.
-    const widest = await page.evaluate(() => Math.max(...Array.from(document.querySelectorAll('[data-testid=sports] *')).map((el) => el.getBoundingClientRect().right)))
+    // No card, row or badge is wider than the screen's own content box; a row of tiles scrolls inside its own box.
+    const widest = await page.evaluate(() => Math.max(...Array.from(document.querySelectorAll('[data-testid=sports] *')).filter((el) => !el.parentElement?.closest('.row-scroll')).map((el) => el.getBoundingClientRect().right)))
     expect(widest).toBeLessThanOrEqual(width)
     await page.getByTestId('sports-listing').nth(0).click()
     const picker = page.getByTestId('sports-picker')
@@ -181,7 +183,7 @@ for (const [width, height] of [[390, 844], [768, 1024], [1280, 720], [1920, 1080
     expect(await inside('sports-picker')).toBe(true)
     expect((await picker.boundingBox())!.width).toBeLessThanOrEqual(width)
     await page.keyboard.press('Escape')
-    await page.getByTestId('sports-listing').nth(2).click()
+    await page.locator('[data-testid=sports-listing][data-kind=upcoming]').filter({ hasText: 'Lakeside Collegiate' }).click()
     const sheet = page.getByTestId('sports-sheet')
     await expect(sheet.getByTestId('sports-record-team')).toHaveCount(2)
     expect(await fits(page)).toBe(true)

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
 import { api, unwrap } from '../api/client'
@@ -27,6 +27,8 @@ type Network = components['schemas']['SportsChannel']
 type NetworksPage = components['schemas']['SportsChannelsPage']
 
 const PAGE = 100
+// One sport's row: enough to scroll through a Saturday's slate; the rest is a "See all" away.
+const ROW = 40
 const NETWORKS = 24
 // Days are the viewer's own: the server is told the zone, and every time is shown on the local clock.
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
@@ -42,6 +44,12 @@ const channelLine = (feeds: Feed[]) => feeds.length === 1 ? `${feeds[0]!.channel
 /** The household's recording of an event, on whichever of its channels it was scheduled. */
 const recordingFor = (recordings: Recording[] | undefined, event: Event) => event.feeds.map((feed) => recordingOf(recordings, { channel_id: feed.channel_id, start: event.start })).find(Boolean)
 const filterSchema = z.object({ language: z.string().max(256), sport: z.string().max(256) })
+// The classifier's names, as a row or chip reads them.
+const SPORT_LABELS: Record<string, string> = { 'American football': 'Football', Football: 'Other football', 'Combat sports': 'Boxing & UFC', Motorsport: 'Racing', Sports: 'More sports' }
+const sportLabel = (sport: string) => SPORT_LABELS[sport] ?? sport
+const hueOf = (text: string) => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360
+/** A row's order: games we know the sides of first, each day in time order. */
+const rowOrder = (a: Event, b: Event) => dayOf(a.start).localeCompare(dayOf(b.start)) || Number(!a.matchup) - Number(!b.matchup) || Date.parse(a.start) - Date.parse(b.start)
 const validateFilters = (raw: unknown) => { const parsed = filterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
 
 export function Sports() {
@@ -100,6 +108,18 @@ function SportsScreen() {
     queryFn: ({ signal }) => unwrap<NetworksPage>(api.GET('/sports/channels', { signal, params: { query: { language: languages, q: term || undefined, limit: NETWORKS } } })),
     staleTime: 60_000, refetchInterval: 60_000,
   })
+  // With no sport picked and nothing searched, the screen is rows of tiles: Live now, then one row per
+  // sport, busiest first. Each row asks for its own sport's games so a busy sport cannot crowd out the rest.
+  const rowsView = !sport && !term
+  const rowSports = rowsView ? [...(q.data?.sports ?? [])].sort((a, b) => Number(a.name === 'Sports') - Number(b.name === 'Sports') || b.count - a.count).map((entry) => entry.name) : []
+  const rows = useQueries({ queries: rowSports.map((name) => ({
+    queryKey: ['sports', profile?.id, 'row', `${profile?.id}|${languages}|${date}`, name],
+    enabled: saved.ready && !!profile,
+    queryFn: ({ signal }: { signal: AbortSignal }) => unwrap<EventsPage>(api.GET('/sports/events', { signal, params: { query: {
+      date, timezone: ZONE, days: date === today ? 2 : 1, status: 'upcoming', language: languages, sport: name, limit: ROW, offset: 0,
+    } } })),
+    staleTime: 30_000, refetchInterval: 60_000,
+  })) })
   const recordings = useRecordings(useCan('recordings'), false)
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
   const data = q.data
@@ -173,6 +193,33 @@ function SportsScreen() {
     </div>
     {saved.error && <p role="alert">{saved.error}</p>}
     {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : q.isPending ? <Skeleton style={{ height: '16rem' }} /> : data && <>
+      {rowsView ? <>
+        {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
+          <h2 className="heading">Live now</h2>
+          {live.length ? <FocusGroup focusKey="sports:live" className="row-scroll sports-tiles" label="Live games">
+            {live.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} />)}
+          </FocusGroup> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
+        </section>}
+        {rowSports.map((name, i) => {
+          const row = rows[i]?.data
+          const games = (row?.events ?? []).filter((event) => isAhead(event, now) && dayOf(event.start) >= date).sort(rowOrder)
+          if (!games.length) return null
+          const label = sportLabel(name)
+          return <section key={name} className="sports-section" aria-label={label} data-testid="sports-row" data-sport={name}>
+            <h2 className="heading">{label}</h2>
+            <FocusGroup focusKey={`sports:row:${name}`} className="row-scroll sports-tiles" label={label}>
+              {games.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} />)}
+              {(row?.total ?? 0) > games.length && <Focusable focusKey={`sports:more:${name}`} className="sports-tile sports-more fx-flat" data-testid="sports-see-all" label={`See all ${label}`} onEnter={() => setSport(name)}>
+                <span className="sports-more-text">See all</span>
+                <span className="label">{row!.total} {label.toLowerCase()} listings</span>
+              </Focusable>}
+            </FocusGroup>
+          </section>
+        })}
+        {!days.length && <section className="sports-section" aria-label="Coming up" data-testid="sports-upcoming">
+          <p className="sports-quiet" role="status">{date === today ? 'Nothing more is listed for today or tomorrow.' : `No games are listed for ${dayLabel(date, today)}.`}</p>
+        </section>}
+      </> : <>
       {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
         <h2 className="heading">Live now</h2>
         {live.length ? <FocusGroup focusKey="sports:live" className={cn('sports-grid', live.some((event) => event.matchup) && 'sports-grid-wide')} label="Live games">
@@ -217,6 +264,7 @@ function SportsScreen() {
           </Focusable>)}
         </FocusGroup>)}
       </section>
+      </>}
       {data.total > PAGE && <FocusGroup focusKey="sports:pages" className="flex gap-3 items-center flex-wrap">
         <Button focusKey="sports:prev" disabled={!page} onEnter={() => setPage(page - 1)}>Previous</Button>
         <span className="label">Page {page + 1} of {Math.ceil(data.total / PAGE)}</span>
@@ -226,7 +274,7 @@ function SportsScreen() {
     </>}
     {(gameChannels.length > 0 || !!networks.data?.channels.length) && <section className="sports-section" aria-label="Sports channels" data-testid="sports-channels">
       <h2 className="heading">Sports channels</h2>
-      <FocusGroup focusKey="sports:channels" className="sports-grid sports-grid-tight" label="Sports channels">
+      <FocusGroup focusKey="sports:channels" className="row-scroll sports-tiles sports-chan-row" label="Sports channels">
         {gameChannels.map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className="sports-chan fx-flat" data-testid="sports-channel" data={{ kind: 'game' }}
           label={`Watch ${event.title}, ${channelLine(event.feeds)}`} onEnter={() => open(event)}>
           <LogoBlock name={event.league ?? event.title} />
@@ -280,6 +328,34 @@ function SportsScreen() {
   </div>
 }
 
+/** A game as a 16:9 tile: the matchup card when both sides are known, else its title over the sport's tint. */
+function GameTile({ event, now, today, recordings, onOpen }: { event: Event; now: number; today: string; recordings: Recording[] | undefined; onOpen: (event: Event) => void }) {
+  const on = isLive(event, now)
+  const day = dayLabel(dayOf(event.start), today)
+  const quality = event.feeds.find((feed) => feed.quality)?.quality
+  const badge: ReactNode = <span className="sports-tile-badges">
+    {on
+      ? <span className={event.live_evidence ? 'badge sports-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
+      : <span className="badge sports-when">{day}</span>}
+    {quality && <span className="badge sports-when">{quality}</span>}
+    <RecordingBadge state={recordingFor(recordings, event)?.state} short />
+  </span>
+  const channel = channelLine(event.feeds)
+  const where = event.feeds.length === 1 ? `on ${event.feeds[0]!.channel_name}` : `${event.feeds.length} channels`
+  const label = on
+    ? `Watch ${event.matchup ? matchupSpeech(event, event.matchup) : event.title}, ${event.sport}, ${event.replay ? 'replay' : event.live_evidence ? 'live' : 'on now'}, ${where}`
+    : `${event.matchup ? matchupTitle(event.matchup) : event.title}, ${event.sport}, ${day} at ${fmtTime(event.start)}, ${where}`
+  return <Focusable focusKey={cardKey(event)} className={cn('sports-tile fx-flat', event.matchup ? 'sports-matchup' : 'sports-tile-plain')} data-testid="sports-listing"
+    data={{ kind: on ? 'live' : 'upcoming', matchup: !!event.matchup }} label={label} onEnter={() => onOpen(event)}
+    style={event.matchup ? undefined : { '--sport-hue': hueOf(event.sport) } as CSSProperties}>
+    {event.matchup ? <MatchupCard event={event} matchup={event.matchup} badge={badge} channel={channel} /> : <>
+      <span className="matchup-top">{badge}<span className="matchup-channel truncate">{channel}</span></span>
+      <span className="sports-tile-title">{event.title}</span>
+      <span className="sports-tile-meta truncate">{on ? `Started ${fmtTime(event.start)}` : fmtTime(event.start)} · {event.sport}</span>
+    </>}
+  </Focusable>
+}
+
 /** A game still to come: when it is on, and (where recording is on and allowed) this game or every game of a side. */
 function EventSheet({ event, today, now, recordable, recordings, onClose, onWatch }: {
   event: Event; today: string; now: number; recordable: boolean; recordings: Recording[] | undefined; onClose: () => void; onWatch: () => void
@@ -315,6 +391,9 @@ function EventSheet({ event, today, now, recordable, recordings, onClose, onWatc
   }
   const first = started ? 'sports:sheet:watch' : !recordable || !feed ? 'sports:sheet:close' : active ? 'sports:sheet:cancel' : 'sports:sheet:record'
   return <Modal open onClose={onClose} title={event.title} firstFocusKey={first} variant="sheet" testId="sports-sheet">
+    {event.matchup && <span className="sports-sheet-card sports-matchup" data-testid="sports-sheet-card">
+      <MatchupCard event={event} matchup={event.matchup} badge={<span className="badge">{started ? 'On now' : dayLabel(dayOf(event.start), today)}</span>} channel={channelLine(event.feeds)} />
+    </span>}
     <p className="sports-sheet-when">{started ? `Started ${fmtTime(event.start)}` : `${dayLabel(dayOf(event.start), today)} · ${fmtTime(event.start)}`}<RecordingBadge state={existing?.state} /></p>
     <p className="muted truncate">{event.sport} · {channelLine(event.feeds)}</p>
     {error && <p role="alert" data-testid="sports-sheet-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
@@ -352,7 +431,7 @@ function SportsLibrary({ language, sport, term }: { language: string; sport: str
   if (!data?.items.length) return null
   return <section className="sports-section" data-testid="sports-recordings" aria-label="From your library">
     <h2 className="heading">From your library</h2>
-    <FocusGroup focusKey="sports:recordings" className="sports-grid sports-grid-tight" label="Sports videos in your library">
+    <FocusGroup focusKey="sports:recordings" className="row-scroll sports-tiles sports-chan-row" label="Sports videos in your library">
       {data.items.map((item) => {
         // Only an item that names its own source can be opened: nothing is matched by title.
         const exact = !!item.source_id && item.title_id.startsWith(`lib:${item.source_id}:`) && item.title_id.length > item.source_id.length + 5
