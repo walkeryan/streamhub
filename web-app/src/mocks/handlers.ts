@@ -158,6 +158,8 @@ export const handlers = [
     setProfilePin(String(params.id), b.pin ?? null)
     return new HttpResponse(null, { status: 204 })
   }),
+  // A test sets localStorage 'mock.tv-release' = 'none' for a server that publishes no TV build.
+  http.get(`${B}/app/tv`, () => localStorage.getItem('mock.tv-release') === 'none' ? HttpResponse.json({ code: 'not_found', message: 'no TV app release is published here' }, { status: 404 }) : HttpResponse.json({ version_code: 8, version_name: '1.2.1', apk_url: '/downloads/streamhub-tv-1.2.1-8-debug.apk', sha256: 'a'.repeat(64) })),
   http.get(`${B}/disclaimer`, () => HttpResponse.json(DISCLAIMER)),
   http.post(`${B}/disclaimer/accept`, ({ request }) => {
     accepted.add(currentProfileId(request))

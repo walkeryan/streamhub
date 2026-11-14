@@ -6,7 +6,7 @@ import { useSession } from '../store/session'
 import { mergeProgrammes } from '../lib/guideWindow'
 import { isOpenRequest, refetchMsFor, tileRequest, tilesRefetchMs } from '../lib/requests'
 import { MIN_QUERY } from '../lib/searchQuery'
-import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined } from './types'
+import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined, TvAppRelease } from './types'
 import type {
   PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult, SearchSectionName,
   Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
@@ -34,6 +34,17 @@ export const useProfiles = () =>
 
 export const useDisclaimer = () =>
   useQuery({ queryKey: qk.disclaimer, queryFn: () => unwrap<Disclaimer>(api.GET('/disclaimer')), staleTime: Infinity })
+
+/** The published TV build, or null when this server publishes none (the endpoint answers 404). */
+export const useTvRelease = () =>
+  useQuery({
+    queryKey: ['tv-release'],
+    queryFn: async () => {
+      const r = await api.GET('/app/tv')
+      return r.response.status === 404 ? null : unwrap<TvAppRelease>(Promise.resolve(r))
+    },
+    staleTime: 5 * 60_000,
+  })
 
 export const useHome = () => useQuery({
   queryKey: [...qk.home, useProfileId()],
