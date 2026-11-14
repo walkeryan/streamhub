@@ -1,0 +1,142 @@
+{
+  "leagues": [{"id": "23", "name": "NCAA - Football", "abbreviation": "NCAAF", "slug": "college-football"}],
+  "day": {"date": "2026-11-14"},
+  "events": [
+    {
+      "id": "401990001",
+      "uid": "s:20~l:23~e:401990001",
+      "date": "2026-11-14T17:00Z",
+      "name": "Lakeview Kestrels at Brookfield Badgers",
+      "shortName": "LKV @ BRK",
+      "competitions": [
+        {
+          "id": "401990001",
+          "date": "2026-11-14T17:00Z",
+          "conferenceCompetition": true,
+          "groups": {"id": "90", "name": "Lakes League Conference", "shortName": "Lakes League", "isConference": true},
+          "competitors": [
+            {
+              "id": "9001",
+              "homeAway": "home",
+              "curatedRank": {"current": 12},
+              "team": {
+                "id": "9001",
+                "location": "Brookfield",
+                "name": "Badgers",
+                "abbreviation": "BRK",
+                "displayName": "Brookfield Badgers",
+                "shortDisplayName": "Brookfield",
+                "color": "7a1f3d",
+                "alternateColor": "f2c14e"
+              },
+              "records": [
+                {"name": "overall", "abbreviation": "Game", "type": "total", "summary": "8-1"},
+                {"name": "Home", "type": "homerecord", "summary": "5-0"},
+                {"name": "vs. Conf.", "type": "vsconf", "summary": "5-1"}
+              ]
+            },
+            {
+              "id": "9002",
+              "homeAway": "away",
+              "curatedRank": {"current": 99},
+              "team": {
+                "id": "9002",
+                "location": "Lakeview",
+                "name": "Kestrels",
+                "abbreviation": "LKV",
+                "displayName": "Lakeview Kestrels",
+                "shortDisplayName": "Lakeview",
+                "color": "2b4c9a",
+                "alternateColor": "ffffff"
+              },
+              "records": [
+                {"name": "overall", "abbreviation": "Game", "type": "total", "summary": "6-3"},
+                {"name": "Road", "type": "awayrecord", "summary": "2-2"},
+                {"name": "vs. Conf.", "type": "vsconf", "summary": "4-1"}
+              ]
+            }
+          ],
+          "status": {
+            "clock": 434.0,
+            "displayClock": "7:14",
+            "period": 2,
+            "type": {"id": "2", "name": "STATUS_IN_PROGRESS", "state": "in", "completed": false, "description": "In Progress", "detail": "7:14 - 2nd Quarter", "shortDetail": "7:14 - 2nd"}
+          },
+          "broadcasts": [{"market": "national", "names": ["Network One"]}]
+        }
+      ],
+      "status": {
+        "clock": 434.0,
+        "displayClock": "7:14",
+        "period": 2,
+        "type": {"id": "2", "name": "STATUS_IN_PROGRESS", "state": "in", "completed": false, "description": "In Progress", "detail": "7:14 - 2nd Quarter", "shortDetail": "7:14 - 2nd"}
+      }
+    },
+    {
+      "id": "401990002",
+      "uid": "s:20~l:23~e:401990002",
+      "date": "2026-11-14T20:30Z",
+      "name": "Harbor Herons at Riverside Otters",
+      "shortName": "HRB @ RIV",
+      "competitions": [
+        {
+          "id": "401990002",
+          "date": "2026-11-14T20:30Z",
+          "conferenceCompetition": false,
+          "competitors": [
+            {
+              "id": "9003",
+              "homeAway": "home",
+              "curatedRank": {"current": 99},
+              "team": {
+                "id": "9003",
+                "location": "Riverside",
+                "name": "Otters",
+                "abbreviation": "RIV",
+                "displayName": "Riverside Otters",
+                "shortDisplayName": "Riverside",
+                "color": "0f6b5c",
+                "alternateColor": "c0c0c0"
+              },
+              "records": [
+                {"name": "overall", "abbreviation": "Game", "type": "total", "summary": "4-5"},
+                {"name": "vs. Conf.", "type": "vsconf", "summary": "2-3"}
+              ]
+            },
+            {
+              "id": "9004",
+              "homeAway": "away",
+              "curatedRank": {"current": 5},
+              "team": {
+                "id": "9004",
+                "location": "Harbor",
+                "name": "Herons",
+                "abbreviation": "HRB",
+                "displayName": "Harbor Herons",
+                "shortDisplayName": "Harbor",
+                "color": "e05a1b",
+                "alternateColor": "1b1b1b"
+              },
+              "records": [
+                {"name": "overall", "abbreviation": "Game", "type": "total", "summary": "9-0"},
+                {"name": "vs. Conf.", "type": "vsconf", "summary": "6-0"}
+              ]
+            }
+          ],
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0:00",
+            "period": 0,
+            "type": {"id": "1", "name": "STATUS_SCHEDULED", "state": "pre", "completed": false, "description": "Scheduled", "detail": "Sat, November 14th at 3:30 PM EST", "shortDetail": "11/14 - 3:30 PM EST"}
+          }
+        }
+      ],
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0:00",
+        "period": 0,
+        "type": {"id": "1", "name": "STATUS_SCHEDULED", "state": "pre", "completed": false, "description": "Scheduled", "detail": "Sat, November 14th at 3:30 PM EST", "shortDetail": "11/14 - 3:30 PM EST"}
+      }
+    }
+  ]
+}

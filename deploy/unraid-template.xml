@@ -34,5 +34,6 @@ Requires you to supply sources you are legally authorized to use. See the legal 
   <Config Name="Timezone" Target="TZ" Default="Etc/UTC" Mode="" Description="Container timezone, for example America/New_York." Type="Variable" Display="advanced" Required="false" Mask="false">Etc/UTC</Config>
   <Config Name="Secret Key" Target="SECRET_KEY" Default="" Mode="" Description="Required. A long random string used to sign tokens and encrypt source credentials. Changing it invalidates sessions and stored credentials." Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="TMDB API Key" Target="TMDB_API_KEY" Default="" Mode="" Description="Optional. TMDB v3 API key for artwork and metadata. Can also be set in the web UI." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="xAI API Key" Target="XAI_API_KEY" Default="" Mode="" Description="Optional. Generated helmet art for football matchup cards on the Sports screen (about 6 cents per image, capped by MATCHUP_ART_DAILY_LIMIT, default 100 a day)." Type="Variable" Display="advanced" Required="false" Mask="true"/>
   <Config Name="Admin Password" Target="ADMIN_PASSWORD" Default="" Mode="" Description="Optional. Sets the initial admin password. If empty, the first-run screen asks for one." Type="Variable" Display="advanced" Required="false" Mask="true"/>
 </Container>

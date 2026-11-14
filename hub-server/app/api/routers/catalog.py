@@ -6,15 +6,16 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 
 from app.api import schemas as S
-from app.api.deps import C, P, SourcesAdmin
+from app.api.deps import C, P, SourcesAdmin, require_reachable
 from app.api.policy_route import PolicyCatalogRoute
 from app.services.adult import adult_scope, require_adult
 from app.services.auth import Principal
-from app.services.errors import Forbidden, ServiceError
+from app.services.errors import Forbidden, NotFound, ServiceError
 from app.services.listing_cache import listing_cached, normalized_query
+from app.services.matchup_art import validate_art_grant
 from app.services.search import MIN_QUERY_LENGTH, TITLE_CAP, empty_search
 from app.services.sports import sports_channels, sports_events, sports_on_now
 from app.services.sports_recordings import sports_recordings
@@ -112,6 +113,32 @@ async def sports_event_list(
         q=q,
         limit=limit,
         offset=offset,
+        matchups=c.sports_facts.annotate,
+    )
+
+
+@router.get("/sports/art/{token}", tags=["live"], include_in_schema=False)
+async def sports_art(token: str, request: Request, c: C) -> Response:
+    """A generated matchup image, behind a signed grant like the hub's other artwork (``/images/{token}``)."""
+    d = c.crypto.verify_json(token)
+    if not isinstance(d, dict):
+        raise NotFound("image not found")
+    # Signed for a user without ``remote.access``: served where their session is, at home.
+    require_reachable(request, c, not d.get("home"))
+    key = await validate_art_grant(d, c.content_policy, c.auth)
+    found = await c.matchup_art.read(key)
+    if found is None:
+        raise NotFound("image not found")
+    body, media_type = found
+    private = c.content_policy.enabled or "profile" in d or bool(d.get("home"))
+    return Response(
+        body,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store" if private else "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
     )
 
 

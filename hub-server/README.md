@@ -44,6 +44,10 @@ export ADMIN_PASSWORD=change-me     # optional; otherwise generated and logged O
 | `IMAGE_CACHE_MAX_MB` | `512` | cap for proxied artwork in `CONFIG_DIR/cache/images` (oldest evicted first; `0` disables) |
 | `RECORDINGS_DIR` | – | where recordings are written; recording is off until this names an existing, writable directory |
 | `RECORDINGS_MIN_FREE_GB` | `50` | recordings stop, and none start, when free space under `RECORDINGS_DIR` falls below this |
+| `SPORTS_FACTS_ENABLED` | `true` | football team facts (rankings, records, clock, win probability) from ESPN's public API for the Sports screen's matchup cards; see `docs/SPORTS_MATCHUP_CARDS.md` |
+| `XAI_API_KEY` | – | turns on generated matchup art (xAI image API); never logged |
+| `MATCHUP_ART_MODEL` | `grok-imagine-image-2.0` | xAI image model for matchup art |
+| `MATCHUP_ART_DAILY_LIMIT` | `100` | matchup art requests per UTC day (about 6 cents each with the default model); `0` turns generation off |
 
 Migrations run automatically at startup (`alembic upgrade head`). Manual: `.venv/bin/alembic upgrade head`
 (uses `sqlalchemy.url` from `alembic.ini`, override with `-x` or edit for your DB path).

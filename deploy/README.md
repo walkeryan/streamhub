@@ -46,6 +46,9 @@ docker push ghcr.io/walkeryan/streamhub:latest
 | `TMDB_API_KEY` | none | Optional. Can also be set in the UI. |
 | `ADMIN_PASSWORD` | none | Optional. Otherwise set on first run. |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Proxy addresses allowed to set `X-Forwarded-*`. |
+| `XAI_API_KEY` | none | Optional. Generated helmet art for football matchup cards (about 6 cents per image). See `docs/SPORTS_MATCHUP_CARDS.md`. |
+| `MATCHUP_ART_DAILY_LIMIT` | `100` | Matchup art requests per UTC day. |
+| `SPORTS_FACTS_ENABLED` | `true` | `false` stops the public scoreboard lookups behind the matchup cards. |
 
 Volumes: `/config` (persistent state, back it up) and `/transcode` (scratch, use tmpfs).
 Optional device: `/dev/dri` for VA-API. The entrypoint adds the app user to the render node's group automatically.

@@ -68,6 +68,12 @@ class AppSettings(BaseSettings):
     image_cache_max_mb: int = 512  # CONFIG_DIR/cache/images, oldest files evicted first; 0 disables
     recordings_dir: str = ""  # recording is off until this names an existing, writable directory
     recordings_min_free_gb: int = 50  # recordings stop, and none start, below this much free space
+    # Football matchup cards (docs/SPORTS_MATCHUP_CARDS.md): team facts from ESPN's public API, and
+    # generated helmet art from xAI's image API, which is off unless a key is set.
+    sports_facts_enabled: bool = True
+    xai_api_key: str | None = Field(default=None, repr=False)
+    matchup_art_model: str = "grok-imagine-image-2.0"
+    matchup_art_daily_limit: int = 100  # new images per UTC day, at about 6 cents each with the default model
 
     @cached_property
     def resolved_secret_key(self) -> str:
@@ -121,6 +127,14 @@ class AppSettings(BaseSettings):
     @property
     def image_cache_dir(self) -> Path:
         return self.cache_dir / "images"
+
+    @property
+    def matchup_art_dir(self) -> Path:
+        return self.config_dir / "art" / "matchups"
+
+    @property
+    def helmet_overrides_path(self) -> Path:
+        return self.config_dir / "art" / "helmets.json"
 
     @property
     def playlist_dir(self) -> Path:

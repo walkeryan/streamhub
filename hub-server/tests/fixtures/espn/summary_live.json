@@ -1,0 +1,13 @@
+{
+  "header": {"id": "401990001", "competitions": [{"id": "401990001", "status": {"type": {"state": "in"}}}]},
+  "predictor": {
+    "header": "Matchup Predictor",
+    "homeTeam": {"id": "9001", "gameProjection": "70.0", "teamChanceLoss": "30.0"},
+    "awayTeam": {"id": "9002", "gameProjection": "30.0", "teamChanceLoss": "70.0"}
+  },
+  "winprobability": [
+    {"homeWinPercentage": 0.702, "tiePercentage": 0.0, "playId": "4019900011"},
+    {"homeWinPercentage": 0.781, "tiePercentage": 0.0, "playId": "4019900012"},
+    {"homeWinPercentage": 0.854, "tiePercentage": 0.0, "playId": "4019900013"}
+  ]
+}

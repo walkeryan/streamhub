@@ -10,8 +10,10 @@ moment. A placeholder programme that repeats its channel's name is not a listing
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, time, timedelta
 from datetime import date as calendar_date
 from functools import lru_cache
@@ -36,6 +38,8 @@ from app.services.event_slots import (
 
 if TYPE_CHECKING:  # the channel service stamps these facts on its programmes
     from app.services.channels import ChannelService
+
+log = logging.getLogger(__name__)
 
 # Deliberately conservative: channel/group names and descriptions are not sports evidence.
 SPORT_RULES = [
@@ -351,6 +355,7 @@ async def sports_events(
     limit: int = 40,
     offset: int = 0,
     now: datetime | None = None,
+    matchups: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Bounded, source-scoped sports events of ``days`` calendar days from ``date``.
 
@@ -359,6 +364,9 @@ async def sports_events(
     that covers this moment. A slot whose time has passed is not listed (its name stays for
     weeks); one without a date is listed as a game channel (``kind`` ``channel``) that makes
     no claim about when it plays.
+
+    ``matchups`` (``SportsFacts.annotate``) adds team facts and art to the football games of the
+    returned page only. It is bounded and best effort: whatever it cannot do leaves ``matchup`` null.
     """
     now = now or datetime.now(UTC)
     try:
@@ -560,11 +568,19 @@ async def sports_events(
     counts = Counter(event["sport"] for event in listed)
     events = [event for event in listed if not sport or event["sport"] == sport]
     limit, offset = max(1, min(100, limit)), max(0, offset)
+    page = events[offset : offset + limit]
+    if matchups is not None:
+        try:
+            await matchups(page)
+        except Exception:  # facts are decoration: the listing answers without them
+            log.warning("sports matchups skipped", exc_info=True)
+            for event in page:
+                event["matchup"] = None
     return {
         "as_of": now,
         "date": day.isoformat(),
         "timezone": timezone,
-        "events": events[offset : offset + limit],
+        "events": page,
         "total": len(events),
         "limit": limit,
         "offset": offset,

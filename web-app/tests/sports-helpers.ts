@@ -29,8 +29,9 @@ export async function stubSports(page: Page, events: StubEvent[], networks: Stub
       }
       if (url.pathname !== '/api/v1/sports/events') return original(request)
       const state = window as unknown as { holdSports?: boolean; sportsPending?: boolean; releaseSports?: () => void }
-      if (state.holdSports) { state.holdSports = false; state.sportsPending = true; await new Promise<void>((resolve) => { state.releaseSports = resolve }) }
-      sessionStorage.setItem('sports.query', url.search)
+      if (state.holdSports && url.searchParams.get('status') !== 'upcoming') { state.holdSports = false; state.sportsPending = true; await new Promise<void>((resolve) => { state.releaseSports = resolve }) }
+      // A sport row's own request (status=upcoming) is not the screen's query.
+      if (url.searchParams.get('status') !== 'upcoming') sessionStorage.setItem('sports.query', url.search)
       const now = Date.now(), iso = (at: number) => new Date(at).toISOString()
       const [y, m, d] = (url.searchParams.get('date') ?? '').split('-').map(Number)
       const from = new Date(y!, m! - 1, d!).getTime(), to = from + Number(url.searchParams.get('days') ?? 1) * 86400000
@@ -44,7 +45,7 @@ export async function stubSports(page: Page, events: StubEvent[], networks: Stub
           replay: !!e.replay, live_evidence: e.live ?? (start <= now && stop > now), grouping_evidence: 'matching_title_and_time',
           feeds: e.feeds.map((f) => ({ programme_id: `prog:slot-${f.id}-${Math.floor(start / 1000)}`, channel_id: `ch:fixture:${f.id}`, channel_name: f.name ?? `Channel ${f.id}`, channel_number: f.number ?? null, quality: f.quality ?? null, source_id: 'fixture', source_name: 'Fixture', language: f.language ?? null, language_verified: false })),
         }
-      }).filter((e) => e.status !== 'ended' && (e.kind === 'channel' ? from <= now && now < to : Date.parse(e.stop) > from && Date.parse(e.start) < to))
+      }).filter((e) => url.searchParams.get('status') !== 'upcoming' || e.status === 'upcoming').filter((e) => e.status !== 'ended' && (e.kind === 'channel' ? from <= now && now < to : Date.parse(e.stop) > from && Date.parse(e.start) < to))
         .filter((e) => !q || `${e.title} ${e.feeds.map((f) => f.channel_name).join(' ')}`.toLowerCase().includes(q))
         .sort((a, b) => Number(a.kind === 'channel') - Number(b.kind === 'channel') || Date.parse(a.start) - Date.parse(b.start))
       const counts = new Map<string, number>()

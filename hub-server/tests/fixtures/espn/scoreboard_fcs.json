@@ -1,0 +1,67 @@
+{
+  "leagues": [{"id": "23", "name": "NCAA - Football", "abbreviation": "NCAAF", "slug": "college-football"}],
+  "day": {"date": "2026-11-14"},
+  "events": [
+    {
+      "id": "401990101",
+      "uid": "s:20~l:23~e:401990101",
+      "date": "2026-11-14T19:00Z",
+      "name": "Ridgeway Rams at Millbrook Mallards",
+      "shortName": "RDG @ MLB",
+      "competitions": [
+        {
+          "id": "401990101",
+          "date": "2026-11-14T19:00Z",
+          "conferenceCompetition": true,
+          "groups": {"id": "95", "name": "Prairie Valley Conference", "shortName": "Prairie Valley", "isConference": true},
+          "competitors": [
+            {
+              "id": "9101",
+              "homeAway": "home",
+              "curatedRank": {"current": 99},
+              "team": {
+                "id": "9101",
+                "location": "Millbrook",
+                "name": "Mallards",
+                "abbreviation": "MLB",
+                "displayName": "Millbrook Mallards",
+                "shortDisplayName": "Millbrook",
+                "color": "1d4f2a",
+                "alternateColor": "e3c04d"
+              },
+              "records": [
+                {"name": "overall", "abbreviation": "Game", "type": "total", "summary": "7-3"},
+                {"name": "vs. Conf.", "type": "vsconf", "summary": "5-2"}
+              ]
+            },
+            {
+              "id": "9102",
+              "homeAway": "away",
+              "curatedRank": {"current": 99},
+              "team": {
+                "id": "9102",
+                "location": "Ridgeway",
+                "name": "Rams",
+                "abbreviation": "RDG",
+                "displayName": "Ridgeway Rams",
+                "shortDisplayName": "Ridgeway",
+                "color": "8c1d18",
+                "alternateColor": "ffffff"
+              },
+              "records": [
+                {"name": "overall", "abbreviation": "Game", "type": "total", "summary": "5-5"},
+                {"name": "vs. Conf.", "type": "vsconf", "summary": "3-4"}
+              ]
+            }
+          ],
+          "status": {
+            "clock": 900.0,
+            "displayClock": "15:00",
+            "period": 1,
+            "type": {"id": "2", "name": "STATUS_IN_PROGRESS", "state": "in", "completed": false, "description": "In Progress", "detail": "15:00 - 1st Quarter", "shortDetail": "15:00 - 1st"}
+          }
+        }
+      ]
+    }
+  ]
+}
