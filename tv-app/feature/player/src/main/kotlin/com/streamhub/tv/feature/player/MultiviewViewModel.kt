@@ -22,11 +22,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import javax.inject.Inject
 
-internal data class PairAudioChoice(val pane:Int,val options:PlaybackOptions)
 internal data class MultiviewState(
     val selected:List<Channel?> = listOf(null,null),val picker:Int?=null,val query:String="",val allLanguages:Boolean=false,
     val channels:ChannelList=ChannelList(),val listing:Boolean=false,val busy:Boolean=false,val active:Boolean=false,
-    val audioPane:Int=0,val choice:PairAudioChoice?=null,val message:String?=null,
+    val audioPane:Int=0,val message:String?=null,
 )
 
 @HiltViewModel
@@ -44,7 +43,6 @@ class MultiviewViewModel @Inject constructor(
     private var startJob:Job?=null
     private var listJob:Job?=null
     private var stopJob:Job?=null
-    private var audioInput:CompletableDeferred<Pair<String,Boolean>>?=null
     private var foreground=true
     private val manager=context.getSystemService(AudioManager::class.java)
     private val focusListener=AudioManager.OnAudioFocusChangeListener {change->if(change<0)stop("Audio focus changed. Start again when ready.")}
@@ -98,33 +96,22 @@ class MultiviewViewModel @Inject constructor(
         if(mutable.value.selected[1-pane]?.id==channel.id){mutable.update{it.copy(message="Choose two different channels.")};return}
         mutable.update{it.copy(selected=it.selected.toMutableList().also{list->list[pane]=channel},picker=null,message=null)}
     }
-    fun confirmAudio(variant:String,confirmed:Boolean) {
-        val choice=mutable.value.choice ?: return
-        val option=choice.options.options.firstOrNull{it.variantId==variant} ?: return
-        if(!option.preferredAudioAvailable && choice.options.preferredLanguages.isNotEmpty() && !confirmed)return
-        audioInput?.complete(variant to confirmed)
-    }
-    fun cancelAudio(){stop("Multiview canceled. No pair was started.")}
-    private suspend fun preflight(channel:Channel,pane:Int,original:Session,generation:Long):PlaybackRequest {
+    /**
+     * Each pane is a channel, and a channel is never held for an audio choice (owner's decision: "if I open a
+     * channel, don't prompt me at all"). The options call still proves the pane's own variant before a pair is
+     * reserved; opening it is the consent, sent explicitly so a server that still checks channel audio admits it.
+     */
+    private suspend fun preflight(channel:Channel,original:Session,generation:Long):PlaybackRequest {
         val options=api.playbackOptions(channel.id,channel.sourceId);ensure(original,generation)
-        require(options.id==channel.id && options.options.isNotEmpty()) {"Channel audio options unavailable"}
-        val automatic=options.options.firstOrNull{it.variantId==options.automaticVariantId && it.sourceId==channel.sourceId && it.variantId==channel.id && (it.preferredAudioAvailable || options.preferredLanguages.isEmpty())}
-        if(automatic!=null)return PlaybackRequest(channel.id,sourceId=channel.sourceId,variantId=automatic.variantId)
-        val input=CompletableDeferred<Pair<String,Boolean>>()
-        audioInput=input;mutable.update{it.copy(choice=PairAudioChoice(pane,options))}
-        try {
-            val (variant,confirmed)=input.await();ensure(original,generation)
-            val selected=options.options.firstOrNull{it.variantId==variant} ?: error("Audio selection changed")
-            require(selected.sourceId==channel.sourceId && selected.variantId==channel.id)
-            return PlaybackRequest(channel.id,sourceId=channel.sourceId,variantId=variant,allowUnverifiedAudio=confirmed)
-        } finally {audioInput=null;mutable.update{it.copy(choice=null)}}
+        require(options.id==channel.id && options.options.any{it.sourceId==channel.sourceId && it.variantId==channel.id}) {"Channel audio options unavailable"}
+        return PlaybackRequest(channel.id,sourceId=channel.sourceId,variantId=channel.id,allowUnverifiedAudio=true)
     }
     fun start() {
         if(mutable.value.busy || mutable.value.active || !foreground)return
         val channels=mutable.value.selected.filterNotNull()
         if(channels.size!=2 || channels[0].id==channels[1].id)return
         val generation=++epoch
-        mutable.update{it.copy(busy=true,message="Checking both audio choices and source capacity…")}
+        mutable.update{it.copy(busy=true,message="Checking both channels and source capacity…")}
         startJob=viewModelScope.launch {
             val original=sessions.current();owner=original
             try {
@@ -133,7 +120,7 @@ class MultiviewViewModel @Inject constructor(
                 coordinator.clearForProfileSwitch() // Release any ordinary/DVR player before reserving a pair.
                 ensure(original,generation)
                 coordinator.registerActivePlayer(registration){stopForExternal()}
-                val requests=channels.mapIndexed{pane,channel->preflight(channel,pane,original,generation)}
+                val requests=channels.map{channel->preflight(channel,original,generation)}
                 ensure(original,generation)
                 val recovery=api.playbackGeneration();ensure(original,generation)
                 val granted=lease.open(original,MultiviewRequest(requests,recovery.generation)){valid(original,generation)}
@@ -152,7 +139,7 @@ class MultiviewViewModel @Inject constructor(
                     "source_busy","source_limit_reached","multiview_capacity"->"The server could not reserve two source connections. Neither pane started; capacity settings are unchanged."
                     else->"Pair could not start. No single-pane fallback. The source may permit only one connection; wait before a manual retry."
                 })}
-            }finally{if(epoch==generation)mutable.update{it.copy(busy=false,choice=null)}}
+            }finally{if(epoch==generation)mutable.update{it.copy(busy=false)}}
         }
     }
     private fun requestFocus():Boolean = if(Build.VERSION.SDK_INT>=26)manager.requestAudioFocus(focusRequest!!)==AudioManager.AUDIOFOCUS_REQUEST_GRANTED
@@ -160,19 +147,19 @@ class MultiviewViewModel @Inject constructor(
     private fun abandonFocus(){if(Build.VERSION.SDK_INT>=26)manager.abandonAudioFocusRequest(focusRequest!!) else @Suppress("DEPRECATION") manager.abandonAudioFocus(focusListener)}
     fun chooseAudio(index:Int){if(index !in 0..1)return;players.forEach{it.exoPlayer.volume=0f};players[index].exoPlayer.volume=1f;mutable.update{it.copy(audioPane=index)}}
     private suspend fun stopForExternal(message:String="Pair stopped. Start checks audio and capacity again.") {
-        epoch++;val pending=startJob;startJob=null;pending?.cancelAndJoin();audioInput?.cancel();audioInput=null
+        epoch++;val pending=startJob;startJob=null;pending?.cancelAndJoin()
         players.forEach{it.stop()};val released=lease.close();abandonFocus();coordinator.unregisterActivePlayer(registration)
-        mutable.update{it.copy(active=false,busy=false,choice=null,message=if(released)message else "Stop could not be confirmed. The server lease must expire or be recovered before retry.")}
+        mutable.update{it.copy(active=false,busy=false,message=if(released)message else "Stop could not be confirmed. The server lease must expire or be recovered before retry.")}
     }
     fun stop(message:String="Paused: both streams released. Start resumes at live with new checks.",clearSelection:Boolean=false) {
-        epoch++;startJob?.cancel();audioInput?.cancel();listJob?.cancel()
-        mutable.update{it.copy(active=false,busy=true,choice=null,picker=null,message=message,selected=if(clearSelection)listOf(null,null) else it.selected)}
+        epoch++;startJob?.cancel();listJob?.cancel()
+        mutable.update{it.copy(active=false,busy=true,picker=null,message=message,selected=if(clearSelection)listOf(null,null) else it.selected)}
         if(stopJob?.isActive!=true) stopJob=viewModelScope.launch {stopForExternal(message)}
     }
     fun background(){foreground=false;stop()}
     fun foreground(){foreground=true}
     override fun onCleared() {
-        epoch++;val pending=startJob;pending?.cancel();listJob?.cancel();audioInput?.cancel();abandonFocus();coordinator.unregisterActivePlayer(registration)
+        epoch++;val pending=startJob;pending?.cancel();listJob?.cancel();abandonFocus();coordinator.unregisterActivePlayer(registration)
         val cleanup=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
         cleanup.launch {try{pending?.join();lease.close()}finally{players.forEach{it.release()};cleanup.cancel()}}
     }

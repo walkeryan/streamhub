@@ -112,7 +112,6 @@ fun MultiviewScreen(onExit:()->Unit,vm:MultiviewViewModel=hiltViewModel()) {
         }
         LaunchedEffect(pane){cancel.requestFocus()}
     }
-    s.choice?.let{choice->AudioSourceDialog(choice.options,onDismiss=vm::cancelAudio,confirmLabel="Use for this pair once",onChoose=vm::confirmAudio)}
     if(tracks&&s.active) {
         val player=vm.players[s.audioPane]
         val state=if(s.audioPane==0)left else right

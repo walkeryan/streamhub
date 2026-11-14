@@ -71,4 +71,17 @@ class AudioLanguagePolicyTest {
         assertNull(preferredAudioIndex(listOf("eng"),listOf("fra",null)))
         assertFalse(preferredAudioSelected(listOf("eng"),listOf(null)))
     }
+
+    @Test fun aLiveChannelNeverHoldsForTheViewerWhileFilmsStillDo() {
+        // Two foreign tracks, or several untagged ones: a film stops for a choice, a channel plays.
+        listOf(runtimeAudioDecision(false,listOf("eng"),2,listOf("fra"),false),runtimeAudioDecision(true,listOf("eng"),2,listOf(null),false)).forEach { decision ->
+            assertEquals(RuntimeAudioDecision.Blocked,decision)
+            assertTrue(audioHoldsForViewer(decision,channel=false))
+            assertFalse(audioHoldsForViewer(decision,channel=true))
+        }
+        listOf(RuntimeAudioDecision.Allowed,RuntimeAudioDecision.Unobservable).forEach { assertFalse(audioHoldsForViewer(it,channel=false)) }
+        // A tagged preferred track is still found for the channel to switch to before it falls back to its default.
+        assertEquals(1,preferredAudioIndex(listOf("eng"),listOf("fra","en-US")))
+        assertNull(preferredAudioIndex(listOf("eng"),listOf("fra",null)))
+    }
 }
