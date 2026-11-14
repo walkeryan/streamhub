@@ -1,4 +1,5 @@
 import { HomeNotices } from '../components/Notices'
+import { WatchingNow } from '../components/WatchingNow'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
 import type { Tile } from '../api/types'
@@ -61,6 +62,7 @@ export function Home() {
   const playable = isPlayable(active)
   return (
     <div data-testid="home" className="home-discovery">
+      <WatchingNow />
       <HomeNotices />
       <section className="hero" aria-label="Featured" data-testid="hero" data-art={noArt ? 'none' : undefined}>
         <Crossfade src={active.backdrop ?? active.poster} />

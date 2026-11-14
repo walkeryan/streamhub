@@ -84,6 +84,8 @@ def test_integration_fields_are_published_as_the_backend_sends_them() -> None:
         "MatchupTeam": ["color", "rank", "record", "conference_record"],
         "SportsChannel": ["channel_name", "channel_number", "quality", "language", "logo"],
         "RoomJoin": ["member_token", "client"],
+        "Room": ["public", "is_member"],
+        "RoomCreate": ["public"],
         "Settings": ["home_networks", "home_shelves", "home_shelves_unknown"],
     }.items():
         actual = getattr(schemas, model).model_json_schema()

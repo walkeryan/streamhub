@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { setRoomPublic } from '../api/hooks'
 import QRCode from 'qrcode'
 import type { Room } from '../api/types'
 import { Button, Modal } from '../components/ui'
@@ -31,6 +32,16 @@ export function ShareSheet({ room, onClose, onStart, startLabel = 'Start watchin
 }) {
   const toast = useUi((s) => s.toast)
   const link = room ? roomLink(room) : ''
+  // What the server last said; the switch answers at once and settles on the server's answer.
+  const [open, setOpen] = useState<{ code: string; on: boolean } | null>(null)
+  const isPublic = room ? (open?.code === room.code ? open.on : room.public ?? true) : true
+  const togglePublic = async () => {
+    if (!room) return
+    const want = !isPublic
+    setOpen({ code: room.code, on: want })
+    try { setOpen({ code: room.code, on: (await setRoomPublic(room.code, want)).public ?? want }) }
+    catch (e) { setOpen({ code: room.code, on: !want }); toast(e instanceof Error ? e.message : 'Could not change the room.', 'error') }
+  }
   const [qr, setQr] = useState<{ link: string; src: string } | null>(null)
   useEffect(() => {
     if (!link) return
@@ -45,7 +56,9 @@ export function ShareSheet({ room, onClose, onStart, startLabel = 'Start watchin
   return (
     <Modal open={!!room} onClose={onClose} title="Watch together" firstFocusKey={onStart ? 'share:start' : 'share:copy'} variant="sheet" testId="room-share">
       {room && <>
-        <p className="muted">Send the link, or read out the code. Anyone signed in to this StreamHub who may join rooms can join you{room.title.title ? ` for ${room.title.title}` : ''}.</p>
+        <p className="muted" data-testid="room-share-hint">{isPublic
+          ? `Everyone signed in to this StreamHub sees this room on their Home screen and can join you${room.title.title ? ` for ${room.title.title}` : ''} with one press. The link and code work too.`
+          : 'Only people you send the link or code to can join.'}</p>
         <div className="room-share">
           <div className="room-qr">{qr?.link === link && <img src={qr.src} alt="QR code for the room link" width={240} height={240} data-testid="room-qr" />}</div>
           <div className="flex flex-col gap-3 min-w-0">
@@ -61,6 +74,7 @@ export function ShareSheet({ room, onClose, onStart, startLabel = 'Start watchin
         </div>
         <FocusGroup focusKey="share:actions" className="flex gap-3 flex-wrap">
           {onStart && <Button focusKey="share:start" primary icon="play" onEnter={onStart} testId="room-start">{startLabel}</Button>}
+          {room.is_host && <Button focusKey="share:public" icon={isPublic ? 'check' : 'people'} pressed={isPublic} onEnter={() => void togglePublic()} testId="room-public">{isPublic ? 'Public' : 'Private'}</Button>}
           <Button focusKey="share:copy" icon="copy" onEnter={() => void copy()} testId="room-copy">Copy link</Button>
           <Button focusKey="share:close" ghost onEnter={onClose}>{onStart ? 'Not now' : 'Done'}</Button>
         </FocusGroup>

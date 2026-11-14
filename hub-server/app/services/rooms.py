@@ -95,8 +95,13 @@ class Room:
         audio_track: int | None = None,
         live: bool = False,
         series: str | None = None,
+        public: bool = True,
     ) -> None:
         self.code = code
+        # Listed to everyone signed in who may join rooms and watch the title, who join with one press
+        # (the owner's decision: someone invited to the server should not need a code). The host can
+        # make it private; the code and link still work either way.
+        self.public = public
         # Title or channel id. Never a show: a room made from one is on the episode it was given then.
         self.ref = ref
         self.series = series  # the show that episode was taken from, by name
@@ -330,6 +335,7 @@ class RoomRegistry:
         audio_track: int | None = None,
         live: bool = False,
         series: str | None = None,
+        public: bool = True,
     ) -> Room:
         if len(self._rooms) >= self._max_rooms:
             raise Conflict("Too many watch rooms are open. Try again later.", code="room_limit")
@@ -344,6 +350,7 @@ class RoomRegistry:
             audio_track=audio_track,
             live=live,
             series=series,
+            public=public,
         )
         self._rooms[code] = room
         return room

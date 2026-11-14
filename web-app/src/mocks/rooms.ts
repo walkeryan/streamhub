@@ -29,7 +29,7 @@ const SKEW_MS = 90_000
 const serverNow = () => Date.now() + SKEW_MS
 
 interface MockMember { id: string; profile_id: string; name: string; host: boolean; buffering: boolean; seen_ms: number }
-interface MockRoom extends Omit<Room, 'members' | 'is_host' | 'server_ms'> {
+interface MockRoom extends Omit<Room, 'members' | 'is_host' | 'server_ms' | 'is_member'> {
   host_profile_id: string; members: MockMember[]
   /** One stream for the whole room (a source with a connection limit): it is restarted at every seek. */
   shared: boolean
@@ -49,6 +49,7 @@ type Change =
   /** the server gives a member's seat up: silent, slow, replaced */
   | { op: 'drop'; member_id: string; reason: string }
   | { op: 'close'; reason: string }
+  | { op: 'public'; on: boolean }
 interface Envelope { code: string; change: Change }
 interface Client { send: (data: string) => void; close: (code?: number, reason?: string) => void }
 
@@ -103,6 +104,8 @@ function apply({ code, change }: Envelope): void {
     if (seat) { sockets.get(code)?.delete(change.member_id); end(seat, change.reason, 4000) }
     room.members = room.members.filter((m) => m.id !== change.member_id)
     messages.push(membersMessage(room))
+  } else if (change.op === 'public') {
+    room.public = change.on
   } else if (change.op === 'say') {
     if (change.message.type === 'waiting') room.waiting_for = String(change.message.name ?? '')
     messages.push(change.message)
@@ -128,7 +131,7 @@ function commit(code: string, change: Change): void {
 
 const publicRoom = (room: MockRoom, profileId: string): Room => {
   const { host_profile_id, members: _everyone, shared: _stream, stream_epoch: _epoch, stream_start_ms: _start, ...rest } = room
-  return { ...rest, is_host: host_profile_id === profileId, server_ms: serverNow(), members: present(room).map(({ id, name, host, buffering }) => ({ id, name, host, buffering })) }
+  return { ...rest, public: room.public ?? true, is_host: host_profile_id === profileId, is_member: room.members.some((m) => m.profile_id === profileId), server_ms: serverNow(), members: present(room).map(({ id, name, host, buffering }) => ({ id, name, host, buffering })) }
 }
 
 function titleOf(id: string): { title: Room['title']; playable: boolean; shared?: boolean } | null {
@@ -194,7 +197,7 @@ export const roomHandlers = [
     const barred = refusedWithout(request, 'rooms.create')
     if (barred) return barred
     const me = profileOf(request)
-    const body = (await request.json()) as { id: string; variant_id?: string | null; audio_track?: number | null }
+    const body = (await request.json()) as { id: string; variant_id?: string | null; audio_track?: number | null; public?: boolean }
     const found = titleOf(body.id)
     if (!found) return error(404, 'not_found', 'Title not found.')
     if (!found.playable) return error(409, 'room_unsupported', 'This title opens in another app, so it cannot be watched together.')
@@ -204,10 +207,25 @@ export const roomHandlers = [
     const room: MockRoom = {
       code, join_path: `/room/${code}`, id: body.id, live, variant_id: body.variant_id ?? null, audio_track: body.audio_track ?? null,
       host_profile_id: me.id, host_name: me.name, controls_locked: false, waiting_for: null, max_members: MAX_MEMBERS, members: [], shared: !!found.shared, stream_epoch: 1, stream_start_ms: 0,
-      state: { playing: live, position_ms: live ? null : 0, as_of_ms: serverNow() }, title: found.title,
+      state: { playing: live, position_ms: live ? null : 0, as_of_ms: serverNow() }, title: found.title, public: body.public ?? true,
     }
     commit(code, { op: 'create', room })
     return HttpResponse.json(publicRoom(room, me.id), { status: 201 })
+  }),
+  // The public rooms anyone signed in may join (the fixture's titles carry no ratings to filter by).
+  http.get(`${B}/rooms`, ({ request }) => {
+    if (refusedWithout(request, 'rooms.join')) return HttpResponse.json({ rooms: [] })
+    const me = profileOf(request)
+    return HttpResponse.json({ rooms: Object.values(load()).filter((r) => r.public ?? true).map((r) => publicRoom(r, me.id)) })
+  }),
+  http.patch(`${B}/rooms/:code`, async ({ params, request }) => {
+    const me = profileOf(request)
+    const room = roomOf(String(params.code))
+    if (!room) return error(404, 'room_not_found', 'This room does not exist or has ended.')
+    if (room.host_profile_id !== me.id) return error(403, 'forbidden', 'Only the host can change who sees this room.')
+    const body = (await request.json()) as { public: boolean }
+    commit(room.code, { op: 'public', on: !!body.public })
+    return HttpResponse.json(publicRoom(roomOf(room.code)!, me.id))
   }),
   http.get(`${B}/rooms/:code`, ({ params, request }) => {
     const room = roomOf(String(params.code))
