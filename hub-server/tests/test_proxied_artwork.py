@@ -175,6 +175,42 @@ async def test_artwork_signed_without_remote_access_is_served_at_home_only(api: 
     assert (await fetch(api, AWAY, await poster(homebody))).status_code == 200
 
 
+@respx.mock
+async def test_proxied_artwork_is_fitted_before_it_is_kept(api: Api) -> None:
+    from tests.test_image_fit import opened, picture
+
+    huge = picture(1920, 2880)
+    respx.get(f"{MANAGER}/player_api.php").mock(side_effect=catalog())
+    respx.get(POSTER).mock(return_value=httpx.Response(200, content=huge, headers={"content-type": "image/jpeg"}))
+    await add_xtream(api, proxy="always")
+    tile = (await api.get("/browse/movies", params={"language": "all"})).json()["tiles"][0]
+    first = await api.client.get(image_path(tile["poster"]))
+    assert first.status_code == 200 and first.headers["content-type"] == "image/jpeg"
+    assert opened(first.content).size == (600, 900) and len(first.content) < len(huge) // 5
+    # What the cache keeps is the fitted copy.
+    [kept] = list((api.c.settings.cache_dir / "images").iterdir())
+    assert kept.stat().st_size < len(huge) // 5
+    again = await api.client.get(image_path(tile["poster"]))
+    assert again.content == first.content
+
+
+@respx.mock
+async def test_an_original_kept_before_fitting_is_fitted_on_its_next_visit(api: Api) -> None:
+    from tests.test_image_fit import opened, picture
+
+    huge = picture(1920, 2880)
+    respx.get(f"{MANAGER}/player_api.php").mock(side_effect=catalog())
+    poster = respx.get(POSTER).mock(return_value=httpx.Response(500))
+    sid = await add_xtream(api, proxy="always")
+    await api.c.image_cache.put(sid, POSTER, huge, "image/jpeg")
+    tile = (await api.get("/browse/movies", params={"language": "all"})).json()["tiles"][0]
+    served = await api.client.get(image_path(tile["poster"]))
+    assert served.status_code == 200 and opened(served.content).size == (600, 900)
+    assert poster.call_count == 0
+    cached = await api.c.image_cache.get(sid, POSTER)
+    assert cached is not None and cached[0] == served.content
+
+
 def test_channel_artwork_grants_bind_to_the_channel_under_content_policy() -> None:
     policy = SimpleNamespace(enabled=True, applies_to=lambda principal: True)
     token = active_principal.set(Principal("kid", False, True, 4, "kid-session"))
