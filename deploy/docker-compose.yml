@@ -28,6 +28,8 @@ services:
       SECRET_KEY: "${SECRET_KEY:?Set SECRET_KEY in .env (a long random string)}"
       # TMDB_API_KEY: "${TMDB_API_KEY:-}"        # optional; can also be set in the UI
       # ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"    # optional; otherwise set on first run
+      # XAI_API_KEY: "${XAI_API_KEY:-}"          # optional; generated art for football matchup cards
+      # MATCHUP_ART_DAILY_LIMIT: "100"           # optional; image requests per UTC day (about 6 cents each)
       # Trust X-Forwarded-* only from your reverse proxy network (see README).
       # FORWARDED_ALLOW_IPS: "172.18.0.0/16"
     restart: unless-stopped
