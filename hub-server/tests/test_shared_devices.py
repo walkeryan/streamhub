@@ -178,9 +178,10 @@ async def test_switchable_lists_the_household_in_order(api: Api) -> None:
     assert r.headers["cache-control"] == "private, no-store"
     users = r.json()["users"]
     assert [u["id"] for u in users] == [me, amy["id"], zed["id"], kid["id"], visitor["id"]]
-    assert set(users[0]) == {"id", "display_name", "avatar", "picture", "role_name", "has_pin", "current"}
+    assert set(users[0]) == {"id", "display_name", "avatar", "picture", "role_name", "has_pin", "pin_arrows", "current"}
     assert [u["current"] for u in users] == [True, False, False, False, False]
     assert [u["has_pin"] for u in users] == [False, False, True, False, False]
+    assert [u["pin_arrows"] for u in users] == [None] * 5
     assert [u["role_name"] for u in users] == ["Owner", "Family", "Family", "Kid", "Friend"]
     assert users[1]["display_name"] == "amy" and users[1]["avatar"] is None and users[1]["picture"] is None
 

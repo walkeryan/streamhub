@@ -800,6 +800,9 @@ h1, h2, h3, p { margin: 0; }
 .pin-dots i { width: 0.75rem; height: 0.75rem; border-radius: 999px; background: var(--t-text); }
 .pin-pad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; width: min(17rem, 100%); margin-inline: auto; }
 .pin-key { min-height: 3.25rem; padding: 0; font-size: var(--text-heading); }
+/* Choosing an arrow pattern: the arrows stay visible (this is where it is chosen), laid out like a D-pad. */
+.arrow-entered { gap: 0.5rem; font-size: var(--text-heading); color: var(--t-text); }
+.arrow-pad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; width: min(13rem, 100%); margin-inline: auto; }
 /* Private entry: people watching the screen while a PIN is entered by remote must not see which key has
    focus, so a keypad key looks the same focused or not: no ring, lift, glow or colour change. */
 .pin-pad .pin-key.fx, .pin-pad .pin-key.fx[data-focused='true'] { transform: none; outline: 0 solid transparent; box-shadow: none; z-index: auto; transition: none; }

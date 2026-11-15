@@ -172,7 +172,7 @@ const tokensFor = (profile: Profile) =>
 const profileOf = (db: Db, id: string | null | undefined) => {
   const base = profiles.find((p) => p.id === id) ?? db.profiles.find((p) => p.id === id)
   const user = db.users.find((u) => u.profile_id === id)
-  return base && user ? { ...base, name: user.display_name, avatar: user.avatar ?? null, has_pin: !!user.pin } : base
+  return base && user ? { ...base, name: user.display_name, avatar: user.avatar ?? null, has_pin: !!user.pin, pin_arrows: user.pin ? user.pin_arrows ?? null : null } : base
 }
 
 /** A profile the three fixtures do not list: a user approved, invited or added while the mock ran. */
@@ -184,11 +184,13 @@ export const ownProfile = (request: Request): Profile[] => {
   return mine && !profiles.some((p) => p.id === mine) ? [profileOf(db, mine)!] : []
 }
 /** The legacy profile PIN and the user's PIN are one secret. */
-export function setProfilePin(profileId: string, pin: string | null) {
+export function setProfilePin(profileId: string, pin: string | null, arrows = false) {
   const db = load()
   const user = db.users.find((u) => u.profile_id === profileId)
-  if (user) { user.pin = pin; save(db) }
+  if (user) { user.pin = pin; user.pin_arrows = pin && arrows ? pin.length : null; save(db) }
 }
+/** An arrow pattern is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. */
+const arrowsRefused = (body: { pin?: unknown; arrows?: unknown }) => !!body.arrows && typeof body.pin === 'string' && !/^[2468]+$/.test(body.pin)
 /** include_adult is honoured only for a holder of watch.adult who unlocked this session. */
 export function adultUnlocked(request: Request): boolean {
   const db = load()
@@ -523,7 +525,7 @@ export const peopleHandlers = [
   http.get(`${B}/auth/switchable`, as(null, ({ db, me }) => {
     if (mode() === 'no-switch') return gone()
     if (!db.shared) return error(403, 'not_shared_device', 'This is not a shared household device')
-    return HttpResponse.json({ users: switchable(db).map((u) => ({ id: u.id, display_name: u.display_name, avatar: u.avatar ?? null, picture: u.picture ?? null, role_name: roleOf(db, u)?.name ?? null, has_pin: !!u.pin, current: u.id === me.id })) })
+    return HttpResponse.json({ users: switchable(db).map((u) => ({ id: u.id, display_name: u.display_name, avatar: u.avatar ?? null, picture: u.picture ?? null, role_name: roleOf(db, u)?.name ?? null, has_pin: !!u.pin, pin_arrows: u.pin ? u.pin_arrows ?? null : null, current: u.id === me.id })) })
   })),
   http.post(`${B}/auth/switch`, async ({ request }) => {
     if (mode() === 'legacy' || mode() === 'no-switch') return gone()
@@ -656,7 +658,9 @@ export const peopleHandlers = [
     if (!u) return gone()
     if (u.id !== me.id && !permissionsOf(db, me).includes('users.manage')) return error(403, 'forbidden', 'Missing permission', { missing: ['users.manage'] })
     if (body.pin != null && !validPin(body.pin)) return error(422, 'invalid_pin', 'A PIN is 4 to 8 digits')
+    if (arrowsRefused(body)) return error(400, 'invalid_pin', 'An arrow pattern holds only 2, 4, 6 and 8 (up, left, right, down)')
     u.pin = (body.pin as string | null) ?? null
+    u.pin_arrows = u.pin && body.arrows ? u.pin.length : null
     const base = profiles.find((p) => p.id === u.profile_id)
     if (base) base.has_pin = !!u.pin
     audit(db, me, u.pin ? 'user.pin_set' : 'user.pin_clear', u)

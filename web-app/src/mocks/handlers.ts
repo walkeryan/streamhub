@@ -156,10 +156,10 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
   http.put(`${B}/profiles/:id/pin`, async ({ params, request }) => {
-    const b = (await request.json()) as { pin?: string | null }
+    const b = (await request.json()) as { pin?: string | null; arrows?: boolean }
     const p = profiles.find((x) => x.id === params.id)
-    if (p) p.has_pin = !!b.pin
-    setProfilePin(String(params.id), b.pin ?? null)
+    if (p) { p.has_pin = !!b.pin; p.pin_arrows = b.pin && b.arrows ? b.pin.length : null }
+    setProfilePin(String(params.id), b.pin ?? null, !!b.arrows)
     return new HttpResponse(null, { status: 204 })
   }),
   // A test sets localStorage 'mock.tv-release' = 'none' for a server that publishes no TV build.

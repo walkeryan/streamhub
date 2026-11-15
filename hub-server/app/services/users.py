@@ -61,6 +61,31 @@ def validate_pin(pin: str) -> str:
     return pin
 
 
+# An arrow pattern is stored as the digits its arrows sit on on a phone keypad: Up 2, Left 4,
+# Right 6, Down 8. It is then an ordinary PIN to every check, and can still be typed as digits.
+ARROW_DIGITS = frozenset("2468")
+
+
+def pin_arrows(pin: str | None, arrows: bool) -> int | None:
+    """What ``Profile.pin_arrows`` becomes when ``pin`` is set: its length for an arrow pattern, else null.
+
+    Validates as ``validate_pin`` does, and refuses an arrow pattern holding any other digit.
+    """
+    if not pin:
+        return None
+    validate_pin(pin)
+    if not arrows:
+        return None
+    if not set(pin) <= ARROW_DIGITS:
+        raise ServiceError("An arrow pattern holds only 2, 4, 6 and 8 (up, left, right, down)", code="invalid_pin")
+    return len(pin)
+
+
+def shown_arrows(profile: Profile | None) -> int | None:
+    """``pin_arrows`` as clients see it: only while there is a PIN for it to describe."""
+    return profile.pin_arrows if profile is not None and profile.pin_hash else None
+
+
 def access(user: User | None, role: Role | None) -> tuple[frozenset[str], Limits]:
     """Effective permissions and limits. Anyone not active, or without a role, holds nothing."""
     if user is None or role is None or user.status != "active":
@@ -237,6 +262,7 @@ class UsersService:
             "role_name": role.name if role else None,
             "profile_id": profile.id if profile else None,
             "has_pin": bool(profile and profile.pin_hash),
+            "pin_arrows": shown_arrows(profile),
             "on_shared_devices": shared,
             "plex_account_linked": user.plex_account_linked,
             "username": user.username,
@@ -442,8 +468,9 @@ class UsersService:
         name = str(data.get("name") or "").strip()[:64]
         if not name:
             raise ServiceError("name is required", code="invalid_name")
-        pin = data.get("pin")
-        pin_hash = await asyncio.to_thread(hash_secret, validate_pin(str(pin))) if pin else None
+        pin = str(data["pin"]) if data.get("pin") else None
+        arrows = pin_arrows(pin, bool(data.get("arrows")))
+        pin_hash = await asyncio.to_thread(hash_secret, validate_pin(pin)) if pin else None
         async with self._db.session() as s:
             role = await self._role(s, data.get("role_id") or ("kid" if data.get("kids") else "family"))
             self._may_assign(await self._actor_is_owner(s, actor), role, set(role.permissions or []))
@@ -470,6 +497,7 @@ class UsersService:
                 languages=list(data.get("languages") or []),
                 kids=bool(data.get("kids")) or role.id == "kid",
                 pin_hash=pin_hash,
+                pin_arrows=arrows,
                 prefs={},
                 user_id=user.id,
             )
@@ -660,16 +688,22 @@ class UsersService:
         pin: str | None,
         current_pin: str | None = None,
         current_password: str | None = None,
+        arrows: bool = False,
     ) -> None:
-        """Set or clear a user's PIN: one's own (see ``prove_pin_holder``), or anyone's with ``users.manage``."""
+        """Set or clear a user's PIN: one's own (see ``prove_pin_holder``), or anyone's with ``users.manage``.
+
+        ``arrows``: the PIN was chosen as an arrow pattern (see ``pin_arrows``).
+        """
         if user_id != actor.user_id and "users.manage" not in actor.permissions:
             raise NotFound("user not found")
+        length = pin_arrows(pin, arrows)
         pin_hash = await asyncio.to_thread(hash_secret, validate_pin(pin)) if pin else None
         async with self._db.session() as s:
             user, profile, _ = await self._load(s, user_id)
             await self.guard_identity(s, actor, user)
             await self.prove_pin_holder(s, actor, user, profile, current_pin, current_password)
             profile.pin_hash = pin_hash
+            profile.pin_arrows = length
             # A PIN that just changed must be proven again before the adult category reopens.
             await s.execute(update(AuthSession).where(AuthSession.user_id == user.id).values(adult_unlocked_until=None))
             audit(s, actor.user_id, "user.pin_set" if pin_hash else "user.pin_clear", user.id)

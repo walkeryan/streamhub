@@ -8,6 +8,8 @@ import com.streamhub.tv.core.data.model.SwitchableUser
 import com.streamhub.tv.core.data.repo.SessionEnd
 import com.streamhub.tv.core.data.repo.SwitchResult
 import com.streamhub.tv.core.data.repo.UserSwitcher
+import com.streamhub.tv.core.ui.input.Arrow
+import com.streamhub.tv.core.ui.input.ArrowPinState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -136,6 +138,26 @@ class WhoIsWatchingViewModelTest {
         vm.cancelPin()
         assertNull(vm.state.value.pinFor)
         assertNull(vm.state.value.pinError)
+    }
+
+    @Test fun anArrowPatternIsSentAsTheDigitsOfItsArrows() = runTest {
+        val jo = SwitchableUser(id = "u4", displayName = "Jo", roleName = "Family", hasPin = true, pinArrows = 6)
+        val fake = Fake(listOf(alex, jo)).apply { answer = { _, pin -> if (pin == "228846") ok(jo) else SwitchResult.PinInvalid } }
+        val vm = vm(fake)
+        vm.pick(jo, keepCurrent = false)
+        assertEquals(6, vm.state.value.pinFor?.pinArrows)
+        val attempt = vm.state.value.pinAttempt
+        // Up, Up, Down, Down, Left, Right, but one Left short of the pattern's last arrow.
+        val wrong = listOf(Arrow.Up, Arrow.Up, Arrow.Down, Arrow.Down, Arrow.Left, Arrow.Left)
+        vm.submitPin(ArrowPinState.digitsOf(wrong))
+        // Said as a pattern, and the dots start empty again.
+        assertEquals("That pattern isn't right. Try again.", vm.state.value.pinError)
+        assertEquals(attempt + 1, vm.state.value.pinAttempt)
+        assertEquals(jo, vm.state.value.pinFor)
+        val right = listOf(Arrow.Up, Arrow.Up, Arrow.Down, Arrow.Down, Arrow.Left, Arrow.Right)
+        vm.submitPin(ArrowPinState.digitsOf(right))
+        assertEquals(listOf("u4:228844", "u4:228846"), fake.calls)
+        assertEquals(WhoOutcome.Done, vm.state.value.outcome)
     }
 
     @Test fun aPinTheListDidNotMentionIsStillAskedFor() = runTest {

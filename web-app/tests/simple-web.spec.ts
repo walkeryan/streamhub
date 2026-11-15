@@ -650,6 +650,20 @@ test.describe('review of the first pass', () => {
     await guest.context.close()
   })
 
+  test('Settings, Profile: a PIN can be chosen as an arrow pattern and is sent as its keypad digits', async ({ page }) => {
+    await enter(page, '/settings?tab=profiles')
+    await page.getByTestId('prof-pin-arrows').click()
+    const dialog = page.getByTestId('arrow-pin-dialog')
+    await expect(dialog.getByRole('heading', { name: 'Arrow pattern for Guest', exact: true })).toBeVisible()
+    for (const key of ['ArrowLeft', 'ArrowLeft', 'ArrowRight', 'ArrowRight', 'ArrowDown', 'ArrowUp']) await page.keyboard.press(key)
+    await expect(dialog.getByTestId('arrow-entered')).toHaveText('←←→→↓↑')
+    await page.keyboard.press('Enter')
+    await expect(dialog).toHaveCount(0)
+    // The mock answers in the page, so what it stored is read back the way the app reads profiles.
+    const stored = await page.evaluate(async () => (await (await fetch('/api/v1/profiles', { headers: { authorization: 'Bearer mock-access-p2' } })).json() as Array<{ id: string; has_pin: boolean; pin_arrows?: number | null }>).find((p) => p.id === 'p2'))
+    expect([stored?.has_pin, stored?.pin_arrows]).toEqual([true, 6])
+  })
+
   test('the bar and the phone menu show the person, not only an initial: a picture, else their avatar', async ({ page, browser }) => {
     const picture = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="#888"/></svg>')}`
     const withPicture = (url: string) => page.evaluate((url) => {

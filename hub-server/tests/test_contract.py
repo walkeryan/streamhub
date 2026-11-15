@@ -87,6 +87,9 @@ def test_integration_fields_are_published_as_the_backend_sends_them() -> None:
         "Room": ["public", "is_member"],
         "RoomCreate": ["public"],
         "Settings": ["home_networks", "home_shelves", "home_shelves_unknown"],
+        "SwitchableUser": ["pin_arrows"],
+        "User": ["pin_arrows"],
+        "Profile": ["pin_arrows"],
     }.items():
         actual = getattr(schemas, model).model_json_schema()
         for field in fields:

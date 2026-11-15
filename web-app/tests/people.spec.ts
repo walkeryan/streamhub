@@ -498,6 +498,41 @@ test.describe('the Users screen', () => {
     await expect(row(page, 'Mara Ellison')).toHaveCount(0)
   })
 
+  test('an arrow pattern is chosen with the arrow keys or the buttons and saved as its keypad digits', async ({ page }) => {
+    await enter(page, '/users/u5')
+    const sharing = page.getByTestId('user-sharing')
+    await page.getByTestId('user-pin-arrows').click()
+    const dialog = page.getByTestId('arrow-pin-dialog')
+    await expect(dialog.getByRole('heading', { name: 'Arrow pattern for Mara Ellison' })).toBeVisible()
+    await expect(dialog).toContainText('Six arrows are much harder to guess than four.')
+    const entered = dialog.getByTestId('arrow-entered')
+    // The arrows enter the pattern; focus stays where it was.
+    const focused = await page.locator('[data-focused="true"]').getAttribute('data-focus-key')
+    for (const key of ['ArrowUp', 'ArrowUp', 'ArrowDown']) await page.keyboard.press(key)
+    await expect(entered).toHaveText('↑↑↓')
+    expect(await page.locator('[data-focused="true"]').getAttribute('data-focus-key')).toBe(focused)
+    // Too short to save.
+    await page.keyboard.press('Enter')
+    await expect(dialog.getByTestId('arrow-error')).toHaveText('Enter at least 4 arrows.')
+    await dialog.getByTestId('arrow-down').click()
+    await dialog.getByTestId('arrow-left').click()
+    await page.keyboard.press('ArrowUp')
+    await page.keyboard.press('Backspace')
+    await page.keyboard.press('ArrowRight')
+    await expect(entered).toHaveText('↑↑↓↓←→')
+    await page.keyboard.press('Enter')
+    await expect(dialog).toHaveCount(0)
+    await expect(sharing).toContainText('Has an arrow pattern of 6 arrows')
+    const stored = await page.evaluate(async () => (await (await fetch('/api/v1/users/u5', { headers: { authorization: 'Bearer mock-access-p1' } })).json() as { pin_arrows: number | null }).pin_arrows)
+    expect(stored).toBe(6)
+    // A typed PIN makes it an ordinary PIN again.
+    await page.getByTestId('user-pin-set').click()
+    for (const entry of ['2468', '2468']) { await page.keyboard.type(entry); await page.keyboard.press('Enter') }
+    await expect(page.getByTestId('pin-dialog')).toHaveCount(0)
+    await expect(sharing).toContainText('Has a PIN')
+    await expect(page.getByTestId('user-pin-arrows')).toHaveText('Use an arrow pattern')
+  })
+
   test('the server\'s guards are shown in its own words', async ({ page }) => {
     await enter(page, '/users/u1')
     const detail = page.getByTestId('user-detail')

@@ -142,16 +142,19 @@ class WhoIsWatchingViewModel internal constructor(
         _state.update { it.copy(busy = true, pinError = null) }
         viewModelScope.launch {
             val name = user.displayName.ifBlank { "this person" }
+            // Someone who chose an arrow pattern knows it as a pattern, not as the digits it is sent as.
+            val secret = if (user.pinArrows != null) "pattern" else "PIN"
+            val theSecret = if (user.pinArrows != null) "arrow pattern" else "PIN"
             when (val result = switcher.switchTo(user.id, pin)) {
                 is SwitchResult.Ok -> {
                     try { applyTheme(result.profile.themeId) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                     _state.update { it.copy(busy = false, pinFor = null, outcome = WhoOutcome.Done) }
                 }
                 SwitchResult.PinRequired -> _state.update {
-                    it.copy(busy = false, pinFor = user, pinError = if (pin == null) null else "Enter the PIN for $name.", pinAttempt = it.pinAttempt + 1)
+                    it.copy(busy = false, pinFor = user, pinError = if (pin == null) null else "Enter the $theSecret for $name.", pinAttempt = it.pinAttempt + 1)
                 }
                 SwitchResult.PinInvalid -> _state.update {
-                    it.copy(busy = false, pinFor = user, pinError = "That PIN isn't right. Try again.", pinAttempt = it.pinAttempt + 1)
+                    it.copy(busy = false, pinFor = user, pinError = "That $secret isn't right. Try again.", pinAttempt = it.pinAttempt + 1)
                 }
                 SwitchResult.PinSetupRequired -> _state.update {
                     it.copy(busy = false, pinFor = null, notice = UserError(

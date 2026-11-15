@@ -1754,6 +1754,11 @@ export interface paths {
                 content: {
                     "application/json": {
                         pin?: string | null;
+                        /**
+                         * @description The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
+                         * @default false
+                         */
+                        arrows?: boolean;
                         current_pin?: string | null;
                         current_password?: string | null;
                     };
@@ -4177,6 +4182,11 @@ export interface paths {
                         /** @default family */
                         role_id?: string;
                         pin?: string | null;
+                        /**
+                         * @description The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
+                         * @default false
+                         */
+                        arrows?: boolean;
                     };
                 };
             };
@@ -4513,6 +4523,11 @@ export interface paths {
                     "application/json": {
                         /** @description 4 to 8 digits; null clears */
                         pin?: string | null;
+                        /**
+                         * @description The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
+                         * @default false
+                         */
+                        arrows?: boolean;
                         current_pin?: string | null;
                         current_password?: string | null;
                     };
@@ -6503,6 +6518,8 @@ export interface components {
             /** @description The profile holding this user's viewer state */
             profile_id?: string | null;
             has_pin?: boolean;
+            /** @description The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow. */
+            pin_arrows?: number | null;
             on_shared_devices?: boolean;
             /** @description This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state. */
             plex_account_linked?: boolean;
@@ -6562,6 +6579,8 @@ export interface components {
             picture: string | null;
             role_name: string;
             has_pin: boolean;
+            /** @description The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow. */
+            pin_arrows?: number | null;
             /** @description The user this device is signed in as */
             current: boolean;
         };
@@ -6727,6 +6746,8 @@ export interface components {
             /** @description ISO 639-3 filter for live TV; empty = all */
             languages: string[];
             has_pin: boolean;
+            /** @description The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow. */
+            pin_arrows?: number | null;
             /** @description Existing password credential available. Missing means unavailable. */
             has_password?: boolean;
             /** @description Server policy currently restricts this profile. */
