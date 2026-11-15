@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamhub.tv.core.data.api.ApiErrors
 import com.streamhub.tv.core.data.auth.SessionStore
-import com.streamhub.tv.core.data.repo.UpdateException
 import com.streamhub.tv.core.data.repo.UpdateInfo
 import com.streamhub.tv.core.data.repo.UpdateInstaller
 import com.streamhub.tv.core.data.repo.UpdateRepository
@@ -59,20 +58,10 @@ class TvSettingsViewModel @Inject constructor(
     fun installUpdate() {
         val info = _state.value.update ?: return
         if (_state.value.updateBusy) return
-        _state.update { it.copy(updateBusy = true, updateStatus = "Downloading…") }
+        _state.update { it.copy(updateBusy = true) }
         viewModelScope.launch {
-            try {
-                var shown = -1
-                val apk = installer.download(info) { fraction ->
-                    val percent = fraction?.let { (it * 100).toInt() }
-                    if (percent != null && percent != shown) { shown = percent; _state.update { it.copy(updateStatus = "Downloading… $percent%") } }
-                }
-                installer.launchInstaller(apk)
-                _state.update { it.copy(updateBusy = false, updateStatus = "Download verified. Confirm in the installer to finish. If no installer opened, allow StreamHub to install apps in this TV's settings, then choose Install again.") }
-            } catch (e: CancellationException) { throw e }
-            catch (e: UpdateException) { _state.update { it.copy(updateBusy = false, updateStatus = e.message) } }
-            catch (_: android.content.ActivityNotFoundException) { _state.update { it.copy(updateBusy = false, updateStatus = "This TV has no installer that can open the update.") } }
-            catch (e: Exception) { _state.update { it.copy(updateBusy = false, updateStatus = ApiErrors.describe(e).body) } }
+            val last = downloadAndInstall(installer, info) { s -> _state.update { it.copy(updateStatus = s) } }
+            _state.update { it.copy(updateBusy = false, updateStatus = last) }
         }
     }
 }

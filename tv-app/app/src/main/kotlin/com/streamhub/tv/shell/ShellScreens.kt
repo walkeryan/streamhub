@@ -15,6 +15,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.withFrameNanos
+import com.streamhub.tv.core.ui.theme.Tokens
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
@@ -74,5 +79,31 @@ fun TvSettingsScreen(appVersion: String, onBack: () -> Unit, onChangeServer: () 
             }
             s.updateStatus?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = t.textMuted, modifier = Modifier.width(720.dp)) }
         }
+    }
+}
+
+/** The shell's own "a newer StreamHub is available" (see [UpdatePromptViewModel]). Back is "Later". */
+@Composable
+fun UpdatePromptDialog(s: UpdatePromptState, appVersion: String, onInstall: () -> Unit, onLater: () -> Unit) {
+    val offer = s.offer ?: return
+    val t = LocalThemeTokens.current
+    val focus = remember { FocusRequester() }
+    Dialog(onDismissRequest = { if (!s.busy) onLater() }) {
+        Column(
+            Modifier.width(560.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Update available", style = MaterialTheme.typography.titleLarge, color = t.text)
+            Text(
+                "StreamHub ${offer.versionName} is ready to install. This TV has $appVersion.",
+                style = MaterialTheme.typography.bodyLarge, color = t.textMuted,
+            )
+            s.status?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = t.textMuted) }
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ShButton(if (s.busy) "Installing…" else "Install now", onInstall, Modifier.focusRequester(focus), enabled = !s.busy, style = ButtonStyle.Primary)
+                ShButton("Later", onLater, enabled = !s.busy)
+            }
+        }
+        LaunchedEffect(offer) { withFrameNanos { }; runCatching { focus.requestFocus() } }
     }
 }

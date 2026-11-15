@@ -43,6 +43,8 @@ import com.streamhub.tv.shell.ShellScreen
 import com.streamhub.tv.shell.ShellViewModel
 import com.streamhub.tv.shell.ShellWebController
 import com.streamhub.tv.shell.TvSettingsScreen
+import com.streamhub.tv.shell.UpdatePromptDialog
+import com.streamhub.tv.shell.UpdatePromptViewModel
 import com.streamhub.tv.shell.UnreachableScreen
 import com.streamhub.tv.shell.backOutcome
 import com.streamhub.tv.shell.createShellWebView
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var tokenBroker: WebTokenBroker
 
     private val vm: ShellViewModel by viewModels()
+    private val updatePrompt: UpdatePromptViewModel by viewModels()
     private lateinit var webView: WebView
     private lateinit var composeView: ComposeView
     private lateinit var controller: ShellWebController
@@ -80,6 +83,7 @@ class MainActivity : ComponentActivity() {
         playerOpen = false
         // Progress shown on tiles and rows is read again; focus and screen are where they were.
         if (controller.ready) webView.evaluateJavascript(PLAYBACK_ENDED_SCRIPT, null)
+        checkForUpdate() // a check that came due while the player was up
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -119,7 +123,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.CREATED) {
                 launch { vm.session.collect { s -> if (s != null) controller.show(s) } }
-                launch { vm.screen.collect(::showScreen) }
+                launch { vm.screen.collect { showScreen(it); checkForUpdate() } }
             }
         }
     }
@@ -155,7 +159,11 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         webView.onResume()
         webView.resumeTimers()
+        checkForUpdate()
     }
+
+    /** Asks the server for a newer build when the web app is in front (see UpdatePromptRules for how often). */
+    private fun checkForUpdate() = updatePrompt.checkIfDue(onWebApp = vm.screen.value == ShellScreen.Web, playerOpen = playerOpen)
 
     override fun onStop() {
         // Backgrounded: the page rests. Behind the native player it keeps running, to answer token requests.
@@ -197,6 +205,8 @@ class MainActivity : ComponentActivity() {
                 ShellScreen.Web -> Unit
             }
             PlaybackDialogs()
+            val update by updatePrompt.state.collectAsStateWithLifecycle()
+            UpdatePromptDialog(update, BuildConfig.VERSION_NAME, onInstall = updatePrompt::install, onLater = updatePrompt::later)
             val notice by vm.signedOutNotice.collectAsState()
             notice?.let { ErrorDialog(UserError("Signed out", it, canRetry = false), onRetry = {}, onDismiss = { vm.signedOutNotice.value = null }) }
         }
