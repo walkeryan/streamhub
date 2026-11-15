@@ -65,7 +65,8 @@ export const people = {
   suspend: (id: string) => unwrap<UserDetail>(api.POST('/users/{id}/suspend', path(id))),
   reinstate: (id: string) => unwrap<UserDetail>(api.POST('/users/{id}/reinstate', path(id))),
   remove: (id: string) => ok(api.DELETE('/users/{id}', path(id))),
-  setPin: (id: string, pin: string | null) => ok(api.PUT('/users/{id}/pin', { ...path(id), body: { pin } })),
+  /** With `arrows`, the PIN is an arrow pattern sent as its keypad digits (see ArrowPin.tsx), and the server records its length. */
+  setPin: (id: string, pin: string | null, arrows = false) => ok(api.PUT('/users/{id}/pin', { ...path(id), body: arrows ? { pin, arrows } : { pin } })),
   createRole: (body: RoleInput & { name: string }) => unwrap<Role>(api.POST('/roles', { body })),
   patchRole: (id: string, body: RoleInput) => unwrap<Role>(api.PATCH('/roles/{id}', { ...path(id), body })),
   removeRole: (id: string) => ok(api.DELETE('/roles/{id}', path(id))),
