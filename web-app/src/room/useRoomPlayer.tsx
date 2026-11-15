@@ -10,7 +10,8 @@ import type { PlayState } from '../player/usePlayback'
 import { seekPlan, seekableRanges } from '../player/restartSeek'
 import { useUi } from '../store/ui'
 import type { RoomSnapshot } from './RoomSocket.ts'
-import { decide, positionAt, streamRestarted } from './roomSync.ts'
+import { decide, liveSkip, LIVE_LAG_MS, positionAt, streamRestarted } from './roomSync.ts'
+import { bufferedAhead, LIVE_CUSHION_S } from '../player/liveCushion.ts'
 import type { RoomSession } from './session'
 import { ShareSheet } from './ShareSheet'
 
@@ -78,7 +79,7 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     toast(text, tone)
   }, [toast])
   useEffect(() => room?.onError((code, message) => notice(
-    code === 'controls_locked' ? 'Only the host can control playback in this room.' : code === 'host_only' ? 'Only the host can do that.' : code === 'live_no_seek' ? 'A live channel cannot be moved.' : message || 'The room refused that.',
+    code === 'controls_locked' ? 'Only the host can control playback in this room.' : code === 'host_only' ? 'Only the host can do that.' : code === 'live_no_seek' ? 'A live channel cannot be moved.' : code === 'live_no_pause' ? 'A live channel keeps playing for everyone in the room.' : message || 'The room refused that.',
     code === 'bad_message' ? 'error' : 'info')), [room, notice])
 
   // ---- room state -> this member's player ----
@@ -92,6 +93,8 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     let seekStarted = 0
     let lastPlayTry = 0
     let stallTimer: number | null = null
+    // When this live-room member was first seen with more in hand than the others (see liveSkip).
+    let laggingSince: number | null = null
     const report = (stalled: boolean) => {
       if (!stalled) {
         if (stallTimer !== null) { window.clearTimeout(stallTimer); stallTimer = null }
@@ -119,6 +122,14 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
       report(!stopped && (loading || video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA))
       if (loading || stopped || p.audioBlocked || video.seeking) return
       const action = decide(state, room.clock.serverNow(), (p.offsetS + video.currentTime) * 1000, !video.paused, p.durationS > 0 ? p.durationS * 1000 : null)
+      if (state.position_ms === null && action.type === 'none') {
+        // A live room: catch up with the others after falling behind, from inside what is already loaded.
+        const skip = liveSkip(bufferedAhead(video), LIVE_CUSHION_S)
+        if (skip === null || video.playbackRate === 0) laggingSince = null
+        else if (laggingSince === null) laggingSince = performance.now()
+        else if (performance.now() - laggingSince >= LIVE_LAG_MS) { laggingSince = null; seekLocal(video.currentTime + skip) }
+        return
+      }
       if (action.type === 'pause') p.pause()
       else if (action.type === 'play') {
         // An ended element would start over; a browser that refuses to start without a tap is not asked every tick.
@@ -184,9 +195,11 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     const state = room.socket.snapshot.state
     // The room has been playing for a while but this browser would not start without a tap: the tap starts it here.
     if (state?.playing && video.paused && !video.ended && room.clock.serverNow() - state.as_of_ms > AUTOPLAY_GRACE_MS) { link.current.resume(); return }
+    // A channel plays on for everyone (a pause would leave this member behind the others for good).
+    if (room.room.live) { if (video.paused) link.current.resume(); else notice('A live channel keeps playing for everyone in the room.'); return }
     if (!allowed()) return
     if (state?.playing) room.socket.pause(); else room.socket.play()
-  }, [room, videoRef, allowed])
+  }, [room, videoRef, allowed, notice])
   const seekTo = useCallback((titleSeconds: number) => {
     if (!room || room.room.live || !allowed()) return
     const end = link.current.durationS > 0 ? Math.max(0, link.current.durationS - 1) : Infinity

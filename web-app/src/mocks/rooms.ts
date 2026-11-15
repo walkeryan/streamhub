@@ -298,6 +298,8 @@ export const roomHandlers = [
           break
         case 'play': case 'pause': case 'seek':
           if (room.controls_locked && !me.host) { refused('controls_locked', 'Only the host can control playback in this room.'); break }
+          if (room.live && message.type === 'pause') { refused('live_no_pause', 'A live channel keeps playing for everyone in the room.'); break }
+          if (room.live && message.type === 'play') break
           if (message.type === 'seek') {
             if (room.live) { refused('live_no_seek', 'A live channel has no position to seek to.'); break }
             if (!Number.isInteger(message.position_ms) || message.position_ms! < 0) { refused('bad_message', 'position_ms must be an integer of at least 0.'); break }

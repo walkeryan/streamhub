@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { RoomClock, clockSample } from '../src/room/roomClock.ts'
-import { decide, positionAt, streamRestarted } from '../src/room/roomSync.ts'
+import { decide, liveSkip, LIVE_LAG_S, positionAt, streamRestarted } from '../src/room/roomSync.ts'
 import { RoomSocket, RECONNECT_DELAYS_MS } from '../src/room/RoomSocket.ts'
 
 test('a pong gives the offset to the middle of its round trip', () => {
@@ -70,6 +70,12 @@ test('a live room has no position: only play and pause', () => {
   assert.deepEqual(decide(live, 9000, 123_456, true), { type: 'none' })
   assert.deepEqual(decide(live, 9000, 0, false), { type: 'play' })
   assert.deepEqual(decide({ ...live, playing: false }, 9000, 0, true), { type: 'pause' })
+})
+
+test('a live-room member skips forward only once it is well behind the others', () => {
+  assert.equal(liveSkip(4, 4), null) // the reserve every member keeps
+  assert.equal(liveSkip(LIVE_LAG_S, 4), null) // a burst of the feed, not a member left behind
+  assert.equal(liveSkip(34, 4), 30) // half a minute behind: skips back to the reserve
 })
 
 test('a shared stream is loaded again only when its epoch is not the one in use', () => {
