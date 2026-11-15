@@ -29,6 +29,8 @@ class FakeManager:
         self.statuses: dict[int, str] = {}
         self.fail: SeerrError | None = None
         self.next_id = 100
+        # What the manager knows about a title it is asked about by TMDB id.
+        self.title_answer = ManagerSnapshot()
 
     def open(self) -> Any:
         if not self.configured:
@@ -54,7 +56,7 @@ class FakeManager:
         return ManagerSnapshot(*ANSWERS[status], tracked=True)
 
     async def title_snapshot(self, media_type: str, tmdb_id: int) -> ManagerSnapshot:
-        return ManagerSnapshot()
+        return self.title_answer
 
 
 class Env:
@@ -74,7 +76,14 @@ class Env:
         known = TITLES.get((media_type, tmdb_id))
         if known is None:
             return None
-        return MetaTitle(tmdb_id, media_type, known[0], year=known[1], poster="https://img.example.test/p.jpg")
+        return MetaTitle(
+            tmdb_id,
+            media_type,
+            known[0],
+            year=known[1],
+            poster="https://img.example.test/p.jpg",
+            season_numbers=[1, 2, 3] if media_type == "tv" else [],
+        )
 
     async def notices(self, profile_id: str) -> list[Notice]:
         async with self.api.c.db.session() as s:
@@ -97,6 +106,44 @@ class Env:
                 )
             )
             await s.commit()
+
+    async def add_library_show(self, seasons: list[int], tmdb_id: int = 1399) -> None:
+        """A series in an in-app library with only these seasons."""
+        async with self.api.c.db.session() as s:
+            if await s.get(Source, "lib1") is None:
+                s.add(Source(id="lib1", type="plex", name="Library", config_enc="unused"))
+                await s.flush()
+            s.add(
+                Title(
+                    source_id="lib1",
+                    ext_id="show1",
+                    kind="show",
+                    title="Game of Thrones",
+                    norm_title="game of thrones",
+                    year=2011,
+                    tmdb_id=tmdb_id,
+                )
+            )
+            for n in seasons:
+                s.add(
+                    Title(
+                        source_id="lib1",
+                        ext_id=f"season{n}",
+                        parent_ext_id="show1",
+                        kind="season",
+                        title=f"Season {n}",
+                        norm_title=f"season {n}",
+                        season_number=n,
+                    )
+                )
+            await s.commit()
+
+    def detail(self) -> dict[str, Any]:
+        return {
+            "id": "tmdb:tv:1399",
+            "kind": "show",
+            "sources": [{"source_id": "lib1", "playable_in_app": True}],
+        }
 
 
 @pytest.fixture
@@ -329,3 +376,75 @@ async def test_deleting_a_profile_removes_its_requests_and_notices(env: Env) -> 
     await env.api.c.auth.delete_profile(env.admin, "viewer1")
     assert await env.notices("viewer1") == []
     assert await env.service.list(env.admin, scope="all", state=None) == []
+
+
+async def test_partial_series_offers_only_its_missing_seasons(env: Env) -> None:
+    await env.add_library_show([1])
+    detail = await env.service.annotate_detail(env.viewer, env.detail())
+    assert detail["requestable"] and detail["request_missing"] and detail["request_seasons"] == [2, 3]
+
+
+async def test_partial_series_prefers_the_managers_season_status(env: Env) -> None:
+    # The library lists season 2, but the manager knows it is only partly there.
+    await env.add_library_show([1, 2])
+    env.manager.title_answer = ManagerSnapshot(media_status=4, season_status={1: 5, 2: 4}, tracked=True)
+    detail = await env.service.annotate_detail(env.viewer, env.detail())
+    assert detail["request_seasons"] == [2, 3]
+
+
+async def test_complete_series_offers_nothing(env: Env) -> None:
+    await env.add_library_show([1, 2, 3])
+    assert not (await env.service.annotate_detail(env.viewer, env.detail())).get("requestable")
+
+
+async def test_partial_series_with_an_open_request_or_no_manager_offers_nothing(env: Env) -> None:
+    await env.add_library_show([1])
+    await env.service.create(env.viewer, "tv", 1399, None)
+    detail = await env.service.annotate_detail(env.viewer, env.detail())
+    assert detail["request_state"] == "pending_approval" and not detail.get("requestable")
+    env.manager.configured = False
+    assert not (await env.service.annotate_detail(env.other, env.detail())).get("requestable")
+
+
+async def test_partial_series_request_asks_for_the_missing_seasons(env: Env) -> None:
+    await env.add_library_show([1])
+    row = await env.service.create(env.admin, "tv", 1399, None)
+    assert row.state == "sent" and row.seasons == [2, 3]
+    assert env.manager.created == [("tv", 1399, [2, 3])]
+
+
+async def test_partial_series_request_drops_seasons_the_library_has(env: Env) -> None:
+    await env.add_library_show([1, 2])
+    assert (await env.service.create(env.viewer, "tv", 1399, [1, 3])).seasons == [3]
+
+
+async def test_complete_series_request_is_rejected(env: Env) -> None:
+    await env.add_library_show([1, 2, 3])
+    with pytest.raises(Conflict) as err:
+        await env.service.create(env.viewer, "tv", 1399, None)
+    assert err.value.code == "already_available"
+    with pytest.raises(Conflict):
+        await env.service.create(env.viewer, "tv", 1399, [2])
+
+
+async def test_reconcile_closes_a_season_request_only_once_those_seasons_arrive(env: Env) -> None:
+    await env.add_library_show([1])
+    row = await env.service.create(env.viewer, "tv", 1399, None)
+    assert row.seasons == [2, 3]
+    assert await env.service.reconcile() == 0
+    async with env.api.c.db.session() as s:
+        for n in (2, 3):
+            s.add(
+                Title(
+                    source_id="lib1",
+                    ext_id=f"season{n}",
+                    parent_ext_id="show1",
+                    kind="season",
+                    title=f"Season {n}",
+                    norm_title=f"season {n}",
+                    season_number=n,
+                )
+            )
+        await s.commit()
+    assert await env.service.reconcile() == 1
+    assert (await env.service.list(env.admin, scope="all", state=None))[0].state == "available"
