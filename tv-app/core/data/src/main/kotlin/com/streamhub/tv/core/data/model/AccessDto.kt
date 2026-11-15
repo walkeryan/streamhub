@@ -87,6 +87,11 @@ data class SwitchableUser(
     val picture: String? = null,
     @SerialName("role_name") val roleName: String? = null,
     @SerialName("has_pin") val hasPin: Boolean = false,
+    /**
+     * How many arrows long this person's PIN is when they chose it as a D-pad arrow pattern; null for
+     * a typed PIN (the keypad is shown) or none. Absent from servers older than arrow patterns.
+     */
+    @SerialName("pin_arrows") val pinArrows: Int? = null,
     /** The person this TV is signed in as right now. */
     val current: Boolean = false,
 )

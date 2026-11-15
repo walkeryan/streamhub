@@ -47,6 +47,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.SwitchableUser
+import com.streamhub.tv.core.ui.components.ArrowPinDialog
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.ErrorDialog
 import com.streamhub.tv.core.ui.components.LoadingView
@@ -118,9 +119,22 @@ fun WhoIsWatchingScreen(
                 delay(250)
             }
         }
-        PinPadDialog(
-            title = "PIN for ${user.displayName.ifBlank { "this person" }}",
-            hint = "Enter the PIN to continue as ${user.displayName.ifBlank { "this person" }}.",
+        val name = user.displayName.ifBlank { "this person" }
+        // Someone who chose an arrow pattern gets dots that fill with each D-pad press and no keypad.
+        val arrows = user.pinArrows
+        if (arrows != null) ArrowPinDialog(
+            title = "Arrow pattern for $name",
+            hint = "Enter your arrow pattern to continue as $name.",
+            length = arrows,
+            error = s.pinError,
+            lockedSeconds = locked,
+            busy = s.busy,
+            onSubmit = vm::submitPin,
+            onDismiss = vm::cancelPin,
+            attempt = s.pinAttempt,
+        ) else PinPadDialog(
+            title = "PIN for $name",
+            hint = "Enter the PIN to continue as $name.",
             error = s.pinError,
             lockedSeconds = locked,
             busy = s.busy,
