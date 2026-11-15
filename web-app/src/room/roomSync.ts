@@ -5,6 +5,16 @@
  */
 export const DRIFT_LIMIT_MS = 1000
 
+/**
+ * A live room has no position: every member watches the channel a few seconds behind the edge the
+ * server is sending (the player's live reserve, liveCushion.ts), and the server sends all members the
+ * same bytes at the same moment. What a member has in hand beyond that reserve is how far it has fallen
+ * behind the others (it stalled, or its tab slept). More than LIVE_LAG_S in hand for LIVE_LAG_MS means
+ * it skips forward to the reserve; the threshold sits above the swing a bursty feed gives on its own.
+ */
+export const LIVE_LAG_S = 7
+export const LIVE_LAG_MS = 2000
+
 export interface RoomClockState {
   playing: boolean
   /** null in a live room: a channel has no position */
@@ -43,4 +53,9 @@ export function decide(state: RoomClockState, serverNowMs: number, localPosition
  */
 export function streamRestarted(inUse: number | null | undefined, state: { stream_epoch?: number | null }): boolean {
   return state.stream_epoch != null && state.stream_epoch !== (inUse ?? null)
+}
+
+/** Seconds a live-room member should skip forward with `aheadS` seconds in hand, or null to stay put. */
+export function liveSkip(aheadS: number, reserveS: number): number | null {
+  return aheadS > LIVE_LAG_S ? aheadS - reserveS : null
 }

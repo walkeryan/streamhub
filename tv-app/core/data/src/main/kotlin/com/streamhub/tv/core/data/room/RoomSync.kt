@@ -27,6 +27,16 @@ enum class StreamStep {
     Wait,
 }
 
+/** What a member of a live room does about how much of the channel it has in hand (see [RoomSync.liveStep]). */
+enum class LiveStep {
+    /** In step with the others. */
+    Stay,
+    /** Too little in hand: hold the picture until the reserve every member keeps has built up. */
+    Hold,
+    /** Well behind the others (it stalled): start the channel again at the edge the server is sending. */
+    CatchUp,
+}
+
 /** What this player has to do to agree with the room. */
 sealed interface SyncAction {
     data object None : SyncAction
@@ -43,6 +53,28 @@ sealed interface SyncAction {
 object RoomSync {
     /** A member further than this from the room position seeks; smaller errors are left alone. */
     const val DRIFT_MS = 1_000L
+
+    /**
+     * A live room has no position: the server sends every member the same bytes at the same moment, and
+     * every member plays them [LIVE_RESERVE_MS] behind what it has received (the browser's live reserve
+     * is the same four seconds). Rooms do not pause or wait for a channel, so what a member has in hand
+     * beyond that reserve is how far it fell behind the others; more than [LIVE_LAG_MS] (above the swing
+     * a bursty feed gives on its own) and it catches up.
+     */
+    const val LIVE_RESERVE_MS = 4_000L
+    const val LIVE_LAG_MS = 7_000L
+    /** The player starts with less than the reserve in hand (it plays from 1.5 s); below this it holds. */
+    const val LIVE_SHORT_MS = 2_500L
+
+    /**
+     * @param aheadMs what the player has loaded beyond its playhead
+     * @param holding whether this member is already holding for the reserve: it holds on until all of it is there
+     */
+    fun liveStep(aheadMs: Long, holding: Boolean): LiveStep = when {
+        aheadMs > LIVE_LAG_MS -> LiveStep.CatchUp
+        aheadMs < (if (holding) LIVE_RESERVE_MS else LIVE_SHORT_MS) -> LiveStep.Hold
+        else -> LiveStep.Stay
+    }
 
     /**
      * Where the room is at server time [serverNowMs]; null in a live room. A state stamped later than

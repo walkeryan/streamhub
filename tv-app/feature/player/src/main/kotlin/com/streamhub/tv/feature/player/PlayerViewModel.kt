@@ -8,6 +8,7 @@ import com.streamhub.tv.core.data.repo.RoomSeat
 import com.streamhub.tv.core.data.room.RoomClient
 import com.streamhub.tv.core.data.room.RoomClock
 import com.streamhub.tv.core.data.room.RoomConnection
+import com.streamhub.tv.core.data.room.LiveStep
 import com.streamhub.tv.core.data.room.RoomStream
 import com.streamhub.tv.core.data.room.RoomSync
 import com.streamhub.tv.core.data.room.RoomUiState
@@ -538,11 +539,21 @@ class PlayerViewModel @Inject constructor(
 
     fun togglePlayPause() {
         if (seat == null) { player.togglePlayPause(); return }
+        if (liveRoom()) { flash(roomRefusalText("live_no_pause").orEmpty()); return }
         val playing = roomClient?.state?.value?.clock?.playing ?: player.exoPlayer.playWhenReady
         roomControl { if (playing) it.pause() else it.play() }
     }
     fun resumePlayback() { if (seat == null) player.resume() else roomControl { it.play() } }
-    fun pausePlayback() { if (seat == null) player.pause() else roomControl { it.pause() } }
+    fun pausePlayback() {
+        when {
+            seat == null -> player.pause()
+            liveRoom() -> flash(roomRefusalText("live_no_pause").orEmpty())
+            else -> roomControl { it.pause() }
+        }
+    }
+
+    /** A live room plays on for everyone: a pause would leave this member behind the others for good. */
+    private fun liveRoom(): Boolean = roomClient?.state?.value?.clock?.live == true
 
     // ---- Watch room ----------------------------------------------------------------------------
 
@@ -604,6 +615,7 @@ class PlayerViewModel @Inject constructor(
     private suspend fun keepInStep(client: RoomClient) {
         var lastSeekAt = 0L
         var seekedFor: RoomClock? = null
+        val live = LiveSteering()
         while (true) {
             delay(ROOM_SYNC_TICK_MS)
             val room = client.state.value
@@ -621,6 +633,7 @@ class PlayerViewModel @Inject constructor(
                 StreamStep.Wait -> clock.copy(positionMs = null)
                 StreamStep.Same -> clock
             }
+            if (clock.live) { steerLive(live); continue }
             when (val action = RoomSync.decide(wanted, client.serverNowMs(), exo.currentPosition, exo.playWhenReady, stream)) {
                 SyncAction.None -> Unit
                 SyncAction.Play -> player.resume()
@@ -641,6 +654,54 @@ class PlayerViewModel @Inject constructor(
                             if (clock.playing) player.resume() else player.pause()
                     }
                 }
+            }
+        }
+    }
+
+    /** What [steerLive] remembers between ticks. */
+    private class LiveSteering {
+        /** Holding the picture for the reserve, since this time (0: not holding). */
+        var holdingSince = 0L
+        /** The hold may start once per start or stall of the player, as the browser's reserve does. */
+        var holdArmed = true
+        var wasReady = false
+        /** First seen well behind the others at this time (0: not behind). */
+        var laggingSince = 0L
+    }
+
+    /**
+     * A live room: no position to follow, and the room never pauses (see [RoomSync.liveStep]). After a
+     * start or a stall the picture holds until the reserve every member keeps is in hand; a member found
+     * well behind the others for a couple of seconds starts the channel again at the edge.
+     */
+    private fun steerLive(live: LiveSteering) {
+        val exo = player.exoPlayer
+        val now = SystemClock.elapsedRealtime()
+        val ready = exo.playbackState == Player.STATE_READY
+        if (ready && !live.wasReady) live.holdArmed = true
+        live.wasReady = ready
+        if (!ready) { live.laggingSince = 0L; return }
+        val ahead = (exo.bufferedPosition - exo.currentPosition).coerceAtLeast(0)
+        val holding = live.holdingSince != 0L
+        when (RoomSync.liveStep(ahead, holding)) {
+            LiveStep.CatchUp -> when {
+                live.laggingSince == 0L -> live.laggingSince = now
+                now - live.laggingSince >= LIVE_LAG_SUSTAIN_MS -> {
+                    live.laggingSince = 0L; live.holdingSince = 0L
+                    player.rejoinLive()
+                }
+            }
+            // A feed slower than real time never builds the reserve: it plays what it has after a while.
+            LiveStep.Hold -> {
+                live.laggingSince = 0L
+                if (holding && now - live.holdingSince >= LIVE_HOLD_MAX_MS) { live.holdingSince = 0L; live.holdArmed = false; player.resume() }
+                else if (!holding && live.holdArmed) { live.holdingSince = now; exo.playWhenReady = false }
+                else if (!holding && !exo.playWhenReady) player.resume()
+            }
+            LiveStep.Stay -> {
+                live.laggingSince = 0L
+                if (holding) { live.holdingSince = 0L; live.holdArmed = false }
+                if (!exo.playWhenReady) player.resume()
             }
         }
     }
@@ -1040,6 +1101,10 @@ class PlayerViewModel @Inject constructor(
         const val SCRUB_RELEASE_MS = 700L
         const val ROOM_SYNC_TICK_MS = 500L
         const val ROOM_SEEK_COOLDOWN_MS = 2_000L
+        /** A live-room member this long well behind the others catches up (a burst alone does not last). */
+        const val LIVE_LAG_SUSTAIN_MS = 2_000L
+        /** The longest a live-room member holds for its reserve, as the browser's LIVE_HOLD_MAX_MS. */
+        const val LIVE_HOLD_MAX_MS = 8_000L
         /** Recoveries of a room member's stream that are tried before the failure is put to the viewer. */
         const val MAX_AUTO_RECOVERIES = 2
         /** Descriptor fetches in one recovery while the room keeps being seeked under it. */

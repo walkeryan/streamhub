@@ -376,30 +376,31 @@ def test_empty_room_expires_after_thirty_minutes(steps: list[tuple[int, str]], c
         assert room.tick(T0 + 99 * R.EMPTY_TTL_MS) == []  # a closed room says nothing more
 
 
-@pytest.mark.parametrize(
-    ("action", "arg", "expected"),
-    [
-        ("pause", None, ("state", False, None, "Guest")),
-        ("seek", 30_000, "live_no_seek"),
-    ],
-)
-def test_live_rooms_have_no_position(action: str, arg: Any, expected: Any) -> None:
+@pytest.mark.parametrize(("action", "code"), [("pause", "live_no_pause"), ("seek", "live_no_seek")])
+def test_live_rooms_neither_pause_nor_seek(action: str, code: str) -> None:
+    room, host, guest = make(live=True)
+    with pytest.raises(CommandRejected) as exc:
+        run(room, {"host": host, "guest": guest}, [(1_000, "guest", action, 30_000)], {"state"})
+    assert exc.value.code == code
+    assert room.state.playing is True and room.state.position_ms == 0
+    assert room.apply(Command("play"), host, T0 + 1_500) == []  # already playing
+
+
+def test_live_rooms_never_wait_for_a_buffering_member() -> None:
     room, host, guest = make(live=True)
     who = {"host": host, "guest": guest}
-    if isinstance(expected, str):
-        with pytest.raises(CommandRejected) as exc:
-            run(room, who, [(1_000, "guest", action, arg)], {"state"})
-        assert exc.value.code == expected
-    else:
-        assert run(room, who, [(1_000, "guest", action, arg)], {"state"}) == [expected]
-    # the buffering wait still applies: the flag flips, there is still no position
-    room.apply(Command("play"), host, T0 + 2_000)
-    steps = [(3_000, "guest", "buffering", True), (5_000, "", "tick"), (6_000, "guest", "buffering", False)]
-    assert run(room, who, steps, {"state", "waiting"}) == [
-        ("state", False, None, None),
-        ("waiting", "Guest"),
-        ("state", True, None, None),
+    steps = [
+        (3_000, "guest", "buffering", True),
+        (5_000, "", "tick"),
+        (17_000, "", "tick"),
+        (18_000, "guest", "buffering", False),
     ]
+    # the strip still shows who is buffering; the room itself never stops
+    assert run(room, who, steps, {"state", "waiting", "members"}) == [
+        ("members", ("Host", "Guest*")),
+        ("members", ("Host", "Guest")),
+    ]
+    assert room.state.playing is True and room.waiting_for is None
 
 
 def test_snapshot_tells_a_newcomer_everything() -> None:

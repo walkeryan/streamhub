@@ -330,18 +330,33 @@ class StreamHubPlayer(
             val backoff = min(MAX_BACKOFF_MS, BASE_BACKOFF_MS shl min(attempt - 1, 5))
             _state.value = _state.value.copy(error = "Reconnecting… ($reason)", reconnectAttempt = attempt)
             delay(backoff)
-            if (current === d) {
-                updatingMedia=true
-                mediaEpoch++;trackRevision++;audioApproval.clear();requestedPreferredAudio=null;waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
-                exoPlayer.playWhenReady=false
-                exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
-                exoPlayer.setMediaItem(MediaItemMapper.toMediaItem(d))
-                exoPlayer.prepare()
-                updatingMedia=false
-                exoPlayer.playWhenReady = wantsPlayback && !waitingForAudio
-                enforceAudioLanguage()
-            }
+            if (current === d) reload(d)
         }
+    }
+
+    /**
+     * A live channel started again at the edge the server is sending now. A progressive channel stream
+     * cannot be seeked (the player would read it from its start again anyway), so a member of a live
+     * room who fell behind the others catches up this way; the hub's shared upstream makes it a new
+     * reader of a connection already open, not a new connection to the source.
+     */
+    fun rejoinLive() {
+        val d = current ?: return
+        if (!d.live) return
+        reconnectJob?.cancel()
+        reload(d)
+    }
+
+    private fun reload(d: PlaybackDescriptor) {
+        updatingMedia=true
+        mediaEpoch++;trackRevision++;audioApproval.clear();requestedPreferredAudio=null;waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
+        exoPlayer.playWhenReady=false
+        exoPlayer.trackSelectionParameters=exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
+        exoPlayer.setMediaItem(MediaItemMapper.toMediaItem(d))
+        exoPlayer.prepare()
+        updatingMedia=false
+        exoPlayer.playWhenReady = wantsPlayback && !waitingForAudio
+        enforceAudioLanguage()
     }
 
     private fun startProgressLoop() {
