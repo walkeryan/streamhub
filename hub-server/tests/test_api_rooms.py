@@ -718,7 +718,7 @@ def test_live_channel_room_has_no_position(rig: Rig) -> None:
         a.send_json({"type": "seek", "position_ms": 1_000})
         assert recv(a)["code"] == "live_no_seek"
         a.send_json({"type": "pause"})
-        assert recv(a) == state(False, None, T0, "Admin")
+        assert recv(a)["code"] == "live_no_pause"
 
 
 def test_malformed_messages_are_answered_not_fatal(rig: Rig) -> None:

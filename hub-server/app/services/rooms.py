@@ -176,9 +176,15 @@ class Room:
             return [self._state_event(by.name)]
         if self.controls_locked and not self.is_host(by.profile_id):
             raise CommandRejected("controls_locked", "Only the host can control this room.")
-        if cmd.kind == "seek":
-            if self.live:
+        if self.live and cmd.kind in ("seek", "pause"):
+            # A channel does not wait: every member watches it a few seconds behind the live edge, and a
+            # member who stopped skips forward to the others. A pause would leave each player behind by
+            # however long it held, with nothing that could line them up again (no member can rewind a
+            # channel), which is how a TV ended up half a minute behind a phone in the same room.
+            if cmd.kind == "seek":
                 raise CommandRejected("live_no_seek", "A live channel has no position to seek to.")
+            raise CommandRejected("live_no_pause", "A live channel keeps playing for everyone in the room.")
+        if cmd.kind == "seek":
             self.state = RoomState(self.state.playing, max(0, int(cmd.position_ms or 0)), now_ms)
             events = [self._state_event(by.name)]
             if self._wait is not None:
@@ -235,6 +241,8 @@ class Room:
 
     def _settle(self, now_ms: int) -> list[Event]:
         """Start, retarget or end the wait for buffering members."""
+        if self.live:
+            return []  # nobody waits for a channel (see ``apply``): a stalled member catches up by itself
         blocking = sorted(
             (
                 m
