@@ -99,7 +99,7 @@ export function Browse() {
   if (category) active.push({ id: 'category', text: `Category: ${category}`, clear: () => setCategory('') })
   if (genre) active.push({ id: 'genre', text: `Genre: ${capital(genre)}`, clear: () => setGenre('') })
   if (source) active.push({ id: 'source', text: `Source: ${libs.find((s) => s.id === source)?.name ?? 'One source'}`, clear: () => setSource('') })
-  if (sort !== defaults.sort || savedOrder) active.push({ id: 'sort', text: `Sort: ${SORTS.find((s) => s.id === sort)?.label ?? sort}, ${DIRECTION[sort][order].toLowerCase()}`, clear: () => setSort(defaults.sort) })
+  if (sort !== defaults.sort || savedOrder) active.push({ id: 'sort', text: `Sort: ${SORTS.find((s) => s.id === sort)?.label ?? sort}${savedOrder ? `, ${DIRECTION[sort][order].toLowerCase()}` : ''}`, clear: () => setSort(defaults.sort) })
   if (lang !== defaults.language) active.push({ id: 'language', text: `Language: ${LANGUAGE_LABEL[lang] ?? LANG_NAMES[lang] ?? lang}`, clear: () => setLang(defaults.language) })
   // The chip under focus is about to go; hand focus to its neighbour, or back to Filter after the last one.
   const drop = (id: string, clear: () => void) => {
