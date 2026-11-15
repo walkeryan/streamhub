@@ -1085,6 +1085,11 @@ class AuthService:
             )
             prof.pin_hash = hash_secret(validate_pin(pin)) if pin else None
             prof.pin_arrows = length
-            prof.token_version += 1
+            # As PUT /users/{id}/pin: the PIN guards switching to the profile and the adult category, not a
+            # session already signed in. Ending every session here signed out the device the change was made
+            # on (a TV fell back to pairing) and the person's phone; only the adult unlock must be earned again.
+            await s.execute(
+                update(AuthSession).where(AuthSession.user_id == prof.user_id).values(adult_unlocked_until=None)
+            )
             audit(s, getattr(principal, "user_id", None), "user.pin_set" if pin else "user.pin_clear", prof.user_id)
             await s.commit()

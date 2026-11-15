@@ -42,7 +42,7 @@ async def test_changing_ones_own_pin_needs_the_current_one(api: Api) -> None:
 
 
 async def test_the_older_profile_route_asks_the_same(api: Api) -> None:
-    """PUT /profiles/{id}/pin signs the profile's devices out when it changes the PIN, as it always did."""
+    """PUT /profiles/{id}/pin guards a change as PUT /users/{id}/pin does, and like it signs nobody out."""
     created = await api.post("/users", json={"name": "Teen", "role_id": "family", "pin": "2468"})
     user = created.json()
     path = f"/profiles/{user['profile_id']}/pin"
@@ -52,7 +52,7 @@ async def test_the_older_profile_route_asks_the_same(api: Api) -> None:
     assert refused(await kid.req("PUT", path, json={"pin": None}), "current_pin_required")
     assert refused(await kid.req("PUT", path, json={"pin": "1111", "current_pin": "0000"}), "pin_invalid")
     assert (await kid.req("PUT", path, json={"pin": "1357", "current_pin": "2468"})).status_code == 204
-    assert (await kid.get("/auth/me")).status_code == 401
+    assert (await kid.get("/auth/me")).status_code == 200  # the device it was changed on stays signed in
     assert (await sign_in(api, user, "1357")).id == user["id"]
 
 

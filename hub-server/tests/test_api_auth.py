@@ -73,9 +73,9 @@ async def test_profiles_pin_login(api: Api) -> None:
     assert r.status_code == 403
     assert (await api.put(f"/profiles/{kid['id']}/pin", json={"pin": "12"})).status_code == 400
     assert (await api.put(f"/profiles/{kid['id']}/pin", json={"pin": None})).status_code == 204
-    # PIN change bumps token version → old refresh token revoked
+    # a PIN change signs nobody out: the PIN guards switching in, not a session already signed in
     r = await api.client.post("/api/v1/auth/refresh", json={"refresh_token": ok.json()["refresh_token"]})
-    assert r.status_code == 401
+    assert r.status_code == 200
     r = await api.patch(f"/profiles/{kid['id']}", json={"theme_id": "oled"})
     assert r.json()["theme_id"] == "oled"
     assert (await api.patch(f"/profiles/{kid['id']}", json={"theme_id": "nope"})).status_code == 400
