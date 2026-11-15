@@ -24,7 +24,7 @@ from app.infra.db import Database
 from app.infra.models import AuthSession, Profile, RevokedSession, Role, User, utcnow
 from app.services.errors import Conflict, Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 from app.services.permissions import OWNER_ROLE, is_wider
-from app.services.users import access, audit
+from app.services.users import access, audit, shown_arrows
 
 SESSION_KINDS = ("browser", "tv", "api")
 TOUCH_INTERVAL_S = 60
@@ -260,6 +260,9 @@ class SessionsService:
             "picture": user.picture,
             "role_name": role.name,
             "has_pin": bool(profile.pin_hash),
+            # How many D-pad presses make this person's arrow pattern, so a TV can show that many
+            # dots and send the pattern on the last one. Null for a typed PIN.
+            "pin_arrows": shown_arrows(profile),
             "current": user.id == current_user_id,
         }
 

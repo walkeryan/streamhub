@@ -63,6 +63,9 @@ class Profile(Base):
     kids: Mapped[bool] = mapped_column(Boolean, default=False)
     content_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
     pin_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # How many arrows long the PIN is when it was chosen as a D-pad arrow pattern (its digits are
+    # then only 2, 4, 6 and 8), so a TV knows how many presses to wait for. Null for a typed PIN.
+    pin_arrows: Mapped[int | None] = mapped_column(Integer, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     prefs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

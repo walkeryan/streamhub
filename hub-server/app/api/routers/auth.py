@@ -14,6 +14,7 @@ from app.infra.models import Profile as ProfileRow
 from app.services.auth import Principal
 from app.services.context import is_https, public_base
 from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
+from app.services.users import shown_arrows
 
 router = APIRouter()
 
@@ -27,6 +28,7 @@ async def profile_out(c: C, p: ProfileRow) -> dict[str, Any]:
         "theme_id": p.theme_id,
         "languages": list(p.languages or []),
         "has_pin": bool(p.pin_hash),
+        "pin_arrows": shown_arrows(p),
         "has_password": bool(p.password_hash),
         "content_restricted": c.content_policy.is_restricted(p),
         "kids": p.kids,
@@ -221,7 +223,7 @@ async def delete_profile(id: str, c: C, p: P) -> Response:
 
 @router.put("/profiles/{id}/pin", status_code=204, tags=["profiles"])
 async def set_pin(id: str, body: S.PinBody, c: C, p: P) -> Response:
-    await c.auth.set_pin(p, id, body.pin, body.current_pin, body.current_password)
+    await c.auth.set_pin(p, id, body.pin, body.current_pin, body.current_password, arrows=body.arrows)
     return Response(status_code=204)
 
 

@@ -56,6 +56,7 @@ class Profile(_M):
     theme_id: str
     languages: list[str]
     has_pin: bool
+    pin_arrows: int | None = Field(default=None, description="the PIN's length when it is an arrow pattern")
     kids: bool
     disclaimer_accepted_version: str | None = None
 
@@ -170,8 +171,13 @@ class DeviceApprove(_M):
     shared_device: bool = Field(default=False, description="a shared household device; needs users.manage")
 
 
+# A PIN chosen as a D-pad arrow pattern is sent as the keypad digits of its arrows.
+_ARROWS = "the PIN is an arrow pattern, sent as keypad digits: up 2, left 4, right 6, down 8 (no other digit)"
+
+
 class PinBody(_M):
     pin: str | None = None
+    arrows: bool = Field(default=False, description=_ARROWS)
     current_pin: str | None = Field(default=None, max_length=8, repr=False)
     current_password: str | None = Field(default=None, max_length=256, repr=False)
 
@@ -1034,6 +1040,7 @@ class User(_M):
     role_name: str | None = None
     profile_id: str | None = None
     has_pin: bool = False
+    pin_arrows: int | None = Field(default=None, description="the PIN's length when it is an arrow pattern")
     on_shared_devices: bool = False
     plex_account_linked: bool = False
     username: str | None = None
@@ -1073,6 +1080,9 @@ class SwitchableUser(_M):
     picture: str | None = None
     role_name: str
     has_pin: bool
+    pin_arrows: int | None = Field(
+        default=None, description="the PIN's length when it is an arrow pattern: how many D-pad presses to wait for"
+    )
     current: bool
 
 
@@ -1120,6 +1130,7 @@ class UserCreate(_M):
     avatar: str | None = Field(default=None, max_length=512)
     role_id: str = "family"
     pin: str | None = _pin(default=None)
+    arrows: bool = Field(default=False, description=_ARROWS)
 
 
 class UserPatch(_M):
@@ -1141,6 +1152,7 @@ class UserApprove(_M):
 
 class UserPin(_M):
     pin: str | None = _pin(default=None)
+    arrows: bool = Field(default=False, description=_ARROWS)
     current_pin: str | None = Field(default=None, max_length=8, repr=False, description="to change one's own")
     current_password: str | None = Field(default=None, max_length=256, repr=False, description="in its place")
 

@@ -37,6 +37,7 @@ from app.services.users import (
     access,
     audit,
     ensure_user,
+    pin_arrows,
     sign_in_methods,
     standing,
     validate_pin,
@@ -1067,7 +1068,9 @@ class AuthService:
         pin: str | None,
         current_pin: str | None = None,
         current_password: str | None = None,
+        arrows: bool = False,
     ) -> None:
+        length = pin_arrows(pin, arrows)
         manager = _can(principal, "users.manage")
         if self.content_policy is not None and self.content_policy.enabled and not manager:
             raise Forbidden("Only the owner can manage profile PINs")
@@ -1081,6 +1084,7 @@ class AuthService:
                 s, principal, await ensure_user(s, prof), prof, current_pin, current_password
             )
             prof.pin_hash = hash_secret(validate_pin(pin)) if pin else None
+            prof.pin_arrows = length
             prof.token_version += 1
             audit(s, getattr(principal, "user_id", None), "user.pin_set" if pin else "user.pin_clear", prof.user_id)
             await s.commit()
