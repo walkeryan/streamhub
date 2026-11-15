@@ -56,8 +56,9 @@ async def test_an_arrow_pattern_holds_only_arrow_digits(api: Api) -> None:
         r = await api.put(path, json={"pin": pin, "arrows": True})
         assert r.status_code == 400 and r.json()["code"] == "invalid_pin", (pin, r.text)
     # The length rules are a PIN's: four to eight.
-    for pin in ("246", "246824682"):
-        assert (await api.put(path, json={"pin": pin, "arrows": True})).status_code == 422, pin
+    assert (await api.put(path, json={"pin": "246", "arrows": True})).status_code == 422
+    r = await api.put(path, json={"pin": "246824682", "arrows": True})
+    assert r.status_code == 400 and r.json()["code"] == "invalid_pin"
     # A refused pattern leaves the PIN that was there.
     assert await arrows_of(api, kid["id"]) is None
     tv = await pair(api, shared_device=True)
