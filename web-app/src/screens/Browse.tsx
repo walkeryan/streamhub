@@ -1,20 +1,20 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
 import { useBrowseGenres } from '../api/browseGenres'
 import { useParams, useSearchParams } from 'react-router'
-import { useBrowse, useBrowseCategories, useBrowseLanguages, useBrowseShelves, useSources, type BrowseFilters } from '../api/hooks'
-import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
+import { useBrowseCategories, useBrowseLanguages, useBrowseShelves, useSources, type BrowseFilters } from '../api/hooks'
+import { Button, Chip, Empty, Modal, Skeleton } from '../components/ui'
+import { BrowseGrid } from '../components/BrowseGrid'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { useAdultUnlock } from '../components/AdultUnlock'
 import { Icon } from '../components/Icon'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
-import { MediaTile, TileRow } from '../components/Tile'
+import { TileRow } from '../components/Tile'
 import { FocusGroup } from '../nav/Focusable'
 import { useRestoreFocus, useGo } from '../nav/back'
 import { setFocus } from '../nav/spatial'
 import { useSession } from '../store/session'
-import { useHistoryState } from '../nav/historyState'
 import { usePhone } from '../lib/layout'
 import { LANG_NAMES } from '../lib/util'
 
@@ -22,6 +22,16 @@ const TITLES: Record<string, string> = { movies: 'Movies', shows: 'Shows', vod: 
 const SORTS: Array<{ id: NonNullable<BrowseFilters['sort']>; label: string }> = [
   { id: 'added', label: 'Recently added' }, { id: 'title', label: 'Title' }, { id: 'year', label: 'Year' }, { id: 'rating', label: 'Rating' },
 ]
+type Sort = NonNullable<BrowseFilters['sort']>
+type Order = NonNullable<BrowseFilters['order']>
+// Each sort's natural direction (the server's default) and how either direction reads.
+const NATURAL: Record<Sort, Order> = { added: 'desc', title: 'asc', year: 'desc', rating: 'desc' }
+const DIRECTION: Record<Sort, Record<Order, string>> = {
+  added: { desc: 'Newest first', asc: 'Oldest first' },
+  title: { asc: 'A to Z', desc: 'Z to A' },
+  year: { desc: 'Newest first', asc: 'Oldest first' },
+  rating: { desc: 'Highest first', asc: 'Lowest first' },
+}
 // Enough rows to browse by scrolling; each ends in See all, so a row stays a short walk with a remote.
 const SHELVES = { limit_rows: 24, limit_items: 12 }
 const LANGUAGE_LABEL: Record<string, string> = { mine: 'My languages', all: 'All languages' }
@@ -29,6 +39,8 @@ const capital = (s: string) => s.charAt(0).toLocaleUpperCase() + s.slice(1)
 
 const filterSchema = z.object({
   source: z.string().max(256), sort: z.enum(['added', 'title', 'year', 'rating']),
+  // '' is the sort's natural direction; filters saved before there was a choice have none.
+  order: z.enum(['', 'asc', 'desc']).catch(''),
   language: z.string().max(256), category: z.string().max(256), genre: z.string().max(256),
 })
 type SavedFilters = z.infer<typeof filterSchema>
@@ -39,15 +51,18 @@ export function Browse() {
   const [params, setParams] = useSearchParams()
   const phone = usePhone()
   const preferred = useSession((s) => s.profile?.languages.join(',') ?? '')
-  const defaults: SavedFilters = { source: '', sort: 'added', language: preferred ? 'mine' : 'all', category: '', genre: '' }
+  const defaults: SavedFilters = { source: '', sort: 'added', order: '', language: preferred ? 'mine' : 'all', category: '', genre: '' }
   const saved = useProfilePreference(`browseFilters.v1.${section}`, defaults, validateFilters)
-  const { source, sort, language: lang, genre } = saved.value
+  const { source, sort, order: savedOrder, language: lang, genre } = saved.value
+  const order: Order = savedOrder || NATURAL[sort]
   // A "See all" link names its shelf in the address: it holds for that visit and is never a saved filter.
   const linked = params.get('category')
   const category = linked ?? saved.value.category
   const unlink = () => { if (linked !== null) setParams({}, { replace: true }) }
   const setSource = (source: string) => { saved.update((v) => ({ ...v, source, category: '' })); unlink() }
-  const setSort = (sort: SavedFilters['sort']) => saved.update((v) => ({ ...v, sort }))
+  // A new sort starts in its own natural direction.
+  const setSort = (sort: SavedFilters['sort']) => saved.update((v) => ({ ...v, sort, order: '' }))
+  const setOrder = (next: Order) => saved.update((v) => ({ ...v, order: next === NATURAL[v.sort] ? '' : next }))
   const setLang = (language: string) => saved.update((v) => ({ ...v, language }))
   const setCategory = (category: string) => { if (linked === null) saved.update((v) => ({ ...v, category })); else setParams(category ? { category } : {}, { replace: true }) }
   const setGenre = (genre: string) => saved.update((v) => ({ ...v, genre }))
@@ -57,13 +72,10 @@ export function Browse() {
   const sources = useSources()
   const languages = useBrowseLanguages(section, source || undefined)
   const { offered: languageOffered, language } = languageScope(languages.data, lang, preferred)
-  const [page, setPage] = useHistoryState(`browse:${section}:page`, 1)
-  const filterKey = `${section}|${source}|${sort}|${language}|${category}|${genre}`
-  const [pageKey, setPageKey] = useState(filterKey)
-  if (pageKey !== filterKey) { setPageKey(filterKey); setPage(1) }
+  const filterKey = `${section}|${source}|${sort}|${order}|${language}|${category}|${genre}`
   // Shelves are the way in. Asking for anything narrower (a filter, one shelf) shows the grid. Finding a
   // title by name is the search box's job, in the top bar.
-  const filtered = !!(source || category || genre || sort !== defaults.sort || lang !== defaults.language)
+  const filtered = !!(source || category || genre || sort !== defaults.sort || savedOrder || lang !== defaults.language)
   // Adult titles are asked for only on a session their holder has unlocked; the server ignores the flag otherwise.
   const adult = useAdultUnlock()
   const shelves = useBrowseShelves(section, { language, ...SHELVES, ...(adult.unlocked ? { include_adult: true } : {}) }, saved.ready && !filtered)
@@ -71,25 +83,23 @@ export function Browse() {
   const filters = { source_id: source || undefined, language }
   const categories = useBrowseCategories(section, filters)
   const genres = useBrowseGenres(section, { ...filters, category: category || undefined })
-  const q = useBrowse(section, { ...filters, sort, category: category || undefined, genre: genre || undefined }, page, saved.ready && !onShelves)
+  const gridFilters: BrowseFilters = { ...filters, sort, order: savedOrder || undefined, category: category || undefined, genre: genre || undefined }
   const go = useGo()
-  const tiles = q.data?.tiles ?? []
-  const total = q.data?.total ?? tiles.length
-  const pageSize = q.data?.page_size ?? 60
-  const pages = Math.max(1, Math.ceil(total / pageSize))
-  const gridReady = !!q.data && !q.isPlaceholderData
+  const [count, setCount] = useState<{ total: number | null; fetching: boolean }>({ total: null, fetching: true })
+  const onTotal = useCallback((total: number | null, fetching: boolean) => setCount({ total, fetching }), [])
+  const gridReady = count.total !== null
   const ready = saved.ready && (onShelves ? !!shelves.data : gridReady)
   // Arrive on something to watch.
-  useRestoreFocus(ready, onShelves ? 'browse:shelves' : tiles.length ? 'browse:grid' : 'browse:filter')
+  useRestoreFocus(ready, onShelves ? 'browse:shelves' : count.total ? 'browse:grid' : 'browse:filter')
   const libs = (sources.data ?? []).filter((s) => s.type !== 'streaming_service' && s.enabled)
-  const reset = () => { saved.update(defaults); setPage(1); unlink(); void setFocus('browse:filter') }
+  const reset = () => { saved.update(defaults); unlink(); void setFocus('browse:filter') }
   const kind = section === 'shows' || section === 'series' ? 'shows' : 'movies'
 
   const active: Array<{ id: string; text: string; clear: () => void }> = []
   if (category) active.push({ id: 'category', text: `Category: ${category}`, clear: () => setCategory('') })
   if (genre) active.push({ id: 'genre', text: `Genre: ${capital(genre)}`, clear: () => setGenre('') })
   if (source) active.push({ id: 'source', text: `Source: ${libs.find((s) => s.id === source)?.name ?? 'One source'}`, clear: () => setSource('') })
-  if (sort !== defaults.sort) active.push({ id: 'sort', text: `Sort: ${SORTS.find((s) => s.id === sort)?.label ?? sort}`, clear: () => setSort(defaults.sort) })
+  if (sort !== defaults.sort || savedOrder) active.push({ id: 'sort', text: `Sort: ${SORTS.find((s) => s.id === sort)?.label ?? sort}, ${DIRECTION[sort][order].toLowerCase()}`, clear: () => setSort(defaults.sort) })
   if (lang !== defaults.language) active.push({ id: 'language', text: `Language: ${LANGUAGE_LABEL[lang] ?? LANG_NAMES[lang] ?? lang}`, clear: () => setLang(defaults.language) })
   // The chip under focus is about to go; hand focus to its neighbour, or back to Filter after the last one.
   const drop = (id: string, clear: () => void) => {
@@ -107,6 +117,7 @@ export function Browse() {
           <Chip focusKey="browse:switch:movies" pressed={kind === 'movies'} onEnter={() => { if (kind !== 'movies') go('/browse/movies', { replace: true }) }}>Movies</Chip>
           <Chip focusKey="browse:switch:shows" pressed={kind === 'shows'} onEnter={() => { if (kind !== 'shows') go('/browse/shows', { replace: true }) }}>Shows</Chip>
         </FocusGroup> : <h1 className="title-xl">{TITLES[section] ?? section}</h1>}
+        {!onShelves && <Button focusKey="browse:order" ghost onEnter={() => setOrder(order === 'asc' ? 'desc' : 'asc')} testId="browse-order" label={`Sorted ${DIRECTION[sort][order]}. Reverse the order`}>{DIRECTION[sort][order]}</Button>}
         <Button focusKey="browse:filter" icon="filter" onEnter={() => setSheet(`browse:sort:${sort}`)} testId="browse-filter">Filter</Button>
       </FocusGroup>
       {filtered && <FocusGroup focusKey="browse:active" className="chip-scroll" role="group" label="Active filters">
@@ -117,25 +128,20 @@ export function Browse() {
         <span className="label">Adult titles are shown on this device.</span>
         <Button focusKey="browse:adult-lock" ghost icon="lock" onEnter={adult.lock} testId="adult-lock">Lock</Button>
       </FocusGroup>}
-      {!onShelves && <p className="label" aria-live="polite">{q.isFetching ? 'Updating…' : `${total.toLocaleString()} titles`}</p>}
+      {!onShelves && <p className="label" aria-live="polite">{count.fetching && count.total === null ? 'Updating…' : `${(count.total ?? 0).toLocaleString()} titles`}</p>}
       {saved.error && <p className="label" role="alert">{saved.error}</p>}
     </div>
     {onShelves ? (shelves.data ? <FocusGroup focusKey="browse:shelves" className="pb-16">
       {shelves.data.shelves.map((s) => <TileRow key={s.name} id={`shelf:${s.name}`} title={s.name} tiles={s.items} count={s.count} seeAll={s.browse_path} />)}
     </FocusGroup> : <div className="page-pad flex gap-4" style={{ paddingTop: 0 }} data-testid="browse-loading">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} style={{ flex: 'none', width: 'var(--tile-poster-w)', height: 'var(--tile-poster-h)' }} />)}</div>) : <div className="page-pad" style={{ paddingTop: 0 }}>
-      {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !gridReady ? <div className="grid-tiles">{Array.from({ length: 12 }, (_, i) => <Skeleton key={i} style={{ aspectRatio: '2/3' }} />)}</div> : !tiles.length ?
-        <Empty title="No matching titles" hint="Try another genre, category or All languages. Titles without language metadata are listed as Unknown, not English."><Button focusKey="browse:reset" onEnter={reset}>Clear filters</Button><Button focusKey="browse:all" onEnter={() => { saved.update({ ...defaults, language: 'all' }); setPage(1); unlink() }}>All languages</Button><Button focusKey="browse:sources" onEnter={() => go('/sources')}>Manage sources</Button></Empty> :
-        <FocusGroup focusKey="browse:grid" className="grid-tiles">{tiles.map((t) => <MediaTile key={t.id} tile={t} scope="browse" />)}</FocusGroup>}
-      {pages > 1 && <FocusGroup focusKey="browse:pages" className="flex gap-3 flex-wrap items-center py-4" label="Library pages">
-        <Button focusKey="browse:previous" disabled={page <= 1 || q.isFetching} onEnter={() => { setPage(page - 1); window.scrollTo({ top: 0 }) }}>Previous page</Button>
-        <span className="label">Page {page} of {pages.toLocaleString()}</span>
-        <Button focusKey="browse:more" disabled={(q.data?.has_more === false || page >= pages) || q.isFetching} onEnter={() => { setPage(page + 1); window.scrollTo({ top: 0 }) }}>Next page</Button>
-      </FocusGroup>}
+      <BrowseGrid section={section} filters={gridFilters} filterKey={filterKey} enabled={saved.ready && !onShelves} onTotal={onTotal} empty={
+        <Empty title="No matching titles" hint="Try another genre, category or All languages. Titles without language metadata are listed as Unknown, not English."><Button focusKey="browse:reset" onEnter={reset}>Clear filters</Button><Button focusKey="browse:all" onEnter={() => { saved.update({ ...defaults, language: 'all' }); unlink() }}>All languages</Button><Button focusKey="browse:sources" onEnter={() => go('/sources')}>Manage sources</Button></Empty>} />
     </div>}
 
     <Modal open={sheet !== null} onClose={() => setSheet(null)} title="Filter" firstFocusKey={sheet ?? 'browse:done'} variant="panel" testId="browse-filters">
       <section className="flex flex-col gap-2"><h3 className="label">Sort by</h3>
         <FocusGroup focusKey="browse:sorts" className="flex gap-2 flex-wrap" role="group" label="Sort titles">{SORTS.map((s) => <Chip key={s.id} focusKey={`browse:sort:${s.id}`} pressed={sort === s.id} onEnter={() => setSort(s.id)}>{s.label}</Chip>)}</FocusGroup>
+        <FocusGroup focusKey="browse:orders" className="flex gap-2 flex-wrap" role="group" label="Sort direction">{(['asc', 'desc'] as const).map((o) => <Chip key={o} focusKey={`browse:order:${o}`} pressed={order === o} testId={`browse-order-${o}`} onEnter={() => setOrder(o)}>{DIRECTION[sort][o]}</Chip>)}</FocusGroup>
       </section>
       <FocusGroup focusKey="browse:pickers" className="flex flex-col gap-2 items-start">
         <CatalogPicker scope="browse:category" label="Category" value={category} selectedLabel={category || undefined} options={[{ id: '', label: 'All categories' }, ...(categories.data ?? []).map((c) => ({ id: c.name, label: c.name, count: c.count }))]} onChange={setCategory} />

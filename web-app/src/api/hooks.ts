@@ -8,7 +8,7 @@ import { isOpenRequest, refetchMsFor, tileRequest, tilesRefetchMs } from '../lib
 import { MIN_QUERY } from '../lib/searchQuery'
 import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined, TvAppRelease } from './types'
 import type {
-  PlaybackOptions, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult, SearchSectionName,
+  PlaybackOptions, BrowseJumps, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult, SearchSectionName,
   Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
 } from './types'
 
@@ -110,13 +110,28 @@ export const useTitle = (id: string | undefined) =>
     queryFn: () => unwrap<TitleDetail>(api.GET('/titles/{id}', { params: { path: { id: id! } } })),
   })
 
-export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating' }
-export const useBrowse = (section: string, f: BrowseFilters, page = 1, enabled = true) =>
-  useQuery({
-    queryKey: ['browse', useProfileId(), section, f, page],
+export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating'; order?: 'asc' | 'desc' }
+/**
+ * A browse grid that loads as it scrolls, both ways: it starts at `start` (page 1, or wherever a jump on the
+ * side rail landed) and grows down with the next pages and up with the earlier ones.
+ */
+export const useBrowsePages = (section: string, f: BrowseFilters, start: number, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: ['browse', useProfileId(), section, f, 'pages', start],
     enabled,
-    placeholderData: useProfilePlaceholder<BrowsePage>(),
-    queryFn: () => unwrap<BrowsePage>(api.GET('/browse/{section}', { params: { path: { section }, query: { ...f, page } } })),
+    initialPageParam: start,
+    queryFn: ({ pageParam }) => unwrap<BrowsePage>(api.GET('/browse/{section}', { params: { path: { section }, query: { ...f, page: pageParam } } })),
+    getNextPageParam: (last, _all, param) => (last.has_more && last.tiles?.length ? (last.page ?? param) + 1 : undefined),
+    getPreviousPageParam: (first, _all, param) => ((first.page ?? param) > 1 ? (first.page ?? param) - 1 : undefined),
+  })
+
+/** Where each letter, year, rating or month starts in the same listing: the grid's side rail. */
+export const useBrowseJumps = (section: string, f: BrowseFilters, enabled = true) =>
+  useQuery({
+    queryKey: ['browse-jumps', useProfileId(), section, f],
+    enabled,
+    staleTime: 60_000,
+    queryFn: () => unwrap<BrowseJumps>(api.GET('/browse/{section}/jumps', { params: { path: { section }, query: f } })),
   })
 
 /** Every shelf of a section with its first titles: what Movies and Shows open on. */

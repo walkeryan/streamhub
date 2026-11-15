@@ -77,6 +77,23 @@ const tileById = (id: string): Tile | undefined => {
 const countryMatches = (value: string | null | undefined, country: string | null) =>
   !country || country === 'all' || (country === 'und' ? !value?.trim() : value?.trim().toUpperCase() === country)
 
+/** The browse listing as the server orders it: sort, then the order (or the sort's natural direction). */
+function browseList(section: string, u: URL): Tile[] {
+  const source = u.searchParams.get('source_id')
+  const sort = u.searchParams.get('sort')
+  const order = u.searchParams.get('order')
+  const query = u.searchParams.get('q')?.toLowerCase()
+  const kind = section === 'movies' || section === 'vod' ? 'movie' : 'show'
+  const category = u.searchParams.get('category')
+  // One shelf lists everything on it; the unfiltered grid stays the small, known title set.
+  let list = (category ? shelfTiles(kind, category) : titles).filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
+  if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title))
+  if (sort === 'year') list = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+  if (sort === 'rating') list = [...list].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
+  const natural = sort === 'title' ? 'asc' : 'desc'
+  return order && order !== natural ? [...list].reverse() : list
+}
+
 export const handlers = [
   // first: these also stand in for the checks the server makes on every request
   ...peopleHandlers,
@@ -292,19 +309,20 @@ export const handlers = [
   }),
   http.get(`${B}/browse/:section/categories`, () => HttpResponse.json([])),
   http.get(`${B}/browse/:section/languages`, () => HttpResponse.json([{ code: 'eng', name: 'English', count: titles.length }])),
+  http.get(`${B}/browse/:section/jumps`, ({ params, request }) => {
+    const u = new URL(request.url)
+    const sort = u.searchParams.get('sort') ?? 'added'
+    const list = browseList(String(params.section), u)
+    const label = (t: Tile) => sort === 'title' ? (/^[a-z]/i.test(t.title) ? t.title[0]!.toUpperCase() : '#')
+      : sort === 'year' ? (t.year ? String(t.year) : 'Unknown') : sort === 'rating' ? (t.rating != null ? `${Math.floor(t.rating)}+` : 'Unrated') : 'Recently'
+    const jumps: Array<{ label: string; offset: number }> = []
+    list.forEach((t, offset) => { const l = label(t); if (!jumps.some((j) => j.label === l)) jumps.push({ label: l, offset }) })
+    return HttpResponse.json({ sort, page_size: 60, jumps })
+  }),
   http.get(`${B}/browse/:section`, async ({ params, request }) => {
     const u = new URL(request.url)
     const page = Number(u.searchParams.get('page') ?? 1)
-    const source = u.searchParams.get('source_id')
-    const sort = u.searchParams.get('sort')
-    const query = u.searchParams.get('q')?.toLowerCase()
-    const kind = params.section === 'movies' || params.section === 'vod' ? 'movie' : 'show'
-    const category = u.searchParams.get('category')
-    // One shelf lists everything on it; the unfiltered grid stays the small, known title set.
-    let list = (category ? shelfTiles(kind, category) : titles).filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
-    if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title))
-    if (sort === 'year') list = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
-    if (sort === 'rating') list = [...list].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
+    const list = browseList(String(params.section), u)
     const size = 60
     await delay(80)
     return HttpResponse.json({ tiles: list.slice((page - 1) * size, page * size), page, page_size: size, has_more: page * size < list.length, total: list.length })
