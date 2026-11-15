@@ -120,7 +120,7 @@ async def test_sync_stores_presentation_fields(api: Api) -> None:
     await api.patch(f"/sources/{sid}", json={"config": {"default_language": "de"}})
     await api.c.sync.sync_source(sid)
     detail = await api.get(f"/titles/lib:{sid}:s:3")
-    assert detail.status_code == 200 and [e["title"] for e in detail.json()["episodes"]] == ["Arrival"]
+    assert detail.status_code == 200 and [e["title"] for e in detail.json()["episodes"]] == ["E1 · Arrival"]
     rows = await titles(api, sid)
     assert rows["1"].language == "deu" and rows["2"].language == "eng"
     assert (rows["e:30"].language, rows["s:3:s1"].language) == ("deu", "deu")

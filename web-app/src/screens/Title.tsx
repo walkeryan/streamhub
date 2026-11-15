@@ -143,7 +143,11 @@ function TitleDetails({ id }: { id: string }) {
       onError: (e) => toast(e.message, 'error'),
     })
   }
-  const startRequest = () => { if (t.kind === 'show' && (t.request_seasons?.length ?? 0) > 1) setSeasonPick([]); else sendRequest() }
+  const startRequest = () => { if ((t.kind === 'show' || t.kind === 'series') && (t.request_seasons?.length ?? 0) > 1) setSeasonPick([]); else sendRequest() }
+  // The library has part of this series: the request is for the seasons it is missing.
+  const missing = t.request_missing ? t.request_seasons ?? [] : []
+  const requestLabel = missing.length === 1 ? `Request season ${missing[0]}` : missing.length ? 'Request missing seasons'
+    : t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'
   const toggleFavorite = () => toggleFav.mutate({ kind: t.kind, id: t.id, on: !t.is_favorite })
   const openTrailer = () => {
     // The TV app loads only this server's pages, so a new YouTube tab opens nowhere there. It is asked to
@@ -209,7 +213,8 @@ function TitleDetails({ id }: { id: string }) {
           </div>
           <div className="title-body flex flex-col gap-4 min-w-0">
             {t.overview && <p style={{ lineHeight: 1.55 }}>{t.overview}</p>}
-            {requestShown && (
+            {/* A finished earlier request says nothing about the seasons still missing. */}
+            {requestShown && !(t.request_missing && !requestOpen) && (
               <RequestStatus testId="title-request-state" progress={request?.progress ?? requestShown}>
                 {requestShown.phase === 'available' ? 'Not in your library yet: it appears after the next library sync.' : null}
               </RequestStatus>
@@ -218,7 +223,7 @@ function TitleDetails({ id }: { id: string }) {
               {(canPlay || handoff.length > 0) && <Button focusKey="title:play" primary icon="play" onEnter={primary} testId="title-play">{canPlay && t.kind !== 'channel' && audio.data && !audio.data.options.length ? 'Choose audio / source' : playLabel}</Button>}
               {canPlay && mayStartRoom && <Button focusKey="title:together" icon="people" iconOnly={phone} label={phone ? 'Watch together' : undefined} disabled={startingRoom} onEnter={() => void watchTogether()} testId="title-together">{phone ? null : startingRoom ? 'Starting a room…' : 'Watch together'}</Button>}
               {!phone && choosable && <Button focusKey="title:source" icon="source" onEnter={() => setPicker('play')} testId="title-source">Choose source</Button>}
-              {canRequest && <Button focusKey="title:request" primary={!handoff.length} icon="plus" onEnter={startRequest} testId="title-request">{t.request_state === 'declined' || t.request_state === 'failed' ? 'Request again' : 'Request'}</Button>}
+              {canRequest && <Button focusKey="title:request" primary={!handoff.length && !canPlay} icon="plus" onEnter={startRequest} testId="title-request">{requestLabel}</Button>}
               <Button focusKey="title:watchlist" icon={onWatchlist ? 'check' : 'bookmark'} pressed={onWatchlist} onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })}>
                 {phone ? 'My List' : onWatchlist ? 'On watchlist' : 'Watchlist'}
               </Button>
@@ -305,9 +310,9 @@ function TitleDetails({ id }: { id: string }) {
         </FocusGroup>
       </Modal>
 
-      <Modal open={seasonPick !== null} onClose={() => setSeasonPick(null)} title={`Request ${t.title}`} firstFocusKey="reqpick:all">
+      <Modal open={seasonPick !== null} onClose={() => setSeasonPick(null)} title={missing.length ? `Request the rest of ${t.title}` : `Request ${t.title}`} firstFocusKey="reqpick:all">
         <div className="flex flex-col gap-3" data-testid="request-seasons">
-          <Button focusKey="reqpick:all" primary onEnter={() => sendRequest()}>All seasons</Button>
+          <Button focusKey="reqpick:all" primary onEnter={() => sendRequest()}>{missing.length ? 'All missing seasons' : 'All seasons'}</Button>
           <p className="label">Or pick seasons</p>
           <FocusGroup focusKey="reqpick:seasons" className="flex gap-2 flex-wrap">
             {(t.request_seasons ?? []).map((n) => (

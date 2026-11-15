@@ -37,13 +37,14 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.adapters.seerr import ManagerSnapshot, SeerrError
+from app.adapters.seerr.client import MEDIA_AVAILABLE
 from app.domain.ports import MetadataProvider
 from app.infra.db import Database
-from app.infra.models import REQUEST_OPEN_STATES, MediaRequest, Profile, utcnow
+from app.infra.models import REQUEST_OPEN_STATES, MediaRequest, Profile, Title, utcnow
 from app.services import ids, request_policy
 from app.services.auth import Principal
 from app.services.availability import AvailabilityService
@@ -76,6 +77,8 @@ READ_REFRESH_MAX = 8
 READ_REFRESH_TIMEOUT_S = 4.0
 # "Check again" reaches the manager at most this often per request, whoever presses it.
 MANUAL_REFRESH_MIN_S = 5
+# Opening a series the library has part of asks the manager which seasons it has, for at most this long.
+MISSING_SEASONS_TIMEOUT_S = 3.0
 
 _STALLED = {
     "downloading": f"No progress for {STALL_AFTER_S // 60} minutes.",
@@ -341,19 +344,50 @@ class RequestService:
         return payload
 
     async def annotate_detail(self, p: Principal, detail: dict[str, Any]) -> dict[str, Any]:
-        """``annotate`` plus, for a requestable series, the seasons a viewer may pick from."""
+        """``annotate`` plus, for a series, the seasons a viewer may pick from.
+
+        A series no source has offers every season. A series the library has only part of is
+        requestable too, for the seasons it is missing (``request_missing``).
+        """
         await self.annotate(p, detail)
-        if detail.get("requestable") and detail.get("kind") == "show":
-            try:
-                async with asyncio.timeout(8):
-                    meta = await self._meta.details("tv", int(str(detail["id"]).rsplit(":", 1)[1]))
-            except Exception:
-                meta = None
+        if detail.get("kind") not in ("show", "series"):
+            return detail
+        parts = str(detail.get("id") or "").split(":")
+        if len(parts) != 3 or parts[:2] != ["tmdb", "tv"] or not parts[2].isdigit():
+            return detail
+        tmdb_id = int(parts[2])
+        partial = (
+            not detail.get("requestable")
+            and self.configured
+            and request_policy.can_request(p)
+            and detail.get("request_state") not in REQUEST_OPEN_STATES
+            and any(b.get("playable_in_app") for b in detail.get("sources") or [])
+        )
+        if not detail.get("requestable") and not partial:
+            return detail
+        try:
+            async with asyncio.timeout(8):
+                meta = await self._meta.details("tv", tmdb_id)
+        except Exception:
+            meta = None
+        if not partial:
             detail["request_seasons"] = list(meta.season_numbers) if meta else []
+            return detail
+        if meta is None:
+            return detail
+        library = await self._library_rows("tv", tmdb_id, meta.title, meta.year)
+        missing = await self._missing_seasons(tmdb_id, list(meta.season_numbers), library) if library else None
+        if missing:
+            detail["requestable"] = True
+            detail["request_missing"] = True
+            detail["request_seasons"] = missing
         return detail
 
     # ------------------------------------------------------------------ library
-    async def _in_library(self, media_type: str, tmdb_id: int, title: str | None, year: int | None) -> bool:
+    async def _library_rows(
+        self, media_type: str, tmdb_id: int, title: str | None, year: int | None
+    ) -> builtins.list[Title]:
+        """The catalog rows of enabled in-app sources that are this title."""
         from app.services.content_policy import active_policy
 
         # "Does any source have it" is a household fact: a restricted profile's catalog
@@ -366,10 +400,54 @@ class RequestService:
             sources = await self._sources.rows_by_id() if matches else {}
         finally:
             active_policy.reset(reset)
-        return any(
-            (src := sources.get(m.source_id)) is not None and src.enabled and self._sources.registry.is_in_app(src.type)
+        return [
+            m
             for m in matches
-        )
+            if (src := sources.get(m.source_id)) is not None
+            and src.enabled
+            and self._sources.registry.is_in_app(src.type)
+        ]
+
+    async def _library_seasons(self, rows: Sequence[Title]) -> set[int]:
+        """The season numbers the library's copies of a series list (the ones opened so far)."""
+        shows = [(r.source_id, r.ext_id) for r in rows if r.kind in ("show", "series")]
+        if not shows:
+            return set()
+        async with self._db.session() as s:
+            found = await s.execute(
+                select(Title.season_number).where(
+                    Title.kind == "season",
+                    Title.season_number.is_not(None),
+                    or_(*(and_(Title.source_id == sid, Title.parent_ext_id == eid) for sid, eid in shows)),
+                )
+            )
+            return {n for (n,) in found if n is not None}
+
+    async def _missing_seasons(
+        self, tmdb_id: int, seasons: builtins.list[int], library: Sequence[Title]
+    ) -> builtins.list[int] | None:
+        """Of ``seasons`` of a series the library has part of, the ones it does not have in full.
+
+        The manager's per-season status answers when it tracks the series (it also knows a
+        season that is only partly there); else the seasons the library's own copy lists.
+        None when neither can say.
+        """
+        if not seasons:
+            return []
+        status: dict[int, int] | None = None
+        if not self._down(self.now()):
+            try:
+                async with asyncio.timeout(MISSING_SEASONS_TIMEOUT_S), self._connection() as manager:
+                    if manager is not None:
+                        snapshot = await manager.title_snapshot("tv", tmdb_id)
+                        if snapshot.tracked and snapshot.season_status:
+                            status = dict(snapshot.season_status)
+            except Exception as exc:
+                log.info("season status unavailable", extra={"tmdb_id": tmdb_id, "err": type(exc).__name__})
+        if status is not None:
+            return [n for n in seasons if status.get(n) != MEDIA_AVAILABLE]
+        have = await self._library_seasons(library)
+        return [n for n in seasons if n not in have] if have else None
 
     # ------------------------------------------------------------------ transitions
     async def _transition(
@@ -470,8 +548,15 @@ class RequestService:
             return existing, False
         if not self.configured:
             raise Conflict("No request manager is configured.", code="request_manager_unconfigured")
-        if await self._in_library(media_type, tmdb_id, meta.title, meta.year):
-            raise Conflict("This title is already available.", code="already_available")
+        library = await self._library_rows(media_type, tmdb_id, meta.title, meta.year)
+        if library:
+            # A series the library has part of can still be asked for the seasons it is missing.
+            missing = (
+                await self._missing_seasons(tmdb_id, list(meta.season_numbers), library) if media_type == "tv" else None
+            ) or []
+            seasons = [n for n in (seasons or missing) if n in missing]
+            if not seasons:
+                raise Conflict("This title is already available.", code="already_available")
         approved = request_policy.auto_approve(p)
         row = MediaRequest(
             id=secrets.token_hex(8),
@@ -729,6 +814,16 @@ class RequestService:
         return await self._get(row.id)
 
     # ------------------------------------------------------------------ job
+    async def _arrived(self, row: MediaRequest) -> bool:
+        """The library has what was asked for: the title, or every season a series request named."""
+        library = await self._library_rows(row.media_type, row.tmdb_id, row.title, row.year)
+        if not library:
+            return False
+        if row.media_type != "tv" or not row.seasons:
+            return True
+        # Not while it cannot be told which of them are there.
+        return await self._missing_seasons(row.tmdb_id, list(cast("list[int]", row.seasons)), library) == []
+
     async def reconcile(self) -> int:
         """Push approved requests, close the ones that arrived, ask about the rest. Returns the number changed."""
         async with self._lock:
@@ -749,7 +844,7 @@ class RequestService:
             sent: list[MediaRequest] = []
             async with self._connection() as manager:
                 for row in rows:
-                    if await self._in_library(row.media_type, row.tmdb_id, row.title, row.year):
+                    if await self._arrived(row):
                         closed = await self._transition(
                             row, REQUEST_OPEN_STATES, "available", notice="request_available"
                         )

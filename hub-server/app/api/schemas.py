@@ -324,6 +324,7 @@ class TitleDetail(Tile):
     episodes: list[Tile] = Field(default_factory=list)
     attribution: str = ""
     request_seasons: list[int] = Field(default_factory=list)
+    request_missing: bool = False
 
 
 class BrowsePage(_M):
@@ -332,6 +333,17 @@ class BrowsePage(_M):
     total: int
     has_more: bool = False
     page_size: int = 60
+
+
+class BrowseJump(_M):
+    label: str
+    offset: int
+
+
+class BrowseJumps(_M):
+    sort: str
+    page_size: int = 60
+    jumps: list[BrowseJump] = Field(default_factory=list)
 
 
 class Shelf(_M):

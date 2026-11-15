@@ -24,7 +24,7 @@ async function backend(page: Page, documents: Record<string, Document>, beforeRe
   })
 }
 const namespace = 'browseFilters.v1.movies'
-const defaults = { source: '', sort: 'added', language: 'mine', category: '', genre: '' }
+const defaults = { source: '', sort: 'added', order: '', language: 'mine', category: '', genre: '' }
 
 test('genre and filters persist across reload and another device without replacing unrelated prefs', async ({ page, browser }) => {
   const documents: Record<string, Document> = { p2: { unrelated: { theme: 'keep-me' } } }

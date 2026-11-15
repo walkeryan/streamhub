@@ -56,6 +56,83 @@ BROWSE_KINDS: dict[str, tuple[str, ...]] = {
     "series": ("series",),
 }
 SORTS = {"added", "title", "year", "rating"}
+# Each sort's natural direction: newest, A to Z, newest year, best rated.
+DEFAULT_ORDER = {"added": "desc", "title": "asc", "year": "desc", "rating": "desc"}
+# Providers file recorded games, fight cards and wrestling shows under VOD; they are not films.
+# A word of the category name (or "replay" anywhere in it) marks such a category.
+SPORTS_VOD_WORDS = (
+    "sport",
+    "sports",
+    "wwe",
+    "aew",
+    "ufc",
+    "mma",
+    "boxing",
+    "wrestling",
+    "ppv",
+    "nfl",
+    "nba",
+    "nhl",
+    "mlb",
+    "mls",
+    "ncaa",
+    "ncaaf",
+    "ncaab",
+    "f1",
+    "nascar",
+    "motogp",
+)
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def sports_vod_groups() -> Select[Any]:
+    """The provider categories that are sports ones (see ``SPORTS_VOD_WORDS``).
+
+    Matched once per distinct category name, never once per title row.
+    """
+    names = select(Title.group_name.label("name")).where(Title.group_name.is_not(None)).distinct().subquery()
+    group = func.lower(names.c.name)
+    words = [
+        or_(group == w, group.like(f"{w} %"), group.like(f"% {w}"), group.like(f"% {w} %")) for w in SPORTS_VOD_WORDS
+    ]
+    return select(names.c.name).where(or_(group.like("%replay%"), *words))
+
+
+def title_sort_key() -> ColumnElement[str]:
+    """``norm_title`` without a list's rank (``01. The Shawshank Redemption``) or the article after it."""
+    norm = Title.norm_title
+    unranked = case(
+        (Title.title.op("GLOB")("[0-9]. *"), func.substr(norm, 3)),
+        (Title.title.op("GLOB")("[0-9][0-9]. *"), func.substr(norm, 4)),
+        (Title.title.op("GLOB")("[0-9][0-9][0-9]. *"), func.substr(norm, 5)),
+        else_=norm,
+    )
+    return case(
+        (unranked.like("the %"), func.substr(unranked, 5)),
+        (unranked.like("an %"), func.substr(unranked, 4)),
+        (unranked.like("a %"), func.substr(unranked, 3)),
+        else_=unranked,
+    )
+
+
+def jump_label(sort: str, value: Any) -> str:
+    """The side-rail label of a title's sort value: a letter, a year, a rating or a month."""
+    if sort == "title":
+        first = str(value or "")[:1].upper()
+        return first if "A" <= first <= "Z" else "#"
+    if value is None or value == "":
+        return "Unknown" if sort != "rating" else "Unrated"
+    if sort == "year":
+        return str(value)
+    if sort == "rating":
+        return f"{int(float(value))}+"
+    text_value = value.isoformat() if isinstance(value, datetime) else str(value)
+    try:
+        return f"{_MONTHS[int(text_value[5:7]) - 1]} {text_value[:4]}"
+    except (ValueError, IndexError):
+        return "Unknown"
+
+
 NEW_RELEASES = "New Releases"
 # A shelf that received nothing for this long counts half when shelves are ranked.
 SHELF_FRESH = timedelta(days=30)
@@ -393,6 +470,9 @@ class CatalogService:
                 t = ctx.title_tile(k)
                 t["id"] = ids.lib_id(k.source_id, k.ext_id)
                 t["kind"] = k.kind
+                if k.kind == "episode":
+                    # Not the provider's release line or file name: the episode's own name and number.
+                    t["title"] = ids.episode_display_title(k.title, k.episode_number)
                 (tile["seasons"] if k.kind == "season" else tile["episodes"]).append(t)
         return tile
 
@@ -548,6 +628,8 @@ class CatalogService:
         self, kinds: tuple[str, ...], source_ids: list[str], source_id: str | None, genre: str | None
     ) -> Select[Any]:
         q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(source_ids), general_audience())
+        if any(k in ids.MOVIE_KINDS for k in kinds):
+            q = q.where(or_(Title.group_name.is_(None), Title.group_name.not_in(sports_vod_groups())))
         if source_id:
             q = q.where(Title.source_id == source_id)
         if genre:
@@ -667,6 +749,58 @@ class CatalogService:
 
         return list(await asyncio.gather(*(enrich(tile) for tile in tiles)))
 
+    async def _browse_frame(
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        source_id: str | None,
+        genre: str | None,
+        sort: str | None,
+        order: str | None,
+        language: str | None,
+        q: str | None,
+        category: str | None,
+    ) -> tuple[Any, list[str], Select[Any], ColumnElement[str], Any, list[Any], str]:
+        """What a browse page and its jump rail share: the filtered rows, one per title, and their order."""
+        kinds = BROWSE_KINDS.get(section)
+        if kinds is None:
+            raise NotFound("unknown section")
+        ctx = await self.tile_context(profile_id)
+        enabled = self._enabled(ctx)
+        query = self._browse_query(kinds, enabled, source_id, genre)
+        if category is not None:
+            query = query.where(Title.group_name == category)
+        if q and q.strip():
+            query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
+        query = self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
+        # Count and page identities before loading variants. Merging raw pages
+        # allowed the same TMDB film to recur on later pages and inflated totals.
+        key = self._canonical_key()
+        grouped = (
+            query.with_only_columns(
+                key.label("hub"),
+                func.min(title_sort_key()).label("title_sort"),
+                func.max(Title.year).label("year_sort"),
+                func.max(Title.rating).label("rating_sort"),
+                func.max(Title.added_at).label("added_sort"),
+                func.max(Title.id).label("id_sort"),
+            )
+            .group_by(key)
+            .subquery()
+        )
+        sort = sort if sort in SORTS else "added"
+        descending = (order if order in ("asc", "desc") else DEFAULT_ORDER[sort]) == "desc"
+        column = getattr(grouped.c, f"{sort}_sort")
+        primary = (column.desc() if descending else column.asc()).nulls_last()
+        if sort == "added":
+            columns = [primary, grouped.c.id_sort.desc() if descending else grouped.c.id_sort.asc()]
+        elif sort == "title":
+            columns = [primary]
+        else:
+            columns = [primary, grouped.c.title_sort]
+        return ctx, enabled, query, key, grouped, [*columns, grouped.c.hub], sort
+
     async def browse(
         self,
         section: str,
@@ -679,43 +813,20 @@ class CatalogService:
         language: str | None = None,
         q: str | None = None,
         category: str | None = None,
+        order: str | None = None,
     ) -> dict[str, Any]:
-        kinds = BROWSE_KINDS.get(section)
-        if kinds is None:
-            raise NotFound("unknown section")
-        ctx = await self.tile_context(profile_id)
-        enabled = self._enabled(ctx)
         page = max(1, page)
-        text_query = q
-        query = self._browse_query(kinds, enabled, source_id, genre)
-        if category is not None:
-            query = query.where(Title.group_name == category)
-        if text_query and text_query.strip():
-            query = query.where(
-                Title.norm_title.like("%" + _escape_like(ids.normalise_title(text_query)) + "%", escape="\\")
-            )
-        query = self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
-        # Count and page identities before loading variants. Merging raw pages
-        # allowed the same TMDB film to recur on later pages and inflated totals.
-        key = self._canonical_key()
-        grouped = (
-            query.with_only_columns(
-                key.label("hub"),
-                func.min(Title.norm_title).label("title_sort"),
-                func.max(Title.year).label("year_sort"),
-                func.max(Title.rating).label("rating_sort"),
-                func.max(Title.added_at).label("added_sort"),
-                func.max(Title.id).label("id_sort"),
-            )
-            .group_by(key)
-            .subquery()
+        ctx, enabled, query, key, grouped, ordering, _ = await self._browse_frame(
+            section,
+            profile_id,
+            source_id=source_id,
+            genre=genre,
+            sort=sort,
+            order=order,
+            language=language,
+            q=q,
+            category=category,
         )
-        orders: dict[str, list[Any]] = {
-            "title": [grouped.c.title_sort],
-            "year": [grouped.c.year_sort.desc().nulls_last(), grouped.c.title_sort],
-            "rating": [grouped.c.rating_sort.desc().nulls_last(), grouped.c.title_sort],
-        }
-        order = orders.get(sort or "added", [grouped.c.added_sort.desc().nulls_last(), grouped.c.id_sort.desc()])
         tracked = ctx.favorites | set(ctx.progress)
         lib_key = literal("lib:") + Title.source_id + ":" + Title.ext_id
         async with self._db.session() as session:
@@ -723,10 +834,7 @@ class CatalogService:
             hubs = list(
                 (
                     await session.execute(
-                        select(grouped.c.hub)
-                        .order_by(*order, grouped.c.hub)
-                        .offset((page - 1) * PAGE_SIZE)
-                        .limit(PAGE_SIZE)
+                        select(grouped.c.hub).order_by(*ordering).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)
                     )
                 ).scalars()
             )
@@ -764,6 +872,43 @@ class CatalogService:
             tile["progress_pct"] = ctx.progress_pct(hub, *matched_refs)
         tiles = await self._enrich_page([merged[hub] for hub in hubs])
         return {"tiles": tiles, "page": page, "total": total, "has_more": page * PAGE_SIZE < total}
+
+    async def browse_jumps(
+        self,
+        section: str,
+        profile_id: str,
+        *,
+        source_id: str | None,
+        genre: str | None,
+        sort: str | None,
+        order: str | None = None,
+        language: str | None = None,
+        q: str | None = None,
+        category: str | None = None,
+    ) -> dict[str, Any]:
+        """The side rail of a browse grid: where each letter, year, rating or month starts."""
+        _, _, _, _, grouped, ordering, sort_used = await self._browse_frame(
+            section,
+            profile_id,
+            source_id=source_id,
+            genre=genre,
+            sort=sort,
+            order=order,
+            language=language,
+            q=q,
+            category=category,
+        )
+        column = getattr(grouped.c, f"{sort_used}_sort")
+        async with self._db.session() as session:
+            values = (await session.execute(select(column).order_by(*ordering))).scalars()
+            jumps: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for offset, value in enumerate(values):
+                label = jump_label(sort_used, value)
+                if label not in seen:
+                    seen.add(label)
+                    jumps.append({"label": label, "offset": offset})
+        return {"sort": sort_used, "page_size": PAGE_SIZE, "jumps": jumps}
 
     # ------------------------------------------------------------------ shelves
     async def shelf_stats(

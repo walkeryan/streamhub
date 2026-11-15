@@ -2744,6 +2744,7 @@ export interface paths {
                     source_id?: string;
                     genre?: string;
                     sort?: "added" | "title" | "year" | "rating";
+                    order?: "asc" | "desc";
                     page?: number;
                     category?: string;
                     language?: string;
@@ -2770,6 +2771,56 @@ export interface paths {
                             has_more?: boolean;
                             page_size?: number;
                         };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/browse/{section}/jumps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where each letter, year, rating or month starts in the same browse listing, for a side rail
+         * @description Same filters, sort and order as /browse/{section}. Movies leave out sports categories (replays, wrestling, fight cards) there and here. A jump's page is floor(offset / page_size) + 1.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    source_id?: string;
+                    genre?: string;
+                    category?: string;
+                    language?: string;
+                    q?: string;
+                    sort?: "added" | "title" | "year" | "rating";
+                    order?: "asc" | "desc";
+                    include_adult?: boolean;
+                };
+                header?: never;
+                path: {
+                    section: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BrowseJumps"];
                     };
                 };
             };
@@ -6830,7 +6881,7 @@ export interface components {
             request_state?: components["schemas"]["RequestState"] | null;
             /** @description What that same request is doing right now; set exactly when request_state is. The stored answer: a tile never makes the server ask the request manager. */
             request_progress?: components["schemas"]["TileRequestProgress"] | null;
-            /** @description TMDB-identified, no in-app source, a request manager is configured and the profile may request. Independent of request_state: show the state instead while a request is open. */
+            /** @description TMDB-identified, no in-app source, a request manager is configured and the profile may request. On a title detail, also a series the library has only part of (see request_missing). Independent of request_state: show the state instead while a request is open. */
             requestable?: boolean;
         };
         Row: {
@@ -6870,8 +6921,20 @@ export interface components {
             episodes?: components["schemas"]["Tile"][];
             /** @description e.g. 'Availability data by JustWatch' */
             attribution?: string;
-            /** @description Requestable series only: season numbers a request may pick from (empty = whole series only). */
+            /** @description Requestable series only: season numbers a request may pick from (empty = whole series only). With request_missing, the seasons the library is missing. */
             request_seasons?: number[];
+            /** @description The library has part of this series; a request asks for the seasons in request_seasons that it is missing. */
+            request_missing?: boolean;
+        };
+        BrowseJumps: {
+            /** @enum {string} */
+            sort: "added" | "title" | "year" | "rating";
+            page_size: number;
+            /** @description In listing order. Labels: A-Z and # (title), a year (year), 9+ ... 0+ and Unrated (rating), 'Nov 2026' (added); Unknown when a title has no value. */
+            jumps: {
+                label: string;
+                offset: number;
+            }[];
         };
         DiscoveryPage: {
             tiles: components["schemas"]["Tile"][];

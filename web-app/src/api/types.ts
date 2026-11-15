@@ -37,6 +37,7 @@ export type SearchResult = paths['/search']['get']['responses']['200']['content'
 export type SearchSectionName = SearchResult['order'][number]
 export type HomeData = paths['/home']['get']['responses']['200']['content']['application/json']
 export type BrowsePage = paths['/browse/{section}']['get']['responses']['200']['content']['application/json']
+export type BrowseJumps = components['schemas']['BrowseJumps']
 export type ChannelsResult = paths['/channels']['get']['responses']['200']['content']['application/json']
 export type EpgData = paths['/epg']['get']['responses']['200']['content']['application/json']
 export type RequestList = paths['/requests']['get']['responses']['200']['content']['application/json']

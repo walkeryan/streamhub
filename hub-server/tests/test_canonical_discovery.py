@@ -5,7 +5,7 @@ import pytest
 from app.adapters.language.inferrer import lang_from_category
 from app.domain.entities import MetaTitle
 from app.infra.models import Title
-from app.services.ids import clean_display_title, normalise_title
+from app.services.ids import clean_display_title, episode_display_title, normalise_title
 from tests.conftest import Api
 from tests.test_large_catalog_filters import seed_catalog
 
@@ -184,3 +184,18 @@ async def test_metadata_discovery_212k_catalog_uses_bounded_indexed_matching(api
     assert warm.json() == response.json()
     assert fake.search.await_count == 1
     assert fake.details.await_count == 20
+
+
+@pytest.mark.parametrize(
+    ("raw", "number", "shown"),
+    [
+        ("EN - Chicago Fire (2012) (US) - S13E16 - In the Rubble", 16, "E16 · In the Rubble"),
+        ("EN - Chicago Fire - S06E04", 4, "Episode 4"),
+        ("Ladies Love Brunch", 20, "E20 · Ladies Love Brunch"),
+        ("Show.Name.S01E03.The.Big.One.1080p.WEB-DL.x264.mkv", 3, "E3 · The Big One"),
+        ("The Show - 1x02 - Name", 2, "E2 · Name"),
+        ("Episode 5", 5, "Episode 5"),
+    ],
+)
+def test_episode_display_title(raw: str, number: int, shown: str) -> None:
+    assert episode_display_title(raw, number) == shown

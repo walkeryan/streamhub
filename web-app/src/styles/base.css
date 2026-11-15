@@ -336,6 +336,21 @@ h1, h2, h3, p { margin: 0; }
 /* grid */
 .grid-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-poster-w), 1fr)); gap: 1.25rem var(--tile-gap); padding: 1rem 0.5rem; }
 .grid-tiles .tile { width: auto; aspect-ratio: 2/3; height: auto; }
+/* Browse: the grid loads as it scrolls; beside it, a rail of jumps for the current sort (A-Z, years, …). */
+.browse-grid-wrap { display: flex; align-items: flex-start; gap: 0.5rem; }
+.browse-grid-main { flex: 1; min-width: 0; }
+.browse-sentinel { height: 1px; }
+.browse-jumps { position: sticky; top: calc(var(--bar-h) + 0.75rem); flex: none; display: flex; flex-direction: column; align-items: stretch;
+  max-height: calc(100dvh - var(--bar-h) - 1.5rem); overflow-y: auto; scrollbar-width: none; padding: 0.25rem 0; }
+.browse-jumps::-webkit-scrollbar { display: none; }
+.browse-jump { min-width: 2.75rem; padding: 0.125rem 0.5rem; border-radius: 999px; text-align: center; font-size: 0.75rem; line-height: 1.35;
+  font-variant-numeric: tabular-nums; color: var(--t-text-muted); cursor: pointer; white-space: nowrap; }
+.browse-jump:hover { color: var(--t-text); }
+.browse-jump[aria-current='true'] { color: var(--t-accent-text); background: var(--t-accent); font-weight: 600; }
+@media (max-width: 720px) {
+  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - 6rem); }
+  .browse-jump { min-width: 2rem; padding-inline: 0.25rem; font-size: 0.6875rem; }
+}
 /* Search results: one page of up to three sections. Broadcasts and channels are short rows in as many
    columns as fit, so a full section stays a few lines tall above the posters. */
 .search-page { display: flex; flex-direction: column; gap: 1rem; min-height: 20rem; }

@@ -412,7 +412,7 @@ components:
         now_playing: { $ref: '#/components/schemas/Programme', nullable: true }
         request_state: { oneOf: [{ $ref: '#/components/schemas/RequestState' }, { type: 'null' }], description: "Open request for this title, else its most recent closed one; null when never requested." }
         request_progress: { oneOf: [{ $ref: '#/components/schemas/TileRequestProgress' }, { type: 'null' }], description: "What that same request is doing right now; set exactly when request_state is. The stored answer: a tile never makes the server ask the request manager." }
-        requestable: {type: boolean, description: "TMDB-identified, no in-app source, a request manager is configured and the profile may request. Independent of request_state: show the state instead while a request is open."}
+        requestable: {type: boolean, description: "TMDB-identified, no in-app source, a request manager is configured and the profile may request. On a title detail, also a series the library has only part of (see request_missing). Independent of request_state: show the state instead while a request is open."}
     Row:
       type: object
       required: [id, title, tiles]
@@ -447,7 +447,19 @@ components:
             seasons: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             episodes: { type: array, items: { $ref: '#/components/schemas/Tile' } }
             attribution: {type: string, description: "e.g. 'Availability data by JustWatch'"}
-            request_seasons: {type: array, items: {type: integer}, description: "Requestable series only: season numbers a request may pick from (empty = whole series only)."}
+            request_seasons: {type: array, items: {type: integer}, description: "Requestable series only: season numbers a request may pick from (empty = whole series only). With request_missing, the seasons the library is missing."}
+            request_missing: {type: boolean, description: "The library has part of this series; a request asks for the seasons in request_seasons that it is missing."}
+
+    BrowseJumps:
+      type: object
+      required: [sort, page_size, jumps]
+      properties:
+        sort: {type: string, enum: [added, title, year, rating]}
+        page_size: {type: integer}
+        jumps:
+          type: array
+          description: "In listing order. Labels: A-Z and # (title), a year (year), 9+ ... 0+ and Unrated (rating), 'Nov 2026' (added); Unknown when a title has no value."
+          items: {type: object, required: [label, offset], properties: {label: {type: string}, offset: {type: integer}}}
 
     DiscoveryPage:
       type: object
@@ -1732,11 +1744,28 @@ paths:
         - { name: source_id, in: query, schema: {type: string} }
         - { name: genre, in: query, schema: {type: string, description: "Actual genre metadata; combines with category."} }
         - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
+        - { name: order, in: query, schema: {type: string, enum: [asc, desc], description: "Omitted = the sort's natural direction: added, year and rating newest/best first; title A to Z. Titles without the sort's value stay last either way."} }
         - { name: page, in: query, schema: {type: integer, default: 1} }
         - { name: category, in: query, schema: {type: string, description: "Exact provider category; combines with genre."} }
         - { name: language, in: query, schema: {type: string, description: "Category language hint. Omitted = profile languages; all = all; und = unknown."} }
         - { name: q, in: query, schema: {type: string} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { tiles: { type: array, items: { $ref: '#/components/schemas/Tile' } }, page: {type: integer}, total: {type: integer}, has_more: {type: boolean}, page_size: {type: integer} } } } } } }
+
+  /browse/{section}/jumps:
+    get:
+      summary: Where each letter, year, rating or month starts in the same browse listing, for a side rail
+      description: Same filters, sort and order as /browse/{section}. Movies leave out sports categories (replays, wrestling, fight cards) there and here. A jump's page is floor(offset / page_size) + 1.
+      parameters:
+        - { name: section, in: path, required: true, schema: {type: string} }
+        - { name: source_id, in: query, schema: {type: string} }
+        - { name: genre, in: query, schema: {type: string} }
+        - { name: category, in: query, schema: {type: string} }
+        - { name: language, in: query, schema: {type: string} }
+        - { name: q, in: query, schema: {type: string} }
+        - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
+        - { name: order, in: query, schema: {type: string, enum: [asc, desc]} }
+        - { name: include_adult, in: query, schema: {type: boolean, default: false} }
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/BrowseJumps' } } } } }
 
   /browse/{section}/categories:
     get:
