@@ -266,6 +266,7 @@ async def browse(
     language: str | None = None,
     q: str | None = Query(None, max_length=200),
     sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
+    order: str | None = Query(None, pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     include_adult: IncludeAdult = False,
 ) -> dict[str, Any]:
@@ -276,7 +277,7 @@ async def browse(
             c.db,
             p.profile_id,
             "browse",
-            (section, source_id, genre, category, language, q, sort, page),
+            (section, source_id, genre, category, language, q, sort, order, page),
             lambda: c.catalog.browse(
                 section,
                 p.profile_id,
@@ -284,7 +285,47 @@ async def browse(
                 genre=genre,
                 category=category,
                 sort=sort,
+                order=order,
                 page=page,
+                language=language,
+                q=q,
+            ),
+            ttl=60,
+        )
+
+
+@router.get("/browse/{section}/jumps", response_model=S.BrowseJumps, tags=["catalog"])
+async def browse_jumps(
+    section: str,
+    c: C,
+    p: P,
+    response: Response,
+    source_id: str | None = None,
+    genre: str | None = None,
+    category: str | None = None,
+    language: str | None = None,
+    q: str | None = Query(None, max_length=200),
+    sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
+    order: str | None = Query(None, pattern="^(asc|desc)$"),
+    include_adult: IncludeAdult = False,
+) -> dict[str, Any]:
+    """Where each letter, year, rating or month starts in the same browse listing, for a side rail."""
+    response.headers["Cache-Control"] = "private, no-store"
+    q = normalized_query(q)
+    with listing_scope(p, include_adult):
+        return await listing_cached(
+            c.db,
+            p.profile_id,
+            "browse_jumps",
+            (section, source_id, genre, category, language, q, sort, order),
+            lambda: c.catalog.browse_jumps(
+                section,
+                p.profile_id,
+                source_id=source_id,
+                genre=genre,
+                category=category,
+                sort=sort,
+                order=order,
                 language=language,
                 q=q,
             ),
