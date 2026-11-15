@@ -393,6 +393,9 @@ class CatalogService:
                 t = ctx.title_tile(k)
                 t["id"] = ids.lib_id(k.source_id, k.ext_id)
                 t["kind"] = k.kind
+                if k.kind == "episode":
+                    # Not the provider's release line or file name: the episode's own name and number.
+                    t["title"] = ids.episode_display_title(k.title, k.episode_number)
                 (tile["seasons"] if k.kind == "season" else tile["episodes"]).append(t)
         return tile
 
