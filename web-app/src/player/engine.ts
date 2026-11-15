@@ -1,5 +1,6 @@
 import type { PlaybackDescriptor } from '../api/types'
 import type shakaNs from 'shaka-player'
+import { liveCushion } from './liveCushion'
 
 export type EngineKind = 'hls' | 'mpegts' | 'dash' | 'native'
 
@@ -17,6 +18,8 @@ export interface PlayerHandle {
   setSubtitle: (id: number) => void
   /** The engine's measured download rate in kbit/s, when it keeps one (the stream information panel shows it). */
   downloadKbps?: () => number | null
+  /** True while a live stream holds its picture to rebuild its reserve. */
+  holding?: () => boolean
 }
 
 export interface AttachOptions {
@@ -24,6 +27,8 @@ export interface AttachOptions {
   /** `refusal` is the server's JSON answer when it turned the stream away (401, 403, 409), if the engine can read it. */
   onFatal: (reason: string, refusal?: unknown) => void
   onTracks?: (resetAudio?: boolean) => void
+  /** A live stream is holding its picture until it has a reserve again (see `liveCushion`). */
+  onHold?: (holding: boolean) => void
 }
 
 /** Pick an engine from descriptor.mime (falls back to the URL extension). */
@@ -110,8 +115,12 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     if (!mpegts.isSupported()) throw new Error('This browser cannot play MPEG-TS streams')
     const p = mpegts.createPlayer(
       { type: 'mpegts', isLive: live, url },
-      // Keep the library defaults for packet buffering and live-latency chasing.
-      { enableStashBuffer: true, liveBufferLatencyChasing: false, isLive: live, lazyLoad: false },
+      // Keep the library defaults for packet buffering and live-latency chasing. A game runs for
+      // hours: live drops what was watched over two minutes ago so the browser's buffer stays bounded.
+      {
+        enableStashBuffer: true, liveBufferLatencyChasing: false, isLive: live, lazyLoad: false,
+        autoCleanupSourceBuffer: live, autoCleanupMaxBackwardDuration: 120, autoCleanupMinBackwardDuration: 60,
+      },
     )
     p.on(mpegts.Events.ERROR, (type: string, detail: string) => opt.onFatal(`${type}: ${detail}`))
     // The library reports its loader speed in KB/s.
@@ -119,7 +128,13 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     p.on(mpegts.Events.STATISTICS_INFO, (info: { speed?: number }) => { speed = typeof info.speed === 'number' && info.speed > 0 ? info.speed * 8 : null })
     p.attachMediaElement(video)
     p.load()
-    return { kind: 'mpegts', destroy: () => { try { p.unload(); p.detachMediaElement(); p.destroy() } catch { /* already gone */ } }, ...noTracks, ...nativeTextTracks(video), downloadKbps: () => speed }
+    const cushion = live ? liveCushion(video, (holding) => opt.onHold?.(holding)) : null
+    return {
+      kind: 'mpegts',
+      destroy: () => { cushion?.stop(); try { p.unload(); p.detachMediaElement(); p.destroy() } catch { /* already gone */ } },
+      ...noTracks, ...nativeTextTracks(video), downloadKbps: () => speed,
+      holding: () => cushion?.holding() ?? false,
+    }
   }
 
   if (kind === 'dash') {
