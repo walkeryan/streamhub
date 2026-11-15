@@ -309,6 +309,11 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           }
           const next = await attachSource(video, descriptor, {
             signal: attachController.signal,
+            // A held live picture is buffering, not playing; once its reserve is back it plays on.
+            onHold: (holding) => { if (cancelled || sequence !== attachSequence) return
+              clearWaiting()
+              setState((s) => holding ? (s === 'playing' ? 'buffering' : s) : (s === 'buffering' && !video.paused ? 'playing' : s))
+            },
             onFatal: (r, refusal) => !cancelled && sequence === attachSequence && reconnect(r, refusal),
             onTracks: (reset) => { if (!cancelled && sequence === attachSequence) {
               if (reset) { consent.current = null; selectedAudio.current = null; wantedAudio.current = null }
@@ -424,7 +429,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       const at = titlePositionMs()
       if (at < d.duration_ms - 30_000) { restart.current = { ...restart.current, startMs: at }; setAttempt((a) => a + 1) }
     }
-    const onPlaying = () => { if (terminal.current || !checkAudio.current()) { v.muted = true; v.pause(); return }; hasPlayed.current = true; plays.current++; clearWaiting(); clearRetry(); setState('playing') }
+    const onPlaying = () => { if (terminal.current || !checkAudio.current()) { v.muted = true; v.pause(); return }; hasPlayed.current = true; plays.current++; clearWaiting(); clearRetry(); setState(handle.current?.holding?.() ? 'buffering' : 'playing') }
     const onPause = () => { clearWaiting(); if (!v.ended) setState((s) => (s === 'playing' || s === 'buffering' ? 'paused' : s)) }
     const onWaiting = () => {
       if (!hasPlayed.current || v.paused || waitingTimer.current !== null) return
