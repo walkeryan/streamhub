@@ -207,4 +207,16 @@ class RoomSyncTest {
         assertEquals(15_000L, RoomBackoff.delayMs(1_000))
         assertEquals(1_000L, RoomBackoff.delayMs(-1))
     }
+
+    @Test fun `a live-room member holds for its reserve and catches up only when well behind`() {
+        // just started (plays from 1.5 s in hand): holds until the four seconds every member keeps are there
+        assertEquals(LiveStep.Hold, RoomSync.liveStep(1_500, holding = false))
+        assertEquals(LiveStep.Hold, RoomSync.liveStep(3_000, holding = true))
+        assertEquals(LiveStep.Stay, RoomSync.liveStep(4_000, holding = true))
+        // a little short, not holding: a burst will make it up, nothing to do
+        assertEquals(LiveStep.Stay, RoomSync.liveStep(3_000, holding = false))
+        // the swing of a bursty feed is not falling behind; half a minute is
+        assertEquals(LiveStep.Stay, RoomSync.liveStep(RoomSync.LIVE_LAG_MS, holding = false))
+        assertEquals(LiveStep.CatchUp, RoomSync.liveStep(34_000, holding = false))
+    }
 }

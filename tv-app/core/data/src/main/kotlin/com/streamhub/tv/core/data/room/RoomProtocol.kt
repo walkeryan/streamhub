@@ -24,7 +24,7 @@ sealed interface RoomMessage {
     data class Members(val members: List<RoomMember>) : RoomMessage
     /** The room is paused for this member while they buffer. */
     data class Waiting(val name: String) : RoomMessage
-    /** A refused command: controls_locked, host_only, live_no_seek, bad_message. */
+    /** A refused command: controls_locked, host_only, live_no_seek, live_no_pause, bad_message. */
     data class Error(val code: String, val message: String) : RoomMessage
     /** The last message before the server closes the socket. */
     data class Closed(val reason: String) : RoomMessage
@@ -115,5 +115,6 @@ fun roomRefusalText(code: String): String? = when (code) {
     "controls_locked" -> "Only the host can control playback"
     "host_only" -> "Only the host can do that"
     "live_no_seek" -> "A live room can't be rewound or skipped"
+    "live_no_pause" -> "A live channel keeps playing for everyone in the room"
     else -> null
 }
