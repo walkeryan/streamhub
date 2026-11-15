@@ -263,7 +263,7 @@ async def test_kid_detail_and_playback_entry(seeded: Api) -> None:
         r = await kid.get(f"/titles/{ref}")
         assert r.status_code == 200, (ref, r.text)
     detail = (await kid.get("/titles/lib:catalog:show-pg")).json()
-    assert "Low Water" in shown(detail)[1]
+    assert "E1 · Low Water" in shown(detail)[1]
     blocked = (
         "lib:catalog:pg13",
         "tmdb:movie:103",
