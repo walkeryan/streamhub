@@ -13,10 +13,10 @@ import org.junit.Test
 /** The auto tuner's rules: when a stalled game feed moves on, and where to. */
 class FeedFailoverTest {
     /** One look a second from [from] to [to] (exclusive). */
-    private fun Watch.run(from: Long, to: Long, progressing: Boolean, paused: Boolean = false): Watch {
+    private fun Watch.run(from: Long, to: Long, progressing: Boolean, paused: Boolean = false, arriving: Boolean = false): Watch {
         var w = this
         var t = from
-        while (t < to) { w = FeedFailover.observe(w, t, progressing, paused); t += 1_000 }
+        while (t < to) { w = FeedFailover.observe(w, t, progressing, paused, arriving); t += 1_000 }
         return w
     }
 
@@ -26,6 +26,30 @@ class FeedFailoverTest {
         val w = FeedFailover.observe(playing(), 20_000, progressing = false, paused = false)
         assertFalse(FeedFailover.shouldSwitch(w, 20_000 + STALL_SWITCH_MS))
         assertTrue(FeedFailover.shouldSwitch(w, 20_000 + STALL_SWITCH_MS + 1))
+    }
+
+    @Test fun aFrozenPictureWhileVideoStillArrivesNeverSwitches() {
+        // A gap, then a hold for the reserve: the picture stands still while video keeps coming in.
+        val w = playing().run(3_000, 6_000, progressing = false).run(6_000, 40_000, progressing = false, arriving = true)
+        assertNull(w.troubleSince)
+        assertNull("a hold is not steady play", w.steadySince)
+        assertFalse(FeedFailover.shouldSwitch(w, 40_000))
+    }
+
+    @Test fun noPictureProgressAndNoNewVideoForLongerThanTheWindowSwitches() {
+        var w = playing().run(3_000, 8_000, progressing = false, arriving = true)
+        w = FeedFailover.observe(w, 8_000, progressing = false, paused = false, arriving = false)
+        assertFalse(FeedFailover.shouldSwitch(w, 8_000 + STALL_SWITCH_MS))
+        assertTrue("the clock starts when the video stops arriving", FeedFailover.shouldSwitch(w, 8_000 + STALL_SWITCH_MS + 1))
+    }
+
+    @Test fun videoArrivingDoesNotCountAsHavingPlayed() {
+        var w = FeedFailover.watchSwitched(playing(), "ch:b", 10_000).run(10_000, 50_000, progressing = false, arriving = true)
+        assertFalse(w.played)
+        assertEquals(listOf("ch:a", "ch:b"), w.tried)
+        // Once the video stops arriving, a feed that never started has used up its start-up grace.
+        w = FeedFailover.observe(w, 50_000, progressing = false, paused = false, arriving = false)
+        assertTrue(FeedFailover.shouldSwitch(w, 50_000))
     }
 
     @Test fun startUpOfAChannelTheViewerChoseIsNeverAStall() {

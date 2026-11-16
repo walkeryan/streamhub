@@ -902,10 +902,11 @@ class PlayerViewModel @Inject constructor(
      */
     private suspend fun watchFeeds() {
         var last: Long? = null
+        var lastBuffered: Long? = null
         while (true) {
             delay(FEED_SAMPLE_MS)
             // A channel change is on its way: judge what it brings, not the stream it is replacing.
-            if (rewindJob?.isActive == true || zapJob?.isActive == true) { last = null; continue }
+            if (rewindJob?.isActive == true || zapJob?.isActive == true) { last = null; lastBuffered = null; continue }
             val s = _state.value
             val d = s.descriptor
             val now = SystemClock.elapsedRealtime()
@@ -913,17 +914,22 @@ class PlayerViewModel @Inject constructor(
             // A switch this run made whose resolve failed: the dialog is up for a channel that never started.
             val failedSwitch = watching != null && watching.tried.isNotEmpty() && failedRequest?.id == watching.channel && d?.id != watching.channel
             val eligible = failedSwitch || (d != null && d.live && s.live && d.id.startsWith("ch:") && !s.bufferTimeshift && !currentStopped)
-            if (!eligible || d == null) { feedWatch = null; last = null; continue }
-            var w = if (failedSwitch) checkNotNull(watching) else watching?.takeIf { it.channel == d.id } ?: FeedFailover.watchChannel(d.id, now).also { last = null }
+            if (!eligible || d == null) { feedWatch = null; last = null; lastBuffered = null; continue }
+            var w = if (failedSwitch) checkNotNull(watching) else watching?.takeIf { it.channel == d.id } ?: FeedFailover.watchChannel(d.id, now).also { last = null; lastBuffered = null }
             if (!failedSwitch && w.tried.isNotEmpty() && w.channel == d.id) feedNotice?.let { (from, to) -> feedNotice = null; flash(FeedFailover.notice(from, to)) }
             val exo = player.exoPlayer
             val position = exo.currentPosition
             val step = last?.let { position - it } ?: 0L
             last = position
             val progressing = !failedSwitch && exo.isPlaying && step in 1..MAX_FEED_STEP_MS
+            // New video still coming in: the buffered position grew. A reconnecting (failed) stream is not delivering.
+            val buffered = exo.bufferedPosition
+            val grew = lastBuffered?.let { buffered > it } ?: false
+            lastBuffered = buffered
+            val arriving = !failedSwitch && grew && player.state.value.error == null
             // Paused by the viewer, held for an audio choice, or a refusal no other feed would get past.
             val paused = !failedSwitch && (!player.wantsToPlay || player.state.value.audioBlocked || s.failure != null || s.audioChoice != null)
-            w = FeedFailover.observe(w, now, progressing, paused)
+            w = FeedFailover.observe(w, now, progressing, paused, arriving)
             feedWatch = w
             if (!FeedFailover.shouldSwitch(w, now)) continue
             val alternates = try { api.playbackAlternates(w.channel).alternates } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
@@ -935,6 +941,7 @@ class PlayerViewModel @Inject constructor(
             feedWatch = FeedFailover.watchSwitched(w, next.channelId, now)
             feedNotice = fromName to next.channelName
             last = null
+            lastBuffered = null
             failedRequest = null
             _state.update { it.copy(failure = null, failureKeepsPlaying = false) }
             submitChannel(PlaybackRequest(next.channelId, replaces = w.channel))
