@@ -14,11 +14,14 @@ another channel a few numbers away. The player now moves there by itself.
 ## The rule
 
 **Trigger.** The live channel on screen is one of several feeds of a current game, the viewer wants it
-to play, and its picture has made no progress for more than five seconds (`STALL_SWITCH_MS`, one
-constant per client). Buffering, a live-cushion hold, a reconnect and a failed stream all count; the
-picture is judged by the playhead moving, sampled once a second. A pause by the viewer, a stream held
-for an audio choice, and an error no other feed would get past (access refused, an administrator's
-stop, the session) do not count.
+to play, and it has stopped working for more than five seconds (`STALL_SWITCH_MS`, one constant per
+client). Stopped working means no new video is arriving: the picture has not moved *and* the buffered
+video ahead of it has not grown (the end of `video.buffered` on the web, ExoPlayer's
+`bufferedPosition` on the TV), or the stream failed or is reconnecting. Both are sampled once a second.
+A frozen picture while video still arrives is not trouble: a live-cushion hold after a gap (up to
+4 s, 8 s for a slow feed) or a slow start is the feed recovering, and it resets the stall clock without
+counting as play. A pause by the viewer, a stream held for an audio choice, and an error no other feed
+would get past (access refused, an administrator's stop, the session) do not count either.
 
 **Start-up is not a stall.** A channel the viewer chose (a zap, a number, the list, Back-twice) is only
 watched once it has played. A feed the auto tuner itself moved to gets a start-up grace of ten seconds
@@ -92,6 +95,8 @@ the caller's own streams are touched, nothing needs authorizing beyond the resol
   next feed; the tuner then treats that feed as failed and moves on.
 - An audio choice the next feed needs (TV preflight) is put to the viewer as for any channel change;
   the run does not continue past it.
-- Real stalls could not be produced in tests. The decision rules are unit-tested with a fake clock, the
-  web switch end to end against the mock server with the picture frozen, and the hub's release with
-  stalled fake upstreams; the TV wiring is compiled and its rules unit-tested, not exercised on a set.
+- Real stalls could not be produced in tests. The decision rules are unit-tested with a fake clock
+  (including a hold with video arriving, which never switches); the web switch is tested end to end
+  against the mock server with the picture frozen and the buffered end either growing (no switch) or
+  standing still (switch); the hub's release with stalled fake upstreams. The TV wiring is compiled and
+  its rules unit-tested, not exercised on a set.
