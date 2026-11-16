@@ -33,7 +33,7 @@ from app.infra.logging import secret_registry
 from app.services.context import absolute
 from app.services.errors import Forbidden
 from app.services.helmets import Helmets
-from app.services.image_grants import IMAGE_TTL, UNBOUND_TTL
+from app.services.image_grants import UNBOUND_TTL, validate_image_grant
 from app.services.sports_facts import normalise_name
 
 log = logging.getLogger(__name__)
@@ -96,67 +96,22 @@ class ArtError(Exception):
     pass
 
 
-def art_payload(key: str, policy: Any) -> dict[str, Any] | None:
-    """What a matchup image URL is signed over, by the rules of ``image_grants.image_payload``.
-
-    Bound to the caller's session whenever the content policy applies to them, and to the home
-    network for a caller without ``remote.access``. A bound URL keeps one value for five minutes
-    so the screen's refreshes do not reload the image; it lasts five to ten.
-    """
-    from app.services.content_policy import active_principal
-
-    payload: dict[str, Any] = {"m": key}
-    principal = active_principal.get()
-    if principal is not None and "remote.access" not in principal.permissions:
-        payload["home"] = True
-    if policy is None or not policy.applies_to(principal):
-        payload["x"] = (int(time.time()) // UNBOUND_TTL + 2) * UNBOUND_TTL
-        return payload
-    if principal is None or not principal.session_id:
-        return None
-    payload.update(
-        profile=principal.profile_id,
-        version=principal.token_version,
-        session=principal.session_id,
-        expires=(int(time.time()) // IMAGE_TTL + 2) * IMAGE_TTL,
-    )
-    return payload
+def art_payload(key: str, policy: Any = None) -> dict[str, Any]:
+    """What a matchup image URL is signed over, by the rules of ``image_grants.image_payload``: the
+    image and the week it expires in, the same URL for every viewer."""
+    return {"m": key, "x": (int(time.time()) // UNBOUND_TTL + 2) * UNBOUND_TTL}
 
 
 def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-async def validate_art_grant(payload: dict[str, Any], policy: Any, auth: Any) -> str:
-    """The image key of a signed matchup art URL that is still good for its viewer."""
+async def validate_art_grant(payload: dict[str, Any], policy: Any = None, auth: Any = None) -> str:
+    """The image key of a signed matchup art URL that has not expired."""
     key = payload.get("m")
     if not isinstance(key, str) or not KEY.match(key):
         raise Forbidden("Artwork authorization expired or missing", code="image_expired")
-    now = time.time()
-    if not policy.enabled and "profile" not in payload:
-        until = payload.get("x")
-        if (
-            isinstance(until, bool)
-            or not isinstance(until, (int, float))
-            or not now < until <= now + 2 * UNBOUND_TTL + 2
-        ):
-            raise Forbidden("Artwork authorization expired or missing", code="image_expired")
-        return key
-    profile, version, session = payload.get("profile"), payload.get("version"), payload.get("session")
-    expires = payload.get("expires")
-    if (
-        not isinstance(profile, str)
-        or not profile
-        or not isinstance(session, str)
-        or not session
-        or not isinstance(version, int)
-        or isinstance(version, bool)
-        or isinstance(expires, bool)
-        or not isinstance(expires, (int, float))
-        or not now < expires <= now + 2 * IMAGE_TTL + 2
-    ):
-        raise Forbidden("Artwork authorization expired or missing", code="content_restricted")
-    await auth.session_valid(profile, version, session)
+    await validate_image_grant(payload)
     return key
 
 
@@ -283,8 +238,7 @@ class MatchupArt:
     def url(self, key: str) -> str | None:
         if not self.has(key):
             return None
-        payload = art_payload(key, self.policy)
-        return absolute(f"/api/v1/sports/art/{self._sign(payload)}") if payload is not None else None
+        return absolute(f"/api/v1/sports/art/{self._sign(art_payload(key))}")
 
     def url_for(self, away: str, home: str, league: str, *, generate: bool = True) -> str | None:
         """The signed URL of this pairing's image; without one, the image is asked for (when ``generate``)."""

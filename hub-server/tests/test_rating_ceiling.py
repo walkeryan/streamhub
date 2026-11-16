@@ -312,40 +312,23 @@ async def test_kid_requests_and_rooms_obey(seeded: Api) -> None:
     assert r.status_code == 403 and r.json()["code"] == "content_restricted", r.text
 
 
-async def test_image_grants_bind_a_restricted_user_and_leave_others_alone(seeded: Api) -> None:
+async def test_a_restricted_users_artwork_url_is_everyones(seeded: Api) -> None:
+    """The ceiling decides which titles a kid is shown and can play; a poster URL is one per image."""
     api = seeded
-    policy, auth = api.c.content_policy, api.c.auth
     kid = await member(api, "kid", "Kid")
-    principal = await auth.resolve_principal(kid.tokens["access_token"])
-    token = active_principal.set(principal)
-    try:
-        fine = image_payload("catalog", "https://art.example.test/pg.jpg", "lib:catalog:pg", policy)
-        hidden = image_payload("catalog", "https://art.example.test/r.jpg", "lib:catalog:r", policy)
-        # No exact reference, nothing to check the artwork against: it is left out.
-        assert image_payload("catalog", "https://art.example.test/x.jpg", None, policy) is None
-    finally:
-        active_principal.reset(token)
-    assert fine is not None and hidden is not None
-    assert (fine["profile"], fine["session"], fine["ref"]) == (kid.profile_id, principal.session_id, "lib:catalog:pg")
-    await validate_image_grant(fine, policy, auth)
-    with pytest.raises(Forbidden):
-        await validate_image_grant(hidden, policy, auth)
-    # A grant minted for someone else's session is no use to the kid, and a revoked session ends it.
-    with pytest.raises(Forbidden):
-        await validate_image_grant({**fine, "ref": "lib:other:pg"}, policy, auth)
-    await auth.revoke_session(principal.session_id)
-    with pytest.raises(Exception, match="revoked"):
-        await validate_image_grant(fine, policy, auth)
-
-    owner = await auth.resolve_principal(api.headers["Authorization"].split()[1])
-    token = active_principal.set(owner)
-    try:
-        plain = image_payload("catalog", "https://art.example.test/r.jpg", "lib:catalog:r", policy)
-    finally:
-        active_principal.reset(token)
-    # Bound to nobody, so no profile or session in it: only where the image is, and until when it is good.
-    assert plain == {"s": "catalog", "u": "https://art.example.test/r.jpg", "x": plain["x"]}
-    await validate_image_grant(plain, policy, auth)
+    principal = await api.c.auth.resolve_principal(kid.tokens["access_token"])
+    owner = await api.c.auth.resolve_principal(api.headers["Authorization"].split()[1])
+    urls = []
+    for who in (principal, owner):
+        token = active_principal.set(who)
+        try:
+            urls.append(
+                image_payload("catalog", "https://art.example.test/pg.jpg", "lib:catalog:pg", api.c.content_policy)
+            )
+        finally:
+            active_principal.reset(token)
+    assert urls[0] == urls[1] == {"s": "catalog", "u": "https://art.example.test/pg.jpg", "x": urls[0]["x"]}
+    await validate_image_grant(urls[0])
 
 
 async def test_stream_grants_are_rechecked_for_a_restricted_user(seeded: Api) -> None:

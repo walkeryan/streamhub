@@ -64,7 +64,9 @@ async def test_proxied_source_artwork_goes_through_the_hub(api: Api) -> None:
     first = await api.client.get(image_path(tile["poster"]))
     assert first.status_code == 200 and first.content == PNG
     assert first.headers["content-type"] == "image/png"
-    assert first.headers["cache-control"] == "public, max-age=86400"
+    assert (
+        first.headers["cache-control"].startswith("public, max-age=") and "immutable" in first.headers["cache-control"]
+    )
     assert first.headers["x-content-type-options"] == "nosniff"
     assert poster.calls[0].request.headers["user-agent"] == "FixturePlayer/1.0"
     again = await api.client.get(image_path(tile["poster"]))
@@ -128,23 +130,11 @@ async def test_proxied_artwork_only_serves_images(api: Api) -> None:
 
 
 @respx.mock
-async def test_artwork_signed_under_a_rating_ceiling_is_private(api: Api) -> None:
+async def test_everyone_gets_the_same_artwork_url_and_it_travels(api: Api) -> None:
+    """A rating-limited teen, a person without remote access and the owner see one URL per poster,
+    kept by any cache, served anywhere: who may see a title is decided by the listing, not the image."""
     from tests.people import member
-
-    respx.get(f"{MANAGER}/player_api.php").mock(side_effect=catalog())
-    respx.get(POSTER).mock(return_value=httpx.Response(200, content=PNG, headers={"content-type": "image/png"}))
-    await add_xtream(api, proxy="always")
-    # The URL is bound to the session it was signed for: never cacheable.
-    teen = await member(api, "family", "Teen", limits={"rating_ceiling_movie": "R"})
-    tile = (await teen.get("/browse/movies", params={"language": "all"})).json()["tiles"][0]
-    bound = await api.client.get(image_path(tile["poster"]))
-    assert bound.status_code == 200 and bound.headers["cache-control"] == "private, no-store"
-
-
-@respx.mock
-async def test_artwork_signed_without_remote_access_is_served_at_home_only(api: Api) -> None:
-    from tests.people import member
-    from tests.test_remote_access import AWAY, HOME, PROXY, denied, fetch
+    from tests.test_remote_access import AWAY, PROXY, fetch
 
     api.c.settings.forwarded_allow_ips = PROXY
     respx.get(f"{MANAGER}/player_api.php").mock(side_effect=catalog())
@@ -156,23 +146,12 @@ async def test_artwork_signed_without_remote_access_is_served_at_home_only(api: 
         assert r.status_code == 200, r.text
         return image_path(r.json()["tiles"][0]["poster"])
 
+    teen = await member(api, "family", "Teen", limits={"rating_ceiling_movie": "R"})
     homebody = await member(api, "family", "Homebody", denials=["remote.access"])
-    path = await poster(homebody)
-    at_home = await fetch(api, HOME, path)
-    assert at_home.status_code == 200 and at_home.headers["cache-control"] == "private, no-store"
-    assert denied(await fetch(api, AWAY, path))
-    assert (await fetch(api, PROXY, path, forwarded=HOME)).status_code == 200
-    assert denied(await fetch(api, PROXY, path, forwarded=AWAY))
-    assert denied(await fetch(api, AWAY, path, forwarded=HOME))  # an untrusted peer's header is not read
-    # Anyone else's artwork is as public as before, and a listing is never shared between the two.
-    mine = await poster(api)
-    assert mine != path
-    anywhere = await fetch(api, AWAY, mine)
-    assert anywhere.status_code == 200 and anywhere.headers["cache-control"] == "public, max-age=86400"
-    # Given the permission, the next listing carries URLs that travel.
-    assert (await api.patch(f"/users/{homebody.id}", json={"denials": []})).status_code == 200
-    await homebody.refresh()
-    assert (await fetch(api, AWAY, await poster(homebody))).status_code == 200
+    paths = {await poster(teen), await poster(homebody), await poster(api)}
+    assert len(paths) == 1
+    away = await fetch(api, AWAY, paths.pop())
+    assert away.status_code == 200 and away.headers["cache-control"].startswith("public, max-age=")
 
 
 @respx.mock
@@ -211,13 +190,11 @@ async def test_an_original_kept_before_fitting_is_fitted_on_its_next_visit(api: 
     assert cached is not None and cached[0] == served.content
 
 
-def test_channel_artwork_grants_bind_to_the_channel_under_content_policy() -> None:
+def test_channel_artwork_has_one_url_whoever_asks() -> None:
     policy = SimpleNamespace(enabled=True, applies_to=lambda principal: True)
     token = active_principal.set(Principal("kid", False, True, 4, "kid-session"))
     try:
-        payload = image_payload("panel", LOGO, "ch:panel:100", policy)
-        assert payload is not None and payload["ref"] == "ch:panel:100"
-        assert image_payload("panel", LOGO, "ch:other:100", policy) is None
+        assert image_payload("panel", LOGO, "ch:panel:100", policy) == image_payload("panel", LOGO)
     finally:
         active_principal.reset(token)
 
