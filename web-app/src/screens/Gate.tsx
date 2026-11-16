@@ -145,11 +145,12 @@ export function ProfilePicker({ embedded }: { embedded?: boolean } = {}) {
           </div>
         )}
       </FocusGroup>
-      <Modal open={!!pending} onClose={() => setPending(null)} title={pending ? (pending.has_password ? `Password for ${pending.name}` : `PIN for ${pending.name}`) : ''} firstFocusKey="login:input">
+      {/* A profile whose PIN was chosen as a password is typed as text; an arrow pattern is typed as its digits. */}
+      <Modal open={!!pending} onClose={() => setPending(null)} title={pending ? (pending.has_password || pending.pin_kind === 'password' ? `Password for ${pending.name}` : `PIN for ${pending.name}`) : ''} firstFocusKey="login:input">
         {pending && (
           <>
-            <FocusableInput focusKey="login:input" label={pending.has_password ? 'Password' : 'PIN'} type="password" value={secret}
-              inputMode={pending.has_password ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
+            <FocusableInput focusKey="login:input" label={pending.has_password || pending.pin_kind === 'password' ? 'Password' : 'PIN'} type="password" value={secret}
+              inputMode={pending.has_password || pending.pin_kind === 'password' ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
             {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
             <div className="flex gap-3">
               <Button focusKey="login:go" primary disabled={busy || !secret} onEnter={() => void login(pending, secret)}>Sign in</Button>

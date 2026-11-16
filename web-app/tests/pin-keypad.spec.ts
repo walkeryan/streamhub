@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 // PIN entry with the remote: the focused key shows the focus box every other button shows, focus
 // returns to 5 after every key, and arrows are clamped to the keypad, so each digit is a short,
 // predictable walk from 5. (People who would rather not be watched walking the keypad choose an
-// arrow pattern.)
+// arrow pattern or a password; see who-sign-in.spec.ts.)
 
 const profile = (id: string, name: string, is_admin = false) => ({ id, name, avatar: null, is_admin, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: false, disclaimer_accepted_version: '1.0' })
 const WHO = { owner: profile('p1', 'Owner', true), guest: profile('p2', 'Guest') }
@@ -175,6 +175,7 @@ test('a new PIN entered twice by remote: focus is back on 5 for the confirm step
   })
   await enter(page, '/users/u5', 'owner')
   await page.getByTestId('user-pin-set').click()
+  await page.getByTestId('secret-kind-pin').click()
   await expect(dialog(page)).toBeVisible()
   await atHome(page)
   await remotePin(page, '864200')
@@ -185,5 +186,5 @@ test('a new PIN entered twice by remote: focus is back on 5 for the confirm step
   await remotePin(page, '864200')
   await press(page, 'ok')
   await expect(dialog(page)).toHaveCount(0)
-  expect(await page.evaluate(() => (window as unknown as { sentPins: unknown[] }).sentPins)).toEqual([{ pin: '864200' }])
+  expect(await page.evaluate(() => (window as unknown as { sentPins: unknown[] }).sentPins)).toEqual([{ pin: '864200', kind: 'pin' }])
 })

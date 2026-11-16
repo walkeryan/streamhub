@@ -454,8 +454,10 @@ test.describe('the Users screen', () => {
     await sharing.getByRole('button', { name: 'Reset shared devices to the role', exact: true }).click()
     await expect(shared).toHaveAttribute('aria-pressed', 'false')
 
-    // Set a PIN (entered twice), then clear it.
+    // Choose a number PIN (entered twice), then remove it.
     await page.getByTestId('user-pin-set').click()
+    await expect(page.getByTestId('secret-choice').getByRole('heading', { name: 'How should Mara Ellison sign in?' })).toBeVisible()
+    await page.getByTestId('secret-kind-pin').click()
     const pin = page.getByTestId('pin-dialog')
     await expect(pin.getByRole('heading', { name: 'New PIN for Mara Ellison' })).toBeVisible()
     await page.keyboard.type('2468')
@@ -468,7 +470,8 @@ test.describe('the Users screen', () => {
     await expect(pin.getByTestId('pin-error')).toHaveText('Those two PINs are not the same. Start again.')
     for (const entry of ['2468', '2468']) { await page.keyboard.type(entry); await page.keyboard.press('Enter') }
     await expect(pin).toHaveCount(0)
-    await expect(sharing).toContainText('Has a PIN')
+    await expect(sharing).toContainText('Signs in with a number PIN')
+    await expect(page.getByTestId('user-pin-clear')).toHaveText('Remove PIN')
     await page.getByTestId('user-pin-clear').click()
     await expect(sharing).toContainText('No PIN')
 
@@ -501,7 +504,8 @@ test.describe('the Users screen', () => {
   test('an arrow pattern is chosen with the arrow keys or the buttons and saved as its keypad digits', async ({ page }) => {
     await enter(page, '/users/u5')
     const sharing = page.getByTestId('user-sharing')
-    await page.getByTestId('user-pin-arrows').click()
+    await page.getByTestId('user-pin-set').click()
+    await page.getByTestId('secret-kind-arrows').click()
     const dialog = page.getByTestId('arrow-pin-dialog')
     await expect(dialog.getByRole('heading', { name: 'Arrow pattern for Mara Ellison' })).toBeVisible()
     await expect(dialog).toContainText('Six arrows are much harder to guess than four.')
@@ -522,15 +526,17 @@ test.describe('the Users screen', () => {
     await expect(entered).toHaveText('↑↑↓↓←→')
     await page.keyboard.press('Enter')
     await expect(dialog).toHaveCount(0)
-    await expect(sharing).toContainText('Has an arrow pattern of 6 arrows')
+    await expect(sharing).toContainText('Signs in with an arrow pattern of 6 arrows')
     const stored = await page.evaluate(async () => (await (await fetch('/api/v1/users/u5', { headers: { authorization: 'Bearer mock-access-p1' } })).json() as { pin_arrows: number | null }).pin_arrows)
     expect(stored).toBe(6)
-    // A typed PIN makes it an ordinary PIN again.
+    // Choosing a number PIN instead makes it an ordinary PIN again: one way to sign in at a time.
     await page.getByTestId('user-pin-set').click()
+    await expect(page.getByTestId('secret-kind-arrows')).toContainText('Arrow pattern (now)')
+    await page.getByTestId('secret-kind-pin').click()
     for (const entry of ['2468', '2468']) { await page.keyboard.type(entry); await page.keyboard.press('Enter') }
     await expect(page.getByTestId('pin-dialog')).toHaveCount(0)
-    await expect(sharing).toContainText('Has a PIN')
-    await expect(page.getByTestId('user-pin-arrows')).toHaveText('Use an arrow pattern')
+    await expect(sharing).toContainText('Signs in with a number PIN')
+    await expect(page.getByTestId('user-pin')).toHaveAttribute('data-kind', 'pin')
   })
 
   test('the server\'s guards are shown in its own words', async ({ page }) => {
@@ -711,7 +717,10 @@ test.describe('the Users screen', () => {
     await walk(page, 'ArrowDown', add.getByRole('button', { name: 'Family', exact: true }))
     await page.keyboard.press('ArrowRight')
     await page.keyboard.press('Enter')
+    // Sign in with: a number PIN unless another way is picked.
     await page.keyboard.press('ArrowDown')
+    await expect(add.getByTestId('add-kind-pin')).toHaveAttribute('aria-pressed', 'true')
+    await walk(page, 'ArrowDown', add.locator('[data-focus-key="add:pin"]'))
     await expect(add.getByLabel('PIN, optional', { exact: true })).toBeFocused()
     await page.keyboard.type('24a68')
     await expect(add.getByLabel('PIN, optional', { exact: true })).toHaveValue('2468')
@@ -1057,12 +1066,16 @@ test.describe('adult titles', () => {
     await filters(page)
     await page.getByTestId('adult-unlock').click()
     const pin = page.getByTestId('pin-dialog')
-    // No PIN yet: choose one (twice), which also unlocks.
-    await expect(pin.getByRole('heading', { name: 'Choose a PIN first' })).toBeVisible()
+    // No PIN yet: choose how to sign in, then the PIN (twice), which also unlocks.
+    const choice = page.getByTestId('secret-choice')
+    await expect(choice).toContainText('Adult titles open with it, and you do not have one yet.')
+    await expect(choice.getByTestId('secret-kind-pin')).toHaveAttribute('data-focused', 'true')
+    await page.keyboard.press('Enter')
+    await expect(pin.getByRole('heading', { name: /^New PIN for / })).toBeVisible()
     for (const entry of ['2468', '2468']) { await page.keyboard.type(entry); await page.keyboard.press('Enter') }
     await expect(pin).toHaveCount(0)
     await expect(shelf(page)).toBeVisible()
-    expect(await sent('/users/u1/pin')).toEqual([['PUT', '/users/u1/pin', { pin: '2468' }]])
+    expect(await sent('/users/u1/pin')).toEqual([['PUT', '/users/u1/pin', { pin: '2468', kind: 'pin' }]])
     expect(await sent('/auth/adult-unlock')).toEqual([['POST', '/auth/adult-unlock', { pin: '2468' }]])
     expect((await sent('/browse/movies/shelves')).at(-1)![1]).toContain('include_adult=true')
 

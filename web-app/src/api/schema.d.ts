@@ -579,7 +579,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         user_id: string;
-                        /** @description null or absent: no PIN offered */
+                        /** @description null or absent: no PIN offered. Whatever the target's pin_kind, a password included; only the hash check decides. */
                         pin?: string | null;
                     };
                 };
@@ -660,6 +660,7 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
+                        /** @description the caller's own PIN, arrow pattern digits or password */
                         pin: string;
                     };
                 };
@@ -1755,10 +1756,16 @@ export interface paths {
                     "application/json": {
                         pin?: string | null;
                         /**
-                         * @description The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
+                         * @description Which kind of secret pin is. pin: 4 to 8 digits. arrows: a D-pad pattern of 4 to 8 arrows sent as keypad digits (up 2, left 4, right 6, down 8). password: 6 to 64 characters, taken exactly as typed. Anything else is refused (400 invalid_pin). Wins over arrows; absent, arrows decides.
+                         * @enum {string}
+                         */
+                        kind?: "pin" | "arrows" | "password";
+                        /**
+                         * @description Older clients: the same as kind arrows. The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
                          * @default false
                          */
                         arrows?: boolean;
+                        /** @description the current secret, whatever its kind */
                         current_pin?: string | null;
                         current_password?: string | null;
                     };
@@ -4232,9 +4239,15 @@ export interface paths {
                         avatar?: string | null;
                         /** @default family */
                         role_id?: string;
+                        /** @description by the rules of kind */
                         pin?: string | null;
                         /**
-                         * @description The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
+                         * @description Which kind of secret pin is. pin: 4 to 8 digits. arrows: a D-pad pattern of 4 to 8 arrows sent as keypad digits (up 2, left 4, right 6, down 8). password: 6 to 64 characters, taken exactly as typed. Anything else is refused (400 invalid_pin). Wins over arrows; absent, arrows decides.
+                         * @enum {string}
+                         */
+                        kind?: "pin" | "arrows" | "password";
+                        /**
+                         * @description Older clients: the same as kind arrows. The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
                          * @default false
                          */
                         arrows?: boolean;
@@ -4572,13 +4585,19 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
-                        /** @description 4 to 8 digits; null clears */
+                        /** @description the new secret, by the rules of its kind; null clears */
                         pin?: string | null;
                         /**
-                         * @description The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
+                         * @description Which kind of secret pin is. pin: 4 to 8 digits. arrows: a D-pad pattern of 4 to 8 arrows sent as keypad digits (up 2, left 4, right 6, down 8). password: 6 to 64 characters, taken exactly as typed. Anything else is refused (400 invalid_pin). Wins over arrows; absent, arrows decides.
+                         * @enum {string}
+                         */
+                        kind?: "pin" | "arrows" | "password";
+                        /**
+                         * @description Older clients: the same as kind arrows. The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin).
                          * @default false
                          */
                         arrows?: boolean;
+                        /** @description the current secret, whatever its kind */
                         current_pin?: string | null;
                         current_password?: string | null;
                     };
@@ -6569,6 +6588,11 @@ export interface components {
             /** @description The profile holding this user's viewer state */
             profile_id?: string | null;
             has_pin?: boolean;
+            /**
+             * @description How the PIN is asked for: pin, a number keypad; arrows, a D-pad pattern (pin_arrows presses, sent as their keypad digits); password, a typed password. Null when there is none. Absent from older hubs: then has_pin and pin_arrows decide.
+             * @enum {string|null}
+             */
+            pin_kind?: "pin" | "arrows" | "password" | null;
             /** @description The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow. */
             pin_arrows?: number | null;
             on_shared_devices?: boolean;
@@ -6630,6 +6654,11 @@ export interface components {
             picture: string | null;
             role_name: string;
             has_pin: boolean;
+            /**
+             * @description How the PIN is asked for: pin, a number keypad; arrows, a D-pad pattern (pin_arrows presses, sent as their keypad digits); password, a typed password. Null when there is none. Absent from older hubs: then has_pin and pin_arrows decide.
+             * @enum {string|null}
+             */
+            pin_kind?: "pin" | "arrows" | "password" | null;
             /** @description The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow. */
             pin_arrows?: number | null;
             /** @description The user this device is signed in as */
@@ -6797,6 +6826,11 @@ export interface components {
             /** @description ISO 639-3 filter for live TV; empty = all */
             languages: string[];
             has_pin: boolean;
+            /**
+             * @description How the PIN is asked for: pin, a number keypad; arrows, a D-pad pattern (pin_arrows presses, sent as their keypad digits); password, a typed password. Null when there is none. Absent from older hubs: then has_pin and pin_arrows decide.
+             * @enum {string|null}
+             */
+            pin_kind?: "pin" | "arrows" | "password" | null;
             /** @description The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow. */
             pin_arrows?: number | null;
             /** @description Existing password credential available. Missing means unavailable. */

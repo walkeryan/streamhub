@@ -1,7 +1,7 @@
 import { useAuthCapabilities } from '../api/contentPolicy'
 import { useCan, useMe } from '../api/me'
 import { absent } from '../api/client'
-import { people, usePeopleChange, useSessions, type AuthSession } from '../api/people'
+import { people, usePeopleChange, useSessions, withKind, type AuthSession, type PinKind } from '../api/people'
 import { DEVICE_GONE, DeviceRow } from '../components/DeviceRow'
 import { deviceName } from '../lib/people'
 import { OwnerPinSettings } from '../components/OwnerPinSettings'
@@ -9,7 +9,7 @@ import { SignInMethods } from '../components/SignInMethods'
 import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
-import { ArrowPinDialog } from '../components/ArrowPin'
+import { SecretControls } from '../components/SignInSecret'
 import { inShell } from '../shell'
 import { StreamRecovery } from '../components/StreamRecovery'
 import { RequestManagerSettings } from '../components/RequestManagerSettings'
@@ -18,13 +18,12 @@ import { HomeNetworkSettings } from '../components/HomeNetworkSettings'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { api, ok } from '../api/client'
+import { api, ok, refreshMe } from '../api/client'
 import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useSettings, useTvRelease } from '../api/hooks'
 import type { Profile } from '../api/types'
 import { Button, Chip, ErrorState, Modal } from '../components/ui'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
-import { setFocus } from '../nav/spatial'
 import { setTheme } from '../lib/theme'
 import { LANG_NAMES } from '../lib/util'
 import { themes } from '../tokens'
@@ -86,32 +85,18 @@ function ProfilesTab() {
   // A restricted profile never manages others, whatever its permissions say.
   const manages = useCan('users') && !me.content_restricted
   const owner = useCan('system.manage')
+  const setProfile = useSession((s) => s.setProfile)
   const qc = useQueryClient()
   const go = useGo()
-  const toast = useUi((s) => s.toast)
-  const [pin, setPin] = useState('')
-  const [currentPin, setCurrentPin] = useState('')
-  const [pinErr, setPinErr] = useState<string | null>(null)
-  const [drawing, setDrawing] = useState(false)
-  const pinProblem = (code: string | undefined) =>
-    code === 'current_pin_required' ? 'Enter your current PIN to change or remove it.' : code === 'pin_invalid' ? 'That is not your current PIN.' : undefined
-  // A PIN that exists is only changed or removed by someone who knows it (or who has just signed in).
-  // `arrows`: the PIN is an arrow pattern, sent as its keypad digits.
-  const putPin = async (value: string | null, arrows = false) => {
-    const body = { pin: value, ...(arrows ? { arrows } : {}), ...(me.has_pin && currentPin ? { current_pin: currentPin } : {}) }
+  // A secret that exists is only changed or removed by someone who knows it (or who has just signed in):
+  // the hub answers current_pin_required, and SecretControls asks for the current one the way it was chosen.
+  const putPin = async (value: string | null, kind: PinKind | null, current?: string) => {
+    const body = { ...(value ? withKind({ pin: value }, kind ?? undefined) : { pin: null }), ...(current ? { current_pin: current } : {}) }
     await ok(api.PUT('/profiles/{id}/pin', { params: { path: { id: me.id } }, body }))
-    setPin(''); setCurrentPin(''); setPinErr(null); void qc.invalidateQueries({ queryKey: qk.profiles })
-    toast(!value ? 'PIN removed.' : arrows ? 'Arrow pattern saved.' : 'PIN saved.', 'success')
-  }
-  const savePin = async (value: string | null) => {
-    if (value !== null && !/^\d{4,8}$/.test(value)) { setPinErr('Use 4 to 8 digits.'); return }
-    setPinErr(null)
-    try { await putPin(value) }
-    catch (e) {
-      const problem = pinProblem((e as { code?: string }).code)
-      if (problem) setPinErr(problem)
-      else toast(e instanceof Error ? e.message : 'Could not change the PIN.', 'error')
-    }
+    // The profile this tab shows is the session's own copy: it says the new way at once, as the hub now does.
+    setProfile({ ...me, has_pin: !!value, pin_kind: value ? kind ?? 'pin' : null, pin_arrows: value && kind === 'arrows' ? value.length : null })
+    void qc.invalidateQueries({ queryKey: qk.profiles })
+    refreshMe()
   }
   return (
     <div className="flex flex-col gap-6">
@@ -131,20 +116,15 @@ function ProfilesTab() {
       )}
       <SignInMethods />
       <OwnerPinSettings />
-      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || owner) && <section className="flex flex-col gap-3">
-        <h2 className="heading">PIN for {me.name}</h2>
-        <p className="muted">{!me.has_pin ? 'Anyone can open this profile. Add a PIN to lock it.' : me.pin_arrows ? `An arrow pattern of ${me.pin_arrows} arrows is required to open this profile. Typed as a PIN, it is its digits: ↑ 2, ← 4, → 6, ↓ 8.` : 'A PIN is required to open this profile.'}</p>
-        <div className="flex gap-3 flex-wrap items-center">
-          {me.has_pin && <div style={{ width: '12rem' }}><FocusableInput focusKey="prof:pin-current" label="Current PIN" type="password" inputMode="numeric" maxLength={8} placeholder="Current PIN" value={currentPin} onChange={setCurrentPin} onSubmit={() => void setFocus('prof:pin')} /></div>}
-          <div style={{ width: '12rem' }}><FocusableInput focusKey="prof:pin" label="New PIN" type="password" inputMode="numeric" maxLength={8} placeholder="4 to 8 digits" value={pin} onChange={setPin} onSubmit={() => void savePin(pin)} /></div>
-          <Button focusKey="prof:pin-save" onEnter={() => void savePin(pin)}>Save PIN</Button>
-          <Button focusKey="prof:pin-arrows" onEnter={() => setDrawing(true)} testId="prof-pin-arrows">{me.pin_arrows ? 'Change arrow pattern' : 'Use an arrow pattern'}</Button>
-          {me.has_pin && <Button focusKey="prof:pin-clear" danger onEnter={() => void savePin(null)}>Remove PIN</Button>}
-        </div>
-        {pinErr && <p role="alert" style={{ color: 'var(--t-danger)' }}>{pinErr}</p>}
-        <ArrowPinDialog open={drawing} onClose={() => { setDrawing(false); void setFocus('prof:pin-arrows') }} title={`Arrow pattern for ${me.name}`} explain={pinProblem}
-          note={me.has_pin && !currentPin ? 'To replace your PIN, type the current one in Current PIN first, unless you signed in in the last few minutes.' : undefined}
-          onSubmit={async (digits) => { await putPin(digits, true); setDrawing(false); void setFocus('prof:pin-arrows') }} />
+      {!me.content_restricted && (!capabilities.data?.content_policy_enabled || owner) && <section className="flex flex-col gap-3" data-testid="profile-secret">
+        <h2 className="heading">How {me.name} signs in on shared devices</h2>
+        <p className="muted">One way of your choosing: a number PIN, a password or an arrow pattern. It is asked for to open this profile on "Who's watching?", and to show adult titles.</p>
+        <FocusGroup focusKey="prof:secret" className="flex flex-col gap-2">
+          <SecretControls scope="prof" name={me.name} who={me} testId="prof-pin"
+            noneHint="Anyone can open this profile. Choose a sign-in to lock it."
+            setHint={me.pin_kind === 'arrows' || (!me.pin_kind && me.pin_arrows) ? 'Typed as a PIN anywhere else, the pattern is its digits: ↑ 2, ← 4, → 6, ↓ 8.' : 'Required to open this profile.'}
+            save={putPin} />
+        </FocusGroup>
       </section>}
     </div>
   )

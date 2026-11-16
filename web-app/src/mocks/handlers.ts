@@ -8,7 +8,7 @@ import {
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
-import { adultUnlocked, holds, mockProfile, ownProfile, peopleHandlers, setProfilePin } from './people'
+import { adultUnlocked, holds, kindOfBody, mockProfile, ownProfile, peopleHandlers, secretRefused, setProfilePin } from './people'
 import { sportsChannels, sportsEvents, sportsNetworks } from './sports'
 
 const B = '/api/v1'
@@ -173,10 +173,13 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
   http.put(`${B}/profiles/:id/pin`, async ({ params, request }) => {
-    const b = (await request.json()) as { pin?: string | null; arrows?: boolean }
+    const b = (await request.json()) as { pin?: string | null; kind?: string; arrows?: boolean }
+    const kind = kindOfBody(b)
+    const refused = secretRefused(b.pin, kind)
+    if (refused) return refused
     const p = profiles.find((x) => x.id === params.id)
-    if (p) { p.has_pin = !!b.pin; p.pin_arrows = b.pin && b.arrows ? b.pin.length : null }
-    setProfilePin(String(params.id), b.pin ?? null, !!b.arrows)
+    if (p) { p.has_pin = !!b.pin; p.pin_kind = b.pin ? kind : null; p.pin_arrows = b.pin && kind === 'arrows' ? b.pin.length : null }
+    setProfilePin(String(params.id), b.pin ?? null, kind)
     return new HttpResponse(null, { status: 204 })
   }),
   // A test sets localStorage 'mock.tv-release' = 'none' for a server that publishes no TV build.

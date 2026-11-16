@@ -646,13 +646,14 @@ test.describe('review of the first pass', () => {
     await enter(guest.page, '/settings?tab=profiles')
     await expect(guest.page.getByRole('heading', { name: 'Signed in as Guest', exact: true })).toBeVisible()
     await expect(guest.page.getByTestId('open-users')).toHaveCount(0)
-    await expect(guest.page.getByLabel('New PIN', { exact: true })).toBeVisible()
+    await expect(guest.page.getByTestId('prof-pin-set')).toBeVisible()
     await guest.context.close()
   })
 
   test('Settings, Profile: a PIN can be chosen as an arrow pattern and is sent as its keypad digits', async ({ page }) => {
     await enter(page, '/settings?tab=profiles')
-    await page.getByTestId('prof-pin-arrows').click()
+    await page.getByTestId('prof-pin-set').click()
+    await page.getByTestId('secret-kind-arrows').click()
     const dialog = page.getByTestId('arrow-pin-dialog')
     await expect(dialog.getByRole('heading', { name: 'Arrow pattern for Guest', exact: true })).toBeVisible()
     for (const key of ['ArrowLeft', 'ArrowLeft', 'ArrowRight', 'ArrowRight', 'ArrowDown', 'ArrowUp']) await page.keyboard.press(key)
@@ -660,8 +661,9 @@ test.describe('review of the first pass', () => {
     await page.keyboard.press('Enter')
     await expect(dialog).toHaveCount(0)
     // The mock answers in the page, so what it stored is read back the way the app reads profiles.
-    const stored = await page.evaluate(async () => (await (await fetch('/api/v1/profiles', { headers: { authorization: 'Bearer mock-access-p2' } })).json() as Array<{ id: string; has_pin: boolean; pin_arrows?: number | null }>).find((p) => p.id === 'p2'))
-    expect([stored?.has_pin, stored?.pin_arrows]).toEqual([true, 6])
+    const stored = await page.evaluate(async () => (await (await fetch('/api/v1/profiles', { headers: { authorization: 'Bearer mock-access-p2' } })).json() as Array<{ id: string; has_pin: boolean; pin_kind?: string | null; pin_arrows?: number | null }>).find((p) => p.id === 'p2'))
+    expect([stored?.has_pin, stored?.pin_kind, stored?.pin_arrows]).toEqual([true, 'arrows', 6])
+    await expect(page.getByTestId('prof-pin-kind')).toHaveText('Signs in with an arrow pattern of 6 arrows')
   })
 
   test('the bar and the phone menu show the person, not only an initial: a picture, else their avatar', async ({ page, browser }) => {

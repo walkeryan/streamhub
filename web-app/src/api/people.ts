@@ -46,6 +46,15 @@ export const useSwitchable = (enabled: boolean) =>
     },
   })
 
+export type PinKind = NonNullable<User['pin_kind']>
+/**
+ * A new secret with its kind. An arrow pattern also says `arrows: true`, which is all a hub from before
+ * kinds understands, so a pattern chosen against one still records its length; `kind` wins where both are known.
+ */
+export function withKind<T extends object>(body: T, kind: PinKind | undefined): T & { kind?: PinKind; arrows?: boolean } {
+  return kind === 'arrows' ? { ...body, kind, arrows: true } : kind ? { ...body, kind } : body
+}
+
 /** POST /auth/switch. A switch that collided with another change to the session (409 switch_conflict) is asked once more. */
 async function switchTo(user_id: string, pin?: string): Promise<Switched> {
   const ask = () => unwrap<Switched>(api.POST('/auth/switch', { body: pin === undefined ? { user_id } : { user_id, pin } }))
@@ -57,7 +66,9 @@ async function switchTo(user_id: string, pin?: string): Promise<Switched> {
 
 /** Every call that changes people, roles, invites or devices. */
 export const people = {
-  create: (body: { name: string; avatar?: string | null; role_id?: string; pin?: string | null }) => unwrap<User>(api.POST('/users', { body })),
+  /** `kind` says how the person signs in (see SignInSecret.tsx); without a pin it is left out. */
+  create: (body: { name: string; avatar?: string | null; role_id?: string; pin?: string | null; kind?: PinKind }) =>
+    unwrap<User>(api.POST('/users', { body: body.pin ? withKind(body, body.kind) : { ...body, kind: undefined } })),
   patch: (id: string, body: { name?: string; avatar?: string | null; role_id?: string; grants?: S['Permission'][]; denials?: S['Permission'][]; limits?: LimitsInput; on_shared_devices?: boolean | null; plex_account_linked?: boolean }) =>
     unwrap<UserDetail>(api.PATCH('/users/{id}', { ...path(id), body })),
   approve: (id: string, role_id: string) => unwrap<UserDetail>(api.POST('/users/{id}/approve', { ...path(id), body: { role_id } })),
@@ -65,8 +76,13 @@ export const people = {
   suspend: (id: string) => unwrap<UserDetail>(api.POST('/users/{id}/suspend', path(id))),
   reinstate: (id: string) => unwrap<UserDetail>(api.POST('/users/{id}/reinstate', path(id))),
   remove: (id: string) => ok(api.DELETE('/users/{id}', path(id))),
-  /** With `arrows`, the PIN is an arrow pattern sent as its keypad digits (see ArrowPin.tsx), and the server records its length. */
-  setPin: (id: string, pin: string | null, arrows = false) => ok(api.PUT('/users/{id}/pin', { ...path(id), body: arrows ? { pin, arrows } : { pin } })),
+  /**
+   * Sets (or with null, removes) how someone signs in: `kind` is a number PIN, an arrow pattern (sent as
+   * its keypad digits, see ArrowPin.tsx) or a password. `current` is one's own current secret, when the
+   * hub asks for it before a change.
+   */
+  setPin: (id: string, pin: string | null, kind: PinKind = 'pin', current?: string) =>
+    ok(api.PUT('/users/{id}/pin', { ...path(id), body: { ...(pin ? withKind({ pin }, kind) : { pin }), ...(current ? { current_pin: current } : {}) } })),
   createRole: (body: RoleInput & { name: string }) => unwrap<Role>(api.POST('/roles', { body })),
   patchRole: (id: string, body: RoleInput) => unwrap<Role>(api.PATCH('/roles/{id}', { ...path(id), body })),
   removeRole: (id: string) => ok(api.DELETE('/roles/{id}', path(id))),

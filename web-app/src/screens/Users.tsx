@@ -7,10 +7,12 @@ import {
 } from '../api/people'
 import type { components } from '../api/schema'
 import { Avatar, AVATARS } from '../components/Avatar'
+import { ArrowPinDialog } from '../components/ArrowPin'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { Icon } from '../components/Icon'
 import { LinkToCopy } from '../components/LinkToCopy'
 import { LimitsEditor, PermissionSwitches, Toggle } from '../components/PeopleControls'
+import { PASSWORD_MAX, PASSWORD_MIN, type PinKind } from '../components/SignInSecret'
 import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -200,13 +202,18 @@ function AddManagedUser({ roles, fallback, onClose }: { roles: Role[]; fallback:
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState<string>(AVATARS[0])
   const [role, setRole] = useState(fallback.id)
+  // How they sign in on shared devices, if at all: the secret is a PIN's digits, a password, or an arrow pattern's digits.
+  const [kind, setKind] = useState<PinKind>('pin')
   const [pin, setPin] = useState('')
+  const [drawing, setDrawing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const chooseKind = (k: PinKind) => { if (k !== kind) { setKind(k); setPin('') } }
   const submit = () => {
     if (!name.trim()) { setError('Give them a name.'); return }
-    if (pin && !/^\d{4,8}$/.test(pin)) { setError('A PIN is 4 to 8 digits.'); return }
+    if (pin && kind === 'pin' && !/^\d{4,8}$/.test(pin)) { setError('A PIN is 4 to 8 digits.'); return }
+    if (pin && kind === 'password' && (pin.length < PASSWORD_MIN || pin.length > PASSWORD_MAX)) { setError(`A password is ${PASSWORD_MIN} to ${PASSWORD_MAX} characters.`); return }
     setError(null)
-    create.mutate({ name: name.trim(), avatar, role_id: role, pin: pin || null }, {
+    create.mutate({ name: name.trim(), avatar, role_id: role, pin: pin || null, kind }, {
       onSuccess: (user) => { toast(`Added ${user.display_name}.`, 'success'); onClose() },
       onError: (e) => setError(e.message),
     })
@@ -227,12 +234,26 @@ function AddManagedUser({ roles, fallback, onClose }: { roles: Role[]; fallback:
           {roles.filter((r) => r.editable).map((r) => <Chip key={r.id} focusKey={`add:role:${r.id}`} pressed={role === r.id} onEnter={() => setRole(r.id)}>{r.name}</Chip>)}
         </FocusGroup>
       </section>
-      <section className="flex flex-col gap-2"><h3 className="label">PIN (optional)</h3>
-        <div style={{ width: '14rem', maxWidth: '100%' }}>
-          <FocusableInput focusKey="add:pin" label="PIN, optional" type="password" inputMode="numeric" maxLength={8} placeholder="4 to 8 digits" value={pin} onChange={(v) => setPin(v.replace(/\D/g, ''))} onSubmit={submit} />
-        </div>
-        <p className="label">With a PIN, nobody else on a shared device can switch to them.</p>
+      <section className="flex flex-col gap-2"><h3 className="label">Sign in with (optional)</h3>
+        <FocusGroup focusKey="add:kinds" className="flex gap-2 flex-wrap" role="group" label="Sign in with">
+          <Chip focusKey="add:kind:pin" pressed={kind === 'pin'} onEnter={() => chooseKind('pin')} testId="add-kind-pin">Number PIN</Chip>
+          <Chip focusKey="add:kind:password" pressed={kind === 'password'} onEnter={() => chooseKind('password')} testId="add-kind-password">Password</Chip>
+          <Chip focusKey="add:kind:arrows" pressed={kind === 'arrows'} onEnter={() => chooseKind('arrows')} testId="add-kind-arrows">Arrow pattern</Chip>
+        </FocusGroup>
+        {kind === 'arrows'
+          ? <div className="flex gap-3 items-center flex-wrap">
+            <Button focusKey="add:pin" onEnter={() => setDrawing(true)} testId="add-arrows">{pin ? 'Change pattern' : 'Choose pattern'}</Button>
+            <span className="label" data-testid="add-arrows-chosen">{pin ? `${pin.length} arrows chosen` : 'No pattern yet'}</span>
+          </div>
+          : <div style={{ width: '14rem', maxWidth: '100%' }}>
+            {kind === 'pin'
+              ? <FocusableInput key="pin" focusKey="add:pin" label="PIN, optional" type="password" inputMode="numeric" maxLength={8} placeholder="4 to 8 digits" value={pin} onChange={(v) => setPin(v.replace(/\D/g, ''))} onSubmit={submit} />
+              : <FocusableInput key="password" focusKey="add:pin" label="Password, optional" type="password" autoComplete="new-password" maxLength={PASSWORD_MAX} placeholder={`${PASSWORD_MIN} to ${PASSWORD_MAX} characters`} value={pin} onChange={setPin} onSubmit={submit} />}
+          </div>}
+        <p className="label">With one, nobody else on a shared device can switch to them.</p>
       </section>
+      <ArrowPinDialog open={drawing} onClose={() => { setDrawing(false); void setFocus('add:pin') }} title={`Arrow pattern for ${name.trim() || 'them'}`}
+        onSubmit={async (digits) => { setPin(digits); setDrawing(false); void setFocus('add:pin') }} />
       {error && <p role="alert" style={{ color: 'var(--t-danger)' }}>{error}</p>}
       <div className="flex gap-3 flex-wrap">
         <Button focusKey="add:ok" primary icon="plus" disabled={create.isPending} onEnter={submit} testId="add-user-ok">Add user</Button>
