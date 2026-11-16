@@ -2610,6 +2610,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playback/alternates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Other feeds of the game a live channel is showing now
+         * @description For a player whose live channel stopped: the other channels the Sports screen lists under the same current event (the same game at the same time), in the order to try them — the event's feeds after this channel, wrapping round. Every language counts; the viewer's permissions, hidden groups and rating ceiling apply as on the Sports screen. Empty when the channel carries no current event with another feed.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description ch:<source>:<channel> */
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Alternate feeds */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlaybackAlternates"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/options": {
         parameters: {
             query?: never;
@@ -7250,6 +7292,21 @@ export interface components {
             rewind_at?: string | null;
             /** @description Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients. */
             recovery_generation?: string | null;
+            /** @description The live channel (ch:…) this device is switching away from to another feed of the same game. Its stream on this server is stopped before the new one is resolved, instead of keeping the source's connection through its linger, when nobody else uses it (another viewer or device, a recording, a watch room, a multiview pair, a buffered session). Ignored unless both ids are channels and the request is live (no catch-up or rewind). */
+            replaces?: string | null;
+        };
+        AlternateFeed: {
+            channel_id: string;
+            channel_name: string;
+            channel_number?: number | null;
+            /** @description The listing this channel carries the game in. */
+            programme_id: string;
+        };
+        PlaybackAlternates: {
+            /** @description The Sports screen event the channel is a feed of; null when it is none. */
+            event_id?: string | null;
+            title?: string | null;
+            alternates: components["schemas"]["AlternateFeed"][];
         };
         MultiviewRequest: {
             panes: components["schemas"]["PlaybackRequest"][];

@@ -190,3 +190,18 @@ export function sportsNetworks(params: URLSearchParams, serve: (p: Programme) =>
     total: listed.length, limit, offset, truncated: false,
   }
 }
+
+/** GET /playback/alternates: the other feeds of the current game a channel shows, after it and wrapping round. */
+export function feedAlternates(id: string): components['schemas']['PlaybackAlternates'] {
+  const current = sportsEvents(new URLSearchParams({ status: 'current', language: 'all', limit: '100' }), () => undefined)
+  for (const event of current.events) {
+    const at = event.feeds.findIndex((feed) => feed.channel_id === id)
+    if (event.kind !== 'event' || at < 0 || event.feeds.length < 2) continue
+    const after = [...event.feeds.slice(at + 1), ...event.feeds.slice(0, at)]
+    return {
+      event_id: event.id, title: event.title,
+      alternates: after.map((feed) => ({ channel_id: feed.channel_id, channel_name: feed.channel_name, channel_number: feed.channel_number, programme_id: feed.programme_id })),
+    }
+  }
+  return { event_id: null, title: null, alternates: [] }
+}

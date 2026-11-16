@@ -11,6 +11,8 @@ import { getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { ChannelAudioPrompt, useChannelAudio } from '../player/channelAudio'
 import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
 import { usePlayback } from '../player/usePlayback'
+import { useFeedFailover } from '../player/useFeedFailover'
+import { switchNotice } from '../player/feedFailover'
 import { NO_POSTER } from '../player/poster'
 import { SafeImg } from '../components/SafeImg'
 import { trackLabel } from '../player/audioTracks'
@@ -81,7 +83,10 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   const activeId = useRef(id)
   useLayoutEffect(() => { activeId.current = id }, [id])
 
-  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, audioTrack }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, audioTrack])
+  // A feed failover's switch: the channel it left, named to the server so that channel's stream is freed first.
+  const [replacing, setReplacing] = useState<{ to: string; from: string } | null>(null)
+  const replaces = !room && replacing?.to === id ? replacing.from : null
+  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, audioTrack, replaces }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, audioTrack, replaces])
   const channelAudio = useChannelAudio(req, manualChoice === selectionKey)
   // A room's audio was settled when the member joined; its stream comes from the room, without a local rewind buffer.
   const audio = room ? { ...channelAudio, enabled: false, blocked: false, request: req } : channelAudio
@@ -318,12 +323,14 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     else void document.documentElement.requestFullscreen?.().catch(() => undefined)
   }, [])
 
-  const zapTo = useCallback((cid: string) => {
+  /** `from`: a feed failover's switch, which names the channel it leaves; any other change of channel clears that. */
+  const zapTo = useCallback((cid: string, from?: string) => {
     const previous = activeId.current
     if (cid === previous) return
     activeId.current = cid
     blockingRef.current = true
     setLast(previous)
+    setReplacing(from ? { to: cid, from } : null)
     navigate(`/play/${encodeURIComponent(cid)}`, { replace: true })
   }, [navigate, setLast])
   const zap = useCallback((d: number) => {
@@ -333,6 +340,20 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     const c = list[i]
     if (c) zapTo(c.id)
   }, [list, zapTo])
+  // ---- feed failover: a live game channel that stops moves to another feed of the same game ----
+  const shownName = desc?.id === id ? desc.title : channel?.name
+  const nameRef = useRef(shownName)
+  nameRef.current = shownName
+  useFeedFailover(videoRef, {
+    // Live at its edge only: not catch-up, a rewind, the local buffer's past, nor a room's one stream.
+    enabled: zappable && live && !catchup && !rewindAt && !pb.timeshifted,
+    channel: id, state, held: audio.blocked, refused: pb.refused,
+    onSwitch: (to, from) => {
+      if (activeId.current !== from) return  // the viewer moved on meanwhile
+      zapTo(to.channel_id, from)
+      toast(switchNotice(nameRef.current ?? 'This channel', to.channel_name))
+    },
+  })
 
   // The controls stay while they are in use: paused, a remote inside the bar, a menu open, a seek not landed yet.
   const seeking = seek.pending !== null || seek.heading !== null
