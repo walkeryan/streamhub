@@ -482,6 +482,12 @@ data class PlaybackRequest(
      */
     @SerialName("recovery_generation") val recoveryGeneration: String? = null,
     // No max_height: the quality cap is for the web player and is ignored for android_tv, so it is never sent.
+    /**
+     * Set only when the player moves on from a stalled channel to another feed of the same game: the
+     * channel it leaves, whose stream the server then stops at once instead of holding the source's
+     * connection through its linger. Left out otherwise.
+     */
+    val replaces: String? = null,
 )
 
 @Serializable
@@ -655,6 +661,20 @@ data class PlaybackOptions(
     val options: List<PlaybackOption> = emptyList(),
     @SerialName("automatic_variant_id") val automaticVariantId: String? = null,
     @SerialName("preferred_languages") val preferredLanguages: List<String> = emptyList(),
+)
+
+/** GET /playback/alternates: the other feeds of the game a live channel is showing now, in the order to try them. */
+@Serializable data class PlaybackAlternates(
+    @SerialName("event_id") val eventId: String? = null,
+    val title: String? = null,
+    val alternates: List<AlternateFeed> = emptyList(),
+)
+
+@Serializable data class AlternateFeed(
+    @SerialName("channel_id") val channelId: String,
+    @SerialName("channel_name") val channelName: String,
+    @SerialName("channel_number") val channelNumber: Int? = null,
+    @SerialName("programme_id") val programmeId: String = "",
 )
 
 @Serializable data class RewindCapability(
