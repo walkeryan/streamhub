@@ -160,6 +160,20 @@ class WhoIsWatchingViewModelTest {
         assertEquals(WhoOutcome.Done, vm.state.value.outcome)
     }
 
+    @Test fun aPasswordIsSentAsTypedAndCalledAPassword() = runTest {
+        val sam = SwitchableUser(id = "u5", displayName = "Sam", roleName = "Family", hasPin = true, pinKind = "password")
+        val fake = Fake(listOf(alex, sam)).apply { answer = { _, pin -> if (pin == " open sesame ") ok(sam) else SwitchResult.PinInvalid } }
+        val vm = vm(fake)
+        vm.pick(sam, keepCurrent = false)
+        assertEquals(sam, vm.state.value.pinFor)
+        vm.submitPin("open sesame")
+        assertEquals("That password isn't right. Try again.", vm.state.value.pinError)
+        // Spaces and all: the hub compares it exactly as it was chosen.
+        vm.submitPin(" open sesame ")
+        assertEquals(listOf("u5:open sesame", "u5: open sesame "), fake.calls)
+        assertEquals(WhoOutcome.Done, vm.state.value.outcome)
+    }
+
     @Test fun aPinTheListDidNotMentionIsStillAskedFor() = runTest {
         // The list said "no PIN"; the server says otherwise (one was set a moment ago).
         val fake = Fake(listOf(alex, kit)).apply { answer = { _, pin -> if (pin == null) SwitchResult.PinRequired else ok(kit) } }

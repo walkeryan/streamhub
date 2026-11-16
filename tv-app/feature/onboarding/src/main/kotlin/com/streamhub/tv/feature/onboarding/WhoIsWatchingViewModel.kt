@@ -8,6 +8,7 @@ import com.streamhub.tv.core.data.api.ApiException
 import com.streamhub.tv.core.data.api.UserError
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.normalizeServerUrl
+import com.streamhub.tv.core.data.model.PinKind
 import com.streamhub.tv.core.data.model.SwitchableUser
 import com.streamhub.tv.core.data.repo.SessionEnd
 import com.streamhub.tv.core.data.repo.SwitchResult
@@ -142,9 +143,12 @@ class WhoIsWatchingViewModel internal constructor(
         _state.update { it.copy(busy = true, pinError = null) }
         viewModelScope.launch {
             val name = user.displayName.ifBlank { "this person" }
-            // Someone who chose an arrow pattern knows it as a pattern, not as the digits it is sent as.
-            val secret = if (user.pinArrows != null) "pattern" else "PIN"
-            val theSecret = if (user.pinArrows != null) "arrow pattern" else "PIN"
+            // Said the way the person chose it: an arrow pattern is known as a pattern, not as the digits it is sent as.
+            val (secret, theSecret) = when (user.kind) {
+                PinKind.Arrows -> "pattern" to "arrow pattern"
+                PinKind.Password -> "password" to "password"
+                else -> "PIN" to "PIN"
+            }
             when (val result = switcher.switchTo(user.id, pin)) {
                 is SwitchResult.Ok -> {
                     try { applyTheme(result.profile.themeId) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
