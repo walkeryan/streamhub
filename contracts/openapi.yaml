@@ -697,6 +697,21 @@ components:
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
+    AlternateFeed:
+      type: object
+      required: [channel_id, channel_name, programme_id]
+      properties:
+        channel_id: {type: string}
+        channel_name: {type: string}
+        channel_number: {type: integer, nullable: true}
+        programme_id: {type: string, description: The listing this channel carries the game in.}
+    PlaybackAlternates:
+      type: object
+      required: [alternates]
+      properties:
+        event_id: {type: string, nullable: true, description: The Sports screen event the channel is a feed of; null when it is none.}
+        title: {type: string, nullable: true}
+        alternates: {type: array, items: {$ref: '#/components/schemas/AlternateFeed'}}
     MultiviewRequest:
       type: object
       required: [panes, recovery_generation]
@@ -1716,6 +1731,13 @@ paths:
       parameters:
         - {name: id, in: query, required: true, schema: {type: string}}
       responses: {'200': {description: Advertised provider archive window, content: {application/json: {schema: {$ref: '#/components/schemas/RewindCapability'}}}}}
+  /playback/alternates:
+    get:
+      summary: Other feeds of the game a live channel is showing now
+      description: "For a player whose live channel stopped: the other channels the Sports screen lists under the same current event (the same game at the same time), in the order to try them — the event's feeds after this channel, wrapping round. Every language counts; the viewer's permissions, hidden groups and rating ceiling apply as on the Sports screen. Empty when the channel carries no current event with another feed."
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string, maxLength: 512}, description: "ch:<source>:<channel>"}
+      responses: {'200': {description: Alternate feeds, possibly none, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackAlternates'}}}}}
   /playback/options:
     get:
       parameters:

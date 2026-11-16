@@ -497,6 +497,19 @@ class PlaybackRequest(_M):
     max_height: Literal[480, 720, 1080] | None = None
 
 
+class AlternateFeed(_M):
+    channel_id: str
+    channel_name: str
+    channel_number: int | None = None
+    programme_id: str
+
+
+class PlaybackAlternates(_M):
+    event_id: str | None = None
+    title: str | None = None
+    alternates: list[AlternateFeed] = Field(default_factory=list)
+
+
 class MultiviewRequest(_M):
     panes: list[PlaybackRequest] = Field(min_length=2, max_length=2)
     recovery_generation: str = Field(max_length=64)

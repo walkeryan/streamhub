@@ -385,6 +385,51 @@ async def sports_events(
     days = max(1, min(7, days))
     start = datetime.combine(day, time.min, zone).astimezone(UTC)
     stop = datetime.combine(day + timedelta(days=days), time.min, zone).astimezone(UTC)
+    listed, eligible_count, scheduled, truncated = await _grouped_events(
+        channels, profile_id, start=start, stop=stop, now=now, language=language, sport=sport, status=status, q=q
+    )
+    counts = Counter(event["sport"] for event in listed)
+    events = [event for event in listed if not sport or event["sport"] == sport]
+    limit, offset = max(1, min(100, limit)), max(0, offset)
+    page = events[offset : offset + limit]
+    if matchups is not None:
+        try:
+            await matchups(page)
+        except Exception:  # facts are decoration: the listing answers without them
+            log.warning("sports matchups skipped", exc_info=True)
+            for event in page:
+                event["matchup"] = None
+    return {
+        "as_of": now,
+        "date": day.isoformat(),
+        "timezone": timezone,
+        "events": page,
+        "total": len(events),
+        "limit": limit,
+        "offset": offset,
+        "sports": [{"name": name, "count": count} for name, count in sorted(counts.items())],
+        "coverage": {"eligible_channels": eligible_count, "channels_with_sports_schedule": scheduled},
+        "truncated": truncated,
+    }
+
+
+async def _grouped_events(
+    channels: ChannelService,
+    profile_id: str,
+    *,
+    start: datetime,
+    stop: datetime,
+    now: datetime,
+    language: str | None,
+    sport: str | None,
+    status: str,
+    q: str | None,
+) -> tuple[list[dict[str, Any]], int, int, bool]:
+    """``(events, eligible channels, channels with a sports schedule, truncated)`` between ``start`` and ``stop``.
+
+    Every event the profile may see, in listing order, each with its feeds in channel order: the
+    Sports screen pages these, and a player asks which of them its channel is a feed of.
+    """
     eligible, _ = await channels._channel_query(profile_id, language=language)
     ch = eligible.subquery()
     text = func.lower(func.coalesce(Programme.category, "") + " " + Programme.title)
@@ -586,29 +631,58 @@ async def sports_events(
     )
     for event in listed:
         event["feeds"].sort(key=lambda f: (f["channel_number"], f["channel_id"]))
-    counts = Counter(event["sport"] for event in listed)
-    events = [event for event in listed if not sport or event["sport"] == sport]
-    limit, offset = max(1, min(100, limit)), max(0, offset)
-    page = events[offset : offset + limit]
-    if matchups is not None:
-        try:
-            await matchups(page)
-        except Exception:  # facts are decoration: the listing answers without them
-            log.warning("sports matchups skipped", exc_info=True)
-            for event in page:
-                event["matchup"] = None
-    return {
-        "as_of": now,
-        "date": day.isoformat(),
-        "timezone": timezone,
-        "events": page,
-        "total": len(events),
-        "limit": limit,
-        "offset": offset,
-        "sports": [{"name": name, "count": count} for name, count in sorted(counts.items())],
-        "coverage": {"eligible_channels": eligible_count, "channels_with_sports_schedule": len(scheduled)},
-        "truncated": truncated,
-    }
+    return listed, eligible_count, len(scheduled), truncated
+
+
+async def feed_alternates(
+    channels: ChannelService, profile_id: str, channel_id: str, *, now: datetime | None = None
+) -> dict[str, Any]:
+    """The other feeds of the game ``channel_id`` is showing now, in the order a player tries them.
+
+    A channel is a feed of a game when the Sports screen lists it with other channels under one
+    current event: the same game at the same time (``sports_events``), from the same channels the
+    profile may see. The list starts after the channel itself and wraps round, so a player that
+    keeps moving on visits every feed once. Empty when the channel carries no current event with
+    another feed. Every language counts: a preference narrows a listing, it does not take a game
+    away from a viewer whose picture stopped.
+    """
+    now = now or datetime.now(UTC)
+    found: dict[str, Any] = {"event_id": None, "title": None, "alternates": []}
+    if not channel_id.startswith("ch:"):
+        return found
+    listed, _, _, _ = await _grouped_events(
+        channels,
+        profile_id,
+        start=now,
+        stop=now + timedelta(seconds=1),
+        now=now,
+        language="all",
+        sport=None,
+        status="current",
+        q=None,
+    )
+    for event in listed:
+        if event["kind"] != "event":
+            continue
+        feeds: list[dict[str, Any]] = []
+        for f in event["feeds"]:  # one channel can list one game twice (two guide rows): try it once
+            if all(f["channel_id"] != seen["channel_id"] for seen in feeds):
+                feeds.append(f)
+        at = next((i for i, f in enumerate(feeds) if f["channel_id"] == channel_id), None)
+        if at is None or len(feeds) < 2:
+            continue
+        found["event_id"], found["title"] = event["id"], event["title"]
+        found["alternates"] = [
+            {
+                "channel_id": f["channel_id"],
+                "channel_name": f["channel_name"],
+                "channel_number": f["channel_number"],
+                "programme_id": f["programme_id"],
+            }
+            for f in feeds[at + 1 :] + feeds[:at]
+        ]
+        return found
+    return found
 
 
 async def sports_channels(
