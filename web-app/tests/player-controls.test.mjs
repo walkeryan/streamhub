@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { COMMIT_MS, HOLD_STEP_MS, MID_STEP_S, accumulate, clampTarget, endTarget, fractionTarget, holdStep, jump, seekHint } from '../src/player/seekSteps.ts'
-import { SHORTCUT_HELP, shortcutFor } from '../src/player/shortcuts.ts'
+import { CONTROLLER_HELP, SHORTCUT_HELP, padHints, shortcutFor } from '../src/player/shortcuts.ts'
 import { DEFAULT_PREFS, SPEEDS, clampSpeed, nextSpeed, nextVolume, parsePrefs, speedLabel } from '../src/player/playerPrefs.ts'
 
 const FILM = 5400
@@ -330,4 +330,27 @@ test('data is short when the browser says so', () => {
   assert.equal(savingData({ type: 'cellular' }), true)
   assert.equal(savingData({ effectiveType: '3g' }), true)
   assert.equal(savingData({ type: 'wifi', effectiveType: '4g' }), false)
+})
+
+test('the controller hint row names only what the buttons do here', () => {
+  const row = (ctx) => padHints({ live: false, zappable: false, room: false, canSeek: true, paused: false, ...ctx }).map((h) => `${h.buttons.join('/')} ${h.does}`)
+  // A film: play/pause, both steps, volume, information, menu.
+  assert.deepEqual(row({}), ['X Pause', 'LB/RB 10 s', 'LT/RT 30 s', 'RS Volume', 'Y Info', 'Start Menu'])
+  assert.deepEqual(row({ paused: true }).slice(0, 1), ['X Play'])
+  // A film that cannot be moved (yet) offers no steps.
+  assert.deepEqual(row({ canSeek: false }), ['X Pause', 'RS Volume', 'Y Info', 'Start Menu'])
+  // A live channel: the bumpers change channel, and nothing seeks.
+  assert.deepEqual(row({ live: true, zappable: true, canSeek: false }), ['X Pause', 'LB/RB Channel', 'RS Volume', 'Y Info', 'Start Menu'])
+  // A room's channel plays on for everyone and is never changed from here.
+  assert.deepEqual(row({ live: true, room: true, canSeek: false }), ['RS Volume', 'Y Info', 'Start Menu'])
+  // A room's film is paused and moved for everyone, when the room lets this member.
+  assert.deepEqual(row({ room: true }), ['X Pause', 'LB/RB 10 s', 'LT/RT 30 s', 'RS Volume', 'Y Info', 'Start Menu'])
+})
+
+test('the sheet lists every controller button the mapping gives a meaning', () => {
+  const listed = new Set(CONTROLLER_HELP.flatMap((line) => line.buttons))
+  for (const b of ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'View', 'Start', 'D-pad', 'LS', 'RS']) assert.ok(listed.has(b), b)
+  // A live channel and a film each get their bumper line; the triggers are a film's only.
+  assert.deepEqual(CONTROLLER_HELP.filter((l) => l.buttons.includes('LB')).map((l) => l.only), ['live', 'film'])
+  assert.deepEqual(CONTROLLER_HELP.filter((l) => l.buttons.includes('LT')).map((l) => l.only), ['film'])
 })

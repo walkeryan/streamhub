@@ -5,7 +5,7 @@
  *
  * A game controller arrives here as keys too (nav/gamepadKeys.ts): X is MediaPlayPause, Y Info,
  * Start ContextMenu, the bumpers Page Down/Up, the triggers Shift+Page Down/Up and the right stick
- * AudioVolumeUp/Down.
+ * AudioVolumeUp/Down. Its buttons are listed for the sheet and the hint row below.
  */
 import { MID_STEP_S } from './seekSteps.ts'
 
@@ -125,3 +125,47 @@ export const SHORTCUT_HELP: ReadonlyArray<{ title: string; lines: ShortcutLine[]
   ] },
 ]
 
+/** A controller's buttons, by the names printed on an Xbox controller. RS is the right stick. */
+export type PadButton = 'A' | 'B' | 'X' | 'Y' | 'LB' | 'RB' | 'LT' | 'RT' | 'View' | 'Start' | 'D-pad' | 'LS' | 'RS'
+
+export interface PadLine { buttons: PadButton[]; does: string; only?: 'film' | 'live' }
+
+/** The sheet's Controller section: every button, as nav/gamepadKeys.ts maps it and the keys above answer it. */
+export const CONTROLLER_HELP: readonly PadLine[] = [
+  { buttons: ['D-pad', 'LS'], does: 'Move between controls' },
+  { buttons: ['A'], does: 'Select' },
+  { buttons: ['B', 'View'], does: 'Back: close what is open, hide the controls, then leave' },
+  { buttons: ['X'], does: 'Play or pause' },
+  { buttons: ['Y'], does: 'Stream information' },
+  { buttons: ['Start'], does: 'Menu: audio, subtitles, quality and more' },
+  { buttons: ['LB', 'RB'], does: 'Previous or next channel', only: 'live' },
+  { buttons: ['LB', 'RB'], does: 'Back or forward 10 seconds. Hold to move faster.', only: 'film' },
+  { buttons: ['LT', 'RT'], does: 'Back or forward 30 seconds', only: 'film' },
+  { buttons: ['RS'], does: 'Push up or down for the volume' },
+]
+
+export interface PadHintContext {
+  /** A live channel (also one a room is watching). */
+  live: boolean
+  /** Up/Down and the bumpers change channel: a live channel outside a room. */
+  zappable: boolean
+  /** A watch room: a live channel in one plays on for everyone. */
+  room: boolean
+  canSeek: boolean
+  paused: boolean
+}
+
+export interface PadHint { buttons: PadButton[]; does: string }
+
+/** The player's row of controller hints: only what the buttons do here and now. */
+export function padHints(ctx: PadHintContext): PadHint[] {
+  const hints: PadHint[] = []
+  if (!(ctx.live && ctx.room)) hints.push({ buttons: ['X'], does: ctx.paused ? 'Play' : 'Pause' })
+  if (ctx.live && ctx.zappable) hints.push({ buttons: ['LB', 'RB'], does: 'Channel' })
+  if (!ctx.live && ctx.canSeek) {
+    hints.push({ buttons: ['LB', 'RB'], does: '10 s' })
+    hints.push({ buttons: ['LT', 'RT'], does: '30 s' })
+  }
+  hints.push({ buttons: ['RS'], does: 'Volume' }, { buttons: ['Y'], does: 'Info' }, { buttons: ['Start'], does: 'Menu' })
+  return hints
+}

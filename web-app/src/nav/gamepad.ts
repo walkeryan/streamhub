@@ -48,6 +48,29 @@ function scrollBy(dir: -1 | 1): void {
   box.scrollBy({ top: dir * Math.round((page ? window.innerHeight : box.clientHeight) * SCROLL_SHARE) })
 }
 
+// ---- when a controller was last used: the hints (PadHints.tsx) show only to someone holding one ----
+let lastUse = 0
+let lastTold = 0
+const listeners = new Set<(at: number) => void>()
+/** Listeners hear a held button at most this often, not at every repeat. */
+const TELL_EVERY_MS = 5000
+
+/** When a controller button last went down (Date.now()), 0 if never on this page. */
+export function lastControllerUse(): number { return lastUse }
+
+/** Called when a controller is used: at once the first time, then at most every few seconds. */
+export function onControllerUse(listener: (at: number) => void): () => void {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
+function used(): void {
+  lastUse = Date.now()
+  if (lastUse - lastTold < TELL_EVERY_MS) return
+  lastTold = lastUse
+  for (const listener of [...listeners]) listener(lastUse)
+}
+
 let started = false
 
 export function startGamepadNavigation(): void {
@@ -62,6 +85,7 @@ export function startGamepadNavigation(): void {
     const pads = connectedPads()
     const { down, up } = padStep(repeatAt, heldKeys(pads.map(snapshot)), performance.now())
     for (const key of up) press('keyup', key)
+    if (down.length) used()
     for (const key of down) {
       const taken = !press('keydown', key)
       const scroll = SCROLL_KEYS.get(key)

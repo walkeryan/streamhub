@@ -103,6 +103,9 @@
 .keys section:first-child { grid-row: span 2; }
 .keys-line { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); gap: 0.75rem; align-items: center; font-size: var(--text-label); }
 .keys-line > span:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; }
+/* The controller's buttons: the whole width, its lines in two columns where there is room. */
+.keys .keys-pad { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem 2rem; }
+.keys-pad > h3 { grid-column: 1 / -1; }
 .kbd {
   font-family: inherit; display: inline-flex; align-items: center; justify-content: center; min-width: 1.625rem; height: 1.625rem; padding: 0 0.4375rem;
   border-radius: var(--radius-sm); background: var(--t-surface-alt); border: 1px solid color-mix(in srgb, var(--t-text) 24%, transparent);
@@ -121,6 +124,7 @@
   .seek-hint[data-side='right'] { right: 6%; }
   .keys { grid-template-columns: minmax(0, 1fr); }
   .keys section:first-child { grid-row: auto; }
+  .keys .keys-pad { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- stream information ---------- */
@@ -148,3 +152,11 @@
   .pinfo dl > div { grid-template-columns: 7rem minmax(0, 1fr); }
 }
 .pinfo-close svg { width: 1.125rem; height: 1.125rem; }
+
+/* ---------- controller hints (components/PadHints.tsx): only for someone holding a controller ---------- */
+/* One quiet line under the control bar, or in the channel banner; it wraps rather than overflow a phone. */
+.pad-hints { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 1rem; padding-top: 0.25rem; font-size: var(--text-label); font-weight: 500; color: rgba(255,255,255,.8); }
+.osd .pad-hints { padding-top: 0.375rem; }
+.pad-hint { display: inline-flex; align-items: center; gap: 0.375rem; white-space: nowrap; }
+/* On the picture the pills are the player's frosted white, whatever the theme. */
+.player .pad-hints .pad-btn:not(.pad-face) { background: rgba(255,255,255,.14); color: #fff; border-color: rgba(255,255,255,.32); }

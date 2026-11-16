@@ -10,6 +10,7 @@ import { useCatalogFreshness } from './api/catalogFreshness'
 import { Rail } from './components/Rail'
 import { WhoIsWatching } from './components/WhoIsWatching'
 import { Button, ErrorState, Skeleton, Toasts } from './components/ui'
+import { ControllerHint } from './components/PadHints'
 import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
 import { bootTheme, useTheme } from './lib/theme'
@@ -147,5 +148,5 @@ export function App() {
       </Suspense>
     )
   }
-  return <>{body}<Toasts /></>
+  return <>{body}<Toasts /><ControllerHint /></>
 }
