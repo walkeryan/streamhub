@@ -15,10 +15,10 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
  *
  * The renderer is only on the classpath when the app is built with `-Pstreamhub.ffmpegDecoder=true`
  * (it is GPL-3.0, so the default build leaves it out). It is looked up by name: this file compiles
- * and behaves like the stock factory without it. When present it goes ahead of the platform audio
- * decoders, so a TV that lacks AC-3/E-AC-3/DTS, or advertises a decoder that outputs silence, still
- * has sound; the cost is that audio is decoded to PCM here rather than passed through to a receiver.
- * Video is never decoded in software.
+ * and behaves like the stock factory without it. When present it goes after the platform audio
+ * renderers: a track the TV can decode or pass through to a receiver still goes that way, and only a
+ * track nothing on the TV can play (DTS on most TVs) is decoded to PCM here, so it has sound instead
+ * of being marked "not supported". Video is never decoded in software.
  */
 @OptIn(UnstableApi::class)
 internal class SoftwareAudioRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
@@ -32,9 +32,9 @@ internal class SoftwareAudioRenderersFactory(context: Context) : DefaultRenderer
         eventListener: AudioRendererEventListener,
         out: ArrayList<Renderer>,
     ) {
-        val first = out.size
         super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, out)
-        softwareAudioRenderer(eventHandler, eventListener, audioSink)?.let { out.add(first, it) }
+        // Last: Media3 gives a track to the first renderer that handles it, so this is the fallback.
+        softwareAudioRenderer(eventHandler, eventListener, audioSink)?.let { out.add(it) }
     }
 
     private fun softwareAudioRenderer(handler: Handler, listener: AudioRendererEventListener, sink: AudioSink): Renderer? =

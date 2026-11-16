@@ -210,24 +210,24 @@ To bundle one, build with a Gradle property:
 
 This adds a prebuilt FFmpeg decoder for Media3 (`io.github.anilbeesetti:nextlib-media3ext`, pinned in
 `gradle/libs.versions.toml` to the build made for the pinned Media3 version). No code changes:
-`SoftwareAudioRenderersFactory` finds its audio renderer by reflection and puts it ahead of the
-platform decoders. Things to know before turning it on:
+`SoftwareAudioRenderersFactory` finds its audio renderer by reflection and puts it after the
+platform decoders, so it only plays tracks the TV itself cannot (typically DTS). Things to know
+before turning it on:
 
 - **Licence.** That artifact is GPL-3.0, so an APK built with the property is a GPL-3.0 combined work.
   The property is off by default so the normal build keeps its own licence; do not distribute a
   build made with it unless you can meet the GPL's terms.
-- **Audio only, and no passthrough.** Audio is decoded to PCM on the TV, so a receiver or soundbar
-  gets PCM rather than the original bitstream. Video always stays on the hardware decoders.
+- **Audio only.** A track the TV decodes or passes through to a receiver still goes that way; a
+  track only FFmpeg can play reaches a receiver or soundbar as PCM. Video always stays on the
+  hardware decoders.
 - **Size.** The artifact carries native libraries for four ABIs and adds roughly 10 MB per ABI.
 - **Keeping versions in step.** When `media3` is bumped, bump `media3FfmpegDecoder` to the build for
   the same Media3 version, or leave the property off until one exists.
-- Not exercised on a device yet: the dependency and the reflective lookup are in place, the actual
-  decoding has not been heard on a TV.
 
 Alternative without the GPL artifact: build Media3's own `decoder_ffmpeg` module with the codecs
 you need (see `libraries/decoder_ffmpeg/README.md` in the Media3 source for the pinned tag) and add
 the resulting AAR to `core/player` as a file dependency. The stock renderer in it is also picked
-up by reflection (`EXTENSION_RENDERER_MODE_PREFER`); check FFmpeg's licence for your configure flags.
+up by reflection (`EXTENSION_RENDERER_MODE_ON`); check FFmpeg's licence for your configure flags.
 
 ## Module map
 
