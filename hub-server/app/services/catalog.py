@@ -20,7 +20,7 @@ from app.infra.crypto import Crypto
 from app.infra.db import Database
 from app.infra.models import Channel, Favorite, Profile, Progress, Setting, Source, Title, Watchlist
 from app.services import ids
-from app.services.adult import general_audience, is_general_audience
+from app.services.adult import adult_included, general_audience, is_general_audience
 from app.services.availability import ATTRIBUTION, AvailabilityService
 from app.services.context import absolute
 from app.services.errors import BadGateway, Forbidden, NotFound
@@ -314,7 +314,11 @@ class CatalogService:
                 out[t["id"]] = t
         for media_type, tid in tmdb_keys:
             hub = ids.tmdb_id(media_type, tid)
-            rows = await self.rows_for_tmdb(media_type, tid, general=True)
+            rows = await self.rows_for_tmdb(media_type, tid)
+            # An id is adult if any row behind it is (as ``require_adult`` decides). Saved from an adult
+            # title, it stays out of the list whole: neither another copy nor a metadata tile stands in.
+            if not adult_included() and any(r.adult for r in rows):
+                continue
             rows = [r for r in rows if r.source_id in ctx.sources]
             if rows:
                 merged = ctx.merge(ctx.title_tile(r) for r in rows)

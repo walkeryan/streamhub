@@ -145,6 +145,31 @@ async def test_home_rows_and_hero_hide_adult_rows(seeded: Api) -> None:
         assert_clean((await api.get(path)).json())
 
 
+async def test_a_saved_adult_id_is_no_metadata_tile_in_personal_lists(seeded: Api) -> None:
+    """Continue Watching, favorites and history resolve tmdb ids; one behind an adult row is left out,
+    not shown from metadata instead, until an unlocked session asks for adult rows."""
+    api = seeded
+    async with api.c.db.session() as s:
+        s.add(Progress(profile_id=api.profile_id, ref_id="tmdb:movie:900", position_ms=600_000, duration_ms=900_000))
+        s.add(Favorite(profile_id=api.profile_id, kind="movie", ref_id="tmdb:movie:900"))
+        await s.commit()
+    meta = AsyncMock()
+    meta.enabled = True
+    meta.details.return_value = MetaTitle(900, "movie", "Late Tide", 2020)
+    meta.trending.return_value = []
+    api.c.catalog.meta = meta
+    home = (await api.get("/home")).json()
+    assert_clean(home)
+    rows = {row["id"]: [t["id"] for t in row["tiles"]] for row in home["rows"]}
+    assert rows["continue_watching"] == ["lib:catalog:watched"]
+    for path in ("/favorites", "/watchlist", "/history"):
+        assert_clean((await api.get(path)).json())
+    await unlock_adult(api)
+    opted = (await api.get("/home", params={"include_adult": "true"})).json()
+    rows = {row["id"]: [t["id"] for t in row["tiles"]] for row in opted["rows"]}
+    assert "tmdb:movie:900" in rows["continue_watching"]
+
+
 async def unlock_adult(api: Api) -> None:
     """The owner holds watch.adult; the session still has to be unlocked with their own PIN."""
     me = (await api.get("/auth/me")).json()["user"]["id"]
