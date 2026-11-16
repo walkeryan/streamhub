@@ -495,6 +495,9 @@ class PlaybackRequest(_M):
     audio_track: int | None = Field(default=None, ge=0, le=255)
     start_position_ms: int | None = Field(default=None, ge=0)
     max_height: Literal[480, 720, 1080] | None = None
+    # The live channel this device is switching away from (another feed of the same game): its stream
+    # here is stopped at once when nobody else uses it, instead of keeping the source's connection.
+    replaces: str | None = Field(default=None, max_length=512)
 
 
 class AlternateFeed(_M):

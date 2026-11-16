@@ -697,6 +697,7 @@ components:
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
+        replaces: {type: string, nullable: true, maxLength: 512, description: "The live channel (ch:…) this device is switching away from to another feed of the same game. Its stream on this server is stopped before the new one is resolved, instead of keeping the source's connection through its linger, when nobody else uses it (another viewer or device, a recording, a watch room, a multiview pair, a buffered session). Ignored unless both ids are channels and the request is live (no catch-up or rewind)."}
     AlternateFeed:
       type: object
       required: [channel_id, channel_name, programme_id]

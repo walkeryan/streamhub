@@ -43,6 +43,16 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
             raise Forbidden(
                 "This playback attempt was stopped. Start playback again manually.", code="playback_stopped"
             )
+    if (
+        body.replaces
+        and body.replaces != body.id
+        and body.replaces.startswith("ch:")
+        and body.id.startswith("ch:")
+        and not (body.catchup_programme_id or body.rewind_at)
+    ):
+        # A feed switch: the channel left behind gives its source connection back before the new one
+        # asks for it. Only this device's own stream is touched, so nothing here needs authorizing.
+        await c.proxy.release_replaced(p.profile_id, p.session_id, body.replaces)
     generation = c.proxy.generation
     result = await c.playback.resolve(
         p.profile_id,
