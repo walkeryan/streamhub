@@ -479,14 +479,55 @@ class CatalogService:
         if row.kind in ("show", "series", "season"):
             kids = await self.children_rows(row)
             for k in kids:
-                t = ctx.title_tile(k)
-                t["id"] = ids.lib_id(k.source_id, k.ext_id)
-                t["kind"] = k.kind
-                if k.kind == "episode":
-                    # Not the provider's release line or file name: the episode's own name and number.
-                    t["title"] = ids.episode_display_title(k.title, k.episode_number)
-                (tile["seasons"] if k.kind == "season" else tile["episodes"]).append(t)
+                (tile["seasons"] if k.kind == "season" else tile["episodes"]).append(self._child_tile(k, ctx))
         return tile
+
+    @staticmethod
+    def _child_tile(k: Title, ctx: TileContext) -> dict[str, Any]:
+        """A season or episode of one library copy, under its own ``lib:`` id."""
+        t = ctx.title_tile(k)
+        t["id"] = ids.lib_id(k.source_id, k.ext_id)
+        t["kind"] = k.kind
+        if k.kind == "episode":
+            # Not the provider's release line or file name: the episode's own name and number.
+            t["title"] = ids.episode_display_title(k.title, k.episode_number)
+        return t
+
+    async def _merged_seasons(
+        self, shows: list[Title], ctx: TileContext
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Every season any library copy of a series has, one per season number, and the first one's episodes.
+
+        Taking the seasons of one copy alone hid the rest: a provider carrying only season 2 of a
+        show the library server has in full made the page list "Season 2" and nothing else (and
+        offer no request, since nothing is missing). The copy with the most seasons gives each
+        season it has; the others fill in the ones it lacks.
+        """
+        copies: list[tuple[list[Title], list[Title]]] = []
+        for show in shows:
+            kids = await self.children_rows(show)
+            copies.append(([k for k in kids if k.kind == "season"], [k for k in kids if k.kind == "episode"]))
+        copies.sort(key=lambda copy: -len(copy[0]))  # stable: equal copies keep the source order
+        chosen: dict[int, Title] = {}
+        unnumbered: list[Title] = []
+        for i, (seasons, _) in enumerate(copies):
+            for season in seasons:
+                if season.season_number is None:
+                    if i == 0:
+                        unnumbered.append(season)
+                elif season.season_number not in chosen:
+                    chosen[season.season_number] = season
+        order = [chosen[n] for n in sorted(chosen)] + unnumbered
+        if not order:
+            return [], [self._child_tile(e, ctx) for e in copies[0][1]] if copies else []
+        first = order[0]
+        # The episodes shown before a season is picked are the first season's, from the copy that gave it.
+        episodes = [
+            e for _, eps in copies for e in eps if e.source_id == first.source_id and e.parent_ext_id == first.ext_id
+        ]
+        if not episodes:
+            episodes = [k for k in await self.children_rows(first) if k.kind == "episode"]
+        return [self._child_tile(s, ctx) for s in order], [self._child_tile(e, ctx) for e in episodes]
 
     async def _tmdb_detail(
         self, media_type: str, tmdb_id: int, ctx: TileContext, preferred: Title | None = None
@@ -539,12 +580,10 @@ class CatalogService:
             detail = await self._lib_detail(primary, ctx, base=tile)
             detail["id"] = hub
             return detail
-        # seasons/episodes from the best library match (playable), else none
-        show_src = next((m for m in matches if m.kind in ("show", "series")), None)
-        if media_type == "tv" and show_src is not None:
-            lib = await self._lib_detail(show_src, ctx, base=ctx.title_tile(show_src))
-            detail["seasons"] = lib["seasons"]
-            detail["episodes"] = lib["episodes"]
+        # Seasons and episodes from every library copy of the series (see _merged_seasons), else none.
+        shows = [m for m in matches if m.kind in ("show", "series")]
+        if media_type == "tv" and shows:
+            detail["seasons"], detail["episodes"] = await self._merged_seasons(shows, ctx)
         if not detail.get("poster") and matches:
             detail["poster"] = ctx.title_tile(matches[0])["poster"]
         return detail
