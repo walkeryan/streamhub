@@ -205,10 +205,7 @@ class CatalogService:
         def image(src: Source | None, url: str | None, ref: str | None = None) -> str | None:
             if not url or src is None or not via_hub(src, url):
                 return url
-            payload = image_payload(src.id, url, ref, self.content_policy)
-            if payload is None:
-                return None
-            token = self._crypto.sign_json(payload)
+            token = self._crypto.sign_json(image_payload(src.id, url))
             return absolute(f"/api/v1/images/{token}")
 
         return image

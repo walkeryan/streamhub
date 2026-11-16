@@ -632,11 +632,9 @@ async def image_proxy(token: str, request: Request, c: C) -> Response:
     d = c.crypto.verify_json(token)
     if not isinstance(d, dict):
         raise NotFound("image not found")
-    from app.services.image_grants import WEB_SCHEMES, validate_image_grant
+    from app.services.image_grants import WEB_SCHEMES, cache_control, validate_image_grant
 
-    # Signed for a user without ``remote.access``: served where their session is, at home.
-    require_reachable(request, c, not d.get("home"))
-    await validate_image_grant(d, c.content_policy, c.auth)
+    await validate_image_grant(d)
     source_id = str(d.get("s"))
     try:
         src, prov = await c.sources.provider_for(source_id)
@@ -671,20 +669,17 @@ async def image_proxy(token: str, request: Request, c: C) -> Response:
         body, media_type = resp.content, resp.headers.get("content-type", "image/jpeg")
         if foreign and not media_type.lower().startswith("image/"):
             raise NotFound("image not found")
-        # The fetch can outlive the grant (session revoked, policy changed): check again.
-        await validate_image_grant(d, c.content_policy, c.auth)
         if media_type.lower().startswith("image/"):
             # Fitted before it is kept: the cache and every later viewer get the light copy.
             body, media_type = await asyncio.to_thread(fit, body, media_type)
             if cache is not None:
                 await cache.put(source_id, url, body, media_type)
-    private = c.content_policy.enabled or "profile" in d or bool(d.get("home"))
     return Response(
         body,
         media_type=media_type,
         headers={
-            # Bound to one viewer (a rating ceiling, or the home network): theirs alone.
-            "Cache-Control": "private, no-store" if private else "public, max-age=86400",
+            # One URL per image for everyone (image_grants): every cache may keep it until it expires.
+            "Cache-Control": cache_control(d),
             # Never let a browser reinterpret or run what a provider called an image (SVG included).
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'none'; sandbox",

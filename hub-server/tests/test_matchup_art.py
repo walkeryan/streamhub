@@ -13,7 +13,6 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -225,43 +224,23 @@ def policy(*, enabled: bool = False, applies: bool = False) -> Any:
     return SimpleNamespace(enabled=enabled, applies_to=lambda principal: applies)
 
 
-async def test_unbound_grant_for_an_unrestricted_viewer() -> None:
-    token = active_principal.set(
-        Principal("adult", True, True, 1, "adult-session", permissions=frozenset({"remote.access"}))
-    )
-    try:
-        payload = art_payload(KEY, policy())
-    finally:
-        active_principal.reset(token)
-    assert payload is not None and "profile" not in payload and "home" not in payload
-    assert await validate_art_grant(payload, policy(), SimpleNamespace(session_valid=AsyncMock())) == KEY
+async def test_one_url_per_matchup_image_whoever_asks() -> None:
+    signed = []
+    for who in (
+        Principal("adult", True, True, 1, "adult-session", permissions=frozenset({"remote.access"})),
+        Principal("kid", False, True, 4, "kid-session"),
+    ):
+        token = active_principal.set(who)
+        try:
+            signed.append(art_payload(KEY, policy(applies=True)))
+        finally:
+            active_principal.reset(token)
+    assert signed[0] == signed[1] and set(signed[0]) == {"m", "x"}
+    assert await validate_art_grant(signed[0]) == KEY
     with pytest.raises(Forbidden):
-        await validate_art_grant({**payload, "x": time.time() - 1}, policy(), None)
+        await validate_art_grant({**signed[0], "x": time.time() - 1})
     with pytest.raises(Forbidden):
-        await validate_art_grant({**payload, "m": "../secret.key"}, policy(), None)
-    # Under the legacy policy flag an unbound grant is no grant.
-    with pytest.raises(Forbidden):
-        await validate_art_grant(payload, policy(enabled=True), None)
-
-
-async def test_bound_grant_checks_the_session() -> None:
-    token = active_principal.set(Principal("kid", False, True, 4, "kid-session"))
-    try:
-        payload = art_payload(KEY, policy(applies=True))
-    finally:
-        active_principal.reset(token)
-    assert payload is not None
-    # The kid has no remote access: home network only, and their own session.
-    assert payload["home"] is True and payload["profile"] == "kid" and payload["session"] == "kid-session"
-    assert time.time() + 300 <= payload["expires"] <= time.time() + 600
-    auth = SimpleNamespace(session_valid=AsyncMock())
-    assert await validate_art_grant(payload, policy(applies=True), auth) == KEY
-    auth.session_valid.assert_awaited_once_with("kid", 4, "kid-session")
-    for change in ({"session": None}, {"version": True}, {"expires": time.time() - 1}, {"expires": time.time() + 4000}):
-        with pytest.raises(Forbidden):
-            await validate_art_grant({**payload, **change}, policy(applies=True), auth)
-    # No session to bind to: no URL.
-    assert art_payload(KEY, policy(applies=True)) is None
+        await validate_art_grant({**signed[0], "m": "../secret.key"})
 
 
 async def test_facts_ask_for_art_by_scoreboard_names_for_the_days_games(tmp_path: Path) -> None:
