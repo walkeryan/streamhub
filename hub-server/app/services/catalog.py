@@ -85,17 +85,11 @@ SPORTS_VOD_WORDS = (
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
-def sports_vod_groups() -> Select[Any]:
-    """The provider categories that are sports ones (see ``SPORTS_VOD_WORDS``).
-
-    Matched once per distinct category name, never once per title row.
-    """
-    names = select(Title.group_name.label("name")).where(Title.group_name.is_not(None)).distinct().subquery()
-    group = func.lower(names.c.name)
-    words = [
-        or_(group == w, group.like(f"{w} %"), group.like(f"% {w}"), group.like(f"% {w} %")) for w in SPORTS_VOD_WORDS
-    ]
-    return select(names.c.name).where(or_(group.like("%replay%"), *words))
+def is_sports_vod_group(name: str) -> bool:
+    """A provider category that is a sports one: a word of ``SPORTS_VOD_WORDS``, or "replay" anywhere."""
+    lowered = name.lower()
+    words = lowered.split(" ")
+    return "replay" in lowered or any(w in words for w in SPORTS_VOD_WORDS)
 
 
 def title_sort_key() -> ColumnElement[str]:
@@ -175,6 +169,7 @@ class CatalogService:
         self.sources = sources
         self.availability = availability
         self.meta = meta
+        self._sports_groups: tuple[int, frozenset[str]] | None = None
         self._metadata_slots = asyncio.Semaphore(6)
         # What the metadata provider answered for a query, for a few minutes; and the searches still
         # in flight, so that one outliving its budget is waited on, not asked again.
@@ -227,7 +222,27 @@ class CatalogService:
             is_in_app=self.sources.registry.is_in_app,
             favorites=favorites,
             progress=progress,
+            sports_groups=await self.sports_groups(),
         )
+
+    async def sports_groups(self) -> frozenset[str]:
+        """The provider categories that are sports ones, worked out once per catalog revision.
+
+        Matching them inside every browse query made SQLite test each pattern against every title
+        row (about 0.8 s a query on a 40k-title library, four queries to a Home); there are a few
+        dozen category names, so they are listed here and the query only compares names.
+        """
+        revision = self._db.catalog_revisions.catalog
+        cached = self._sports_groups
+        if cached is not None and cached[0] == revision:
+            return cached[1]
+        async with self._db.session() as session:
+            names = (
+                await session.execute(select(Title.group_name).where(Title.group_name.is_not(None)).distinct())
+            ).scalars()
+            found = frozenset(name for name in names if name and is_sports_vod_group(name))
+        self._sports_groups = (revision, found)
+        return found
 
     def _enabled(self, ctx: TileContext) -> list[str]:
         return [sid for sid, s in ctx.sources.items() if s.enabled]
@@ -622,11 +637,17 @@ class CatalogService:
 
     # ------------------------------------------------------------------ browse
     def _browse_query(
-        self, kinds: tuple[str, ...], source_ids: list[str], source_id: str | None, genre: str | None
+        self,
+        kinds: tuple[str, ...],
+        source_ids: list[str],
+        source_id: str | None,
+        genre: str | None,
+        sports: frozenset[str] = frozenset(),
     ) -> Select[Any]:
+        """``sports``: the sports categories (``TileContext.sports_groups``), left out of films."""
         q = select(Title).where(Title.kind.in_(kinds), Title.source_id.in_(source_ids), general_audience())
-        if any(k in ids.MOVIE_KINDS for k in kinds):
-            q = q.where(or_(Title.group_name.is_(None), Title.group_name.not_in(sports_vod_groups())))
+        if sports and any(k in ids.MOVIE_KINDS for k in kinds):
+            q = q.where(or_(Title.group_name.is_(None), Title.group_name.not_in(sorted(sports))))
         if source_id:
             q = q.where(Title.source_id == source_id)
         if genre:
@@ -673,7 +694,7 @@ class CatalogService:
         if kinds is None:
             raise NotFound("unknown section")
         ctx = await self.tile_context(profile_id)
-        query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
+        query = self._browse_query(kinds, self._enabled(ctx), source_id, None, ctx.sports_groups)
         if q and q.strip():
             query = query.where(Title.norm_title.like("%" + _escape_like(ids.normalise_title(q)) + "%", escape="\\"))
         query = self._filter_title_languages(query, await self.preferred_languages(profile_id, language))
@@ -694,7 +715,7 @@ class CatalogService:
         if kinds is None:
             raise NotFound("unknown section")
         ctx = await self.tile_context(profile_id)
-        query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
+        query = self._browse_query(kinds, self._enabled(ctx), source_id, None, ctx.sports_groups)
         async with self._db.session() as session:
             rows = (
                 await session.execute(
@@ -765,7 +786,7 @@ class CatalogService:
             raise NotFound("unknown section")
         ctx = await self.tile_context(profile_id)
         enabled = self._enabled(ctx)
-        query = self._browse_query(kinds, enabled, source_id, genre)
+        query = self._browse_query(kinds, enabled, source_id, genre, ctx.sports_groups)
         if category is not None:
             query = query.where(Title.group_name == category)
         if q and q.strip():
@@ -921,7 +942,9 @@ class CatalogService:
         kinds = BROWSE_KINDS.get(section)
         if kinds is None:
             raise NotFound("unknown section")
-        query = self._filter_title_languages(self._browse_query(kinds, self._enabled(ctx), source_id, None), languages)
+        query = self._filter_title_languages(
+            self._browse_query(kinds, self._enabled(ctx), source_id, None, ctx.sports_groups), languages
+        )
         async with self._db.session() as session:
             rows = (
                 await session.execute(
@@ -957,7 +980,9 @@ class CatalogService:
             raise NotFound("unknown section")
         if not names:
             return {}
-        query = self._filter_title_languages(self._browse_query(kinds, self._enabled(ctx), source_id, None), languages)
+        query = self._filter_title_languages(
+            self._browse_query(kinds, self._enabled(ctx), source_id, None, ctx.sports_groups), languages
+        )
         # Twice the limit: variants of one title merge into a single tile afterwards.
         position = (
             func.row_number()
@@ -1016,7 +1041,7 @@ class CatalogService:
         ``billboard`` keeps titles with a backdrop and a rating of 6 or more; without it any artwork will do.
         """
         art = Title.backdrop.is_not(None) if billboard else or_(Title.backdrop.is_not(None), Title.poster.is_not(None))
-        query = self._browse_query(BROWSE_KINDS[section], self._enabled(ctx), None, None).where(
+        query = self._browse_query(BROWSE_KINDS[section], self._enabled(ctx), None, None, ctx.sports_groups).where(
             Title.group_name == shelf, Title.adult.is_not(True), art
         )
         if billboard:
@@ -1091,7 +1116,7 @@ class CatalogService:
         if kinds is None:
             raise NotFound("unknown section")
         ctx = await self.tile_context(profile_id)
-        query = self._browse_query(kinds, self._enabled(ctx), source_id, None)
+        query = self._browse_query(kinds, self._enabled(ctx), source_id, None, ctx.sports_groups)
         if category is not None:
             query = query.where(Title.group_name == category)
         if q and q.strip():

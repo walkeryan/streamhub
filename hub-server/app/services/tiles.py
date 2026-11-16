@@ -126,6 +126,8 @@ class TileContext:
     is_in_app: Callable[[str], bool]
     favorites: set[str] = field(default_factory=set)
     progress: dict[str, Progress] = field(default_factory=dict)
+    # Provider categories that are sports, left out of film browsing (CatalogService.sports_groups).
+    sports_groups: frozenset[str] = frozenset()
 
     def progress_pct(self, *keys: str) -> float | None:
         for k in keys:
