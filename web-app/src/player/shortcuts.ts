@@ -2,7 +2,13 @@
  * The player's keyboard map, as data: the key handler in Player.tsx runs what this returns and the
  * shortcut sheet lists it. Arrows, Enter and Back keep their remote meaning wherever focus is being
  * moved (inside the control bar or a menu); everything here is extra for a keyboard.
+ *
+ * A game controller arrives here as keys too (nav/gamepadKeys.ts): X is MediaPlayPause, Y Info,
+ * Start ContextMenu, the bumpers Page Down/Up, the triggers Shift+Page Down/Up and the right stick
+ * AudioVolumeUp/Down. Its buttons are listed for the sheet and the hint row below.
  */
+import { MID_STEP_S } from './seekSteps.ts'
+
 export type MenuSection = 'all' | 'audio' | 'subs' | 'settings'
 
 export type ShortcutAction =
@@ -10,7 +16,9 @@ export type ShortcutAction =
   | { type: 'play' }
   | { type: 'pause' }
   | { type: 'stop' }
-  | { type: 'seek-step'; dir: -1 | 1; big: boolean }
+  /** [stepS]: a step of its own size (the triggers' 30 s), held or not. */
+  | { type: 'seek-step'; dir: -1 | 1; big: boolean; stepS?: number }
+  | { type: 'channel'; dir: -1 | 1 }
   | { type: 'seek-fraction'; digit: number }
   | { type: 'seek-start' }
   | { type: 'seek-end' }
@@ -55,6 +63,16 @@ export function shortcutFor(e: KeyLike, ctx: ShortcutContext): ShortcutAction | 
     case 'ArrowUp': case 'ArrowDown':
       if (ctx.live || ctx.navigating) return null
       return { type: 'volume', dir: e.key === 'ArrowUp' ? 1 : -1 }
+    // Page Up/Down (a controller's bumpers): the next or previous channel on live TV, which a room
+    // never changes; a 10 s step in a film, and with Shift (the triggers) 30 s. They are no focus
+    // keys, so they work inside the control bar too.
+    case 'PageUp': case 'PageDown': {
+      const dir = e.key === 'PageUp' ? 1 : -1
+      if (ctx.live) return ctx.room || e.shiftKey ? null : { type: 'channel', dir }
+      return e.shiftKey ? { type: 'seek-step', dir, big: false, stepS: MID_STEP_S } : { type: 'seek-step', dir, big: false }
+    }
+    // The right stick. Volume belongs to each viewer, on live TV and in a room as well.
+    case 'AudioVolumeUp': case 'AudioVolumeDown': return { type: 'volume', dir: e.key === 'AudioVolumeUp' ? 1 : -1 }
     case 'Home': return seekable ? { type: 'seek-start' } : null
     case 'End': return seekable ? { type: 'seek-end' } : null
     case '<': case '>': return ctx.live || ctx.room ? null : { type: 'speed', dir: e.key === '<' ? -1 : 1 }
@@ -65,7 +83,7 @@ export function shortcutFor(e: KeyLike, ctx: ShortcutContext): ShortcutAction | 
     case 'ContextMenu': case 'MediaTrackNext': return { type: 'menu', section: 'all' }
     case 'f': case 'F': return { type: 'fullscreen' }
     case 'p': case 'P': return { type: 'pip' }
-    case 'i': case 'I': return { type: 'info' }
+    case 'i': case 'I': case 'Info': return { type: 'info' }
     case '?': return { type: 'help' }
   }
   // Live keeps its digits for channel numbers.
@@ -80,13 +98,14 @@ export const SHORTCUT_HELP: ReadonlyArray<{ title: string; lines: ShortcutLine[]
   { title: 'Playback', lines: [
     { keys: ['Space', 'K'], does: 'Play or pause' },
     { keys: ['←', '→'], does: 'Back or forward 10 seconds. Hold to move faster.', only: 'film' },
-    { keys: ['J', 'L'], does: 'Back or forward 10 seconds', only: 'film' },
+    { keys: ['J', 'L', 'PgDn', 'PgUp'], does: 'Back or forward 10 seconds', only: 'film' },
+    { keys: ['Shift PgDn', 'Shift PgUp'], does: 'Back or forward 30 seconds', only: 'film' },
     { keys: ['Shift ←', 'Shift →'], does: 'Back or forward 1 minute', only: 'film' },
     { keys: ['0', '…', '9'], does: 'Jump to 0% … 90% of the title', only: 'film' },
     { keys: ['Home', 'End'], does: 'Jump to the start or near the end', only: 'film' },
     { keys: ['Enter'], does: 'Go to the chosen position now', only: 'film' },
     { keys: ['<', '>'], does: 'Slower or faster', only: 'film' },
-    { keys: ['↑', '↓'], does: 'Next or previous channel', only: 'live' },
+    { keys: ['↑', '↓', 'PgUp', 'PgDn'], does: 'Next or previous channel', only: 'live' },
     { keys: ['0', '…', '9'], does: 'Go to a channel number', only: 'live' },
     { keys: ['Enter'], does: 'Channel list', only: 'live' },
   ] },
@@ -105,3 +124,48 @@ export const SHORTCUT_HELP: ReadonlyArray<{ title: string; lines: ShortcutLine[]
     { keys: ['Esc'], does: 'Cancel a seek, close what is open, hide the controls, then leave' },
   ] },
 ]
+
+/** A controller's buttons, by the names printed on an Xbox controller. RS is the right stick. */
+export type PadButton = 'A' | 'B' | 'X' | 'Y' | 'LB' | 'RB' | 'LT' | 'RT' | 'View' | 'Start' | 'D-pad' | 'LS' | 'RS'
+
+export interface PadLine { buttons: PadButton[]; does: string; only?: 'film' | 'live' }
+
+/** The sheet's Controller section: every button, as nav/gamepadKeys.ts maps it and the keys above answer it. */
+export const CONTROLLER_HELP: readonly PadLine[] = [
+  { buttons: ['D-pad', 'LS'], does: 'Move between controls' },
+  { buttons: ['A'], does: 'Select' },
+  { buttons: ['B', 'View'], does: 'Back: close what is open, hide the controls, then leave' },
+  { buttons: ['X'], does: 'Play or pause' },
+  { buttons: ['Y'], does: 'Stream information' },
+  { buttons: ['Start'], does: 'Menu: audio, subtitles, quality and more' },
+  { buttons: ['LB', 'RB'], does: 'Previous or next channel', only: 'live' },
+  { buttons: ['LB', 'RB'], does: 'Back or forward 10 seconds. Hold to move faster.', only: 'film' },
+  { buttons: ['LT', 'RT'], does: 'Back or forward 30 seconds', only: 'film' },
+  { buttons: ['RS'], does: 'Push up or down for the volume' },
+]
+
+export interface PadHintContext {
+  /** A live channel (also one a room is watching). */
+  live: boolean
+  /** Up/Down and the bumpers change channel: a live channel outside a room. */
+  zappable: boolean
+  /** A watch room: a live channel in one plays on for everyone. */
+  room: boolean
+  canSeek: boolean
+  paused: boolean
+}
+
+export interface PadHint { buttons: PadButton[]; does: string }
+
+/** The player's row of controller hints: only what the buttons do here and now. */
+export function padHints(ctx: PadHintContext): PadHint[] {
+  const hints: PadHint[] = []
+  if (!(ctx.live && ctx.room)) hints.push({ buttons: ['X'], does: ctx.paused ? 'Play' : 'Pause' })
+  if (ctx.live && ctx.zappable) hints.push({ buttons: ['LB', 'RB'], does: 'Channel' })
+  if (!ctx.live && ctx.canSeek) {
+    hints.push({ buttons: ['LB', 'RB'], does: '10 s' })
+    hints.push({ buttons: ['LT', 'RT'], does: '30 s' })
+  }
+  hints.push({ buttons: ['RS'], does: 'Volume' }, { buttons: ['Y'], does: 'Info' }, { buttons: ['Start'], does: 'Menu' })
+  return hints
+}

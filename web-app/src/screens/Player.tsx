@@ -19,9 +19,10 @@ import { trackLabel } from '../player/audioTracks'
 import { seekableRanges } from '../player/restartSeek'
 import { Scrubber } from '../player/Scrubber'
 import { InfoPanel } from '../player/InfoPanel'
-import { ShortcutHelp } from '../player/ShortcutHelp'
+import { ShortcutHelp, helpTitle } from '../player/ShortcutHelp'
+import { PadHintRow, useControllerRecent } from '../components/PadHints'
 import { endTarget, fractionTarget, seekHint } from '../player/seekSteps'
-import { shortcutFor, type MenuSection, type ShortcutAction } from '../player/shortcuts'
+import { padHints, shortcutFor, type MenuSection, type ShortcutAction } from '../player/shortcuts'
 import { SPEEDS, loadPrefs, nextSpeed, nextVolume, savePrefs, speedLabel, type PlayerPrefs } from '../player/playerPrefs'
 import { useSeekControl } from '../player/useSeekControl'
 import { chosenQuality, loadQuality, qualityOptions, saveQuality, savingData, type QualityHeight } from '../player/quality'
@@ -189,6 +190,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   // A phone's bar has two rows of 44 px targets: what does not fit moves into the settings menu.
   const phone = usePhone()
   const zappable = isChannel && !room
+  // Someone holding a game controller is shown its buttons beside the controls.
+  const padRecent = useControllerRecent()
   // A dialog has the keys. The control bar does not: only its arrows and OK are navigation there.
   const blocking = audio.blocked || overlay === 'menu' || overlay === 'list' || help || state === 'error' || state === 'handoff' || !!roomCtl?.modal || !!together
   const blockingRef = useRef(false)
@@ -378,7 +381,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       case 'play': if (v?.paused) togglePlay(); break
       case 'pause': if (v && !v.paused) togglePlay(); break
       case 'stop': leaveOrExit(); break
-      case 'seek-step': seek.step(action.dir, { held: repeat, big: action.big }); break
+      case 'seek-step': seek.step(action.dir, { held: repeat, big: action.big, stepS: action.stepS }); break
+      case 'channel': zap(action.dir); showOsd(); break
       case 'seek-fraction': seek.jumpTo(fractionTarget(action.digit, duration)); break
       case 'seek-start': seek.jumpTo(0); break
       case 'seek-end': seek.jumpTo(endTarget(duration)); break
@@ -415,6 +419,9 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       const a = apiRef.current
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
+      // A real volume key has set the device's volume already: the player's as well would count it twice.
+      // The same keys sent by nav/gamepad.ts for a controller's right stick (untrusted) set the player's.
+      if (e.isTrusted && (e.key === 'AudioVolumeUp' || e.key === 'AudioVolumeDown')) return
       // A text field keeps its keys.
       if (isTyping(e.target)) return
       const handled = () => { e.preventDefault(); e.stopImmediatePropagation() }
@@ -459,8 +466,10 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       const action = shortcutFor(e, { live: a.titleLive, room: a.inRoom, navigating: inBar, scrubbing: inBar && getCurrentFocusKey() === 'pb:scrub' })
       if (action) {
         handled()
-        // A held key repeats a step or a volume change, never a toggle.
-        if (!e.repeat || action.type === 'seek-step' || action.type === 'volume') a.run(action, e.repeat)
+        // A zap with the controls hidden keeps them hidden, as Up/Down's do.
+        if (action.type === 'channel') a.hideIfHidden(visible)
+        // A held key repeats a step, a zap or a volume change, never a toggle.
+        if (!e.repeat || action.type === 'seek-step' || action.type === 'volume' || action.type === 'channel') a.run(action, e.repeat)
         return
       }
       // Inside the bar the arrows and OK belong to spatial navigation.
@@ -737,6 +746,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
               </div>
             )}
           </FocusGroup>
+          {padRecent && showChrome && <PadHintRow hints={padHints({ live, zappable, room: !!room, canSeek, paused })} />}
         </div>
       </div>
 
@@ -757,7 +767,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
               <div className="heading truncate">{channel?.name ?? title}</div>
               <div className="truncate">{channel?.now ? `${channel.now.title}  ${fmtTime(channel.now.start)} to ${fmtTime(channel.now.stop)}` : 'No programme data'}</div>
               {channel?.next && <div className="label truncate" style={{ color: 'rgba(255,255,255,.7)' }}>Next · {channel.next.title} at {fmtTime(channel.next.start)}</div>}
-              {!showChrome && !room && <div className="label truncate" style={{ color: 'rgba(255,255,255,.7)' }}>▲▼ change channel · ◀ ▶ show controls · OK channel list</div>}
+              {!showChrome && !room && !padRecent && <div className="label truncate" style={{ color: 'rgba(255,255,255,.7)' }}>▲▼ change channel · ◀ ▶ show controls · OK channel list</div>}
+              {!showChrome && padRecent && <PadHintRow hints={padHints({ live, zappable, room: !!room, canSeek, paused })} />}
             </div>
           </div>
           {channel?.now && <ProgressBar pct={pct} />}
@@ -826,7 +837,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
                 <MenuSection title="More">
                   {phone && room && <Button focusKey="pm:info" icon="info" onEnter={() => { closeOverlay(); setInfo(true) }}>Stream information</Button>}
                   {phone && room && <Button focusKey="pm:pip" icon="pip" onEnter={() => { closeOverlay(); void pip() }}>Picture in picture</Button>}
-                  <Button focusKey="pm:keys" icon="list" onEnter={() => { closeOverlay(); setHelp(true) }} testId="player-keys-btn">Keyboard shortcuts</Button>
+                  <Button focusKey="pm:keys" icon="list" onEnter={() => { closeOverlay(); setHelp(true) }} testId="player-keys-btn">{helpTitle()}</Button>
                 </MenuSection>
               )}
             </FocusGroup>

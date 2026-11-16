@@ -105,7 +105,7 @@ export function useSeekControl(videoRef: RefObject<HTMLVideoElement | null>, tar
     return o.enabled && (!o.room || o.room.canControl())
   }, [])
   /** One press of a step key or button. */
-  const step = useCallback((dir: -1 | 1, how: { held?: boolean; big?: boolean } = {}) => {
+  const step = useCallback((dir: -1 | 1, how: { held?: boolean; big?: boolean; stepS?: number } = {}) => {
     if (!pendingRef.current && !ready()) return
     move(accumulate(pendingRef.current, { dir, now: performance.now(), ...how }, position(), t.current.durationS))
   }, [move, position, ready])

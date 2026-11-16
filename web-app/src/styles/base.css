@@ -333,6 +333,36 @@ h1, h2, h3, p { margin: 0; }
 .toast[data-tone='success'] { border-color: var(--t-success); }
 @media (max-width: 720px) { .toasts { bottom: 4.75rem; right: 1rem; } }
 
+/* ---------- game controller: button glyphs and the first-use hint (components/PadHints.tsx) ---------- */
+/* A, B, X and Y keep the colours printed on the controller, since the colour names the button as much as
+   the letter does. A and B are the theme's own green and red; blue and yellow have no theme token. */
+:root { --pad-x: #3C8CF0; --pad-y: #F2C230; --pad-ink: #0B0F17; }
+.pad-glyphs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; }
+.pad-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 1.5rem; height: 1.5rem; padding: 0 0.4375rem;
+  border-radius: var(--radius-pill); background: var(--t-surface-alt); color: var(--t-text); border: 1px solid color-mix(in srgb, var(--t-text) 24%, transparent);
+  font-size: 0.6875rem; font-weight: 700; line-height: 1; letter-spacing: 0.02em; white-space: nowrap;
+}
+.pad-face { width: 1.5rem; padding: 0; border: 0; color: var(--pad-ink); font-size: var(--text-label); }
+.pad-btn[data-btn='A'] { background: var(--t-success); }
+.pad-btn[data-btn='B'] { background: var(--t-danger); }
+.pad-btn[data-btn='X'] { background: var(--pad-x); }
+.pad-btn[data-btn='Y'] { background: var(--pad-y); }
+.pad-intro {
+  position: fixed; z-index: 95; top: calc(var(--safe-y) + 0.5rem); left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: min(46rem, calc(100vw - 2rem)); display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.875rem 1rem;
+  border-radius: var(--radius-md); background: var(--t-surface-alt); color: var(--t-text); border-left: 0.25rem solid var(--t-accent); box-shadow: 0 0.5rem 2rem rgba(0,0,0,0.4);
+}
+.pad-intro-body { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.pad-intro-keys { display: flex; flex-wrap: wrap; gap: 0.375rem 1rem; font-size: var(--text-label); }
+.pad-intro-keys > span { display: inline-flex; align-items: center; gap: 0.375rem; white-space: nowrap; }
+.pad-intro-close {
+  flex: none; display: grid; place-items: center; width: 2rem; height: 2rem; margin: -0.25rem -0.25rem 0 0; border: 0; border-radius: var(--radius-pill);
+  background: transparent; color: var(--t-text-muted); cursor: pointer;
+}
+.pad-intro-close:hover { color: var(--t-text); background: color-mix(in srgb, var(--t-text) 10%, transparent); }
+@media (max-width: 720px) { .pad-intro { top: 0.75rem; } }
+
 /* grid */
 .grid-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-poster-w), 1fr)); gap: 1.25rem var(--tile-gap); padding: 1rem 0.5rem; }
 .grid-tiles .tile { width: auto; aspect-ratio: 2/3; height: auto; }
