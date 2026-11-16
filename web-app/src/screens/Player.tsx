@@ -378,7 +378,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       case 'play': if (v?.paused) togglePlay(); break
       case 'pause': if (v && !v.paused) togglePlay(); break
       case 'stop': leaveOrExit(); break
-      case 'seek-step': seek.step(action.dir, { held: repeat, big: action.big }); break
+      case 'seek-step': seek.step(action.dir, { held: repeat, big: action.big, stepS: action.stepS }); break
+      case 'channel': zap(action.dir); showOsd(); break
       case 'seek-fraction': seek.jumpTo(fractionTarget(action.digit, duration)); break
       case 'seek-start': seek.jumpTo(0); break
       case 'seek-end': seek.jumpTo(endTarget(duration)); break
@@ -415,6 +416,9 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       const a = apiRef.current
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
+      // A real volume key has set the device's volume already: the player's as well would count it twice.
+      // The same keys sent by nav/gamepad.ts for a controller's right stick (untrusted) set the player's.
+      if (e.isTrusted && (e.key === 'AudioVolumeUp' || e.key === 'AudioVolumeDown')) return
       // A text field keeps its keys.
       if (isTyping(e.target)) return
       const handled = () => { e.preventDefault(); e.stopImmediatePropagation() }
@@ -459,8 +463,10 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       const action = shortcutFor(e, { live: a.titleLive, room: a.inRoom, navigating: inBar, scrubbing: inBar && getCurrentFocusKey() === 'pb:scrub' })
       if (action) {
         handled()
-        // A held key repeats a step or a volume change, never a toggle.
-        if (!e.repeat || action.type === 'seek-step' || action.type === 'volume') a.run(action, e.repeat)
+        // A zap with the controls hidden keeps them hidden, as Up/Down's do.
+        if (action.type === 'channel') a.hideIfHidden(visible)
+        // A held key repeats a step, a zap or a volume change, never a toggle.
+        if (!e.repeat || action.type === 'seek-step' || action.type === 'volume' || action.type === 'channel') a.run(action, e.repeat)
         return
       }
       // Inside the bar the arrows and OK belong to spatial navigation.

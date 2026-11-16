@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { COMMIT_MS, HOLD_STEP_MS, accumulate, clampTarget, endTarget, fractionTarget, holdStep, jump, seekHint } from '../src/player/seekSteps.ts'
+import { COMMIT_MS, HOLD_STEP_MS, MID_STEP_S, accumulate, clampTarget, endTarget, fractionTarget, holdStep, jump, seekHint } from '../src/player/seekSteps.ts'
 import { SHORTCUT_HELP, shortcutFor } from '../src/player/shortcuts.ts'
 import { DEFAULT_PREFS, SPEEDS, clampSpeed, nextSpeed, nextVolume, parsePrefs, speedLabel } from '../src/player/playerPrefs.ts'
 
@@ -22,6 +22,12 @@ test('separate presses add ten seconds each to one pending target', () => {
   assert.deepEqual([pending.base, pending.target, pending.dir], [600, 630, -1])
   // Shift is a minute.
   assert.equal(accumulate(null, { dir: -1, now: 0, big: true }, 600, FILM).target, 540)
+  // A trigger's step is its own size, also when its presses come quickly enough to count as held.
+  assert.equal(accumulate(null, { dir: 1, now: 0, stepS: MID_STEP_S }, 600, FILM).target, 630)
+  let trigger = null
+  for (let now = 0; now <= 1200; now += 120) trigger = accumulate(trigger, { dir: -1, now, stepS: MID_STEP_S }, 3000, FILM)
+  assert.equal((3000 - trigger.target) % MID_STEP_S, 0)
+  assert.ok(3000 - trigger.target >= 4 * MID_STEP_S, `moved ${3000 - trigger.target}`)
   assert.ok(COMMIT_MS >= 400 && COMMIT_MS <= 600)
 })
 
@@ -112,6 +118,15 @@ test('the shortcut map for a film', () => {
   assert.deepEqual(shortcutFor(key('f'), film), { type: 'fullscreen' })
   assert.deepEqual(shortcutFor(key('p'), film), { type: 'pip' })
   assert.deepEqual(shortcutFor(key('i'), film), { type: 'info' })
+  assert.deepEqual(shortcutFor(key('Info'), film), { type: 'info' })
+  // Page Down/Up (a controller's bumpers) step 10 s; with Shift (its triggers) 30 s.
+  assert.deepEqual(shortcutFor(key('PageDown'), film), { type: 'seek-step', dir: -1, big: false })
+  assert.deepEqual(shortcutFor(key('PageUp'), film), { type: 'seek-step', dir: 1, big: false })
+  assert.deepEqual(shortcutFor(key('PageDown', { shiftKey: true }), film), { type: 'seek-step', dir: -1, big: false, stepS: 30 })
+  assert.deepEqual(shortcutFor(key('PageUp', { shiftKey: true }), film), { type: 'seek-step', dir: 1, big: false, stepS: 30 })
+  // The right stick's volume keys.
+  assert.deepEqual(shortcutFor(key('AudioVolumeUp'), film), { type: 'volume', dir: 1 })
+  assert.deepEqual(shortcutFor(key('AudioVolumeDown'), film), { type: 'volume', dir: -1 })
   assert.deepEqual(shortcutFor(key('?', { shiftKey: true }), film), { type: 'help' })
   assert.deepEqual(shortcutFor(key('MediaStop'), film), { type: 'stop' })
   // Enter, Escape and Backspace are not shortcuts: they commit, cancel and go back.
@@ -136,6 +151,9 @@ test('inside the control bar the arrows navigate; on the scrubber Left and Right
   assert.deepEqual(shortcutFor(key('f'), bar), { type: 'fullscreen' })
   assert.deepEqual(shortcutFor(key('j'), bar), { type: 'seek-step', dir: -1, big: false })
   assert.deepEqual(shortcutFor(key('4'), bar), { type: 'seek-fraction', digit: 4 })
+  // Nor are the controller's bumpers and right stick: they step and turn the volume from the bar too.
+  assert.deepEqual(shortcutFor(key('PageUp'), bar), { type: 'seek-step', dir: 1, big: false })
+  assert.deepEqual(shortcutFor(key('AudioVolumeDown'), bar), { type: 'volume', dir: -1 })
 })
 
 test('live keeps zap on Up and Down and its digits for channel numbers; nothing seeks or changes speed', () => {
@@ -144,21 +162,40 @@ test('live keeps zap on Up and Down and its digits for channel numbers; nothing 
   assert.deepEqual(shortcutFor(key('k'), live), { type: 'toggle-play' })
   assert.deepEqual(shortcutFor(key('m'), live), { type: 'mute' })
   assert.deepEqual(shortcutFor(key('s'), live), { type: 'menu', section: 'settings' })
+  // Page Up/Down (the bumpers) change channel; Shift (the triggers) has nothing to seek in. Volume is the viewer's.
+  assert.deepEqual(shortcutFor(key('PageUp'), live), { type: 'channel', dir: 1 })
+  assert.deepEqual(shortcutFor(key('PageDown'), live), { type: 'channel', dir: -1 })
+  assert.deepEqual(shortcutFor(key('PageDown'), { ...live, navigating: true }), { type: 'channel', dir: -1 })
+  assert.equal(shortcutFor(key('PageUp', { shiftKey: true }), live), null)
+  assert.deepEqual(shortcutFor(key('AudioVolumeUp'), live), { type: 'volume', dir: 1 })
+  assert.deepEqual(shortcutFor(key('Info'), live), { type: 'info' })
+  // A room watching a channel neither zaps nor seeks.
+  const liveRoom = { live: true, room: true, navigating: false }
+  for (const k of ['PageUp', 'PageDown']) {
+    assert.equal(shortcutFor(key(k), liveRoom), null, k)
+    assert.equal(shortcutFor(key(k, { shiftKey: true }), liveRoom), null, k)
+  }
   // A room plays at one speed for everyone, but its film can be moved and its volume is each member's own.
   const room = { live: false, room: true, navigating: false }
   assert.equal(shortcutFor(key('>'), room), null)
   assert.deepEqual(shortcutFor(key('ArrowRight'), room), { type: 'seek-step', dir: 1, big: false })
   assert.deepEqual(shortcutFor(key('ArrowUp'), room), { type: 'volume', dir: 1 })
+  // Its film steps with the bumpers and triggers as well; the room decides whether this member may.
+  assert.deepEqual(shortcutFor(key('PageUp', { shiftKey: true }), room), { type: 'seek-step', dir: 1, big: false, stepS: 30 })
 })
 
 test('every shortcut the sheet lists is one the map knows', () => {
-  const names = { Space: ' ', '←': 'ArrowLeft', '→': 'ArrowRight', '↑': 'ArrowUp', '↓': 'ArrowDown', 'Shift ←': 'ArrowLeft', 'Shift →': 'ArrowRight', Esc: null, Enter: null, '…': null }
+  const names = { Space: ' ', '←': 'ArrowLeft', '→': 'ArrowRight', '↑': 'ArrowUp', '↓': 'ArrowDown', 'Shift ←': 'ArrowLeft', 'Shift →': 'ArrowRight', PgUp: 'PageUp', PgDn: 'PageDown', 'Shift PgUp': 'PageUp', 'Shift PgDn': 'PageDown', Esc: null, Enter: null, '…': null }
   for (const group of SHORTCUT_HELP) for (const line of group.lines) for (const shown of line.keys) {
     const name = shown in names ? names[shown] : shown
     if (name === null) continue
     const context = { live: line.only === 'live', room: false, navigating: false }
-    // Live's arrows and digits are the player's own zap keys, not entries of the map.
-    if (line.only === 'live') { assert.equal(shortcutFor(key(name), context), null, shown); continue }
+    // Live's arrows and digits are the player's own zap keys, not entries of the map; Page Up/Down are its channel keys.
+    if (line.only === 'live') {
+      const action = shortcutFor(key(name), context)
+      assert.ok(action === null || action.type === 'channel', shown)
+      continue
+    }
     assert.ok(shortcutFor(key(name, { shiftKey: shown.startsWith('Shift') }), context), `${shown} (${line.does})`)
   }
 })

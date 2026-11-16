@@ -15,6 +15,8 @@ export const HOLD_STEP_MS = 100
 export const HOLD_GAP_MS = 150
 export const HOLD_AFTER_MS = 400
 export const STEP_S = 10
+/** A controller trigger's step (Shift+Page Up/Down on a keyboard): between a press and Shift's minute. */
+export const MID_STEP_S = 30
 export const BIG_STEP_S = 60
 
 export interface PendingSeek {
@@ -37,6 +39,8 @@ export interface SeekPress {
   held?: boolean
   /** Shift: a minute at a time. */
   big?: boolean
+  /** A step of this many seconds, held or not (a controller trigger's 30 s). */
+  stepS?: number
 }
 
 /** Steps grow while a key is held: 10 s for the first second, 30 s for the next two, then a minute. */
@@ -60,7 +64,7 @@ export function accumulate(pending: PendingSeek | null, press: SeekPress, positi
   // The keyboard's own repeat flag says "held" at once; a run of quick presses has to last before it is believed.
   const held = heldSince !== null && (!!press.held || press.now - heldSince >= HOLD_AFTER_MS)
   if (pending && sameWay && held && press.now - pending.lastStepAt < HOLD_STEP_MS) return { ...pending, heldSince, lastPressAt: press.now }
-  const step = press.big ? BIG_STEP_S : held ? holdStep(press.now - heldSince) : STEP_S
+  const step = press.stepS ?? (press.big ? BIG_STEP_S : held ? holdStep(press.now - heldSince) : STEP_S)
   const from = pending ? pending.target : position
   return { base: pending ? pending.base : position, target: clampTarget(from + press.dir * step, duration), dir: press.dir, heldSince, lastStepAt: press.now, lastPressAt: press.now }
 }
