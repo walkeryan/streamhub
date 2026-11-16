@@ -31,14 +31,30 @@ async function playUntilMoving(page: Page, id: string) {
   await expect.poll(() => page.getByTestId('video').evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(1)
 }
 
-/** The picture stops moving while the player still means to play: what a feed that went quiet looks like. */
-const freeze = (page: Page) => page.getByTestId('video').evaluate((v: HTMLVideoElement) => { v.playbackRate = 0 })
+/**
+ * The picture stops moving while the player still means to play. `arriving`: video keeps coming in
+ * meanwhile (the buffered end grows, as during the live cushion's hold); otherwise nothing more
+ * arrives, which is what a feed that went quiet looks like. The local fixture file is downloaded
+ * at once, so what the buffer reports is set here rather than left to the network.
+ */
+const freeze = (page: Page, arriving: boolean) => page.getByTestId('video').evaluate((v: HTMLVideoElement, arriving) => {
+  v.playbackRate = 0
+  const end = v.currentTime + 2
+  const started = performance.now()
+  Object.defineProperty(v, 'buffered', {
+    configurable: true,
+    get: () => {
+      const last = arriving ? end + (performance.now() - started) / 1000 : end
+      return { length: 1, start: () => 0, end: () => last }
+    },
+  })
+}, arriving)
 
 test('a game feed that stops switches to the next feed of the game and frees the old one', async ({ page }) => {
   await recordResolves(page)
   await signIn(page)
   await playUntilMoving(page, GAME_FEED)
-  await freeze(page)
+  await freeze(page, false)
   await expect(page).toHaveURL(new RegExp(`/play/${encodeURIComponent(OTHER_FEED)}$`), { timeout: 15_000 })
   await expect(page.locator('.toast').last()).toHaveText(/stopped — switched to LUMEX TV 007$/)
   const bodies = await resolves(page)
@@ -51,12 +67,22 @@ test('a stalled channel with no other feed of its game stays on the player\'s ow
   await recordResolves(page)
   await signIn(page)
   await playUntilMoving(page, LONE_GAME)
-  await freeze(page)
+  await freeze(page, false)
   await page.waitForTimeout(8_000)
   await expect(page).toHaveURL(new RegExp(`/play/${encodeURIComponent(LONE_GAME)}$`))
   const bodies = await resolves(page)
   expect(bodies.length).toBeGreaterThan(0)
   expect(bodies.every((b) => b.id === LONE_GAME && !b.replaces)).toBe(true)
+})
+
+test('a frozen picture while video still arrives is a hold, not a failure, and is not switched away from', async ({ page }) => {
+  await recordResolves(page)
+  await signIn(page)
+  await playUntilMoving(page, GAME_FEED)
+  await freeze(page, true)
+  await page.waitForTimeout(9_000)
+  await expect(page).toHaveURL(new RegExp(`/play/${encodeURIComponent(GAME_FEED)}$`))
+  expect((await resolves(page)).every((b) => !b.replaces)).toBe(true)
 })
 
 test('a picture the viewer paused is never switched away from', async ({ page }) => {

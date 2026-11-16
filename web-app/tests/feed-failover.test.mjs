@@ -22,6 +22,35 @@ test('a channel that played and then stops for longer than the stall window swit
   assert.equal(shouldSwitch(w, 20_000 + STALL_SWITCH_MS + 1), true)
 })
 
+test('a frozen picture while video still arrives (a cushion hold) never switches, however long', () => {
+  let w = run(watchChannel('ch:a', 0), 0, 10_000, { progressing: true, arriving: true, paused: false })
+  // A gap, then a hold for the reserve: the picture stands still while video keeps coming in.
+  w = run(w, 10_000, 13_000, { progressing: false, arriving: false, paused: false })
+  w = run(w, 13_000, 40_000, { progressing: false, arriving: true, paused: false })
+  assert.equal(w.troubleSince, null)
+  assert.equal(shouldSwitch(w, 40_000), false)
+  assert.equal(w.steadySince, null, 'a hold is not steady play')
+})
+
+test('no picture progress and no new video for longer than the window switches', () => {
+  let w = run(watchChannel('ch:a', 0), 0, 10_000, { progressing: true, arriving: true, paused: false })
+  w = run(w, 10_000, 12_000, { progressing: false, arriving: true, paused: false })
+  w = observe(w, { now: 12_000, progressing: false, arriving: false, paused: false })
+  assert.equal(shouldSwitch(w, 12_000 + STALL_SWITCH_MS), false)
+  assert.equal(shouldSwitch(w, 12_000 + STALL_SWITCH_MS + 1), true, 'the clock starts when the video stops arriving')
+})
+
+test('video arriving does not count as having played, nor start a run\'s steady clock', () => {
+  const origin = run(watchChannel('ch:a', 0), 0, 3_000, { progressing: true, paused: false })
+  let w = watchSwitched(origin, 'ch:b', 10_000)
+  w = run(w, 10_000, 50_000, { progressing: false, arriving: true, paused: false })
+  assert.equal(w.played, false)
+  assert.deepEqual(w.tried, ['ch:a', 'ch:b'])
+  // Once the video stops arriving, a feed that never started has used up its start-up grace.
+  w = observe(w, { now: 50_000, progressing: false, arriving: false, paused: false })
+  assert.equal(shouldSwitch(w, 50_000), true)
+})
+
 test('start-up of a channel the viewer chose is never a stall', () => {
   let w = watchChannel('ch:a', 0)
   w = run(w, 0, 60_000, { progressing: false, paused: false })

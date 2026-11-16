@@ -44,6 +44,7 @@ export function useFeedFailover(videoRef: RefObject<HTMLVideoElement | null>, op
   useEffect(() => {
     if (!enabled) return
     let last: number | null = null
+    let lastEnd: number | null = null
     let asking = false
     let stopped = false
     const tick = () => {
@@ -55,10 +56,17 @@ export function useFeedFailover(videoRef: RefObject<HTMLVideoElement | null>, op
       const step = last === null ? 0 : t - last
       last = t
       const progressing = !v.paused && step > 0 && step <= MAX_STEP_S
+      // The furthest buffered video: it grows while the stream delivers, and is reset by a new stream.
+      const b = v.buffered
+      const end = b.length ? b.end(b.length - 1) : 0
+      const grew = lastEnd !== null && end > lastEnd + 0.01
+      lastEnd = end
+      // A failed or reconnecting stream is not delivering, whatever a stale range says.
+      const arriving = grew && state !== 'error' && state !== 'reconnecting'
       // An error another feed would only repeat is the player's to show, like a pause is the viewer's.
       const paused = state === 'paused' || state === 'handoff' || held || (state === 'error' && refused)
       const now = performance.now()
-      const next = observe(w, { now, progressing, paused })
+      const next = observe(w, { now, progressing, arriving, paused })
       watch.current = next
       if (!shouldSwitch(next, now)) return
       asking = true
