@@ -143,8 +143,8 @@ const owners = (db: Db) => db.users.filter((u) => u.role_id === 'owner' && u.sta
 const hasGoogle = (u: StoredUser) => u.google_linked ?? u.kind === 'google'
 const methodsOf = (u: StoredUser): Method[] => [hasGoogle(u) ? 'google' : null, u.plex_account ? 'plex' : null, u.username && u.password ? 'password' : null].filter((m): m is Method => !!m)
 const out = (db: Db, u: StoredUser): S['User'] => {
-  const { grants: _g, denials: _d, limit_overrides: _l, shared_override: _s, pin, now_playing: _n, handed: _h, password: _p, plex_account: _x, google_linked: _o, ...user } = u
-  return { ...user, role_name: roleOf(db, u)?.name ?? null, has_pin: !!pin, on_shared_devices: sharedOf(db, u), username: u.username ?? null, plex_username: u.plex_account ? u.plex_username ?? null : null, sign_in_methods: methodsOf(u) }
+  const { grants: _g, denials: _d, limit_overrides: _l, shared_override: _s, pin: _pin, now_playing: _n, handed: _h, password: _p, plex_account: _x, google_linked: _o, ...user } = u
+  return { ...user, role_name: roleOf(db, u)?.name ?? null, ...secretOf(u), on_shared_devices: sharedOf(db, u), username: u.username ?? null, plex_username: u.plex_account ? u.plex_username ?? null : null, sign_in_methods: methodsOf(u) }
 }
 const listed = (db: Db, u: StoredUser): S['UserListItem'] => ({ ...out(db, u), now_playing: u.now_playing })
 const local = (db: Db, u: StoredUser): S['AuthSession'] =>
@@ -172,7 +172,7 @@ const tokensFor = (profile: Profile) =>
 const profileOf = (db: Db, id: string | null | undefined) => {
   const base = profiles.find((p) => p.id === id) ?? db.profiles.find((p) => p.id === id)
   const user = db.users.find((u) => u.profile_id === id)
-  return base && user ? { ...base, name: user.display_name, avatar: user.avatar ?? null, has_pin: !!user.pin, pin_arrows: user.pin ? user.pin_arrows ?? null : null } : base
+  return base && user ? { ...base, name: user.display_name, avatar: user.avatar ?? null, ...secretOf(user) } : base
 }
 
 /** A profile the three fixtures do not list: a user approved, invited or added while the mock ran. */
@@ -183,14 +183,39 @@ export const ownProfile = (request: Request): Profile[] => {
   const mine = callerOf(db, request)?.profile_id
   return mine && !profiles.some((p) => p.id === mine) ? [profileOf(db, mine)!] : []
 }
+type PinKind = NonNullable<S['User']['pin_kind']>
+/** Which kind a set-PIN body chooses: `kind` wins, then the older `arrows: true`, else a number PIN. */
+export const kindOfBody = (body: { kind?: unknown; arrows?: unknown }): PinKind =>
+  body.kind === 'password' || body.kind === 'arrows' || body.kind === 'pin' ? body.kind : body.arrows ? 'arrows' : 'pin'
+/** The one secret a person signs in with, as every listing shows it. */
+function secretOf(u: Pick<StoredUser, 'pin' | 'pin_kind' | 'pin_arrows'>): Pick<S['User'], 'has_pin' | 'pin_kind' | 'pin_arrows'> {
+  if (!u.pin) return { has_pin: false, pin_kind: null, pin_arrows: null }
+  const kind = u.pin_kind ?? (u.pin_arrows ? 'arrows' : 'pin')
+  return { has_pin: true, pin_kind: kind, pin_arrows: kind === 'arrows' ? u.pin.length : null }
+}
+function storeSecret(u: StoredUser, pin: string | null, kind: PinKind) {
+  u.pin = pin
+  u.pin_kind = pin ? kind : null
+  u.pin_arrows = pin && kind === 'arrows' ? pin.length : null
+}
 /** The legacy profile PIN and the user's PIN are one secret. */
-export function setProfilePin(profileId: string, pin: string | null, arrows = false) {
+export function setProfilePin(profileId: string, pin: string | null, kind: PinKind = 'pin') {
   const db = load()
   const user = db.users.find((u) => u.profile_id === profileId)
-  if (user) { user.pin = pin; user.pin_arrows = pin && arrows ? pin.length : null; save(db) }
+  if (user) { storeSecret(user, pin, kind); save(db) }
 }
-/** An arrow pattern is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. */
-const arrowsRefused = (body: { pin?: unknown; arrows?: unknown }) => !!body.arrows && typeof body.pin === 'string' && !/^[2468]+$/.test(body.pin)
+/**
+ * The hub's rules for each kind: 4 to 8 digits; an arrow pattern's digits are 2, 4, 6 and 8 only (up,
+ * left, right, down); a password is 6 to 64 characters. Null when the secret is fine.
+ */
+export function secretRefused(pin: unknown, kind: PinKind): Response | null {
+  if (pin === null || pin === undefined) return null
+  if (typeof pin !== 'string' || pin.length < 4 || pin.length > 64) return error(422, 'invalid_pin', 'A PIN is 4 to 8 digits')
+  if (kind === 'password') return pin.length >= 6 ? null : error(400, 'invalid_pin', 'A password must be 6 to 64 characters')
+  if (!/^\d{4,8}$/.test(pin)) return error(400, 'invalid_pin', 'PIN must be 4 to 8 digits')
+  if (kind === 'arrows' && !/^[2468]+$/.test(pin)) return error(400, 'invalid_pin', 'An arrow pattern holds only 2, 4, 6 and 8 (up, left, right, down)')
+  return null
+}
 /** include_adult is honoured only for a holder of watch.adult who unlocked this session. */
 export function adultUnlocked(request: Request): boolean {
   const db = load()
@@ -232,7 +257,6 @@ const cleanLimits = (raw: unknown): Partial<Limits> | null => {
   const okTv = l.rating_ceiling_tv === undefined || l.rating_ceiling_tv === null || TV.includes(l.rating_ceiling_tv as string)
   return okStreams && okMovie && okTv ? (l as Partial<Limits>) : null
 }
-const validPin = (pin: unknown): pin is string => typeof pin === 'string' && /^\d{4,8}$/.test(pin)
 const wider = (db: Db, a: StoredUser, b: StoredUser) => { const held = permissionsOf(db, b); return permissionsOf(db, a).some((p) => !held.includes(p)) }
 const switchable = (db: Db) => db.users.filter((u) => u.status === 'active' && sharedOf(db, u))
 const LAST_OWNER = () => error(409, 'last_owner', 'The last active owner cannot be demoted, suspended or removed')
@@ -525,7 +549,7 @@ export const peopleHandlers = [
   http.get(`${B}/auth/switchable`, as(null, ({ db, me }) => {
     if (mode() === 'no-switch') return gone()
     if (!db.shared) return error(403, 'not_shared_device', 'This is not a shared household device')
-    return HttpResponse.json({ users: switchable(db).map((u) => ({ id: u.id, display_name: u.display_name, avatar: u.avatar ?? null, picture: u.picture ?? null, role_name: roleOf(db, u)?.name ?? null, has_pin: !!u.pin, pin_arrows: u.pin ? u.pin_arrows ?? null : null, current: u.id === me.id })) })
+    return HttpResponse.json({ users: switchable(db).map((u) => ({ id: u.id, display_name: u.display_name, avatar: u.avatar ?? null, picture: u.picture ?? null, role_name: roleOf(db, u)?.name ?? null, ...secretOf(u), current: u.id === me.id })) })
   })),
   http.post(`${B}/auth/switch`, async ({ request }) => {
     if (mode() === 'legacy' || mode() === 'no-switch') return gone()
@@ -572,11 +596,14 @@ export const peopleHandlers = [
   http.post(`${B}/users`, as('users.manage', ({ db, me, body }) => {
     const name = String(body.name ?? '').trim().slice(0, 64)
     if (!name) return error(422, 'invalid_name', 'name is required')
-    if (body.pin != null && !validPin(body.pin)) return error(422, 'invalid_pin', 'A PIN is 4 to 8 digits')
+    const kind = kindOfBody(body)
+    const refused = secretRefused(body.pin, kind)
+    if (refused) return refused
     const role = db.roles.find((r) => r.id === (body.role_id ?? 'family'))
     if (!role) return error(404, 'not_found', 'role not found')
     const n = ++db.seq
-    const user = person(`u${n}`, n, name, 'managed', role.id, { avatar: (body.avatar as string | null) ?? null, pin: (body.pin as string | null) ?? null, created_at: ago(0), approved_at: ago(0), last_seen_at: null })
+    const user = person(`u${n}`, n, name, 'managed', role.id, { avatar: (body.avatar as string | null) ?? null, created_at: ago(0), approved_at: ago(0), last_seen_at: null })
+    storeSecret(user, (body.pin as string | null) || null, kind)
     db.users.push(user)
     db.profiles.push(profileFor(user))
     audit(db, me, 'user.create', user, { kind: 'managed', role_id: role.id })
@@ -657,12 +684,12 @@ export const peopleHandlers = [
     const u = target(db, params)
     if (!u) return gone()
     if (u.id !== me.id && !permissionsOf(db, me).includes('users.manage')) return error(403, 'forbidden', 'Missing permission', { missing: ['users.manage'] })
-    if (body.pin != null && !validPin(body.pin)) return error(422, 'invalid_pin', 'A PIN is 4 to 8 digits')
-    if (arrowsRefused(body)) return error(400, 'invalid_pin', 'An arrow pattern holds only 2, 4, 6 and 8 (up, left, right, down)')
-    u.pin = (body.pin as string | null) ?? null
-    u.pin_arrows = u.pin && body.arrows ? u.pin.length : null
+    const kind = kindOfBody(body)
+    const refused = secretRefused(body.pin, kind)
+    if (refused) return refused
+    storeSecret(u, (body.pin as string | null) ?? null, kind)
     const base = profiles.find((p) => p.id === u.profile_id)
-    if (base) base.has_pin = !!u.pin
+    if (base) Object.assign(base, secretOf(u))
     audit(db, me, u.pin ? 'user.pin_set' : 'user.pin_clear', u)
     return none()
   })),

@@ -64,26 +64,57 @@ def validate_pin(pin: str) -> str:
 # An arrow pattern is stored as the digits its arrows sit on on a phone keypad: Up 2, Left 4,
 # Right 6, Down 8. It is then an ordinary PIN to every check, and can still be typed as digits.
 ARROW_DIGITS = frozenset("2468")
+# The one secret a person signs in with on shared devices (and opens the adult category with): a number
+# PIN, an arrow pattern, or a password. Each is hashed into ``Profile.pin_hash`` the same way and checked
+# by the same hash comparison, against the same budget of guesses; the kind only says how it is asked for.
+PIN_KINDS = ("pin", "arrows", "password")
+PASSWORD_MIN, PASSWORD_MAX = 6, 64
 
 
-def pin_arrows(pin: str | None, arrows: bool) -> int | None:
-    """What ``Profile.pin_arrows`` becomes when ``pin`` is set: its length for an arrow pattern, else null.
+def validate_secret(secret: str, kind: str) -> str:
+    """The rules of each kind: 4 to 8 digits; 4 to 8 arrows (their digits); a password of 6 to 64 characters.
 
-    Validates as ``validate_pin`` does, and refuses an arrow pattern holding any other digit.
+    A password is taken exactly as typed, spaces included: trimming it here would refuse, on the way in,
+    a password that some keyboard then sends untrimmed. Only control characters are refused.
+    """
+    if kind == "password":
+        if not (PASSWORD_MIN <= len(secret) <= PASSWORD_MAX and secret.isprintable()):
+            raise ServiceError(
+                f"A password must be {PASSWORD_MIN} to {PASSWORD_MAX} characters, with no control characters",
+                code="invalid_pin",
+            )
+        return secret
+    if kind not in PIN_KINDS:
+        raise ServiceError("kind must be pin, arrows or password", code="invalid_pin")
+    validate_pin(secret)
+    if kind == "arrows" and not set(secret) <= ARROW_DIGITS:
+        raise ServiceError("An arrow pattern holds only 2, 4, 6 and 8 (up, left, right, down)", code="invalid_pin")
+    return secret
+
+
+def chosen_secret(pin: str | None, kind: str | None = None, arrows: bool = False) -> tuple[str | None, int | None]:
+    """What ``Profile.pin_kind`` and ``Profile.pin_arrows`` become when ``pin`` is set, after checking it.
+
+    ``kind`` wins; without one, ``arrows`` (what clients from before kinds send) means an arrow pattern,
+    and anything else a number PIN. Clearing the secret clears both.
     """
     if not pin:
+        return None, None
+    chosen = kind or ("arrows" if arrows else "pin")
+    validate_secret(pin, chosen)
+    return chosen, len(pin) if chosen == "arrows" else None
+
+
+def shown_kind(profile: Profile | None) -> str | None:
+    """``pin_kind`` as clients see it: null while there is no secret, and a number PIN when a row predates kinds."""
+    if profile is None or not profile.pin_hash:
         return None
-    validate_pin(pin)
-    if not arrows:
-        return None
-    if not set(pin) <= ARROW_DIGITS:
-        raise ServiceError("An arrow pattern holds only 2, 4, 6 and 8 (up, left, right, down)", code="invalid_pin")
-    return len(pin)
+    return profile.pin_kind or ("arrows" if profile.pin_arrows else "pin")
 
 
 def shown_arrows(profile: Profile | None) -> int | None:
-    """``pin_arrows`` as clients see it: only while there is a PIN for it to describe."""
-    return profile.pin_arrows if profile is not None and profile.pin_hash else None
+    """``pin_arrows`` as clients see it: only while there is an arrow pattern for it to describe."""
+    return profile.pin_arrows if profile is not None and shown_kind(profile) == "arrows" else None
 
 
 def access(user: User | None, role: Role | None) -> tuple[frozenset[str], Limits]:
@@ -262,6 +293,7 @@ class UsersService:
             "role_name": role.name if role else None,
             "profile_id": profile.id if profile else None,
             "has_pin": bool(profile and profile.pin_hash),
+            "pin_kind": shown_kind(profile),
             "pin_arrows": shown_arrows(profile),
             "on_shared_devices": shared,
             "plex_account_linked": user.plex_account_linked,
@@ -469,8 +501,8 @@ class UsersService:
         if not name:
             raise ServiceError("name is required", code="invalid_name")
         pin = str(data["pin"]) if data.get("pin") else None
-        arrows = pin_arrows(pin, bool(data.get("arrows")))
-        pin_hash = await asyncio.to_thread(hash_secret, validate_pin(pin)) if pin else None
+        kind, arrows = chosen_secret(pin, data.get("kind"), bool(data.get("arrows")))
+        pin_hash = await asyncio.to_thread(hash_secret, pin) if pin else None
         async with self._db.session() as s:
             role = await self._role(s, data.get("role_id") or ("kid" if data.get("kids") else "family"))
             self._may_assign(await self._actor_is_owner(s, actor), role, set(role.permissions or []))
@@ -497,6 +529,7 @@ class UsersService:
                 languages=list(data.get("languages") or []),
                 kids=bool(data.get("kids")) or role.id == "kid",
                 pin_hash=pin_hash,
+                pin_kind=kind,
                 pin_arrows=arrows,
                 prefs={},
                 user_id=user.id,
@@ -689,20 +722,23 @@ class UsersService:
         current_pin: str | None = None,
         current_password: str | None = None,
         arrows: bool = False,
+        kind: str | None = None,
     ) -> None:
         """Set or clear a user's PIN: one's own (see ``prove_pin_holder``), or anyone's with ``users.manage``.
 
-        ``arrows``: the PIN was chosen as an arrow pattern (see ``pin_arrows``).
+        ``kind``: a number PIN, an arrow pattern or a password (see ``chosen_secret``); ``arrows`` is how
+        older clients say an arrow pattern.
         """
         if user_id != actor.user_id and "users.manage" not in actor.permissions:
             raise NotFound("user not found")
-        length = pin_arrows(pin, arrows)
-        pin_hash = await asyncio.to_thread(hash_secret, validate_pin(pin)) if pin else None
+        chosen, length = chosen_secret(pin, kind, arrows)
+        pin_hash = await asyncio.to_thread(hash_secret, pin) if pin else None
         async with self._db.session() as s:
             user, profile, _ = await self._load(s, user_id)
             await self.guard_identity(s, actor, user)
             await self.prove_pin_holder(s, actor, user, profile, current_pin, current_password)
             profile.pin_hash = pin_hash
+            profile.pin_kind = chosen
             profile.pin_arrows = length
             # A PIN that just changed must be proven again before the adult category reopens.
             await s.execute(update(AuthSession).where(AuthSession.user_id == user.id).values(adult_unlocked_until=None))

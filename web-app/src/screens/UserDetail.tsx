@@ -9,8 +9,7 @@ import { DeviceRow } from '../components/DeviceRow'
 import { Icon } from '../components/Icon'
 import { LinkToCopy } from '../components/LinkToCopy'
 import { LimitsEditor, PermissionSwitches, Toggle } from '../components/PeopleControls'
-import { ArrowPinDialog } from '../components/ArrowPin'
-import { PinDialog } from '../components/PinPad'
+import { SecretControls, type PinKind } from '../components/SignInSecret'
 import { Button, Chip, ErrorState, Modal, Skeleton } from '../components/ui'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -41,11 +40,10 @@ export function UserDetail() {
   const navigate = useNavigate()
   const toast = useUi((s) => s.toast)
   const change = usePeopleChange((body: Change) => people.patch(id!, body))
-  const pin = usePeopleChange((value: string | null) => people.setPin(id!, value))
-  const arrowPin = usePeopleChange((digits: string) => people.setPin(id!, digits, true))
+  const pin = usePeopleChange((v: { pin: string | null; kind: PinKind | null; current?: string }) => people.setPin(id!, v.pin, v.kind ?? undefined, v.current))
   const status = usePeopleChange((to: 'suspend' | 'reinstate') => people[to](id!))
   const remove = usePeopleChange(() => people.remove(id!))
-  const [asking, setAsking] = useState<'suspend' | 'remove' | 'pin' | 'arrows' | 'reset' | null>(null)
+  const [asking, setAsking] = useState<'suspend' | 'remove' | 'reset' | null>(null)
   const [unlinking, setUnlinking] = useState<Method | null>(null)
   const [setupLink, setSetupLink] = useState<string | null>(null)
   const unlink = usePeopleChange((method: Method) => people.unlinkMethod(id!, method))
@@ -112,21 +110,18 @@ export function UserDetail() {
       </section>
 
       <section className="panel flex flex-col gap-3" data-testid="user-sharing">
-        <h2 className="heading">Shared devices and PIN</h2>
+        <h2 className="heading">Shared devices and sign-in</h2>
         <FocusGroup focusKey="ud:sharing" className="flex flex-col gap-2">
           <div className="toggle-row">
             <Toggle focusKey="ud:shared" label="Show on shared devices" hint={'Offered on "Who\'s watching?" on household TVs and browsers'} on={!!u.on_shared_devices}
               note={sharedOverridden ? 'Overridden' : 'From role'} onChange={(on) => apply({ on_shared_devices: on })} />
             {sharedOverridden && <Button focusKey="ud:shared:reset" ghost label="Reset shared devices to the role" onEnter={() => apply({ on_shared_devices: null })}>Reset</Button>}
           </div>
-          <div className="person-row device-row">
-            <span className="who"><strong>{!u.has_pin ? 'No PIN' : u.pin_arrows ? `Has an arrow pattern of ${u.pin_arrows} arrows` : 'Has a PIN'}</strong>
-              <span className="label">{!u.has_pin ? 'Anyone on a shared device with less access cannot switch to them until a PIN is set.' : u.pin_arrows ? "Asked for with the remote's arrows when a shared TV switches to them." : 'Asked for when a shared device switches to them.'}</span></span>
-            <Button focusKey="ud:pin" icon="lock" onEnter={() => setAsking('pin')} testId="user-pin-set">{u.has_pin && !u.pin_arrows ? 'Change PIN' : 'Set PIN'}</Button>
-            <Button focusKey="ud:pin-arrows" onEnter={() => setAsking('arrows')} testId="user-pin-arrows">{u.pin_arrows ? 'Change arrow pattern' : 'Use an arrow pattern'}</Button>
-            {u.has_pin && <Button focusKey="ud:pin-clear" danger testId="user-pin-clear"
-              onEnter={() => { void setFocus('ud:pin'); pin.mutate(null, { onSuccess: () => toast('PIN cleared.', 'success'), onError: failed }) }}>Clear PIN</Button>}
-          </div>
+          {/* Each person signs in one way of their choosing: a number PIN, a password or an arrow pattern. */}
+          <SecretControls scope="ud" name={u.display_name} who={u} testId="user-pin"
+            noneHint="Anyone on a shared device with less access cannot switch to them until they have one."
+            setHint={'Asked for when a shared device switches to them on "Who\'s watching?".'}
+            save={async (value, kind, current) => { await pin.mutateAsync({ pin: value, kind, current }) }} />
           <Toggle focusKey="ud:plex" label="Link to Plex account" testId="user-plex" on={!!u.plex_account_linked}
             hint="Resume points sync both ways with the Plex account this server uses. One person only: linking them unlinks whoever was linked."
             onChange={(on) => apply({ plex_account_linked: on }, on ? `${u.display_name} is linked to the Plex account.` : 'Plex link removed.')} />
@@ -213,10 +208,6 @@ export function UserDetail() {
         {setupLink && <LinkToCopy scope="reset-link" url={setupLink} label="Setup link" />}
         <div><Button focusKey="reset-link:done" primary onEnter={() => setSetupLink(null)}>Done</Button></div>
       </Modal>
-      <PinDialog open={asking === 'pin'} onClose={() => setAsking(null)} title={`New PIN for ${u.display_name}`} hint="Four to eight digits." confirm submitLabel="Save PIN"
-        onSubmit={async (value) => { await pin.mutateAsync(value); toast('PIN saved.', 'success'); setAsking(null) }} />
-      <ArrowPinDialog open={asking === 'arrows'} onClose={() => setAsking(null)} title={`Arrow pattern for ${u.display_name}`}
-        onSubmit={async (digits) => { await arrowPin.mutateAsync(digits); toast('Arrow pattern saved.', 'success'); setAsking(null) }} />
     </div>
   )
 }

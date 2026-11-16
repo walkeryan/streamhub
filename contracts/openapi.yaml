@@ -106,6 +106,7 @@ components:
         role_name: {type: string, nullable: true}
         profile_id: {type: string, nullable: true, description: The profile holding this user's viewer state}
         has_pin: {type: boolean}
+        pin_kind: {type: string, nullable: true, enum: [pin, arrows, password, null], description: "How the PIN is asked for: pin, a number keypad; arrows, a D-pad pattern (pin_arrows presses, sent as their keypad digits); password, a typed password. Null when there is none. Absent from older hubs: then has_pin and pin_arrows decide."}
         pin_arrows: {type: integer, nullable: true, minimum: 4, maximum: 8, description: "The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow."}
         on_shared_devices: {type: boolean}
         plex_account_linked: {type: boolean, description: "This user is the person the Plex server's account belongs to. Their resume points and Plex's are merged when a title is opened or resolved (the one touched last wins; watched in Plex means completed), and only their progress is reported to Plex. Nobody else's requests read or write Plex's watch state."}
@@ -158,6 +159,7 @@ components:
         picture: {type: string, nullable: true}
         role_name: {type: string}
         has_pin: {type: boolean}
+        pin_kind: {type: string, nullable: true, enum: [pin, arrows, password, null], description: "How the PIN is asked for: pin, a number keypad; arrows, a D-pad pattern (pin_arrows presses, sent as their keypad digits); password, a typed password. Null when there is none. Absent from older hubs: then has_pin and pin_arrows decide."}
         pin_arrows: {type: integer, nullable: true, minimum: 4, maximum: 8, description: "The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow."}
         current: {type: boolean, description: The user this device is signed in as}
     Switched:
@@ -338,6 +340,7 @@ components:
         theme_id: {type: string}
         languages: {type: array, items: {type: string}, description: "ISO 639-3 filter for live TV; empty = all"}
         has_pin: {type: boolean}
+        pin_kind: {type: string, nullable: true, enum: [pin, arrows, password, null], description: "How the PIN is asked for: pin, a number keypad; arrows, a D-pad pattern (pin_arrows presses, sent as their keypad digits); password, a typed password. Null when there is none. Absent from older hubs: then has_pin and pin_arrows decide."}
         pin_arrows: {type: integer, nullable: true, minimum: 4, maximum: 8, description: "The PIN's length when it was chosen as a D-pad arrow pattern (its digits are then 2, 4, 6 and 8 only); null for a typed PIN or none. A TV shows that many dots and sends the pattern on the last arrow."}
         has_password: {type: boolean, description: Existing password credential available. Missing means unavailable.}
         content_restricted: {type: boolean, description: Server policy currently restricts this profile.}
@@ -1482,7 +1485,7 @@ paths:
         GET /auth/switchable): to anyone listed, by the same PIN rules, a target's access being
         compared with what the suspended user held. The suspended user is not a target (404),
         and their tokens for this device stop working with the hand-over like anyone's.
-      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "null or absent: no PIN offered"} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [user_id], properties: { user_id: {type: string}, pin: {type: string, nullable: true, writeOnly: true, minLength: 1, maxLength: 64, description: "null or absent: no PIN offered. Whatever the target's pin_kind, a password included; only the hash check decides."} } } } } }
       responses:
         '200': { description: switched, content: { application/json: { schema: { $ref: '#/components/schemas/Switched' } } } }
         '401': { description: "pin_required | pin_invalid: about the PIN. token_expired | session_stale | session_revoked: about the caller's own session, answered before any PIN is looked at; refresh and retry. user_suspended only on a device that is not shared." }
@@ -1499,7 +1502,7 @@ paths:
         POST /playback/multiview, GET /playback/options and /playback/rewind, and creating, showing or joining
         a watch room on one answer 403 with missing [watch.adult], or 403 adult_locked for a session that
         holds the permission but is not unlocked.
-      requestBody: { content: { application/json: { schema: { type: object, required: [pin], properties: { pin: {type: string, writeOnly: true, minLength: 4, maxLength: 8} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [pin], properties: { pin: {type: string, writeOnly: true, minLength: 1, maxLength: 64, description: "the caller's own PIN, arrow pattern digits or password"} } } } } }
       responses:
         '200': { description: unlocked, content: { application/json: { schema: { type: object, required: [adult_unlocked_until], properties: { adult_unlocked_until: {type: string, format: date-time} } } } } }
         '403': { description: "forbidden (missing watch.adult) | pin_invalid" }
@@ -1640,7 +1643,7 @@ paths:
     patch: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }, responses: { '200': { description: ok } } }
     delete: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
   /profiles/{id}/pin:
-    put: { summary: "Set or clear a profile's PIN (the older route; see PUT /users/{id}/pin for the rule on changing one's own)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true}, arrows: {type: boolean, default: false, writeOnly: true, description: "The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin)."}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }, responses: { '204': { description: ok } } }
+    put: { summary: "Set or clear a profile's PIN (the older route; see PUT /users/{id}/pin for the rule on changing one's own)", parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true}, kind: {type: string, enum: [pin, arrows, password], writeOnly: true, description: "Which kind of secret pin is. pin: 4 to 8 digits. arrows: a D-pad pattern of 4 to 8 arrows sent as keypad digits (up 2, left 4, right 6, down 8). password: 6 to 64 characters, taken exactly as typed. Anything else is refused (400 invalid_pin). Wins over arrows; absent, arrows decides."}, arrows: {type: boolean, default: false, writeOnly: true, description: "Older clients: the same as kind arrows. The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin)."}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 64, description: "the current secret, whatever its kind"}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }, responses: { '204': { description: ok } } }
 
   /profiles/{id}/home_layout:
     get: { summary: Per-profile Home row order / hidden rows, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/HomeLayout' } } } } } }
@@ -2005,7 +2008,7 @@ paths:
       responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/UserListItem' } } } } } }
     post:
       summary: Add a managed user, one without a Google identity (users.manage)
-      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: {type: string, minLength: 1, maxLength: 64}, avatar: {type: string, nullable: true}, role_id: {type: string, default: family}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8}, arrows: {type: boolean, default: false, writeOnly: true, description: "The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin)."} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: {type: string, minLength: 1, maxLength: 64}, avatar: {type: string, nullable: true}, role_id: {type: string, default: family}, pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 64, description: "by the rules of kind"}, kind: {type: string, enum: [pin, arrows, password], writeOnly: true, description: "Which kind of secret pin is. pin: 4 to 8 digits. arrows: a D-pad pattern of 4 to 8 arrows sent as keypad digits (up 2, left 4, right 6, down 8). password: 6 to 64 characters, taken exactly as typed. Anything else is refused (400 invalid_pin). Wins over arrows; absent, arrows decides."}, arrows: {type: boolean, default: false, writeOnly: true, description: "Older clients: the same as kind arrows. The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin)."} } } } } }
       responses: { '201': { description: created, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } } }
   /users/{id}:
     get:
@@ -2046,7 +2049,7 @@ paths:
         sign-in made in the last ten minutes. Otherwise 403 current_pin_required. A first PIN needs nothing;
         someone else's is a user manager's to set. PUT /profiles/{id}/pin asks the same.
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 8, description: "4 to 8 digits; null clears"}, arrows: {type: boolean, default: false, writeOnly: true, description: "The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin)."}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 8}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { pin: {type: string, nullable: true, writeOnly: true, minLength: 4, maxLength: 64, description: "the new secret, by the rules of its kind; null clears"}, kind: {type: string, enum: [pin, arrows, password], writeOnly: true, description: "Which kind of secret pin is. pin: 4 to 8 digits. arrows: a D-pad pattern of 4 to 8 arrows sent as keypad digits (up 2, left 4, right 6, down 8). password: 6 to 64 characters, taken exactly as typed. Anything else is refused (400 invalid_pin). Wins over arrows; absent, arrows decides."}, arrows: {type: boolean, default: false, writeOnly: true, description: "Older clients: the same as kind arrows. The PIN was chosen as a D-pad arrow pattern and is sent as the keypad digits of its arrows: up 2, left 4, right 6, down 8. Any other digit is refused (400 invalid_pin)."}, current_pin: {type: string, nullable: true, writeOnly: true, maxLength: 64, description: "the current secret, whatever its kind"}, current_password: {type: string, nullable: true, writeOnly: true, maxLength: 256} } } } } }
       responses: { '204': { description: ok } }
   /users/{id}/methods/{method}:
     delete:

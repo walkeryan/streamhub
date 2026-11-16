@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
-// Private PIN entry: on a shared TV a parent enters a PIN with the remote while others watch the
-// screen. The keypad never shows which key has focus, focus returns to 5 after every key, and arrows
-// are clamped to the keypad, so each digit is a short walk from 5 that can be done without looking.
+// PIN entry with the remote: the focused key shows the focus box every other button shows, focus
+// returns to 5 after every key, and arrows are clamped to the keypad, so each digit is a short,
+// predictable walk from 5. (People who would rather not be watched walking the keypad choose an
+// arrow pattern or a password; see who-sign-in.spec.ts.)
 
 const profile = (id: string, name: string, is_admin = false) => ({ id, name, avatar: null, is_admin, theme_id: 'midnight', languages: ['eng'], has_pin: false, kids: false, disclaimer_accepted_version: '1.0' })
 const WHO = { owner: profile('p1', 'Owner', true), guest: profile('p2', 'Guest') }
@@ -49,13 +50,13 @@ async function remotePin(page: Page, pin: string, already = 0) {
   }
 }
 
-/** The styles that could give a focused key away. */
+/** The styles that show which key has focus. */
 const look = (page: Page, name: string) => key(page, name).evaluate((el) => {
   const s = getComputedStyle(el)
   return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.backgroundColor, s.color, s.transform, s.opacity, s.borderColor, s.filter].join(' | ')
 })
 
-test.describe('private PIN entry', () => {
+test.describe('PIN entry by remote', () => {
   test.beforeEach(async ({ page }) => {
     await enter(page, '/', 'guest', true)
     await expect(page.getByTestId('who-is-watching')).toBeVisible()
@@ -66,24 +67,25 @@ test.describe('private PIN entry', () => {
     await atHome(page)
   }
 
-  test('focus starts on 5 and no key looks any different when it has focus', async ({ page }) => {
+  test('focus starts on 5 and the focused key shows the focus box, wherever it moves', async ({ page }) => {
     await open(page, 'Kids')
-    await expect(dialog(page).getByTestId('pin-private')).toHaveText('Your place on the keypad is hidden. Each digit starts from 5.')
-    // Every digit key computes the same look whether or not it holds focus.
-    const focused = await look(page, '5')
-    for (const digit of '1234678 90'.replace(' ', '')) expect(await look(page, digit)).toBe(focused)
-    // And the keypad renders pixel for pixel the same wherever focus is.
-    const pad = dialog(page).locator('.pin-pad')
-    const atFive = await pad.screenshot({ animations: 'disabled' })
+    // The old note about a hidden place on the keypad is gone with the hiding.
+    await expect(dialog(page)).not.toContainText('Your place on the keypad is hidden')
+    // The focused key looks unlike the others; the others all look alike.
+    await expect.poll(() => look(page, '5')).not.toBe(await look(page, '1'))
+    const resting = await look(page, '1')
+    for (const digit of '234678 90'.replace(' ', '')) expect(await look(page, digit)).toBe(resting)
+    // It is the same box a focused button has anywhere else: an outline or a ring.
+    const box = await key(page, '5').evaluate((el) => { const s = getComputedStyle(el); return { outline: s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0, ring: s.boxShadow !== 'none' } })
+    expect(box.outline || box.ring).toBe(true)
+    // The box follows focus, and leaves the key it moved off.
     for (const arrow of ['ArrowUp', 'ArrowLeft']) await page.keyboard.press(arrow)
     expect(await focusedKey(page)).toBe('pin:1')
-    expect(await look(page, '1')).toBe(focused)
-    expect((await pad.screenshot({ animations: 'disabled' })).equals(atFive)).toBe(true)
+    await expect.poll(() => look(page, '5')).toBe(resting)
+    await expect.poll(() => look(page, '1')).not.toBe(resting)
     await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowRight')
     expect(await focusedKey(page)).toBe('pin:8')
-    expect((await pad.screenshot({ animations: 'disabled' })).equals(atFive)).toBe(true)
-    // Nothing else in the dialog names the focused key.
-    await expect(dialog(page)).not.toContainText(/selected|focused/i)
+    await expect.poll(() => look(page, '8')).not.toBe(resting)
   })
 
   test('arrows clamp at the edges without wrapping or leaving the keypad', async ({ page }) => {
@@ -173,6 +175,7 @@ test('a new PIN entered twice by remote: focus is back on 5 for the confirm step
   })
   await enter(page, '/users/u5', 'owner')
   await page.getByTestId('user-pin-set').click()
+  await page.getByTestId('secret-kind-pin').click()
   await expect(dialog(page)).toBeVisible()
   await atHome(page)
   await remotePin(page, '864200')
@@ -183,5 +186,5 @@ test('a new PIN entered twice by remote: focus is back on 5 for the confirm step
   await remotePin(page, '864200')
   await press(page, 'ok')
   await expect(dialog(page)).toHaveCount(0)
-  expect(await page.evaluate(() => (window as unknown as { sentPins: unknown[] }).sentPins)).toEqual([{ pin: '864200' }])
+  expect(await page.evaluate(() => (window as unknown as { sentPins: unknown[] }).sentPins)).toEqual([{ pin: '864200', kind: 'pin' }])
 })

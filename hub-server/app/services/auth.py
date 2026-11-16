@@ -36,11 +36,10 @@ from app.services.users import (
     UsersService,
     access,
     audit,
+    chosen_secret,
     ensure_user,
-    pin_arrows,
     sign_in_methods,
     standing,
-    validate_pin,
 )
 
 log = logging.getLogger(__name__)
@@ -1069,8 +1068,9 @@ class AuthService:
         current_pin: str | None = None,
         current_password: str | None = None,
         arrows: bool = False,
+        kind: str | None = None,
     ) -> None:
-        length = pin_arrows(pin, arrows)
+        kind, length = chosen_secret(pin, kind, arrows)
         manager = _can(principal, "users.manage")
         if self.content_policy is not None and self.content_policy.enabled and not manager:
             raise Forbidden("Only the owner can manage profile PINs")
@@ -1083,7 +1083,8 @@ class AuthService:
             await self.users.prove_pin_holder(
                 s, principal, await ensure_user(s, prof), prof, current_pin, current_password
             )
-            prof.pin_hash = hash_secret(validate_pin(pin)) if pin else None
+            prof.pin_kind = kind
+            prof.pin_hash = hash_secret(pin) if pin else None
             prof.pin_arrows = length
             # As PUT /users/{id}/pin: the PIN guards switching to the profile and the adult category, not a
             # session already signed in. Ending every session here signed out the device the change was made

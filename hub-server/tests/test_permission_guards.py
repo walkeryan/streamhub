@@ -267,8 +267,9 @@ async def test_pin_rules_and_who_may_set_whose(api: Api) -> None:
     me = await owner_id(api)
     kid = await member(api, "kid", name="Small")
     other = await member(api, "kid", name="Other")
-    for bad in ("123", "123456789", "12ab", ""):
-        assert (await api.put(f"/users/{me}/pin", json={"pin": bad})).status_code == 422, bad
+    # Too short for any kind is refused by the schema; the rules of a number PIN are the service's.
+    for bad, status in (("123", 422), ("", 422), ("123456789", 400), ("12ab", 400)):
+        assert (await api.put(f"/users/{me}/pin", json={"pin": bad})).status_code == status, bad
     # One's own PIN needs no permission; someone else's needs users.manage.
     assert (await kid.req("PUT", f"/users/{kid.id}/pin", json={"pin": "12345678"})).status_code == 204
     assert (await kid.req("PUT", f"/users/{other.id}/pin", json={"pin": "1234"})).status_code == 404

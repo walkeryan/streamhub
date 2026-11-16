@@ -46,11 +46,13 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.streamhub.tv.core.data.model.PinKind
 import com.streamhub.tv.core.data.model.SwitchableUser
 import com.streamhub.tv.core.ui.components.ArrowPinDialog
 import com.streamhub.tv.core.ui.components.ButtonStyle
 import com.streamhub.tv.core.ui.components.ErrorDialog
 import com.streamhub.tv.core.ui.components.LoadingView
+import com.streamhub.tv.core.ui.components.PasswordPinDialog
 import com.streamhub.tv.core.ui.components.PinPadDialog
 import com.streamhub.tv.core.ui.components.SafeArea
 import com.streamhub.tv.core.ui.components.ScreenBackground
@@ -120,28 +122,42 @@ fun WhoIsWatchingScreen(
             }
         }
         val name = user.displayName.ifBlank { "this person" }
-        // Someone who chose an arrow pattern gets dots that fill with each D-pad press and no keypad.
+        // Asked for the way the person chose: dots that fill with each D-pad press and no keypad for an
+        // arrow pattern, the system keyboard for a password, the keypad for a number PIN.
         val arrows = user.pinArrows
-        if (arrows != null) ArrowPinDialog(
-            title = "Arrow pattern for $name",
-            hint = "Enter your arrow pattern to continue as $name.",
-            length = arrows,
-            error = s.pinError,
-            lockedSeconds = locked,
-            busy = s.busy,
-            onSubmit = vm::submitPin,
-            onDismiss = vm::cancelPin,
-            attempt = s.pinAttempt,
-        ) else PinPadDialog(
-            title = "PIN for $name",
-            hint = "Enter the PIN to continue as $name.",
-            error = s.pinError,
-            lockedSeconds = locked,
-            busy = s.busy,
-            onSubmit = vm::submitPin,
-            onDismiss = vm::cancelPin,
-            attempt = s.pinAttempt,
-        )
+        when {
+            user.kind == PinKind.Arrows && arrows != null -> ArrowPinDialog(
+                title = "Arrow pattern for $name",
+                hint = "Enter your arrow pattern to continue as $name.",
+                length = arrows,
+                error = s.pinError,
+                lockedSeconds = locked,
+                busy = s.busy,
+                onSubmit = vm::submitPin,
+                onDismiss = vm::cancelPin,
+                attempt = s.pinAttempt,
+            )
+            user.kind == PinKind.Password -> PasswordPinDialog(
+                title = "Password for $name",
+                hint = "Enter the password to continue as $name.",
+                error = s.pinError,
+                lockedSeconds = locked,
+                busy = s.busy,
+                onSubmit = vm::submitPin,
+                onDismiss = vm::cancelPin,
+                attempt = s.pinAttempt,
+            )
+            else -> PinPadDialog(
+                title = "PIN for $name",
+                hint = "Enter the PIN to continue as $name.",
+                error = s.pinError,
+                lockedSeconds = locked,
+                busy = s.busy,
+                onSubmit = vm::submitPin,
+                onDismiss = vm::cancelPin,
+                attempt = s.pinAttempt,
+            )
+        }
     }
     s.notice?.let { ErrorDialog(it, onRetry = vm::retryNotice, onDismiss = vm::dismissNotice) }
     if (askExit) ExitDialog(onStay = { askExit = false }, onExit = { activity?.finish() })
@@ -204,7 +220,10 @@ private fun PersonCard(user: SwitchableUser, serverUrl: String?, busy: Boolean, 
             if (user.hasPin) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Icon and word: the lock is not carried by colour or shape alone.
                 Icon(Icons.Filled.Lock, contentDescription = null, tint = t.textMuted, modifier = Modifier.size(14.dp))
-                Text("PIN", style = MaterialTheme.typography.labelMedium, color = t.textMuted)
+                Text(
+                    when (user.kind) { PinKind.Password -> "Password"; PinKind.Arrows -> "Arrows"; else -> "PIN" },
+                    style = MaterialTheme.typography.labelMedium, color = t.textMuted,
+                )
             }
         }
     }

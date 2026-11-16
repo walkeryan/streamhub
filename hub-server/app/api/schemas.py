@@ -33,6 +33,13 @@ RequestPhaseL = Literal[
 ]
 RecordingStateL = Literal["scheduled", "recording", "done", "failed", "missed", "cancelled"]
 
+# The one secret a person signs in with on shared devices is one of three kinds, each asked for its own way.
+PinKindL = Literal["pin", "arrows", "password"]
+_KIND = "pin: 4 to 8 digits; arrows: 4 to 8 of 2, 4, 6, 8; password: 6 to 64 characters. Wins over arrows"
+_KIND_OUT = "how the PIN is asked for: a keypad, D-pad arrows or a password; null when there is none"
+# Anywhere the person's own secret is checked rather than chosen it may be a password: the hash decides.
+_SECRET_MAX = 64
+
 
 class _M(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -56,6 +63,7 @@ class Profile(_M):
     theme_id: str
     languages: list[str]
     has_pin: bool
+    pin_kind: PinKindL | None = Field(default=None, description=_KIND_OUT)
     pin_arrows: int | None = Field(default=None, description="the PIN's length when it is an arrow pattern")
     kids: bool
     disclaimer_accepted_version: str | None = None
@@ -177,8 +185,9 @@ _ARROWS = "the PIN is an arrow pattern, sent as keypad digits: up 2, left 4, rig
 
 class PinBody(_M):
     pin: str | None = None
+    kind: PinKindL | None = Field(default=None, description=_KIND)
     arrows: bool = Field(default=False, description=_ARROWS)
-    current_pin: str | None = Field(default=None, max_length=8, repr=False)
+    current_pin: str | None = Field(default=None, max_length=_SECRET_MAX, repr=False)
     current_password: str | None = Field(default=None, max_length=256, repr=False)
 
 
@@ -982,7 +991,13 @@ UserStatusL = Literal["pending", "active", "suspended"]
 
 
 def _pin(**kw: Any) -> Any:
-    return Field(min_length=4, max_length=8, pattern=r"^[0-9]+$", repr=False, **kw)
+    """A secret being chosen: its kind's own rules are the service's (``validate_secret``), these only bound it."""
+    return Field(min_length=4, max_length=_SECRET_MAX, repr=False, **kw)
+
+
+def _proof(**kw: Any) -> Any:
+    """The person's own secret, being checked: digits, an arrow pattern's digits or a password alike."""
+    return Field(min_length=1, max_length=_SECRET_MAX, repr=False, **kw)
 
 
 class Limits(_M):
@@ -1052,6 +1067,7 @@ class User(_M):
     role_name: str | None = None
     profile_id: str | None = None
     has_pin: bool = False
+    pin_kind: PinKindL | None = Field(default=None, description=_KIND_OUT)
     pin_arrows: int | None = Field(default=None, description="the PIN's length when it is an arrow pattern")
     on_shared_devices: bool = False
     plex_account_linked: bool = False
@@ -1092,6 +1108,7 @@ class SwitchableUser(_M):
     picture: str | None = None
     role_name: str
     has_pin: bool
+    pin_kind: PinKindL | None = Field(default=None, description=_KIND_OUT)
     pin_arrows: int | None = Field(
         default=None, description="the PIN's length when it is an arrow pattern: how many D-pad presses to wait for"
     )
@@ -1104,7 +1121,7 @@ class SwitchableUsers(_M):
 
 class SwitchRequest(_M):
     user_id: str = Field(min_length=1, max_length=32)
-    pin: str | None = _pin(default=None)
+    pin: str | None = _proof(default=None)
 
 
 class SwitchedUser(User):
@@ -1142,6 +1159,7 @@ class UserCreate(_M):
     avatar: str | None = Field(default=None, max_length=512)
     role_id: str = "family"
     pin: str | None = _pin(default=None)
+    kind: PinKindL | None = Field(default=None, description=_KIND)
     arrows: bool = Field(default=False, description=_ARROWS)
 
 
@@ -1164,8 +1182,11 @@ class UserApprove(_M):
 
 class UserPin(_M):
     pin: str | None = _pin(default=None)
+    kind: PinKindL | None = Field(default=None, description=_KIND)
     arrows: bool = Field(default=False, description=_ARROWS)
-    current_pin: str | None = Field(default=None, max_length=8, repr=False, description="to change one's own")
+    current_pin: str | None = Field(
+        default=None, max_length=_SECRET_MAX, repr=False, description="to change one's own (a password, if that is it)"
+    )
     current_password: str | None = Field(default=None, max_length=256, repr=False, description="in its place")
 
 
@@ -1183,7 +1204,7 @@ class Me(_M):
 
 
 class AdultUnlockRequest(_M):
-    pin: str = _pin()
+    pin: str = _proof()
 
 
 class AdultUnlock(_M):

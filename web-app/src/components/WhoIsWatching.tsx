@@ -9,13 +9,15 @@ import { useSession } from '../store/session'
 import { useWho } from '../store/who'
 import { Avatar } from './Avatar'
 import { Icon } from './Icon'
-import { PinDialog } from './PinPad'
+import { AskSecretDialog, NOUN, kindOf } from './SignInSecret'
 import { Button, ErrorState } from './ui'
 
 /**
  * The picker a shared household device opens on, and shows again from the profile entry. Choosing
  * someone switches this device's session to them: the server asks for their PIN when they have one,
- * and refuses a switch to wider access when they have none. Choosing the person already watching
+ * and refuses a switch to wider access when they have none. The PIN is asked for the way that person
+ * chose it: on the keypad, as an arrow pattern pressed on the remote's D-pad (it arrives as the arrow
+ * keys) or as a typed password. Choosing the person already watching
  * hands nothing over; when they have a PIN the same call checks it. `mandatory` is the picker at the
  * start of the app, which has no way out but choosing.
  */
@@ -81,7 +83,7 @@ export function WhoIsWatching({ users, mandatory, error, onRetry }: { users: Swi
         {error ? <ErrorState error={error} onRetry={onRetry} /> : !users ? <p className="muted">Loading…</p> : (
           <div className="who-grid">
             {users.map((u) => (
-              <Focusable key={u.id} focusKey={`who:${u.id}`} className="who-card" label={`${u.display_name}${u.has_pin ? ', PIN needed' : ''}${u.current ? ', watching now' : ''}`}
+              <Focusable key={u.id} focusKey={`who:${u.id}`} className="who-card" label={`${u.display_name}${kindOf(u) ? `, ${NOUN[kindOf(u)!]} needed` : ''}${u.current ? ', watching now' : ''}`}
                 data-testid="who-card" data={{ current: u.current, locked: u.has_pin }} onEnter={() => void choose(u)}>
                 <span className="who-face">
                   <Avatar name={u.display_name} avatar={u.avatar} picture={u.picture} size={6} />
@@ -96,8 +98,14 @@ export function WhoIsWatching({ users, mandatory, error, onRetry }: { users: Swi
         {problem && <p role="alert" data-testid="who-problem" style={{ color: 'var(--t-danger)', textAlign: 'center', maxWidth: '34rem' }}>{problem}</p>}
         {!mandatory && <Button focusKey="who:close" onEnter={hide} testId="who-close">Cancel</Button>}
       </FocusGroup>
-      <PinDialog open={!!asking} onClose={() => setAsking(null)} title={`PIN for ${asking?.display_name ?? ''}`} hint="Enter their PIN to switch this device to them."
-        submitLabel="Switch" explain={asking ? refused(asking) : undefined} onSubmit={(pin) => switchTo(asking!, pin)} />
+      {asking && <AskSecretDialog open kind={kindOf(asking) ?? 'pin'} arrows={asking.pin_arrows} onClose={() => setAsking(null)} submitLabel="Switch"
+        title={{ pin: `PIN for ${asking.display_name}`, arrows: `Arrow pattern for ${asking.display_name}`, password: `Password for ${asking.display_name}` }}
+        hint={{
+          pin: 'Enter their PIN to switch this device to them.',
+          arrows: 'Press their arrow pattern on the remote or the arrow keys to switch this device to them.',
+          password: 'Enter their password to switch this device to them.',
+        }}
+        explain={refused(asking)} onSubmit={(pin) => switchTo(asking, pin)} />}
     </div>
   )
 }

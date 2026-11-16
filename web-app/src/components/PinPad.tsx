@@ -13,19 +13,22 @@ const GRID = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['erase', '0', 
 const HOME = 'pin:5'
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 
-/** What a refused PIN means, for the codes every PIN call shares. A caller can say more for its own. */
-function explain(e: unknown, extra?: (code: string | undefined) => string | undefined): string {
+/**
+ * What a refused secret means, for the codes every PIN call shares, worded for the kind being asked
+ * for (`noun`: PIN, pattern, password). A caller can say more for its own codes.
+ */
+export function explain(e: unknown, extra?: (code: string | undefined) => string | undefined, noun = 'PIN'): string {
   const code = e instanceof ApiError ? e.code : undefined
   return extra?.(code)
-    ?? (code === 'pin_invalid' ? 'That PIN is not right. Try again.'
-      : code === 'pin_required' ? 'A PIN is needed.'
-      : e instanceof ApiError && e.status === 429 ? 'Too many wrong PINs.'
+    ?? (code === 'pin_invalid' ? `That ${noun} is not right. Try again.`
+      : code === 'pin_required' ? `The ${noun} is needed.`
+      : e instanceof ApiError && e.status === 429 ? `Too many wrong ${noun}s.`
       : e instanceof Error ? e.message : 'That did not work. Try again.')
 }
 
 /**
- * The next key for an arrow, clamped to the grid: no wrapping, and never out of the keypad, so a
- * parent entering a PIN blind can count presses from 5 and extra presses at an edge do nothing.
+ * The next key for an arrow, clamped to the grid: no wrapping, and never out of the keypad, so
+ * presses can be counted from 5 and extra presses at an edge do nothing.
  */
 function move(key: string, direction: string): string {
   const r = GRID.findIndex((row) => (row as readonly string[]).includes(key))
@@ -50,7 +53,7 @@ function PinKey(p: { k: string; label: string; locked: boolean; inactive?: boole
       disabled={p.locked}
       aria={{ disabled: p.locked || p.inactive || undefined }}
       data-testid={p.testId}
-      // Scrolling the dialog to follow focus would show where focus is.
+      // The keypad is always in view inside its dialog; following focus would only make it jump.
       scroll={false}
       onArrow={(direction) => { void setFocus(`pin:${move(p.k, direction)}`); return false }}
       onEnter={p.onEnter}
@@ -67,10 +70,10 @@ function PinKey(p: { k: string; label: string; locked: boolean; inactive?: boole
  * locks the keypad for the server's Retry-After and counts it down. With `confirm`, a new PIN is
  * entered twice before it is submitted.
  *
- * Private entry: people watching the screen while a PIN is entered with the remote must not learn
- * it, so the keypad never shows which key has focus (no ring, lift or colour; see `.pin-pad` in
- * base.css) and focus goes back to 5 after every key press. Each digit is then a short, predictable
- * walk from 5 that the person entering it can do without looking.
+ * With the remote, the focused key shows the same focus box as every other button, so the person
+ * entering the PIN can see where they are. Focus still goes back to 5 after every key press, so each
+ * digit is a short walk from 5 and a familiar PIN can be entered by habit. People who would rather
+ * not have their walk on the keypad watched choose an arrow pattern or a password instead.
  */
 export function PinDialog(p: {
   open: boolean; title: string; hint?: string; confirm?: boolean; submitLabel?: string
@@ -160,7 +163,6 @@ export function PinDialog(p: {
         <PinKey k="0" label="0" locked={locked} onEnter={() => add('0')}>0</PinKey>
         <PinKey k="ok" primary icon="check" label={p.submitLabel ?? 'OK'} locked={locked} inactive={!ready} onEnter={() => { void setFocus(HOME); void submit() }} testId="pin-ok" />
       </FocusGroup>
-      <p className="muted pin-private" data-testid="pin-private">Your place on the keypad is hidden. Each digit starts from 5.</p>
       <div><Button focusKey="pin:cancel" onEnter={p.onClose}>Cancel</Button></div>
     </Modal>
   )

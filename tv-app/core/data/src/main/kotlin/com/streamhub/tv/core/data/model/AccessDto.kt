@@ -78,6 +78,16 @@ data class Me(
     override fun toString(): String = "Me(status=$status, user=${user.id}, role=${role?.name}, permissions=$permissions, sharedDevice=$sharedDevice, tokens=${if (tokens == null) "null" else "[REDACTED]"})"
 }
 
+/** How a person's PIN is asked for: each person chooses one of these. */
+enum class PinKind {
+    /** Digits on the keypad. */
+    Pin,
+    /** A D-pad pattern of [SwitchableUser.pinArrows] presses, sent as their keypad digits. */
+    Arrows,
+    /** Typed on the system keyboard. */
+    Password,
+}
+
 /** One person who can be picked on this shared TV (GET /auth/switchable). */
 @Serializable
 data class SwitchableUser(
@@ -92,9 +102,29 @@ data class SwitchableUser(
      * a typed PIN (the keypad is shown) or none. Absent from servers older than arrow patterns.
      */
     @SerialName("pin_arrows") val pinArrows: Int? = null,
+    /**
+     * "pin", "arrows" or "password": how this person's PIN is asked for; null when there is none.
+     * Absent from servers older than the choice; read it through [kind].
+     */
+    @SerialName("pin_kind") val pinKind: String? = null,
     /** The person this TV is signed in as right now. */
     val current: Boolean = false,
-)
+) {
+    /**
+     * How to ask for this person's PIN; null when they have none. A server older than the choice (or
+     * one sending a kind this app does not know) is read the way it always was: an arrow pattern when
+     * it says how long one is, else the keypad. An arrow pattern without a length is asked for on the
+     * keypad too, where its digits work.
+     */
+    val kind: PinKind?
+        get() = when {
+            !hasPin -> null
+            pinKind == "password" -> PinKind.Password
+            pinKind == "pin" -> PinKind.Pin
+            pinArrows != null -> PinKind.Arrows
+            else -> PinKind.Pin
+        }
+}
 
 @Serializable
 data class SwitchableUsers(val users: List<SwitchableUser> = emptyList())

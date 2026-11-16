@@ -150,7 +150,7 @@ test('a restricted admin cannot expose policy or profile-management escape contr
   await page.goto('/settings?tab=profiles')
   await expect(page.getByRole('button',{name:'Add profile',exact:true})).toHaveCount(0)
   await expect(page.getByRole('button',{name:'Delete',exact:true})).toHaveCount(0)
-  await expect(page.getByLabel('New PIN')).toHaveCount(0)
+  await expect(page.getByTestId('prof-pin-set')).toHaveCount(0)
   await remote(page,'prof:switch');await remote(page,'switch:p1')
   await expect(page.getByLabel('Owner PIN',{exact:true})).toBeVisible()
 })
