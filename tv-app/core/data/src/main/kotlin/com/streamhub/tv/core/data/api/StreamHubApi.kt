@@ -296,6 +296,9 @@ class StreamHubApi @Inject constructor(
 
     suspend fun rewindCapability(id: String): RewindCapability = get("/playback/rewind") { parameter("id", id) }
 
+    /** Other feeds of the game live channel [id] is showing now (empty when it is no feed of a current game). */
+    suspend fun playbackAlternates(id: String): PlaybackAlternates = get("/playback/alternates") { parameter("id", id) }
+
     suspend fun playbackOptions(id: String, sourceId: String? = null): PlaybackOptions = get("/playback/options") {
         parameter("id", id)
         sourceId?.let { parameter("source_id", it) }

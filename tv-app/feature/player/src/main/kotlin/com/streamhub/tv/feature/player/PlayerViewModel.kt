@@ -150,6 +150,9 @@ data class PlayerScreenState(
  *    rating ceiling, the user's stream limit) is worded like the same refusal of a resolve. One about
  *    the session is first put to the server: refreshed and resolved again once, or, when the session
  *    really is over, left to the shell, which explains and returns to the picker or to pairing.
+ *  - Feed failover: a live channel that is one of several feeds of a game in progress and whose
+ *    picture stops for more than five seconds moves on to the next feed of the game (FeedFailover),
+ *    naming the channel it left so the server frees that stream at once. Never in a room.
  *  - In a watch room (the player key carries a RoomSeat) play, pause and seek go to the room instead
  *    of the player; what the room answers is applied through RoomSync, so every member, this one
  *    included, moves on the same message. Buffering is reported so the room can wait.
@@ -232,6 +235,8 @@ class PlayerViewModel @Inject constructor(
         }
         showOsd()
         viewModelScope.launch { player.state.map { it.refusal }.distinctUntilChanged().collect { refusal -> if (refusal != null) streamRefused(refusal) } }
+        // A room plays one stream for everyone: it never moves to another feed on its own.
+        if (seat == null) viewModelScope.launch { watchFeeds() }
         viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) { reauthorized = false; pausedRetry.reset() } } }
         viewModelScope.launch {
             sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
@@ -857,7 +862,8 @@ class PlayerViewModel @Inject constructor(
                     }
                     is AudioPlaybackAttempt.Ready -> {
                         val descriptor=result.descriptor
-                        currentRequest=result.request; failedRequest=null
+                        // A feed switch names the channel it left once; Try again later is an ordinary resolve.
+                        currentRequest=result.request.copy(replaces=null); failedRequest=null
                         // Another channel is another playback: its first stop is a first one.
                         pausedRetry.reset()
                         if(previousId != descriptor.id) lastChannelId=previousId
@@ -879,6 +885,66 @@ class PlayerViewModel @Inject constructor(
                     _state.update { it.copy(rewindLoading=false, rewindError=rewindError, failure=ApiErrors.describe(e), failureKeepsPlaying=!previousStopped, osdChannel=if(previousStopped) it.osdChannel else it.channels.getOrNull(it.index)) }
                 }
             }
+        }
+    }
+
+    // ---- Feed failover -------------------------------------------------------------------------
+
+    /** The channel being watched for stalls, and the failover run it is part of; null when nothing is. */
+    private var feedWatch: FeedFailover.Watch? = null
+    /** Said once the feed a switch moved to is on screen (start() clears any message before that). */
+    private var feedNotice: Pair<String, String>? = null
+
+    /**
+     * Looks at the picture once a second. Live at its edge only: not catch-up, a rewind, the local
+     * buffer's past, nor a room. A stall of a channel that has played (or a feed switched to that does
+     * not start) asks the server for the other feeds of its game and tunes to the next untried one.
+     */
+    private suspend fun watchFeeds() {
+        var last: Long? = null
+        var lastBuffered: Long? = null
+        while (true) {
+            delay(FEED_SAMPLE_MS)
+            // A channel change is on its way: judge what it brings, not the stream it is replacing.
+            if (rewindJob?.isActive == true || zapJob?.isActive == true) { last = null; lastBuffered = null; continue }
+            val s = _state.value
+            val d = s.descriptor
+            val now = SystemClock.elapsedRealtime()
+            val watching = feedWatch
+            // A switch this run made whose resolve failed: the dialog is up for a channel that never started.
+            val failedSwitch = watching != null && watching.tried.isNotEmpty() && failedRequest?.id == watching.channel && d?.id != watching.channel
+            val eligible = failedSwitch || (d != null && d.live && s.live && d.id.startsWith("ch:") && !s.bufferTimeshift && !currentStopped)
+            if (!eligible || d == null) { feedWatch = null; last = null; lastBuffered = null; continue }
+            var w = if (failedSwitch) checkNotNull(watching) else watching?.takeIf { it.channel == d.id } ?: FeedFailover.watchChannel(d.id, now).also { last = null; lastBuffered = null }
+            if (!failedSwitch && w.tried.isNotEmpty() && w.channel == d.id) feedNotice?.let { (from, to) -> feedNotice = null; flash(FeedFailover.notice(from, to)) }
+            val exo = player.exoPlayer
+            val position = exo.currentPosition
+            val step = last?.let { position - it } ?: 0L
+            last = position
+            val progressing = !failedSwitch && exo.isPlaying && step in 1..MAX_FEED_STEP_MS
+            // New video still coming in: the buffered position grew. A reconnecting (failed) stream is not delivering.
+            val buffered = exo.bufferedPosition
+            val grew = lastBuffered?.let { buffered > it } ?: false
+            lastBuffered = buffered
+            val arriving = !failedSwitch && grew && player.state.value.error == null
+            // Paused by the viewer, held for an audio choice, or a refusal no other feed would get past.
+            val paused = !failedSwitch && (!player.wantsToPlay || player.state.value.audioBlocked || s.failure != null || s.audioChoice != null)
+            w = FeedFailover.observe(w, now, progressing, paused, arriving)
+            feedWatch = w
+            if (!FeedFailover.shouldSwitch(w, now)) continue
+            val alternates = try { api.playbackAlternates(w.channel).alternates } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
+            if (feedWatch != w) continue  // the viewer moved on while the server was asked
+            val nextId = FeedFailover.nextFeed(w, alternates.map { it.channelId })
+            val next = alternates.firstOrNull { it.channelId == nextId }
+            if (next == null) { feedWatch = FeedFailover.giveUp(w); continue }
+            val fromName = s.channels.firstOrNull { it.id == w.channel }?.name ?: d.title.takeIf { d.id == w.channel && it.isNotBlank() } ?: "This channel"
+            feedWatch = FeedFailover.watchSwitched(w, next.channelId, now)
+            feedNotice = fromName to next.channelName
+            last = null
+            lastBuffered = null
+            failedRequest = null
+            _state.update { it.copy(failure = null, failureKeepsPlaying = false) }
+            submitChannel(PlaybackRequest(next.channelId, replaces = w.channel))
         }
     }
 
@@ -1116,6 +1182,10 @@ class PlayerViewModel @Inject constructor(
         /** The live reconnect attempt at which a room member's stream address is fetched again. */
         const val LIVE_ROOM_REFETCH_ATTEMPT = 3
         const val FLASH_MS = 2_500L
+        /** How often feed failover looks at the picture. */
+        const val FEED_SAMPLE_MS = 1_000L
+        /** A step of the position larger than this in one look is a jump (a new stream), not play. */
+        const val MAX_FEED_STEP_MS = 3_000L
         const val ROOM_HOST_ONLY = "Only the host can control playback"
         const val ROOM_RECONNECTING = "Reconnecting to the room…"
         val SLEEP_OPTIONS = listOf<Int?>(null, 15, 30, 60, 90, 120)

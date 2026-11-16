@@ -262,6 +262,9 @@ class StreamHubPlayer(
 
     val currentDescriptor: PlaybackDescriptor? get() = current
 
+    /** The viewer means this to play: not paused by them, and not stopped. Holds for audio do not change it. */
+    val wantsToPlay: Boolean get() = wantsPlayback
+
     /** A snapshot of Media3's own numbers. Call on the main thread, like every other player call. */
     fun stats(): PlayerStats {
         val size = exoPlayer.videoSize

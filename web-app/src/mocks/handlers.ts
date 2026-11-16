@@ -9,7 +9,7 @@ import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } fro
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
 import { adultUnlocked, holds, kindOfBody, mockProfile, ownProfile, peopleHandlers, secretRefused, setProfilePin } from './people'
-import { sportsChannels, sportsEvents, sportsNetworks } from './sports'
+import { feedAlternates, sportsChannels, sportsEvents, sportsNetworks } from './sports'
 
 const B = '/api/v1'
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
@@ -108,6 +108,7 @@ export const handlers = [
     const params = new URL(request.url).searchParams
     return HttpResponse.json({ items: [], total: 0, limit: Number(params.get('limit') ?? 40), offset: Number(params.get('offset') ?? 0), truncated: false } satisfies components['schemas']['SportsRecordingsPage'])
   }),
+  http.get(`${B}/playback/alternates`, ({ request }) => HttpResponse.json(feedAlternates(new URL(request.url).searchParams.get('id') ?? ''))),
   http.get(`${B}/playback/rewind`, () => HttpResponse.json({ mode: 'unavailable', advertised_start: null, advertised_end: null, verified: false, recording_enabled: false, granularity_seconds: 60, reason: 'Fixture has no archive.' })),
   http.get(`${B}/playback/options`, ({ request }) => {
     const id = new URL(request.url).searchParams.get('id') ?? ''

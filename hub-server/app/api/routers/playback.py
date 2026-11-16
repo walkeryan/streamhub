@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api import schemas as S
@@ -24,6 +24,7 @@ from app.services import ids
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
 from app.services.playback import StreamGrant, play_key
+from app.services.sports import feed_alternates
 from app.services.streams import is_recording, open_failed, panes, source_busy
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,16 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
             raise Forbidden(
                 "This playback attempt was stopped. Start playback again manually.", code="playback_stopped"
             )
+    if (
+        body.replaces
+        and body.replaces != body.id
+        and body.replaces.startswith("ch:")
+        and body.id.startswith("ch:")
+        and not (body.catchup_programme_id or body.rewind_at)
+    ):
+        # A feed switch: the channel left behind gives its source connection back before the new one
+        # asks for it. Only this device's own stream is touched, so nothing here needs authorizing.
+        await c.proxy.release_replaced(p.profile_id, p.session_id, body.replaces)
     generation = c.proxy.generation
     result = await c.playback.resolve(
         p.profile_id,
@@ -63,6 +74,20 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         capability = await c.playback.rewind_capability(p.profile_id, body.id)
         result["buffer_available"] = capability["mode"] == "unavailable"
     return result
+
+
+@router.get("/playback/alternates", response_model=S.PlaybackAlternates, tags=["playback"])
+async def alternates(
+    c: C, p: P, response: Response, id: str = Query(..., min_length=1, max_length=512)
+) -> dict[str, Any]:
+    """Other feeds of the game a live channel is showing now, for a player whose channel stalled."""
+    response.headers["Cache-Control"] = "private, no-store"
+    found = await feed_alternates(c.channels, p.profile_id, id)
+    if c.content_policy.applies_to(p):
+        # The same final gate the Sports screen's listing passes (``PolicyCatalogRoute``).
+        filtered = await c.content_policy.filter_payload(p.profile_id, found)
+        found = filtered if filtered is not None else {"event_id": None, "title": None, "alternates": []}
+    return found
 
 
 @router.post("/playback/multiview", response_model=S.MultiviewDescriptor, tags=["playback"])

@@ -20,6 +20,10 @@
 - **Recordings** either subscribe to a channel's shared upstream (``Tap``) or hold a connection of
   their own (``capture_slot``); both count against the source's limit and are named to a profile
   it turns away. The capture itself lives in ``app.proxy.capture``.
+- **Feed switches** (``release_replaced``): a player that leaves a stalled channel for another feed
+  of the same game gives the old channel's upstream back at once, instead of after its linger or
+  idle reap, when nobody else (another viewer or device, a recording, a room, a pair, a buffer)
+  uses it.
 
 Seeking in a web VOD session is restart-at-offset. A session starts at ``start_s`` (``-ss`` before
 ``-i``) and its playlist only ever lists what ffmpeg has produced since, as an ``EVENT`` playlist
@@ -214,6 +218,8 @@ class SharedUpstream:
         self.source_id: str | None = None
         self.viewers: dict[asyncio.Queue[bytes | None], Viewer] = {}
         self.taps: dict[asyncio.Queue[bytes | None], Tap] = {}
+        # Who left last when the subscribers ran out: while it lingers, the upstream is that viewer's to give back.
+        self.last_viewer: Viewer | None = None
 
     @property
     def subscribers(self) -> int:
@@ -230,6 +236,7 @@ class SharedUpstream:
     def subscribe(self) -> asyncio.Queue[bytes | None]:
         q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=CLIENT_QUEUE)
         self._subs.add(q)
+        self.last_viewer = None
         if self._linger is not None:
             self._linger.cancel()
             self._linger = None
@@ -240,9 +247,13 @@ class SharedUpstream:
         return q
 
     def unsubscribe(self, q: asyncio.Queue[bytes | None]) -> None:
+        was_subscribed = q in self._subs
         self._subs.discard(q)
-        self.viewers.pop(q, None)
-        self.taps.pop(q, None)
+        viewer = self.viewers.pop(q, None)
+        tap = self.taps.pop(q, None)
+        if was_subscribed and not self._subs:
+            # A recording's seat is nobody's to give back early, nor is an unnamed subscriber's.
+            self.last_viewer = viewer if tap is None else None
         if not self.closed and not self._subs and self._linger is None:
             loop = asyncio.get_running_loop()
             self._linger = loop.call_later(LINGER_S, self._close_if_idle)
@@ -336,6 +347,9 @@ class HlsSession:
     pin_key: str | None = None  # the pinned upstream session this one uses, if any (``StreamProxy.pin``)
     # profile id -> (viewer, when it last asked for the playlist); a live channel can have several.
     viewers: dict[str, tuple[Viewer, float]] = field(default_factory=dict)
+    # (profile id, auth session id) -> (content ref, when it last asked for the playlist). ``viewers`` keeps
+    # one entry per profile, so two devices of one profile on the same channel are only told apart here.
+    watchers: dict[tuple[str, str | None], tuple[str | None, float]] = field(default_factory=dict)
 
     @property
     def complete(self) -> bool:
@@ -867,6 +881,89 @@ class StreamProxy:
             found += up.viewers.values()
         return [viewer for viewer in found if viewer.user_id == user_id]
 
+    async def release_replaced(self, profile_id: str, session_id: str | None, ref: str) -> int:
+        """Stop, at once, the live streams of ``ref`` that one signed-in device is leaving; how many stopped.
+
+        A player whose channel stalled switches to another feed of the same game. The channel it left
+        would otherwise keep its source connection: a shared upstream through its linger, an HLS
+        session until it is reaped or evicted. On a source that allows one connection (one login, one
+        stream) that is long enough to turn the new feed away as ``source_busy``. Only what this
+        device alone uses goes: a stream another viewer or another device of the same profile is on,
+        a recording's tap, a watch room's kept session, a multiview pair and a buffered session stay.
+        """
+        if not session_id:
+            return 0  # a grant that names no device cannot be told apart from another device's
+        me = (profile_id, session_id)
+
+        def mine(viewer: Viewer | None) -> bool:
+            return viewer is not None and (viewer.profile_id, viewer.session_id) == me and viewer.ref == ref
+
+        released = 0
+        async with self._hls_lock:
+            for key, up in list(self._shared.items()):
+                if up.closed or up.taps:
+                    continue
+                if up.subscribers:
+                    # Every subscriber must be this device's own (a player can hold a second read briefly).
+                    if len(up.viewers) != up.subscribers or not all(mine(v) for v in up.viewers.values()):
+                        continue
+                elif not mine(up.last_viewer):
+                    continue
+                if await self._close_shared(key, up):
+                    released += 1
+            now = self._clock()
+            reserved = {key for lease in self._pairs.values() for key in lease.members}
+            for key, sess in list(self._hls.items()):
+                if sess.family is not None or key in self._kept or key in reserved or self.dvr.key == key:
+                    continue
+                entry = sess.watchers.get(me)
+                if entry is None or entry[0] != ref:
+                    continue
+                # Anyone else who asked for the playlist within the idle window is still watching.
+                if any(who != me and now - seen <= HLS_IDLE_S for who, (_, seen) in sess.watchers.items()):
+                    continue
+                try:
+                    await self._stop_hls(key, expected=sess)
+                except Exception:
+                    continue  # not confirmed stopped: it keeps its slot, as any failed stop does
+                self._forget_pin(sess)
+                released += 1
+        if released:
+            log.info("released replaced stream", extra={"count": released})
+        return released
+
+    async def _close_shared(self, key: str, up: SharedUpstream) -> bool:
+        """Caller holds _hls_lock. Close one shared upstream now, as its linger would; False if it would not stop."""
+        up.closed = True
+        if up._linger is not None:
+            up._linger.cancel()
+            up._linger = None
+        task = up._task
+        if task is not None and not task.done():
+            task.cancel()
+            # However this call ends, the upstream leaves the table once its pump has really stopped.
+            task.add_done_callback(lambda _: self._forget_shared(key, up))
+            try:
+                await asyncio.wait_for(asyncio.shield(task), 1)
+            except asyncio.CancelledError:
+                if not task.done():
+                    raise  # this call was cancelled, not the pump
+            except (Exception, TimeoutError):
+                # Still running: keep counting it, so the source is never told a connection is free that is not.
+                return False
+        up._broadcast(None)
+        for q, (owner, _) in list(self._viewers.items()):
+            if owner is up:
+                self._finish_viewer(q)
+        up._subs.clear()
+        up.viewers.clear()
+        self._forget_shared(key, up)
+        return True
+
+    def _forget_shared(self, key: str, up: SharedUpstream) -> None:
+        if self._shared.get(key) is up:
+            self._shared.pop(key, None)
+
     def refused_at_limit(self, source_id: str, maximum: int | None) -> bool:
         """Was a stream the source just refused its last free connection, with other streams on the rest?
 
@@ -1371,6 +1468,7 @@ class StreamProxy:
         if viewer is not None:
             first = sess.viewers.get(viewer.profile_id)
             sess.viewers[viewer.profile_id] = (first[0] if first else viewer, self._clock())
+            sess.watchers[(viewer.profile_id, viewer.session_id)] = (viewer.ref, self._clock())
         deadline = self._clock() + HLS_READY_TIMEOUT
         playlist = sess.workdir / "index.m3u8"
         while self._clock() < deadline:
@@ -1401,7 +1499,7 @@ class StreamProxy:
                         if key not in self._hls:  # else another request of this playback restarted it
                             self._admit_source(source_id, max_connections)
                             sess.workdir.mkdir(parents=True, exist_ok=True)
-                            watching = sess.viewers
+                            watching, seen = sess.viewers, sess.watchers
                             fresh = attempts_for(url, sess.workdir)
                             tried = next((i for i, (label, _) in enumerate(fresh) if label == sess.label), 0)
                             sess = await self._spawn_hls(
@@ -1413,7 +1511,7 @@ class StreamProxy:
                                 family=sess.family,
                                 pin_key=pin_key,
                             )
-                            sess.viewers = watching
+                            sess.viewers, sess.watchers = watching, seen
                     deadline = self._clock() + HLS_READY_TIMEOUT
                     continue
                 async with self._hls_lock:
@@ -1427,7 +1525,7 @@ class StreamProxy:
                             "transcode fallback", extra={"from": sess.label, "to": sess.fallbacks[0][0], "code": code}
                         )
                         sess.workdir.mkdir(parents=True, exist_ok=True)
-                        watching = sess.viewers
+                        watching, seen = sess.viewers, sess.watchers
                         sess = await self._spawn_hls(
                             key,
                             sess.sid,
@@ -1437,7 +1535,7 @@ class StreamProxy:
                             family=sess.family,
                             pin_key=pin_key,
                         )
-                        sess.viewers = watching
+                        sess.viewers, sess.watchers = watching, seen
                         deadline = self._clock() + HLS_READY_TIMEOUT
                         continue
                 if sess.upstream_status is not None:

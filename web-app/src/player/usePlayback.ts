@@ -17,6 +17,8 @@ export interface PlaybackReq {
   startPositionMs?: number | null
   /** The viewer's quality cap (480, 720 or 1080); the server applies it to films taller than that. */
   maxHeight?: number | null
+  /** The live channel this one replaces after it stalled (feed failover): the server frees its stream first. */
+  replaces?: string | null
 }
 
 async function playbackGeneration(): Promise<string> {
@@ -31,7 +33,7 @@ export async function resolve(req: PlaybackReq, generation?: string): Promise<Pl
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null },
+      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null, replaces: req.replaces ?? null },
     }),
   )
 }
@@ -82,6 +84,10 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const [state, setState] = useState<PlayState>('resolving')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<SourceBusy | null>(null)
+  // The error on screen is a refusal another stream would get too (access, an administrator's stop), not a failing stream.
+  const [refused, setRefused] = useState(false)
+  // Watching back in the local buffer rather than at the live edge.
+  const [timeshifted, setTimeshifted] = useState(false)
   const plays = useRef(0)
   const [attempt, setAttempt] = useState(0)
   const [tracksVersion, setTracksVersion] = useState(0)
@@ -128,7 +134,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     terminal.current = true
     clearRetry(); clearWaiting()
     handle.current?.destroy()
-    setBusy(null); setState('error'); setError(message)
+    setBusy(null); setRefused(true); setState('error'); setError(message)
   }, [clearRetry, clearWaiting])
   // The stream says the session it was issued to no longer stands. Once per deliberate Play or Retry, have the API
   // judge this device's session: a revoked or suspended one is signed out there, a stale one refreshed, and a
@@ -241,6 +247,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     setState((s) => (s === 'reconnecting' ? s : 'resolving'))
     setError(null)
     setBusy(null)
+    setRefused(false)
+    setTimeshifted(false)
     ;(async () => {
       try {
         await pendingRelease.current
@@ -346,7 +354,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
               try {
                 const result = await lease.seek(at)
                 if (cancelled) return
-                setBufferWindow(result.window); setBufferIssue(null)
+                setBufferWindow(result.window); setBufferIssue(null); setTimeshifted(at !== null)
                 await attach({ ...d, url: result.url })
               } catch (failure) {
                 if (!cancelled && !(failure instanceof DOMException && failure.name === 'AbortError')) setBufferIssue(bufferError(failure))
@@ -373,6 +381,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           terminal.current = true
           clearWaiting()
           clearRetry()
+          setRefused(e.status === 401 || e.status === 403 || e.code === 'audio_selection_required' || e.code === 'playback_reload_required')
           setState('error')
           // A room's refusals (the room ended, it is full) are the server's own words.
           setError((descriptorSource.current && e.code?.startsWith('room_')) || (recording && e.message) ? e.message : e.code === 'audio_selection_required' ? 'Choose an audio language and source from title details before playing.' : e.code === 'playback_paused' || e.code === 'playback_stopped'
@@ -507,7 +516,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   }, [tracksVersion])
 
   return {
-    desc, state, error, busy, tracks, audioBlocked,
+    desc, state, error, busy, refused, timeshifted, tracks, audioBlocked,
     pause: () => { wantsPlayback.current = false; pausedByViewer.current = true; videoRef.current?.pause() },
     resume: () => { wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
     consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
