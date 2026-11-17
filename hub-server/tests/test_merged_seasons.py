@@ -93,7 +93,9 @@ async def test_an_episode_tile_shows_its_own_picture_not_the_series_backdrop() -
     bare = episode("lib", "l", 1, 2)
     bare.backdrop = "series-art.jpg"
     service = catalog({("lib", "l"): [still, bare]})
-    ctx: Any = SimpleNamespace(title_tile=lambda row: {"title": row.title, "poster": row.poster, "backdrop": row.backdrop})
+    ctx: Any = SimpleNamespace(
+        title_tile=lambda row: {"title": row.title, "poster": row.poster, "backdrop": row.backdrop}
+    )
     _, episodes = await service._merged_seasons([only], ctx)
     assert [(e["poster"], e["backdrop"]) for e in episodes] == [
         ("still-1.jpg", "still-1.jpg"),
