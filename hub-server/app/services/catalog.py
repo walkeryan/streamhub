@@ -495,6 +495,10 @@ class CatalogService:
         if k.kind == "episode":
             # Not the provider's release line or file name: the episode's own name and number.
             t["title"] = ids.episode_display_title(k.title, k.episode_number)
+            # Its own picture, not the series' backdrop: a library server gives every episode the show's
+            # background art too, and wide tiles prefer a backdrop, so each episode looked the same.
+            if t.get("poster"):
+                t["backdrop"] = t["poster"]
         return t
 
     async def _merged_seasons(
