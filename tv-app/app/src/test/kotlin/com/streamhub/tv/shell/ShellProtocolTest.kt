@@ -210,8 +210,8 @@ class ShellProtocolTest {
 
     @Test fun theEventReachesThePageAsAStringItParses() {
         val script = miniPlayerScript(miniPlayerEventJson(info))
-        assertTrue(script.contains("s.miniPlayer(\"{"))
-        assertTrue("checks the page has the function", script.contains("typeof s.miniPlayer==='function'"))
+        assertTrue(script.contains("s.message(\"{"))
+        assertTrue("checks the page has the function", script.contains("typeof s.message==='function'"))
     }
 
     private fun command(body: String) = parseMiniPlayerCommand("""{"v":1,"kind":"mini_player_command",$body}""")

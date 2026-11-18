@@ -28,9 +28,11 @@ import java.time.OffsetDateTime
  *  - `signedOut(reason)` — the web app has no session any more; the shell returns to pairing.
  *  - `capabilities(): string` — JSON ([capabilitiesJson]).
  *  - `deliverToken(id, json)` — the answer to a token request (see WebTokenBroker).
- *  - `miniPlayerCommand(json): boolean` — the mini player bar's buttons ([parseMiniPlayerCommand]); false when refused.
+ *  - `message(json): boolean` — a `{"v":1,"kind":…}` envelope; today kind `mini_player_command`, the mini
+ *    player bar's buttons ([parseMiniPlayerCommand]). False when refused or of a kind this TV does not know.
  * TV → page, on `window.streamhubShell`: `back(): boolean`, `token(id, rejected)`, `playbackEnded()`,
- *  `miniPlayer(json)` — the native player in picture-in-picture ([miniPlayerEventJson]), state null when it is not.
+ *  `message(json)` — the same envelope the other way; today kind `mini_player`, the native player in
+ *  picture-in-picture ([miniPlayerEventJson]), state null when it is not. (Web half: web-app/src/shellProtocol.ts.)
  */
 const val BRIDGE_VERSION = 1
 
@@ -202,7 +204,7 @@ fun capabilitiesJson(versionName: String, versionCode: Int, hdr: List<String>, v
 // ---- Mini player (the native player in picture-in-picture) ----------------------------------------
 
 /**
- * The `mini_player` event the page's `window.streamhubShell.miniPlayer(json)` receives:
+ * The `mini_player` message the page's `window.streamhubShell.message(json)` receives:
  * `{"v":1,"kind":"mini_player","state":{id,title,subtitle,image,position_ms,duration_ms,playing,has_next,has_previous,live}}`,
  * or `"state":null` when picture-in-picture ends or playback stops (the page then hides its bar).
  */
@@ -225,14 +227,14 @@ fun miniPlayerEventJson(info: MiniPlayerInfo?): String = buildJsonObject {
 
 /** Hands [eventJson] to the page as a string (the page parses it); a page without the function is left alone. */
 fun miniPlayerScript(eventJson: String): String =
-    "(function(){var s=window.streamhubShell;if(s&&typeof s.miniPlayer==='function')s.miniPlayer(${jsString(eventJson)})})()"
+    "(function(){var s=window.streamhubShell;if(s&&typeof s.message==='function')s.message(${jsString(eventJson)})})()"
 
 private const val MAX_COMMAND_JSON = 1024
 /** Six hours either way: more than any seek the bar's buttons make. */
 private const val MAX_SEEK_MS = 6L * 3600 * 1000
 
 /**
- * Reads `miniPlayerCommand(json)`: `{"v":1,"kind":"mini_player_command","command":…,"delta_ms":int|null}` with
+ * Reads a page → TV `message(json)` of kind `mini_player_command`: `{"v":1,"kind":"mini_player_command","command":…,"delta_ms":int|null}` with
  * command `play_pause` | `seek_by` (needs a non-zero `delta_ms`) | `next` | `previous` | `expand` | `close`.
  * Null for anything else; unknown fields are ignored, like `play(json)`.
  */
