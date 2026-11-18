@@ -1,5 +1,20 @@
 package com.streamhub.tv.feature.player
 
+import com.streamhub.tv.core.ui.theme.glass
+import com.streamhub.tv.core.ui.components.PictureGlass
+import com.streamhub.tv.core.ui.components.GlassIcons
+import com.streamhub.tv.core.ui.components.QrTile
+import com.streamhub.tv.core.ui.components.BigCode
+import com.streamhub.tv.core.ui.components.GroupLabel
+import com.streamhub.tv.core.ui.components.DialogText
+import com.streamhub.tv.core.ui.components.DialogTitle
+import com.streamhub.tv.core.ui.components.GlassPanel
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -108,7 +123,7 @@ private fun fmt(ms: Long): String {
 private const val LONG_PRESS_MS = 500L
 
 /** Appended to audio and subtitle tracks that are in the file but have no decoder on this device. */
-private const val UNSUPPORTED_TRACK = " (not supported on this TV)"
+internal const val UNSUPPORTED_TRACK = " (not supported on this TV)"
 
 /** Tracks one OK press across its KeyDown / auto-repeat / KeyUp events (not state: no recomposition). */
 private class OkPress {
@@ -346,8 +361,12 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
 
 @Composable
 private fun StatusBadge(text: String, modifier: Modifier) {
-    val t = LocalThemeTokens.current
-    Text(text, color = t.text, style = MaterialTheme.typography.bodyLarge, modifier = modifier.background(t.overlay, RoundedCornerShape(Tokens.Radius.Md)).padding(horizontal = 20.dp, vertical = 12.dp))
+    val g = glass
+    Text(
+        text, color = g.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+        modifier = modifier.shadow(12.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(g.panel)
+            .border(1.dp, g.line, RoundedCornerShape(14.dp)).padding(horizontal = 22.dp, vertical = 13.dp),
+    )
 }
 
 /** Bottom OSD: live = number, logo, name, now/next + progress; VOD = title + scrubber. */
@@ -556,11 +575,12 @@ private const val SUBTITLES_OFF = "off"
 @Composable
 private fun MiniList(channels: List<Channel>, currentId: String?, onPick: (Channel) -> Unit) {
     val t = LocalThemeTokens.current
+    val g = glass
     val startIdx = channels.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
     val state = rememberLazyListState(initialFirstVisibleItemIndex = (startIdx - 3).coerceAtLeast(0))
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(50); runCatching { focus.requestFocus() } }
-    Box(Modifier.fillMaxHeight().width(380.dp).background(t.overlay)) {
+    GlassPanel(Modifier.fillMaxHeight().width(400.dp).padding(start = 14.dp, top = 14.dp, bottom = 14.dp), shape = RoundedCornerShape(20.dp), padding = PaddingValues(0.dp)) {
         PivotScroll(leadingOffset = 160.dp) {
             LazyColumn(
                 state = state,
@@ -571,17 +591,18 @@ private fun MiniList(channels: List<Channel>, currentId: String?, onPick: (Chann
                 itemsIndexed(channels, key = { _, c -> c.id }) { i, ch ->
                     FocusSurface(
                         onClick = { onPick(ch) },
-                        modifier = Modifier.fillMaxWidth().height(52.dp).then(if (i == startIdx) Modifier.focusRequester(focus) else Modifier),
-                        containerColor = if (ch.id == currentId) t.surfaceAlt else Color.Transparent,
-                        focusedContainerColor = t.text,
+                        modifier = Modifier.fillMaxWidth().height(56.dp).then(if (i == startIdx) Modifier.focusRequester(focus) else Modifier),
+                        shape = RoundedCornerShape(11.dp),
+                        containerColor = if (ch.id == currentId) g.fillTop else Color.Transparent,
+                        focusedContainerColor = g.rowFocus,
                         scaleOnFocus = false, glow = false,
+                        ringColor = t.accent,
                     ) { focused ->
-                        val fg = if (focused) t.bg else t.text
-                        Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(ch.number.toString(), color = fg, style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(48.dp))
+                        Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(ch.number.toString(), color = if (focused) t.accent else g.muted, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(48.dp))
                             Column {
-                                Text(ch.name + if (ch.id == currentId) "  ▶" else "", color = fg, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                ch.now?.let { Text(it.title, color = fg.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                Text(ch.name + if (ch.id == currentId) "  ▶" else "", color = g.text, fontSize = 16.sp, fontWeight = if (focused) FontWeight.Bold else FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                ch.now?.let { Text(it.title, color = g.muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                             }
                         }
                     }
@@ -598,26 +619,37 @@ private fun MiniList(channels: List<Channel>, currentId: String?, onPick: (Chann
  */
 @Composable
 private fun StreamInfoDialog(vm: PlayerViewModel, s: PlayerScreenState, onDismiss: () -> Unit) {
-    val t = LocalThemeTokens.current
-    val close = remember { FocusRequester() }
     val info = s.descriptor?.mediaInfo
     val lines by produceState(streamInfoLines(info, vm.player.stats()), info) {
         while (true) { value = streamInfoLines(info, vm.player.stats()); delay(1_000) }
     }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(Modifier.width(560.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Stream info", style = MaterialTheme.typography.titleLarge, color = t.text)
-            if (info == null) Text("The server sent no details for this stream.", color = t.textMuted, style = MaterialTheme.typography.bodySmall)
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        StreamInfoCard(lines, noDetails = info == null, onDismiss = onDismiss)
+    }
+}
+
+/** Stream info's glass card: label and value in two columns, Close under them. */
+@Composable
+internal fun StreamInfoCard(lines: List<StreamInfoLine>, noDetails: Boolean, onDismiss: () -> Unit) {
+    val g = glass
+    val close = remember { FocusRequester() }
+    GlassPanel(Modifier.width(620.dp), padding = PaddingValues(30.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Image(GlassIcons.Info, null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(LocalThemeTokens.current.accent))
+            DialogTitle("Stream info", maxLines = 1)
+        }
+        if (noDetails) DialogText("The server sent no details for this stream.", fontSize = 15.sp)
+        Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             lines.forEach { line ->
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(line.label, Modifier.width(170.dp), color = t.textMuted, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                    Text(line.value, Modifier.weight(1f), color = t.text, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(line.label, Modifier.width(180.dp), color = g.dim, fontSize = 15.sp, maxLines = 1)
+                    Text(line.value, Modifier.weight(1f), color = g.text, fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
-            ShButton("Close", onDismiss, Modifier.padding(top = 8.dp).focusRequester(close))
         }
-        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { close.requestFocus() } }
+        ShButton("Close", onDismiss, Modifier.padding(top = 10.dp).focusRequester(close))
     }
+    LaunchedEffect(Unit) { withFrameNanos { }; runCatching { close.requestFocus() } }
 }
 
 /** Menu: audio track · subtitles · aspect ratio · sleep timer · stream info. Every track is listed; undecodable ones are disabled. */
@@ -642,86 +674,64 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
     val inRoom = s.roomCode != null
     // No archive or Go Live in a room: it stays on the room clock.
     val isChannel = s.descriptor?.id?.startsWith("ch:") == true && !inRoom
-    /** A section above Audio holds the menu's first focus. */
-    val topSection = isChannel || inRoom
-    // Initial focus must land on something focusable: tracks this TV cannot decode are listed but disabled.
-    val firstAudio = ps.audioTracks.indexOfFirst { it.supported }
-    Column(
-        Modifier.fillMaxHeight().width(420.dp).background(t.overlay).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = Tokens.Canvas.SafeMarginY),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        if (inRoom) {
-            Text("Watch room ${RoomCode.display(s.roomCode.orEmpty())}", style = MaterialTheme.typography.titleSmall, color = t.text)
-            Text(
-                (room?.members?.size ?: 0).let { n -> if (n == 1) "1 person watching" else "$n people watching" } +
-                    if (room?.controlsLocked == true) " · only the host controls playback" else "",
-                color = t.textMuted, style = MaterialTheme.typography.bodySmall,
-            )
-            if (room?.isHost == true) {
-                ShButton(if (room.controlsLocked) "Let everyone control playback" else "Only I control playback", vm::toggleRoomLock, Modifier.focusRequester(first))
-                ShButton("Invite people", { invite = true }, Modifier.focusRequester(inviteOpener))
-                ShButton("Leave the room", vm::askLeaveRoom)
-            } else {
-                ShButton("Leave the room", vm::askLeaveRoom, Modifier.focusRequester(first))
-                ShButton("Invite people", { invite = true }, Modifier.focusRequester(inviteOpener))
-            }
-        }
-        if(isChannel) {
-            ShButton(if(s.bufferWindow!=null) "Buffered rewind" else "Provider archive · unverified", vm::openRewind, Modifier.focusRequester(first))
-            ShButton("Go Live", vm::goLive)
-            s.rewindError?.let { Text(it, color=t.danger) }
-            s.bufferWindow?.let { Text("${it.bufferedSeconds.toInt()} seconds retained · grows while watched",color=t.textMuted) }
-            s.bufferError?.let { Text(it,color=t.danger) }
-        }
-        Text("Audio", style = MaterialTheme.typography.titleSmall, color = t.text)
-        ps.audioNotice?.let {Text(it,color=if(ps.audioBlocked)t.danger else t.textMuted)}
-        trackMessage?.let {Text(it,color=t.textMuted)}
-        if (ps.audioTracks.isEmpty()) Text("Audio track metadata unavailable", color = t.textMuted, style = MaterialTheme.typography.bodySmall)
-        ps.audioTracks.forEachIndexed { i, tr ->
-            val opener=remember(tr.revision,tr.groupIndex,tr.trackIndex){FocusRequester()}
-            val note = when {
-                !tr.supported -> UNSUPPORTED_TRACK
-                tr.language.isNullOrBlank() || tr.language.equals("und",true) -> " · language unverified"
-                else -> ""
-            }
-            ShChip(tr.label + note, tr.selected, {
-                trackMessage=null
-                if(vm.player.audioTrackNeedsConfirmation(tr)) {vm.player.pause();confirmOpener=opener;confirmation=tr}
-                else if(!vm.player.selectTrack(tr,C.TRACK_TYPE_AUDIO)) trackMessage="Audio tracks changed. Choose again."
-            },Modifier.focusRequester(opener).then(if(i==firstAudio && !topSection)Modifier.focusRequester(first) else Modifier), enabled = tr.supported)
-        }
-        Text("Subtitles", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
-        ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (firstAudio < 0 && !topSection) Modifier.focusRequester(first) else Modifier)
-        ps.textTracks.forEach { tr ->
-            ShChip(tr.label + if (tr.supported) "" else UNSUPPORTED_TRACK, !ps.subtitlesOff && tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) }, enabled = tr.supported)
-        }
-        // The profile's "Autoplay next episode" (the web settings have the same switch).
-        if (s.upNext.kind != UpNextFlow.Kind.None) {
-            Text("Playback", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
-            ShChip(if (s.autoplayNext) "Autoplay next episode: On" else "Autoplay next episode: Off", s.autoplayNext, { vm.setAutoplayNext(!s.autoplayNext) })
-        }
-        Text("Picture", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
-        ShButton("Aspect: ${s.aspect.label}", vm::cycleAspect)
-        Text("Sleep timer", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PlayerViewModel.SLEEP_OPTIONS.forEach { m -> ShChip(m?.let { "$it" } ?: "Off", s.sleepMinutes == m, { vm.setSleep(m) }) }
-        }
-        // A room for whatever is playing, with this TV as its host (the web player's "Watch together").
-        if (vm.roomStart(s) != null) ShButton("Watch together", vm::startWatchTogether, Modifier.padding(top = 8.dp))
-        // What is playing and how it gets here: the server's facts and the player's own numbers.
-        ShButton("Stream info", { streamInfo = true }, Modifier.focusRequester(infoOpener))
-        if (ps.error != null) ShButton("Retry stream", vm::retry)
-        ShButton("Close controls",vm::hideOverlay)
-    }
+    SettingsDrawer(
+        SettingsModel(
+            roomCode = s.roomCode,
+            roomMembers = room?.members?.size ?: 0,
+            roomLocked = room?.controlsLocked == true,
+            roomHost = room?.isHost == true,
+            channel = isChannel,
+            hasBufferWindow = s.bufferWindow != null,
+            bufferedSeconds = s.bufferWindow?.bufferedSeconds?.toInt(),
+            rewindError = s.rewindError,
+            bufferError = s.bufferError,
+            audioNotice = ps.audioNotice,
+            audioBlocked = ps.audioBlocked,
+            trackMessage = trackMessage,
+            audioTracks = ps.audioTracks,
+            textTracks = ps.textTracks,
+            subtitlesOff = ps.subtitlesOff,
+            autoplay = s.autoplayNext.takeIf { s.upNext.kind != UpNextFlow.Kind.None },
+            aspectLabel = s.aspect.label,
+            sleepOptions = PlayerViewModel.SLEEP_OPTIONS,
+            sleepMinutes = s.sleepMinutes,
+            watchTogether = vm.roomStart(s) != null,
+            canRetry = ps.error != null,
+        ),
+        SettingsActions(
+            onToggleRoomLock = vm::toggleRoomLock,
+            onInvite = { invite = true },
+            onLeaveRoom = vm::askLeaveRoom,
+            onRewind = vm::openRewind,
+            onGoLive = vm::goLive,
+            onAudio = { tr, opener ->
+                trackMessage = null
+                if (vm.player.audioTrackNeedsConfirmation(tr)) { vm.player.pause(); confirmOpener = opener; confirmation = tr }
+                else if (!vm.player.selectTrack(tr, C.TRACK_TYPE_AUDIO)) trackMessage = "Audio tracks changed. Choose again."
+            },
+            onSubtitlesOff = { vm.player.disableSubtitles() },
+            onSubtitle = { tr -> vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) },
+            onToggleAutoplay = { vm.setAutoplayNext(!s.autoplayNext) },
+            onAspect = vm::cycleAspect,
+            onSleep = vm::setSleep,
+            onWatchTogether = vm::startWatchTogether,
+            onStreamInfo = { streamInfo = true },
+            onRetry = vm::retry,
+            onClose = vm::hideOverlay,
+        ),
+        first = first,
+        streamInfoOpener = infoOpener,
+        inviteOpener = inviteOpener,
+    )
     if (streamInfo) StreamInfoDialog(vm, s) { streamInfo = false; menuScope.launch { withFrameNanos { }; runCatching { infoOpener.requestFocus() } } }
     if (invite && s.roomCode != null) InviteDialog(s.roomCode, s.roomShareUrl) { invite = false; menuScope.launch { withFrameNanos { }; runCatching { inviteOpener.requestFocus() } } }
     confirmation?.let {track ->
         val cancelFocus=remember {FocusRequester()}
-        Dialog(onDismissRequest=dismissTrack) {
-            Column(Modifier.width(520.dp).background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                Text("Use this audio track?",color=t.text,style=MaterialTheme.typography.titleLarge)
-                Text("${track.label} · ${track.language ?: "Language unverified"}. Its language is unverified or outside your preferred languages. Allow only this track for this playback?",color=t.textMuted)
-                ShButton("Cancel · keep paused",dismissTrack,Modifier.focusRequester(cancelFocus))
+        Dialog(onDismissRequest=dismissTrack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            GlassPanel(Modifier.width(580.dp)) {
+                DialogTitle("Use this audio track?")
+                DialogText("${track.label} · ${track.language ?: "Language unverified"}. Its language is unverified or outside your preferred languages. Allow only this track for this playback?")
+                ShButton("Cancel · keep paused",dismissTrack,Modifier.padding(top = 6.dp).focusRequester(cancelFocus), style = ButtonStyle.Primary)
                 ShButton("Use this track once",{
                     if(vm.player.selectTrack(track,C.TRACK_TYPE_AUDIO,allowUnverifiedAudio=true)) {vm.player.resume();dismissTrack()}
                     else {trackMessage="Audio tracks changed. Choose again.";dismissTrack()}
@@ -736,7 +746,8 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
 @Composable
 private fun RoomStrip(code: String, room: RoomUiState, modifier: Modifier = Modifier) {
     Row(
-        modifier.background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(Tokens.Radius.Pill)).padding(horizontal = 14.dp, vertical = 6.dp),
+        modifier.clip(RoundedCornerShape(Tokens.Radius.Pill)).background(Brush.verticalGradient(listOf(Color(0xCC181E34), Color(0xB3121729))))
+            .border(1.dp, PictureGlass.Line, RoundedCornerShape(Tokens.Radius.Pill)).padding(horizontal = 16.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -758,54 +769,58 @@ private const val MAX_STRIP_MEMBERS = 6
 /** "Invite people" in a room: its code to read out and a QR code of its link, as when it was started. */
 @Composable
 private fun InviteDialog(code: String, shareUrl: String?, onDismiss: () -> Unit) {
-    val t = LocalThemeTokens.current
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        InviteCard(code, shareUrl, onDismiss)
+    }
+}
+
+@Composable
+internal fun InviteCard(code: String, shareUrl: String?, onDismiss: () -> Unit) {
     val close = remember { FocusRequester() }
-    Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-        Row(
-            Modifier.width(820.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(32.dp),
-            horizontalArrangement = Arrangement.spacedBy(32.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    GlassPanel(Modifier.width(840.dp), padding = PaddingValues(36.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(36.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Invite people", style = MaterialTheme.typography.titleLarge, color = t.text)
-                Text("Room code", style = MaterialTheme.typography.labelLarge, color = t.textMuted)
-                Text(
-                    RoomCode.display(code),
-                    style = MaterialTheme.typography.displayLarge.copy(fontFamily = FontFamily.Monospace, fontSize = 64.sp, letterSpacing = 6.sp),
-                    color = t.accent,
-                )
-                Text(
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Image(GlassIcons.People, null, Modifier.size(28.dp), colorFilter = ColorFilter.tint(LocalThemeTokens.current.accent))
+                    DialogTitle("Invite people", maxLines = 1)
+                }
+                GroupLabel("Room code", Modifier.padding(top = 8.dp))
+                BigCode(RoomCode.display(code))
+                DialogText(
                     "On another TV: open Join a room from the menu and enter this code. On a phone or computer: scan the QR code" +
                         (shareUrl?.let { " or open $it" } ?: "") + ".",
-                    style = MaterialTheme.typography.bodyMedium, color = t.textMuted,
+                    fontSize = 16.sp,
                 )
-                ShButton("Done", onDismiss, Modifier.padding(top = 8.dp).focusRequester(close))
+                ShButton("Done", onDismiss, Modifier.padding(top = 10.dp).focusRequester(close), style = ButtonStyle.Primary)
             }
-            if (shareUrl != null) QrCode(shareUrl, size = 220.dp)
+            if (shareUrl != null) QrTile(shareUrl, size = 232.dp)
         }
-        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { close.requestFocus() } }
     }
+    LaunchedEffect(Unit) { withFrameNanos { }; runCatching { close.requestFocus() } }
 }
 
 /** Back in a room. Focus starts on staying: leaving is the choice that has to be made on purpose. */
 @Composable
 private fun LeaveRoomDialog(isHost: Boolean, onLeave: () -> Unit, onEnd: () -> Unit, onStay: () -> Unit) {
-    val t = LocalThemeTokens.current
-    val stay = remember { FocusRequester() }
-    Dialog(onDismissRequest = onStay) {
-        Column(Modifier.width(520.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Leave the room?", style = MaterialTheme.typography.titleLarge, color = t.text)
-            Text(
-                if (isHost) "The others can keep watching without you, or you can end the room for everyone."
-                else "The others keep watching. You can come back with the room's code while it is open.",
-                style = MaterialTheme.typography.bodyLarge, color = t.textMuted,
-            )
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ShButton("Stay", onStay, Modifier.focusRequester(stay), style = ButtonStyle.Primary)
-                ShButton("Leave", onLeave)
-                if (isHost) ShButton("End for everyone", onEnd, style = ButtonStyle.Danger)
-            }
-        }
-        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { stay.requestFocus() } }
+    Dialog(onDismissRequest = onStay, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        LeaveRoomCard(isHost, onLeave, onEnd, onStay)
     }
+}
+
+@Composable
+internal fun LeaveRoomCard(isHost: Boolean, onLeave: () -> Unit, onEnd: () -> Unit, onStay: () -> Unit) {
+    val stay = remember { FocusRequester() }
+    GlassPanel(Modifier.width(600.dp)) {
+        DialogTitle("Leave the room?")
+        DialogText(
+            if (isHost) "The others can keep watching without you, or you can end the room for everyone."
+            else "The others keep watching. You can come back with the room's code while it is open.",
+        )
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            ShButton("Stay", onStay, Modifier.focusRequester(stay), style = ButtonStyle.Primary)
+            ShButton("Leave", onLeave, icon = GlassIcons.Leave)
+            if (isHost) ShButton("End for everyone", onEnd, style = ButtonStyle.Danger)
+        }
+    }
+    LaunchedEffect(Unit) { withFrameNanos { }; runCatching { stay.requestFocus() } }
 }

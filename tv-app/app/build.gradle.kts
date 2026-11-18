@@ -31,8 +31,8 @@ android {
         applicationId = "com.streamhub.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 20
-        versionName = "1.3.1"
+        versionCode = 21
+        versionName = "1.4.0"
     }
 
     buildTypes {
@@ -59,6 +59,9 @@ android {
         compose = true
         buildConfig = true
     }
+
+    // Robolectric renders the shell's native screens for the screenshot test.
+    testOptions { unitTests { isIncludeAndroidResources = true } }
 
     packaging {
         resources.excludes += setOf("META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties", "META-INF/{AL2.0,LGPL2.1}")
@@ -105,4 +108,16 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }
+
+// Robolectric screenshots of the glass screens and dialogs (written only when asked for:
+// -Pstreamhub.screenshots=<dir>, and -Pstreamhub.screenshotArt=<dir> for the picture behind player dialogs).
+tasks.withType<Test>().configureEach {
+    systemProperty("streamhub.screenshots", providers.gradleProperty("streamhub.screenshots").getOrElse(""))
+    systemProperty("streamhub.screenshotArt", providers.gradleProperty("streamhub.screenshotArt").getOrElse(""))
+}
+

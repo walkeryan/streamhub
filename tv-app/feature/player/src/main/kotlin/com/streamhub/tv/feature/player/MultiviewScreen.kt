@@ -1,5 +1,8 @@
 package com.streamhub.tv.feature.player
 
+import com.streamhub.tv.core.ui.components.GlassPanel
+import com.streamhub.tv.core.ui.components.DialogTitle
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -85,7 +88,7 @@ fun MultiviewScreen(onExit:()->Unit,vm:MultiviewViewModel=hiltViewModel()) {
         val close={vm.closePicker();runCatching{(if(pane==0)firstPane else secondPane).requestFocus()};Unit}
         val cancel=remember{FocusRequester()}
         Dialog(onDismissRequest=close) {
-            Column(Modifier.width(700.dp).heightIn(max=560.dp).background(t.surface,RoundedCornerShape(20.dp)).padding(20.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+            GlassPanel(Modifier.width(700.dp).heightIn(max = 486.dp), padding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Choose ${if(pane==0)"left" else "right"} channel",style=MaterialTheme.typography.titleLarge,color=t.text)
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     ShButton("Cancel",close,Modifier.focusRequester(cancel))
@@ -118,7 +121,7 @@ fun MultiviewScreen(onExit:()->Unit,vm:MultiviewViewModel=hiltViewModel()) {
         val close={tracks=false;confirm=null;runCatching{audioFocus.requestFocus()};Unit}
         val cancel=remember{FocusRequester()}
         Dialog(onDismissRequest={if(confirm!=null)confirm=null else close()}) {
-            Column(Modifier.width(640.dp).heightIn(max=500.dp).background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+            GlassPanel(Modifier.width(640.dp).heightIn(max = 486.dp), padding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("${if(s.audioPane==0)"Left" else "Right"} audio tracks",style=MaterialTheme.typography.titleLarge,color=t.text)
                 ShButton(if(confirm==null)"Close" else "Back to tracks",{if(confirm!=null)confirm=null else close()},Modifier.focusRequester(cancel))
                 val pending=confirm
