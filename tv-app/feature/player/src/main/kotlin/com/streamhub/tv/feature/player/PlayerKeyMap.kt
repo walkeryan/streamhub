@@ -28,6 +28,43 @@ sealed interface PlayerCommand {
     data object PreviousItem : PlayerCommand
 }
 
+/** What one press of Back does in the player, decided by [PlayerKeyMap.back]. */
+enum class BackAction {
+    /** "Keep watching": the Up next card goes until the very end. */
+    DismissUpNext,
+    /** Close the open menu or the control row. */
+    HideOverlay,
+    /** Leaving a room is leaving other people: "Leave the room?" first. */
+    AskLeaveRoom,
+    /** A channel number being typed is committed. */
+    CommitNumber,
+    /** Live with a last channel: a second Back inside the window swaps channels, else the player closes. */
+    LastChannelWindow,
+    /** Shrink into the mini player (picture-in-picture); only when the profile asked for it. */
+    Minimise,
+    /** Stop and return to where the player was opened from. */
+    Exit,
+}
+
+/**
+ * What the player screen knows when Back is pressed (see [PlayerKeyMap.back]).
+ *
+ * @param canMinimise the player can go into picture-in-picture (the device supports it)
+ * @param titlePlaying a title (not live, not a room) is loaded and the viewer means it to play
+ * @param backMinimises the profile's `back_minimises` preference ("Back shrinks to mini player")
+ */
+data class BackContext(
+    val upNextCard: Boolean = false,
+    val menuOpen: Boolean = false,
+    val controlsVisible: Boolean = false,
+    val inRoom: Boolean = false,
+    val typingNumber: Boolean = false,
+    val liveWithLastChannel: Boolean = false,
+    val canMinimise: Boolean = false,
+    val titlePlaying: Boolean = false,
+    val backMinimises: Boolean = false,
+)
+
 /**
  * The player's remote mapping as a pure function of Android key codes, so it is unit-tested
  * without a device.
@@ -91,6 +128,22 @@ object PlayerKeyMap {
             KeyEvent.KEYCODE_DPAD_RIGHT -> if (isLive) PlayerCommand.OpenMenu else PlayerCommand.Seek(SEEK_STEP_MS)
             else -> PlayerCommand.None
         }
+    }
+
+    /**
+     * Back, topmost first: the Up next card, an open menu or the control row, a room (asks first), a
+     * typed channel number, the last-channel window. Then the player closes, as it always did, unless
+     * the profile turned on "Back shrinks to mini player" and a title is playing: then it minimises.
+     * The minimise button minimises whatever this preference says.
+     */
+    fun back(c: BackContext): BackAction = when {
+        c.upNextCard -> BackAction.DismissUpNext
+        c.menuOpen || c.controlsVisible -> BackAction.HideOverlay
+        c.inRoom -> BackAction.AskLeaveRoom
+        c.typingNumber -> BackAction.CommitNumber
+        c.liveWithLastChannel -> BackAction.LastChannelWindow
+        c.backMinimises && c.canMinimise && c.titlePlaying -> BackAction.Minimise
+        else -> BackAction.Exit
     }
 
     fun isSelect(key: Int): Boolean =

@@ -41,7 +41,7 @@ class RestyleScreenshotTest {
     )
 
     private val vod = SettingsModel(
-        audioTracks = audio, textTracks = text, subtitlesOff = true, autoplay = true, aspectLabel = "Fit",
+        audioTracks = audio, textTracks = text, subtitlesOff = true, autoplay = true, backMinimises = false, aspectLabel = "Fit",
         sleepOptions = PlayerViewModel.SLEEP_OPTIONS, sleepMinutes = 30, watchTogether = true,
     )
 
@@ -63,13 +63,13 @@ class RestyleScreenshotTest {
     /** A live channel in a room the TV hosts: the room's section first. */
     @Test fun settingsDrawerRoom() = drawer(
         "player-settings-room",
-        vod.copy(roomCode = "K7M2QX", roomMembers = 3, roomHost = true, autoplay = null, watchTogether = false),
+        vod.copy(roomCode = "K7M2QX", roomMembers = 3, roomHost = true, autoplay = null, backMinimises = null, watchTogether = false),
     )
 
     /** A live channel outside a room: buffered rewind and Go Live first. */
     @Test fun settingsDrawerLive() = drawer(
         "player-settings-live",
-        vod.copy(channel = true, hasBufferWindow = true, bufferedSeconds = 540, autoplay = null, canRetry = true),
+        vod.copy(channel = true, hasBufferWindow = true, bufferedSeconds = 540, autoplay = null, backMinimises = null, canRetry = true),
     )
 
     @Test fun streamInfo() = rule.shoot("player-stream-info", Behind.Picture) {

@@ -22,6 +22,8 @@ class ShellBridge(
     private val onSignedOut: (reason: String?) -> Unit,
     /** Main thread. A mini player bar button; true when a player in picture-in-picture took it. */
     private val onMiniPlayerCommand: (MiniPlayerCommand) -> Boolean = { false },
+    /** Main thread. What the page wants the picture-in-picture window to stay off (see PipLayout.kt). */
+    private val onKeepClear: (KeepClearReport) -> Unit = {},
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -40,15 +42,23 @@ class ShellBridge(
     }
 
     /**
-     * A `{"v":1,"kind":…}` message from the page. The one kind today is `mini_player_command`, the web
-     * app's mini player bar (see [parseMiniPlayerCommand]). False when refused or of an unknown kind.
+     * A `{"v":1,"kind":…}` message from the page: `mini_player_command`, the web app's mini player bar
+     * (see [parseMiniPlayerCommand]), or `keep_clear`, the page's rects for the picture-in-picture window
+     * to avoid (see [parseKeepClear]). False when refused or of an unknown kind.
      */
     @JavascriptInterface
     fun message(json: String?): Boolean {
-        val command = json?.let(::parseMiniPlayerCommand)
-        if (command == null) { Log.w(TAG, "message() refused"); return false }
-        main.post { if (pageAllowed()) onMiniPlayerCommand(command) }
-        return true
+        if (json == null) { Log.w(TAG, "message() refused"); return false }
+        parseMiniPlayerCommand(json)?.let { command ->
+            main.post { if (pageAllowed()) onMiniPlayerCommand(command) }
+            return true
+        }
+        parseKeepClear(json)?.let { report ->
+            main.post { if (pageAllowed()) onKeepClear(report) }
+            return true
+        }
+        Log.w(TAG, "message() refused")
+        return false
     }
 
     @JavascriptInterface

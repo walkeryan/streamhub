@@ -148,6 +148,8 @@ data class PlayerScreenState(
     val upNext: UpNextFlow.Plan = UpNextFlow.NONE,
     /** The profile's `autoplay_next` (missing = on), read when the player opened. */
     val autoplayNext: Boolean = true,
+    /** The profile's `back_minimises` (missing = off): Back shrinks a playing title into the mini player. */
+    val backMinimises: Boolean = false,
     /** Skip intro is up and seeks here. */
     val skipIntroTo: Long? = null,
     val skipCredits: Boolean = false,
@@ -289,7 +291,7 @@ class PlayerViewModel @Inject constructor(
         // A room plays one stream for everyone: it never moves to another feed on its own.
         if (seat == null) viewModelScope.launch { watchFeeds() }
         viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) { reauthorized = false; pausedRetry.reset() } } }
-        viewModelScope.launch { serverUrl = sessions.current().serverUrl; loadAutoplayPref() }
+        viewModelScope.launch { serverUrl = sessions.current().serverUrl; loadPlaybackPrefs() }
         viewModelScope.launch { while (true) { delay(FLOW_TICK_MS); flowTick() } }
         viewModelScope.launch {
             // Read afresh for the person playing: what was cached may be from before a switch in the web app.
@@ -609,12 +611,30 @@ class PlayerViewModel @Inject constructor(
 
     // ---- Skip intro / credits, Up next, Still watching (UpNextFlow) -----------------------------
 
-    private suspend fun loadAutoplayPref() {
+    /** The profile's player preferences: `autoplay_next`, then `back_minimises`. A failed read keeps the defaults. */
+    private suspend fun loadPlaybackPrefs() {
         val profile = sessions.current().profile?.id ?: return
         val value = try { prefs.read(profile, AUTOPLAY_NEXT_PREF) }
         catch (e: CancellationException) { if (currentCoroutineContext().isActive) return else throw e }
         catch (_: Exception) { return }
         _state.update { it.copy(autoplayNext = autoplayNextPref(value)) }
+        val back = try { prefs.read(profile, BACK_MINIMISES_PREF) }
+        catch (e: CancellationException) { if (currentCoroutineContext().isActive) return else throw e }
+        catch (_: Exception) { return }
+        _state.update { it.copy(backMinimises = backMinimisesPref(back)) }
+    }
+
+    /** "Back shrinks to mini player" in the settings: applies at once and is stored in the profile's preferences. */
+    fun setBackMinimises(on: Boolean) {
+        val before = _state.value.backMinimises
+        if (before == on) return
+        _state.update { it.copy(backMinimises = on) }
+        viewModelScope.launch {
+            val profile = sessions.current().profile?.id ?: return@launch
+            try { prefs.write(profile, BACK_MINIMISES_PREF, JsonPrimitive(on)) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { _state.update { it.copy(backMinimises = before) }; flash("Couldn't save that setting. Try again.") }
+        }
     }
 
     /** "Autoplay next episode" in the settings: applies at once and is stored in the profile's preferences. */

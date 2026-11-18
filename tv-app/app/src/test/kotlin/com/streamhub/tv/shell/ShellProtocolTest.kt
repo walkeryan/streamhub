@@ -187,7 +187,9 @@ class ShellProtocolTest {
         assertEquals("1", e["v"]!!.jsonPrimitive.content)
         assertEquals("mini_player", e["kind"]!!.jsonPrimitive.content)
         val st = e["state"]!!.jsonObject
-        assertEquals(setOf("id", "title", "subtitle", "image", "position_ms", "duration_ms", "playing", "has_next", "has_previous", "live"), st.keys)
+        assertEquals(setOf("id", "title", "subtitle", "image", "position_ms", "duration_ms", "playing", "has_next", "has_previous", "live", "keep_clear", "pip_rect"), st.keys)
+        assertEquals("false", st["keep_clear"]!!.jsonPrimitive.content)
+        assertEquals("where the window is, when unknown", JsonNull, st["pip_rect"])
         assertEquals("lib:p:ep:3", st["id"]!!.jsonPrimitive.content)
         assertEquals("S2 · E3 · Episode 3", st["subtitle"]!!.jsonPrimitive.content)
         assertEquals(662_000L, st["position_ms"]!!.jsonPrimitive.content.toLong())
@@ -206,6 +208,15 @@ class ShellProtocolTest {
         val gone = StreamHubJson.parseToJsonElement(miniPlayerEventJson(null)).jsonObject
         assertEquals(JsonNull, gone["state"])
         assertEquals("mini_player", gone["kind"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun theEventSaysWhetherKeepClearIsTakenAndWhereTheWindowIs() {
+        val st = StreamHubJson.parseToJsonElement(miniPlayerEventJson(info, CssRect(1440.0, 48.0, 432.0, 243.5), keepClear = true)).jsonObject["state"]!!.jsonObject
+        assertEquals("true", st["keep_clear"]!!.jsonPrimitive.content)
+        val pip = st["pip_rect"]!!.jsonObject
+        assertEquals(setOf("x", "y", "w", "h"), pip.keys)
+        assertEquals(1440.0, pip["x"]!!.jsonPrimitive.content.toDouble(), 0.0)
+        assertEquals(243.5, pip["h"]!!.jsonPrimitive.content.toDouble(), 0.0)
     }
 
     @Test fun theEventReachesThePageAsAStringItParses() {
