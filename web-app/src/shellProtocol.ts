@@ -9,6 +9,11 @@
  *   capabilities(): string       JSON: { bridge, shell, version_code, native_playback, hdr, video_codecs, audio_passthrough }
  *   deliverToken(id, json): void the answer to window.streamhubShell.token(id, rejected)
  * and calls window.streamhubShell.{ back(), token(id, rejected), playbackEnded() } in the page.
+ *
+ * Messages (the mini player, more to come), one JSON envelope `{"v":1,"kind":…}` each way:
+ *   TV → page:  window.streamhubShell.message(json)        kind "mini_player" (parseShellMessage)
+ *   page → TV:  window.StreamHubTV.message(json): boolean  kind "mini_player_command" (miniPlayerCommand)
+ * `message` is optional on the TV side: a TV app without it simply never shows the bar.
  */
 
 export const SHELL_BRIDGE_VERSION = 1
@@ -20,6 +25,8 @@ export interface StreamHubTVBridge {
   signedOut(reason: string): void
   capabilities(): string
   deliverToken(id: string, json: string): void
+  /** A page → TV message envelope (miniPlayerCommand). Absent on TV apps older than the mini player. */
+  message?(json: string): boolean
 }
 
 /** The bridge on `w` (the window), or null in every ordinary browser. */
@@ -98,4 +105,68 @@ export function expiresSoon(token: string, now: number, marginMs = 30_000): bool
     const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '='))) as { exp?: unknown }
     return typeof json.exp === 'number' && json.exp * 1000 <= now + marginMs
   } catch { return false }
+}
+
+/**
+ * The TV's own player while it is in picture-in-picture: what the page's bottom bar shows (null: no bar).
+ * The TV sends it whenever any of it changes, and at least every few seconds while it plays.
+ */
+export interface MiniPlayerState {
+  id: string
+  title: string
+  subtitle: string | null
+  image: string | null
+  position_ms: number
+  duration_ms: number | null
+  playing: boolean
+  has_next: boolean
+  has_previous: boolean
+  live: boolean
+}
+export type MiniPlayerCommandName = 'play_pause' | 'seek_by' | 'next' | 'previous' | 'expand' | 'close'
+export type ShellMessage = { kind: 'mini_player'; state: MiniPlayerState | null }
+
+const MAX_MESSAGE_JSON = 16 * 1024
+const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.length <= max ? v : null)
+const int = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 7 * 24 * 3600 * 1000 ? v : null)
+
+/**
+ * A TV → page message, checked as strictly as the TV checks play(): the version, the kind and every
+ * field's type. Null for anything else (unknown kinds included: an older page ignores a newer TV's news).
+ * Takes the JSON text, or an object a TV handed over already parsed.
+ */
+export function parseShellMessage(input: unknown): ShellMessage | null {
+  let root: unknown = input
+  if (typeof input === 'string') {
+    if (input.length > MAX_MESSAGE_JSON) return null
+    try { root = JSON.parse(input) } catch { return null }
+  }
+  if (!root || typeof root !== 'object') return null
+  const m = root as Record<string, unknown>
+  if (m.v !== SHELL_BRIDGE_VERSION || m.kind !== 'mini_player') return null
+  if (m.state === null) return { kind: 'mini_player', state: null }
+  const s = m.state as Record<string, unknown> | undefined
+  if (!s || typeof s !== 'object') return null
+  const id = str(s.id, 512), title = str(s.title, 512)
+  const position = int(s.position_ms)
+  const duration = s.duration_ms === null || s.duration_ms === undefined ? null : int(s.duration_ms)
+  const subtitle = s.subtitle === null || s.subtitle === undefined ? null : str(s.subtitle, 512)
+  const image = s.image === null || s.image === undefined ? null : str(s.image, 4096)
+  const flags = ['playing', 'has_next', 'has_previous', 'live'] as const
+  if (!id || title === null || position === null || flags.some((f) => typeof s[f] !== 'boolean')) return null
+  if ((s.duration_ms != null && duration === null) || (s.subtitle != null && subtitle === null) || (s.image != null && image === null)) return null
+  // Artwork is shown in an <img>: only web addresses, never script or data the TV did not mean.
+  const safeImage = image && (/^https?:\/\//i.test(image) || (image.startsWith('/') && !image.startsWith('//'))) ? image : null
+  return {
+    kind: 'mini_player',
+    state: {
+      id, title, subtitle, image: safeImage, position_ms: position, duration_ms: duration,
+      playing: s.playing as boolean, has_next: s.has_next as boolean, has_previous: s.has_previous as boolean, live: s.live as boolean,
+    },
+  }
+}
+
+/** A page → TV command for the player in picture-in-picture. `deltaMs` only for seek_by (negative is back). */
+export function miniPlayerCommand(command: MiniPlayerCommandName, deltaMs?: number): string {
+  return JSON.stringify({ v: SHELL_BRIDGE_VERSION, kind: 'mini_player_command', command, delta_ms: command === 'seek_by' ? Math.trunc(deltaMs ?? 0) : null })
 }
