@@ -2652,6 +2652,195 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playback/subtitles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every subtitle track of a library title now
+         * @description PlaybackDescriptor.subtitles fetched again from the library server (no cache): after a select that was still pending. The viewer must be allowed to play the title.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description The descriptor's subtitle_search_id. */
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The title's subtitle tracks */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubtitleList"];
+                    };
+                };
+                /** @description subtitle_search_unavailable: not a library title this source can list subtitles for */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/subtitles/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search for subtitles on demand through the library server
+         * @description Asks the library server's own subtitle search (Plex: its OpenSubtitles agent; no account here) for candidates of one language. Read-only: nothing is downloaded until select. Allowed to whoever may play the title; 20 searches per user per 5 minutes (429 with Retry-After beyond). 502 subtitle_search_failed when the library server could not search.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description The descriptor's subtitle_search_id. */
+                    id: string;
+                    /** @description ISO 639-1 or 639-3. */
+                    language: string;
+                    /** @description Prefer SDH subtitles. */
+                    hearing_impaired?: boolean;
+                    /** @description Prefer forced subtitles. */
+                    forced?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Candidates */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubtitleSearchResults"];
+                    };
+                };
+                /** @description subtitle_search_unavailable */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description rate_limited */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description subtitle_search_failed */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/subtitles/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Download one searched-for subtitle into the library and return it as a track
+         * @description Has the library server download the candidate as a sidecar of the file (it stays in the library for everyone), then lists the title's tracks again for a few seconds until the new one appears. The key must come from a search of this title in the last 30 minutes (409 subtitle_candidate_unknown otherwise). Allowed to whoever may play the title; 5 per user per 10 minutes. Never touches playback: the player adds the returned track itself.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SubtitleSelect"];
+                };
+            };
+            responses: {
+                /** @description The new track (or pending) and the title's tracks */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubtitleList"];
+                    };
+                };
+                /** @description subtitle_search_unavailable */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description subtitle_candidate_unknown */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description rate_limited */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description subtitle_select_failed */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/options": {
         parameters: {
             query?: never;
@@ -7590,6 +7779,72 @@ export interface components {
             previous?: components["schemas"]["UpNext"] | null;
             /** @description Scrub previews when the library server generated them for this file; null otherwise. */
             thumbnails?: components["schemas"]["Thumbnails"] | null;
+            /** @description Every subtitle track the library server knows for the file being played: text tracks inside the file and sidecar files beside it, in the server's order. Image-based tracks are listed with supported=false and no url. Empty for live, recordings, watch rooms, sources that know none, and whenever looking them up failed: never a reason playback fails. Live closed captions (CEA-608/708) are not listed here; they arrive inside the stream. */
+            subtitles?: components["schemas"]["Subtitle"][];
+            /** @description The library copy being played (lib:<source>:<item>) when its source can search for subtitles on demand: pass it as id to GET /playback/subtitles/search and POST /playback/subtitles/select. Null otherwise (and in watch rooms). */
+            subtitle_search_id?: string | null;
+        };
+        Subtitle: {
+            /** @description The library server's id for the track; stable while the file and its sidecars are unchanged. */
+            id: string;
+            /** @description ISO 639-3 (eng, spa…); null when the track is untagged. */
+            language?: string | null;
+            /** @description What a picker shows: the language and what sets the track apart ("English", "English (SDH)", "English · Forced", "Spanish · Commentary"). */
+            label: string;
+            /** @description Only the lines a viewer who understands the audio still needs (foreign dialogue, signs). */
+            forced: boolean;
+            /** @description SDH / closed captions: sound effects and speaker names as well as dialogue. */
+            hearing_impaired: boolean;
+            /** @description As the library server names it: srt, ass, ssa, mov_text, vtt, pgs, vobsub… */
+            codec?: string | null;
+            /** @description A sidecar file beside the video (a downloaded or searched-for subtitle), not a track inside it. A player that reads the file itself (the TV) side-loads only these; the file's own text tracks reach it with the file. */
+            external: boolean;
+            /** @description The file marks this track as its default. */
+            default: boolean;
+            /** @description False for image-based tracks (PGS, VobSub, DVB) and for captions carried inside the video stream: listed so the viewer sees they exist, with no url. Nothing is burned in. */
+            supported: boolean;
+            /** @description A signed, viewer-independent grant like artwork. GET answers the track as text/vtt (WebVTT; SRT and ASS/SSA are converted, styling reduced to italics/bold/underline). Cue times are title times. 503 with Retry-After while a track inside the file is still being read out of it (the first request for one starts that; it can take a minute for a long film), 404 when the track is gone. */
+            url?: string | null;
+        };
+        SubtitleCandidate: {
+            /** @description Opaque; pass it to POST /playback/subtitles/select. Valid for a while after the search that returned it. */
+            key: string;
+            /** @description The release or file name the provider gives. */
+            title: string;
+            /** @description ISO 639-3 */
+            language?: string | null;
+            codec?: string | null;
+            /** @description Where the library server found it (e.g. OpenSubtitles). */
+            provider?: string | null;
+            /** @description The provider's own match score; higher is better. Results come best first. */
+            score?: number | null;
+            hearing_impaired: boolean;
+            forced: boolean;
+            /** @description The provider matched this file exactly (by its hash), not only the title. */
+            perfect_match: boolean;
+        };
+        SubtitleSearchResults: {
+            id: string;
+            /** @description ISO 639-3 searched for */
+            language: string;
+            results: components["schemas"]["SubtitleCandidate"][];
+        };
+        SubtitleSelect: {
+            /** @description The descriptor's subtitle_search_id. */
+            id: string;
+            /** @description A SubtitleCandidate key from a search of this title. */
+            key: string;
+        };
+        SubtitleList: {
+            /** @description POST /playback/subtitles/select: the track the chosen candidate became; null while pending. */
+            subtitle?: components["schemas"]["Subtitle"] | null;
+            /**
+             * @description POST /playback/subtitles/select: the library server accepted the download but has not listed the new track yet. Ask GET /playback/subtitles again in a few seconds.
+             * @default false
+             */
+            pending: boolean;
+            /** @description Every subtitle track of the title now, as PlaybackDescriptor.subtitles. */
+            subtitles: components["schemas"]["Subtitle"][];
         };
         PlaybackMarker: {
             /** @enum {string} */
@@ -7641,7 +7896,7 @@ export interface components {
             supports_title_link: boolean;
             tmdb_provider_ids: number[];
         };
-        /** @description Opaque client-owned preferences. Max 16 KB when serialized. Keys both clients read: autoplay_next (boolean, missing = true): the player plays an episode's next one by itself at its end. */
+        /** @description Opaque client-owned preferences. Max 16 KB when serialized. Keys both clients read: autoplay_next (boolean, missing = true): the player plays an episode's next one by itself at its end. subtitles_on (boolean, missing = false): the player turns on a subtitle track by itself when a title has one in subtitle_language. subtitle_language (ISO 639-3, missing = the profile's first preferred language): the language last chosen in a subtitle picker, and the default of its search. */
         ClientPrefs: {
             [key: string]: unknown;
         };

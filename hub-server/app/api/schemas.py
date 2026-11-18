@@ -713,6 +713,50 @@ class Thumbnails(_M):
     interval_ms: int
 
 
+class Subtitle(_M):
+    """One subtitle track of the file being played; ``url`` answers it as WebVTT (``services/subtitles``)."""
+
+    id: str
+    language: str | None = None
+    label: str
+    forced: bool = False
+    hearing_impaired: bool = False
+    codec: str | None = None
+    external: bool = False
+    default: bool = False
+    supported: bool = True
+    url: str | None = None
+
+
+class SubtitleCandidate(_M):
+    key: str
+    title: str
+    language: str | None = None
+    codec: str | None = None
+    provider: str | None = None
+    score: float | None = None
+    hearing_impaired: bool = False
+    forced: bool = False
+    perfect_match: bool = False
+
+
+class SubtitleSearchResults(_M):
+    id: str
+    language: str
+    results: list[SubtitleCandidate] = Field(default_factory=list)
+
+
+class SubtitleSelect(_M):
+    id: str = Field(max_length=512)
+    key: str = Field(min_length=1, max_length=2048)
+
+
+class SubtitleList(_M):
+    subtitle: Subtitle | None = None
+    pending: bool = False
+    subtitles: list[Subtitle] = Field(default_factory=list)
+
+
 class PlaybackDescriptor(_M):
     media_info: MediaInfo | None = None
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
@@ -750,6 +794,8 @@ class PlaybackDescriptor(_M):
     next: UpNext | None = None
     previous: UpNext | None = None
     thumbnails: Thumbnails | None = None
+    subtitles: list[Subtitle] = Field(default_factory=list)
+    subtitle_search_id: str | None = None
 
 
 class MultiviewDescriptor(_M):

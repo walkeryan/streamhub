@@ -895,6 +895,58 @@ components:
         next: {allOf: [{$ref: '#/components/schemas/UpNext'}], nullable: true, description: "Episodes: the following one (the next season's first after a season's last), preferring the playing library copy and counting seasons only another copy holds. Null when there is none or the viewer may not open it."}
         previous: {allOf: [{$ref: '#/components/schemas/UpNext'}], nullable: true, description: "Episodes: the one before, by the same rules as next."}
         thumbnails: {allOf: [{$ref: '#/components/schemas/Thumbnails'}], nullable: true, description: "Scrub previews when the library server generated them for this file; null otherwise."}
+        subtitles:
+          type: array
+          items: {$ref: '#/components/schemas/Subtitle'}
+          description: "Every subtitle track the library server knows for the file being played: text tracks inside the file and sidecar files beside it, in the server's order. Image-based tracks are listed with supported=false and no url. Empty for live, recordings, watch rooms, sources that know none, and whenever looking them up failed: never a reason playback fails. Live closed captions (CEA-608/708) are not listed here; they arrive inside the stream."
+        subtitle_search_id: {type: string, nullable: true, description: "The library copy being played (lib:<source>:<item>) when its source can search for subtitles on demand: pass it as id to GET /playback/subtitles/search and POST /playback/subtitles/select. Null otherwise (and in watch rooms)."}
+    Subtitle:
+      type: object
+      required: [id, label, forced, hearing_impaired, external, default, supported]
+      properties:
+        id: {type: string, description: "The library server's id for the track; stable while the file and its sidecars are unchanged."}
+        language: {type: string, nullable: true, description: "ISO 639-3 (eng, spa…); null when the track is untagged."}
+        label: {type: string, description: "What a picker shows: the language and what sets the track apart (\"English\", \"English (SDH)\", \"English · Forced\", \"Spanish · Commentary\")."}
+        forced: {type: boolean, description: "Only the lines a viewer who understands the audio still needs (foreign dialogue, signs)."}
+        hearing_impaired: {type: boolean, description: "SDH / closed captions: sound effects and speaker names as well as dialogue."}
+        codec: {type: string, nullable: true, description: "As the library server names it: srt, ass, ssa, mov_text, vtt, pgs, vobsub…"}
+        external: {type: boolean, description: "A sidecar file beside the video (a downloaded or searched-for subtitle), not a track inside it. A player that reads the file itself (the TV) side-loads only these; the file's own text tracks reach it with the file."}
+        default: {type: boolean, description: "The file marks this track as its default."}
+        supported: {type: boolean, description: "False for image-based tracks (PGS, VobSub, DVB) and for captions carried inside the video stream: listed so the viewer sees they exist, with no url. Nothing is burned in."}
+        url: {type: string, nullable: true, description: "A signed, viewer-independent grant like artwork. GET answers the track as text/vtt (WebVTT; SRT and ASS/SSA are converted, styling reduced to italics/bold/underline). Cue times are title times. 503 with Retry-After while a track inside the file is still being read out of it (the first request for one starts that; it can take a minute for a long film), 404 when the track is gone."}
+    SubtitleCandidate:
+      type: object
+      required: [key, title, hearing_impaired, forced, perfect_match]
+      properties:
+        key: {type: string, description: "Opaque; pass it to POST /playback/subtitles/select. Valid for a while after the search that returned it."}
+        title: {type: string, description: "The release or file name the provider gives."}
+        language: {type: string, nullable: true, description: ISO 639-3}
+        codec: {type: string, nullable: true}
+        provider: {type: string, nullable: true, description: "Where the library server found it (e.g. OpenSubtitles)."}
+        score: {type: number, nullable: true, description: "The provider's own match score; higher is better. Results come best first."}
+        hearing_impaired: {type: boolean}
+        forced: {type: boolean}
+        perfect_match: {type: boolean, description: "The provider matched this file exactly (by its hash), not only the title."}
+    SubtitleSearchResults:
+      type: object
+      required: [id, language, results]
+      properties:
+        id: {type: string}
+        language: {type: string, description: ISO 639-3 searched for}
+        results: {type: array, items: {$ref: '#/components/schemas/SubtitleCandidate'}}
+    SubtitleSelect:
+      type: object
+      required: [id, key]
+      properties:
+        id: {type: string, maxLength: 512, description: "The descriptor's subtitle_search_id."}
+        key: {type: string, maxLength: 2048, description: "A SubtitleCandidate key from a search of this title."}
+    SubtitleList:
+      type: object
+      required: [subtitles]
+      properties:
+        subtitle: {allOf: [{$ref: '#/components/schemas/Subtitle'}], nullable: true, description: "POST /playback/subtitles/select: the track the chosen candidate became; null while pending."}
+        pending: {type: boolean, default: false, description: "POST /playback/subtitles/select: the library server accepted the download but has not listed the new track yet. Ask GET /playback/subtitles again in a few seconds."}
+        subtitles: {type: array, items: {$ref: '#/components/schemas/Subtitle'}, description: "Every subtitle track of the title now, as PlaybackDescriptor.subtitles."}
     PlaybackMarker:
       type: object
       required: [type, start_ms, end_ms]
@@ -953,7 +1005,7 @@ components:
     ClientPrefs:
       type: object
       additionalProperties: true
-      description: "Opaque client-owned preferences. Max 16 KB when serialized. Keys both clients read: autoplay_next (boolean, missing = true): the player plays an episode's next one by itself at its end."
+      description: "Opaque client-owned preferences. Max 16 KB when serialized. Keys both clients read: autoplay_next (boolean, missing = true): the player plays an episode's next one by itself at its end. subtitles_on (boolean, missing = false): the player turns on a subtitle track by itself when a title has one in subtitle_language. subtitle_language (ISO 639-3, missing = the profile's first preferred language): the language last chosen in a subtitle picker, and the default of its search."
     HomeLayout:
       type: object
       required: [rows]
@@ -1833,6 +1885,40 @@ paths:
       parameters:
         - {name: id, in: query, required: true, schema: {type: string, maxLength: 512}, description: "ch:<source>:<channel>"}
       responses: {'200': {description: Alternate feeds, possibly none, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackAlternates'}}}}}
+  /playback/subtitles:
+    get:
+      summary: Every subtitle track of a library title now
+      description: "PlaybackDescriptor.subtitles fetched again from the library server (no cache): after a select that was still pending. The viewer must be allowed to play the title."
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string, maxLength: 512}, description: "The descriptor's subtitle_search_id."}
+      responses:
+        '200': {description: The title's subtitle tracks, content: {application/json: {schema: {$ref: '#/components/schemas/SubtitleList'}}}}
+        '404': {description: "subtitle_search_unavailable: not a library title this source can list subtitles for"}
+  /playback/subtitles/search:
+    get:
+      summary: Search for subtitles on demand through the library server
+      description: "Asks the library server's own subtitle search (Plex: its OpenSubtitles agent; no account here) for candidates of one language. Read-only: nothing is downloaded until select. Allowed to whoever may play the title; 20 searches per user per 5 minutes (429 with Retry-After beyond). 502 subtitle_search_failed when the library server could not search."
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string, maxLength: 512}, description: "The descriptor's subtitle_search_id."}
+        - {name: language, in: query, required: true, schema: {type: string, pattern: '^[A-Za-z]{2,3}$'}, description: "ISO 639-1 or 639-3."}
+        - {name: hearing_impaired, in: query, schema: {type: boolean, default: false}, description: "Prefer SDH subtitles."}
+        - {name: forced, in: query, schema: {type: boolean, default: false}, description: "Prefer forced subtitles."}
+      responses:
+        '200': {description: Candidates, best first (possibly none), content: {application/json: {schema: {$ref: '#/components/schemas/SubtitleSearchResults'}}}}
+        '404': {description: subtitle_search_unavailable}
+        '429': {description: rate_limited}
+        '502': {description: subtitle_search_failed}
+  /playback/subtitles/select:
+    post:
+      summary: Download one searched-for subtitle into the library and return it as a track
+      description: "Has the library server download the candidate as a sidecar of the file (it stays in the library for everyone), then lists the title's tracks again for a few seconds until the new one appears. The key must come from a search of this title in the last 30 minutes (409 subtitle_candidate_unknown otherwise). Allowed to whoever may play the title; 5 per user per 10 minutes. Never touches playback: the player adds the returned track itself."
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SubtitleSelect'}}}}
+      responses:
+        '200': {description: "The new track (or pending) and the title's tracks", content: {application/json: {schema: {$ref: '#/components/schemas/SubtitleList'}}}}
+        '404': {description: subtitle_search_unavailable}
+        '409': {description: subtitle_candidate_unknown}
+        '429': {description: rate_limited}
+        '502': {description: subtitle_select_failed}
   /playback/options:
     get:
       parameters:
