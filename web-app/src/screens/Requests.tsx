@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router'
 import { useCreateRequest, useDecideRequest, useRefreshRequest, useRequests } from '../api/hooks'
 import { useCan } from '../api/me'
 import type { MediaRequest } from '../api/types'
-import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
+import { Button, Chip, Empty, ErrorState, GlassIconButton, Modal, PageHeader, Skeleton, nameGradient } from '../ds'
 import { RequestStatus } from '../components/RequestStatus'
 import { SafeImg } from '../components/SafeImg'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
@@ -79,37 +79,42 @@ export function Requests() {
   const superseded = (r: MediaRequest) => list.some((x) => x.title_id === r.title_id && x.created_at > r.created_at)
 
   return (
-    <div className="page-pad flex flex-col gap-6" data-testid="requests">
-      <h1 className="display">Requests</h1>
-      <FocusGroup focusKey="req:tabs" className="flex gap-2 flex-wrap" role="tablist">
-        <Chip focusKey="req:tab:mine" pressed={scope === 'mine'} onEnter={() => setSp({}, { replace: true })} testId="requests-tab-mine">My requests</Chip>
-        {canApprove && <Chip focusKey="req:tab:all" pressed={scope === 'all'} onEnter={() => setSp({ scope: 'all' }, { replace: true })} testId="requests-tab-all">All requests</Chip>}
-      </FocusGroup>
-      {active.error ? <ErrorState error={active.error} onRetry={() => void active.refetch()} /> : !active.data ? <Skeleton style={{ height: '12rem' }} /> : !list.length ? (
-        <Empty title={scope === 'all' ? 'No requests' : 'You have not requested anything'} hint="Titles that none of your sources have show a Request button on their page." >
-          <Button focusKey="req:search" icon="search" onEnter={() => go('/search')}>Search for a title</Button>
+    <div className="page-pad lib-page" data-testid="requests">
+      <PageHeader title="Requests" className="lib-head">
+        <FocusGroup focusKey="req:tabs" className="lib-chips" role="tablist">
+          <Chip focusKey="req:tab:mine" pressed={scope === 'mine'} onEnter={() => setSp({}, { replace: true })} testId="requests-tab-mine">My requests</Chip>
+          {canApprove && <Chip focusKey="req:tab:all" pressed={scope === 'all'} onEnter={() => setSp({ scope: 'all' }, { replace: true })} testId="requests-tab-all">All requests</Chip>}
+        </FocusGroup>
+      </PageHeader>
+      {active.error ? <ErrorState error={active.error} onRetry={() => void active.refetch()} /> : !active.data ? (
+        <div className="lib-list" aria-hidden="true">{Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="lib-row-skel" />)}</div>
+      ) : !list.length ? (
+        <Empty icon="download" title={scope === 'all' ? 'No requests' : 'You have not requested anything'} hint="Titles that none of your sources have show a Request button on their page." >
+          <Button focusKey="req:search" primary icon="search" onEnter={() => go('/search')}>Search for a title</Button>
         </Empty>
       ) : (
-        <FocusGroup focusKey="req:list" className="flex flex-col gap-2" style={{ maxWidth: '60rem' }}>
+        <FocusGroup focusKey="req:list" className="lib-list">
           {list.map((r) => (
-            <div key={r.id} className="panel flex items-center gap-4 flex-wrap" data-testid="request-row" data-state={r.state} data-phase={r.progress.phase}>
-              <div style={{ flex: 'none', width: '3rem', height: '4.5rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', background: 'var(--t-surface-alt)' }}>
-                <SafeImg src={r.poster} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallback={null} />
+            <div key={r.id} className="ds-panel lib-row req-row" data-testid="request-row" data-state={r.state} data-phase={r.progress.phase}>
+              <div className="req-poster">
+                <SafeImg src={r.poster} alt="" loading="lazy" fallback={<span className="ds-art-fallback" style={{ background: nameGradient(r.title) }} />} />
               </div>
-              <div className="min-w-0 flex flex-col gap-2" style={{ flex: '1 1 14rem' }}>
-                <span className="truncate" style={{ fontWeight: 600 }}>{r.title}{r.year ? ` (${r.year})` : ''}</span>
+              <div className="lib-row-copy">
+                <span className="lib-row-title">{r.title}{r.year ? ` (${r.year})` : ''}</span>
                 <RequestStatus progress={r.progress} of={r.title} />
                 <span className="label">{[seasonsLabel(r), scope === 'all' && r.profile_name ? `Requested by ${r.profile_name}` : null, new Date(r.created_at).toLocaleDateString()].filter(Boolean).join(' · ')}</span>
                 {/* The status already says a note that is its detail (a decline reason, why it is not sent yet). */}
                 {r.note && r.note !== r.progress.detail && <span className="muted">{r.note}</span>}
               </div>
-              <Button focusKey={`req:${r.id}:open`} icon="info" label={`Details: ${r.title}`} onEnter={() => go(`/title/${encodeURIComponent(r.title_id)}`)}>Details</Button>
-              {(r.progress.phase === 'stalled' || r.progress.phase === 'unknown' || r.progress.phase === 'approved') && <Button focusKey={`req:${r.id}:check`} icon="refresh" label={`Check again: ${r.title}`} disabled={refresh.isPending} onEnter={() => check(r)} testId="request-check">Check again</Button>}
-              {r.progress.phase === 'failed' && mayRequest && !superseded(r) && <Button focusKey={`req:${r.id}:again`} icon="plus" label={`Request again: ${r.title}`} disabled={again.isPending} onEnter={() => requestAgain(r)} testId="request-again">Request again</Button>}
-              {scope === 'all' && r.state === 'pending_approval' && <>
-                <Button focusKey={`req:${r.id}:approve`} primary icon="check" label={`Approve: ${r.title}`} onEnter={() => run(r, true)} testId="request-approve">Approve</Button>
-                <Button focusKey={`req:${r.id}:decline`} danger icon="x" label={`Decline: ${r.title}`} onEnter={() => { setNote(''); setDeclining(r) }} testId="request-decline">Decline</Button>
-              </>}
+              <div className="lib-row-actions">
+                <GlassIconButton focusKey={`req:${r.id}:open`} icon="info" label={`Details: ${r.title}`} tip="Details" onEnter={() => go(`/title/${encodeURIComponent(r.title_id)}`)} />
+                {(r.progress.phase === 'stalled' || r.progress.phase === 'unknown' || r.progress.phase === 'approved') && <GlassIconButton focusKey={`req:${r.id}:check`} icon="refresh" label={`Check again: ${r.title}`} tip="Check again" disabled={refresh.isPending} onEnter={() => check(r)} testId="request-check" />}
+                {r.progress.phase === 'failed' && mayRequest && !superseded(r) && <GlassIconButton focusKey={`req:${r.id}:again`} icon="plus" label={`Request again: ${r.title}`} tip="Request again" disabled={again.isPending} onEnter={() => requestAgain(r)} testId="request-again" />}
+                {scope === 'all' && r.state === 'pending_approval' && <>
+                  <Button focusKey={`req:${r.id}:approve`} primary icon="check" label={`Approve: ${r.title}`} onEnter={() => run(r, true)} testId="request-approve">Approve</Button>
+                  <Button focusKey={`req:${r.id}:decline`} ghost icon="x" label={`Decline: ${r.title}`} onEnter={() => { setNote(''); setDeclining(r) }} testId="request-decline">Decline</Button>
+                </>}
+              </div>
             </div>
           ))}
         </FocusGroup>
@@ -117,8 +122,8 @@ export function Requests() {
       <Modal open={!!declining} onClose={() => setDeclining(null)} title={`Decline ${declining?.title ?? ''}?`} firstFocusKey="reqdecline:cancel">
         <p className="muted">{declining?.profile_name ? `${declining.profile_name} is told, with your note if you add one.` : 'The requester is told, with your note if you add one.'}</p>
         <FocusableInput focusKey="reqdecline:note" label="Note for the requester (optional)" placeholder="Note for the requester (optional)" maxLength={500} value={note} onChange={setNote} onSubmit={confirmDecline} />
-        <div className="flex gap-3">
-          <Button focusKey="reqdecline:cancel" onEnter={() => setDeclining(null)}>Keep request</Button>
+        <div className="lib-actions">
+          <Button focusKey="reqdecline:cancel" ghost onEnter={() => setDeclining(null)}>Keep request</Button>
           <Button focusKey="reqdecline:ok" danger icon="x" onEnter={confirmDecline}>Decline request</Button>
         </div>
       </Modal>
