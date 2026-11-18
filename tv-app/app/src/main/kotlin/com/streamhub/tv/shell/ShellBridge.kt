@@ -39,11 +39,14 @@ class ShellBridge(
         main.post { if (pageAllowed()) onSignedOut(said) }
     }
 
-    /** The web app's mini player bar (see [parseMiniPlayerCommand]). False when the message is refused. */
+    /**
+     * A `{"v":1,"kind":…}` message from the page. The one kind today is `mini_player_command`, the web
+     * app's mini player bar (see [parseMiniPlayerCommand]). False when refused or of an unknown kind.
+     */
     @JavascriptInterface
-    fun miniPlayerCommand(json: String?): Boolean {
+    fun message(json: String?): Boolean {
         val command = json?.let(::parseMiniPlayerCommand)
-        if (command == null) { Log.w(TAG, "miniPlayerCommand() refused"); return false }
+        if (command == null) { Log.w(TAG, "message() refused"); return false }
         main.post { if (pageAllowed()) onMiniPlayerCommand(command) }
         return true
     }
