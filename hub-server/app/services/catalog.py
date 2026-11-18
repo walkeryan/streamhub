@@ -18,10 +18,21 @@ from app.domain.entities import CatalogItem, MediaKind, MetaTitle, SourceType
 from app.domain.ports import DetailProvider, ImageAuthProvider, MetadataProvider
 from app.infra.crypto import Crypto
 from app.infra.db import Database
-from app.infra.models import Channel, Favorite, Profile, Progress, Setting, Source, Title, Watchlist
+from app.infra.models import (
+    AgeClassification,
+    Channel,
+    Favorite,
+    Profile,
+    Progress,
+    Setting,
+    Source,
+    Title,
+    Watchlist,
+)
 from app.services import ids
 from app.services.adult import adult_included, general_audience, is_general_audience
 from app.services.availability import ATTRIBUTION, AvailabilityService
+from app.services.classification import rating_code
 from app.services.context import absolute
 from app.services.errors import BadGateway, Forbidden, NotFound
 from app.services.search import (
@@ -484,7 +495,95 @@ class CatalogService:
             kids = await self.children_rows(row)
             for k in kids:
                 (tile["seasons"] if k.kind == "season" else tile["episodes"]).append(self._child_tile(k, ctx))
+        if row.kind in ("season", "episode"):
+            tile["parent"], show = await self._parent(row, ctx)
+            if show is not None and show.tmdb_id:
+                tile["content_rating"] = await self._stored_rating(f"tmdb:tv:{show.tmdb_id}")
+        released = (row.extra or {}).get("originally_available_at")
+        if isinstance(released, str) and released:
+            tile["release_date"] = released
         return tile
+
+    async def _parent(self, row: Title, ctx: TileContext) -> tuple[dict[str, Any] | None, Title | None]:
+        """The show and season a season or episode of one library copy belongs to, and its place in the season.
+
+        Only stored rows are read (the page has just listed them): no provider is asked. A source that
+        hangs an episode straight off its show gives a show and no season.
+        """
+
+        async def one(ext: str | None) -> Title | None:
+            if not ext:
+                return None
+            return (
+                await s.execute(select(Title).where(Title.source_id == row.source_id, Title.ext_id == ext))
+            ).scalar_one_or_none()
+
+        async with self._db.session() as s:
+            season: Title | None = None
+            show: Title | None = None
+            if row.kind == "season":
+                season = row
+                above = await one(row.parent_ext_id)
+            else:
+                above = await one(row.parent_ext_id)
+                if above is not None and above.kind == "season":
+                    season, above = above, await one(above.parent_ext_id)
+            if above is not None and above.kind in ids.SHOW_KINDS:
+                show = above
+            count = None
+            if row.kind == "episode" and season is not None:
+                count = (
+                    await s.execute(
+                        select(func.count())
+                        .select_from(Title)
+                        .where(
+                            Title.source_id == row.source_id,
+                            Title.parent_ext_id == season.ext_id,
+                            Title.kind == "episode",
+                        )
+                    )
+                ).scalar_one()
+        if show is None and season is None:
+            return None, None
+        src = ctx.sources.get(row.source_id)
+        parent: dict[str, Any] = {
+            "show": {
+                "id": hub_id_for_title(show),
+                "title": ids.clean_display_title(show.title),
+                "backdrop": ctx.image(src, show.backdrop, ids.lib_id(show.source_id, show.ext_id)),
+            }
+            if show is not None
+            else None,
+            "season": {
+                "id": ids.lib_id(season.source_id, season.ext_id),
+                "title": season.title or (f"Season {season.season_number}" if season.season_number is not None else ""),
+                "number": season.season_number,
+            }
+            if season is not None
+            else None,
+            "episode_number": row.episode_number if row.kind == "episode" else None,
+            "episode_count": int(count) if count else None,
+            "episode_title": None,
+        }
+        if row.kind == "episode":
+            # The episode's own name: the tile's ``E4 · Name`` without its number, which the page shows apart.
+            name = ids.episode_display_title(row.title, row.episode_number)
+            prefix = f"E{row.episode_number} · " if row.episode_number is not None else ""
+            parent["episode_title"] = name.removeprefix(prefix) if prefix else name
+        return parent, show
+
+    async def _stored_rating(self, subject_key: str) -> str | None:
+        """The classification code stored for a title (``TV-14``), when the evidence settles on one."""
+        async with self._db.session() as s:
+            evidence = (
+                await s.execute(
+                    select(AgeClassification.evidence)
+                    .where(AgeClassification.subject_key == subject_key)
+                    .order_by(AgeClassification.observed_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        return rating_code(evidence)
 
     @staticmethod
     def _child_tile(k: Title, ctx: TileContext) -> dict[str, Any]:
@@ -492,9 +591,12 @@ class CatalogService:
         t = ctx.title_tile(k)
         t["id"] = ids.lib_id(k.source_id, k.ext_id)
         t["kind"] = k.kind
+        t["season_number"] = k.season_number
         if k.kind == "episode":
             # Not the provider's release line or file name: the episode's own name and number.
             t["title"] = ids.episode_display_title(k.title, k.episode_number)
+            t["episode_number"] = k.episode_number
+            t["runtime_min"] = (k.duration_ms // 60000) if k.duration_ms else None
         return t
 
     async def _merged_seasons(
@@ -573,6 +675,8 @@ class CatalogService:
                 "seasons": [],
                 "episodes": [],
                 "attribution": ATTRIBUTION,
+                "content_rating": rating_code(meta.age_evidence),
+                "release_date": meta.release_date,
             }
         else:
             primary = matches[0]
