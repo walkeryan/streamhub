@@ -334,9 +334,10 @@ test('a remote: OK pauses onto the scrubber, the arrows reach every control, and
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await expect.poll(() => inBar(page)).toBe(false)
   await expect(ui(page)).toHaveAttribute('data-show', 'false', { timeout: 6000 })
-  // Back: with the controls hidden it leaves.
+  // Back: with the controls hidden it keeps the film playing, minimised to the bar at the bottom.
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('player')).toHaveCount(0)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-mini', 'true')
+  await expect(page.getByTestId('mini-player')).toBeVisible()
 })
 
 test('Media Session: title for the lock screen, and its play, pause and seek controls drive the player', async ({ page }) => {
@@ -533,7 +534,7 @@ test.describe('on a phone', () => {
     const resolves = await enter(page)
     await play(page, CONVERTED)
     const bar = page.getByTestId('player-bar')
-    const boxes = await bar.locator('.pbar-row .fx').evaluateAll((all) => all.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), width: r.width, height: r.height, right: r.right } }))
+    const boxes = await bar.locator('.pbar-row .fx').evaluateAll((all) => all.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top + r.height / 2), width: r.width, height: r.height, right: r.right } }))
     expect(new Set(boxes.map((b) => b.top)).size).toBe(2)
     for (const box of boxes) {
       expect(box.width).toBeGreaterThanOrEqual(44)

@@ -200,6 +200,7 @@
 
 /* ---------- timeline (mockup .track) ---------- */
 .player .scrub-hit { height: 2rem; }
+@media (pointer: coarse) { .player .scrub-hit { height: max(2.75rem, 44px); } }
 .player .scrub-rail { height: 0.35rem; overflow: visible; background: rgba(255,255,255,.25); box-shadow: none; }
 .player .scrub[data-focused='true'] .scrub-rail, .player .scrub-hit[data-dragging='true'] .scrub-rail { height: 0.45rem; }
 .player .scrub-loaded { background: rgba(255,255,255,.35); border-radius: 999px; }
