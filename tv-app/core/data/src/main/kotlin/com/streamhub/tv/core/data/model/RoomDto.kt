@@ -6,7 +6,12 @@ import kotlinx.serialization.Serializable
 /* Watch rooms (POST /rooms, GET/DELETE /rooms/{code}, POST /rooms/{code}/join, GET /rooms/{code}/descriptor). */
 
 @Serializable
-data class RoomCreate(val id: String, @SerialName("variant_id") val variantId: String? = null)
+data class RoomCreate(
+    val id: String,
+    @SerialName("variant_id") val variantId: String? = null,
+    /** The source's audio track the creator is hearing (a descriptor's `audio_track`), so members hear it too. Left out when null. */
+    @SerialName("audio_track") val audioTrack: Int? = null,
+)
 
 @Serializable
 data class RoomJoinRequest(

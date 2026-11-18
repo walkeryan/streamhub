@@ -137,8 +137,8 @@ class ControlsActions(
     val onAudio: () -> Unit,
     val onSubtitles: () -> Unit,
     /**
-     * "Watch together": null hides the button. The slot draft PR #43 wires (`vm.roomStart(s) != null`
-     * → `vm::startWatchTogether`), where the web player offers it.
+     * "Watch together": null hides the button. Shown where the web player offers it
+     * (`vm.roomStart(s) != null`); it opens the room dialog (`vm::startWatchTogether`).
      */
     val onWatchTogether: (() -> Unit)?,
     /** Picture-in-picture; null where the TV has none. */

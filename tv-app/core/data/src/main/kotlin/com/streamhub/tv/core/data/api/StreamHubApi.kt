@@ -351,8 +351,8 @@ class StreamHubApi @Inject constructor(
     // ---- Watch rooms ---------------------------------------------------------------------------
 
     /** A room for a title or channel; it starts empty and paused at 0 (a live room starts playing). */
-    suspend fun createRoom(titleId: String, variantId: String? = null): Room =
-        client.post(url("/rooms")) { setBody(RoomCreate(titleId, variantId)) }.ok()
+    suspend fun createRoom(titleId: String, variantId: String? = null, audioTrack: Int? = null): Room =
+        client.post(url("/rooms")) { setBody(RoomCreate(titleId, variantId, audioTrack)) }.ok()
     /** The join screen: title, host, members, state. 404 `room_not_found`. */
     suspend fun room(code: String): Room = get("/rooms/${id(code)}")
     /** Takes a seat; resolves playback exactly as /playback/resolve would and returns its refusals unchanged. */

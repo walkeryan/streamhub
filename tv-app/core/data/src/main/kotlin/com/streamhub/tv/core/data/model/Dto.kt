@@ -548,6 +548,12 @@ data class PlaybackDescriptor(
      * stream [startPositionMs] describes. Null for every other descriptor.
      */
     @SerialName("stream_epoch") val streamEpoch: Int? = null,
+    /**
+     * The source's audio track the server put in this stream, when it chose one (a remux or transcode
+     * of one track); null when the stream carries the source's tracks and this TV picks among them.
+     * A room started from this playback is opened on the same track.
+     */
+    @SerialName("audio_track") val audioTrack: Int? = null,
     /** What is playing and how it reaches this TV, for the player's stream information; null for a hand-off. Informational only. */
     @SerialName("media_info") val mediaInfo: MediaInfo? = null,
     // ---- Player revamp (all optional; see PlaybackExtras.kt) ----
