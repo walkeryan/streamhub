@@ -3,7 +3,10 @@ package com.streamhub.tv.feature.player
 import android.os.SystemClock
 import androidx.lifecycle.SavedStateHandle
 import androidx.media3.common.Player
+import com.streamhub.tv.core.data.repo.ProfileFilterStore
 import com.streamhub.tv.core.data.repo.RoomRepository
+import com.streamhub.tv.core.data.model.UpNext
+import kotlinx.serialization.json.JsonPrimitive
 import com.streamhub.tv.core.data.repo.RoomSeat
 import com.streamhub.tv.core.data.room.RoomClient
 import com.streamhub.tv.core.data.room.RoomClock
@@ -53,6 +56,7 @@ import com.streamhub.tv.core.data.model.Channel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -79,6 +83,9 @@ import javax.inject.Inject
 
 /** [Controls] is the focusable film control row; [Osd] is the passive live banner. */
 enum class Overlay { None, Osd, Controls, MiniList, Menu, Rewind, Buffer }
+
+/** The audio or subtitle list opened from the control row. */
+enum class TrackPicker { Audio, Subtitles }
 
 data class PlayerScreenState(
     val descriptor: PlaybackDescriptor? = null,
@@ -124,6 +131,23 @@ data class PlayerScreenState(
      */
     val streamStartMs: Long = 0,
     val titleDurationMs: Long? = null,
+    // ---- Revamped player (UpNextFlow) ----
+    /** What this title allows: skip intro/credits, Up next, the episode buttons. */
+    val upNext: UpNextFlow.Plan = UpNextFlow.NONE,
+    /** The profile's `autoplay_next` (missing = on), read when the player opened. */
+    val autoplayNext: Boolean = true,
+    /** Skip intro is up and seeks here. */
+    val skipIntroTo: Long? = null,
+    val skipCredits: Boolean = false,
+    /** The Up next card, while it is up. */
+    val upNextCard: UpNextCardModel? = null,
+    /** Still watching? is up (the picture is paused behind it). */
+    val stillWatching: Boolean = false,
+    /** The next (or previous) episode is being resolved. */
+    val advancing: Boolean = false,
+    /** Where focus lands when the control row comes up. */
+    val controlsFocus: ControlsFocus = ControlsFocus.PlayPause,
+    val picker: TrackPicker? = null,
 ) {
     /** Position in the title for a position of the player. */
     fun titlePositionMs(playerPositionMs: Long): Long = playerPositionMs + streamStartMs
@@ -170,9 +194,13 @@ class PlayerViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val sessions: SessionStore,
     private val rooms: RoomRepository,
+    private val prefs: ProfileFilterStore,
     playerFactory: PlayerFactory,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState["key"])
+    /** The paired server, for a scrub thumbnail address given relative to it. */
+    var serverUrl: String? = null
+        private set
     val player: StreamHubPlayer = playerFactory.create()
 
     private val _state = MutableStateFlow(PlayerScreenState())
@@ -219,6 +247,10 @@ class PlayerViewModel @Inject constructor(
     private var recoverySeq = 0
     /** Recoveries in a row that ended with the room still on a later start of its stream than the one loaded. */
     private var epochMisses = 0
+    /** Where this episode's Up next card is (see UpNextFlow); reset with every title. */
+    private var flow = UpNextFlow.State()
+    /** Episodes started by autoplay since the last key press (or mini-player command): Still watching? at three. */
+    private var unattendedAutoplays = 0
 
     init {
         coordinator.registerActivePlayer(key) { stopCurrentPlayback() }
@@ -238,6 +270,8 @@ class PlayerViewModel @Inject constructor(
         // A room plays one stream for everyone: it never moves to another feed on its own.
         if (seat == null) viewModelScope.launch { watchFeeds() }
         viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) { reauthorized = false; pausedRetry.reset() } } }
+        viewModelScope.launch { serverUrl = sessions.current().serverUrl; loadAutoplayPref() }
+        viewModelScope.launch { while (true) { delay(FLOW_TICK_MS); flowTick() } }
         viewModelScope.launch {
             sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
                 rewindJob?.cancel(); _state.update { it.copy(audioChoice=null) }; stopCurrentPlayback(); _exit.emit(Unit)
@@ -362,7 +396,9 @@ class PlayerViewModel @Inject constructor(
         }
         val reportOwner=sessions.current()
         val owner=reportOwner.catalogScope()
-        _state.update { it.copy(descriptor=d, live=d.live, message=null, bufferError=null, bufferBusy=d.bufferAvailable) }
+        flow = UpNextFlow.State()
+        val plan = UpNextFlow.plan(d, currentRequest, inRoom)
+        _state.update { it.copy(descriptor=d, live=d.live, message=null, bufferError=null, bufferBusy=d.bufferAvailable, upNext=plan, skipIntroTo=null, skipCredits=false, upNextCard=null, stillWatching=false) }
         var acquiredLeaseId: String? = null
         try {
             val lease=if(d.bufferAvailable) buffer.open(d) else null
@@ -467,9 +503,9 @@ class PlayerViewModel @Inject constructor(
     /** Films, catch-up and buffered history are driven from the control row; only true live gets the banner. */
     private fun usesControls(s: PlayerScreenState = _state.value) = !s.live || s.bufferTimeshift
 
-    fun showOsd() {
+    fun showOsd(focus: ControlsFocus = ControlsFocus.PlayPause) {
         if (_state.value.overlay in listOf(Overlay.MiniList, Overlay.Menu, Overlay.Rewind, Overlay.Buffer)) return
-        if (usesControls()) { showControls(); return }
+        if (usesControls()) { showControls(focus); return }
         _state.update { it.copy(overlay = Overlay.Osd) }
         osdJob?.cancel()
         osdJob = viewModelScope.launch {
@@ -480,9 +516,10 @@ class PlayerViewModel @Inject constructor(
 
     // ---- Film controls ------------------------------------------------------------------------
 
-    fun showControls() {
+    fun showControls(focus: ControlsFocus = ControlsFocus.PlayPause) {
         if (_state.value.overlay in listOf(Overlay.MiniList, Overlay.Menu, Overlay.Rewind, Overlay.Buffer)) return
-        _state.update { it.copy(overlay = Overlay.Controls) }
+        // Focus is placed when the row appears; a row already up keeps where the viewer is.
+        _state.update { if (it.overlay == Overlay.Controls) it else it.copy(overlay = Overlay.Controls, controlsFocus = focus) }
         armControlsHide()
     }
 
@@ -493,8 +530,9 @@ class PlayerViewModel @Inject constructor(
         osdJob?.cancel()
         osdJob = viewModelScope.launch {
             delay(CONTROLS_HIDE_MS)
-            // A paused picture keeps its controls: they are the only sign of why it stopped.
-            while (!player.exoPlayer.playWhenReady) delay(500)
+            // A paused picture keeps its controls: they are the only sign of why it stopped. An open
+            // audio or subtitle list keeps them too.
+            while (!player.exoPlayer.playWhenReady || _state.value.picker != null) delay(500)
             _state.update { if (it.overlay == Overlay.Controls) it.copy(overlay = Overlay.None) else it }
         }
     }
@@ -520,6 +558,8 @@ class PlayerViewModel @Inject constructor(
         val shown = _state.value
         val duration = shown.titleDurationMs(ps.durationMs)
         if (!shown.canSeek(ps.seekable) || duration <= 0) return
+        // Any seek dismisses the Up next card; it comes back at the very end.
+        dismissUpNext()
         // In a room the bar starts from where the room is, not from where this player happens to be.
         val target = ((shown.scrubTargetMs ?: roomPosition() ?: shown.titlePositionMs(ps.positionMs)) + deltaMs).coerceIn(0, duration)
         _state.update { it.copy(scrubTargetMs = target) }
@@ -535,10 +575,186 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun startOver() {
+        dismissUpNext()
         scrubJob?.cancel()
         _state.update { it.copy(scrubTargetMs = null) }
         if (seat != null) roomControl { it.seek(0) } else player.seekTo(0)
     }
+
+    // ---- Skip intro / credits, Up next, Still watching (UpNextFlow) -----------------------------
+
+    private suspend fun loadAutoplayPref() {
+        val profile = sessions.current().profile?.id ?: return
+        val value = try { prefs.read(profile, AUTOPLAY_NEXT_PREF) }
+        catch (e: CancellationException) { if (currentCoroutineContext().isActive) return else throw e }
+        catch (_: Exception) { return }
+        _state.update { it.copy(autoplayNext = autoplayNextPref(value)) }
+    }
+
+    /** "Autoplay next episode" in the settings: applies at once and is stored in the profile's preferences. */
+    fun setAutoplayNext(on: Boolean) {
+        val before = _state.value.autoplayNext
+        if (before == on) return
+        _state.update { it.copy(autoplayNext = on) }
+        viewModelScope.launch {
+            val profile = sessions.current().profile?.id ?: return@launch
+            try { prefs.write(profile, AUTOPLAY_NEXT_PREF, JsonPrimitive(on)) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { _state.update { it.copy(autoplayNext = before) }; flash("Couldn't save that setting. Try again.") }
+        }
+    }
+
+    /** A key press (or a mini-player command): somebody is watching, so autoplay may carry on. */
+    fun userInteracted() { unattendedAutoplays = 0 }
+
+    /** Four times a second: where the title is, what is shown for it, and whether the countdown ran out. */
+    private fun flowTick() {
+        val s = _state.value
+        val plan = s.upNext
+        if (plan.kind == UpNextFlow.Kind.None) return
+        if (s.advancing || s.stillWatching || s.failure != null || s.retrying || currentStopped) return
+        val ps = player.state.value
+        val position = s.scrubTargetMs ?: s.titlePositionMs(ps.positionMs)
+        val duration = s.titleDurationMs(ps.durationMs).takeIf { it > 0 } ?: s.descriptor?.durationMs ?: 0L
+        val look = UpNextFlow.Look(SystemClock.elapsedRealtime(), position, duration, ps.isPlaying, ps.ended)
+        val (next, effect) = UpNextFlow.observe(flow, plan, look, s.autoplayNext)
+        flow = next
+        publishFlow(position)
+        if (effect == UpNextFlow.Effect.CountdownDone) {
+            val target = plan.next ?: return
+            if (UpNextFlow.asksStillWatching(unattendedAutoplays)) {
+                player.pause()
+                _state.update { it.copy(stillWatching = true, upNextCard = null, skipCredits = false, overlay = Overlay.None, picker = null) }
+            } else playEpisode(target, auto = true, forward = true)
+        }
+    }
+
+    /** What [flow] shows at [positionMs]: the skip buttons and the card. */
+    private fun publishFlow(positionMs: Long) {
+        val s = _state.value
+        val plan = s.upNext
+        val card = plan.next?.takeIf { UpNextFlow.cardShowing(flow) }?.let { next ->
+            UpNextCardModel(
+                next,
+                secondsLeft = if (s.autoplayNext) UpNextFlow.secondsLeft(flow) else null,
+                progress = (flow.countedMs.toFloat() / UpNextFlow.COUNTDOWN_MS).coerceIn(0f, 1f),
+            )
+        }
+        val intro = UpNextFlow.skipIntroTarget(plan, positionMs)
+        val credits = UpNextFlow.skipCreditsVisible(plan, flow, positionMs)
+        _state.update { it.copy(skipIntroTo = intro, skipCredits = credits, upNextCard = card) }
+    }
+
+    /** Back, "Keep watching" or a seek: the card goes until the very end. */
+    fun dismissUpNext() {
+        if (!UpNextFlow.cardShowing(flow)) return
+        flow = UpNextFlow.dismiss(flow)
+        val s = _state.value
+        publishFlow(s.scrubTargetMs ?: s.titlePositionMs(player.state.value.positionMs))
+    }
+
+    fun skipIntro() {
+        val target = _state.value.skipIntroTo ?: return
+        scrubJob?.cancel()
+        _state.update { it.copy(scrubTargetMs = null, skipIntroTo = null) }
+        player.seekTo(target)
+    }
+
+    /** Skip credits: the next episode, or (a film, the last episode) the end of playback, reported watched. */
+    fun skipCredits() {
+        val plan = _state.value.upNext
+        when (plan.kind) {
+            UpNextFlow.Kind.Episode -> plan.next?.let { playEpisode(it, auto = false, forward = true) }
+            UpNextFlow.Kind.EndsPlayback -> viewModelScope.launch { finishTitle() }
+            UpNextFlow.Kind.None -> Unit
+        }
+    }
+
+    /**
+     * OK while the controls are hidden: the visible skip button (Skip intro, else Skip credits), or the
+     * Up next card's "Play next". False when nothing of that is up, so OK does what it always did.
+     */
+    fun activateVisibleSkip(): Boolean {
+        val s = _state.value
+        return when {
+            s.skipIntroTo != null -> { skipIntro(); true }
+            s.skipCredits -> { skipCredits(); true }
+            s.upNextCard != null -> { playNextEpisode(); true }
+            else -> false
+        }
+    }
+
+    fun playNextEpisode() { _state.value.upNext.next?.let { playEpisode(it, auto = false, forward = true) } }
+    fun playPreviousEpisode() { _state.value.upNext.previous?.let { playEpisode(it, auto = false, forward = false) } }
+
+    fun stillWatchingContinue() {
+        _state.update { it.copy(stillWatching = false) }
+        unattendedAutoplays = 0
+        val next = _state.value.upNext.next
+        if (next != null) playEpisode(next, auto = false, forward = true) else player.resume()
+    }
+
+    fun stillWatchingBack() {
+        _state.update { it.copy(stillWatching = false) }
+        _exit.tryEmit(Unit)
+    }
+
+    /** The title is done (Skip credits on a film): reported watched, and the player closes. */
+    private suspend fun finishTitle() {
+        attachJob?.cancel()
+        player.stop(completed = true); currentStopped = true
+        withContext(NonCancellable) { buffer.close() }
+        _exit.emit(Unit)
+    }
+
+    /**
+     * Plays [target] (the next or previous episode) in this player: resolved the way Play resolves it,
+     * with the audio language chosen now carried over. Moving on from the credits or the end reports
+     * this episode watched. A failure leaves the current episode playing and says so.
+     */
+    private fun playEpisode(target: UpNext, auto: Boolean, forward: Boolean) {
+        if (seat != null || _state.value.advancing) return
+        val s = _state.value
+        val ps = player.state.value
+        val duration = s.titleDurationMs(ps.durationMs).takeIf { it > 0 } ?: s.descriptor?.durationMs ?: 0L
+        val completes = forward && UpNextFlow.finishesCurrent(s.upNext, s.titlePositionMs(ps.positionMs), duration, ps.ended)
+        val language = ps.audioTracks.firstOrNull { it.selected && it.supported }?.language?.takeIf { it.isNotBlank() && !it.equals("und", true) }
+        flow = UpNextFlow.State(phase = UpNextFlow.Phase.Done)
+        scrubJob?.cancel()
+        _state.update { it.copy(advancing = true, upNextCard = null, skipCredits = false, skipIntroTo = null, stillWatching = false, scrubTargetMs = null, message = "Loading ${target.title.ifBlank { "the next episode" }}…") }
+        rewindJob?.cancel()
+        attachJob?.cancel()
+        attachJob = viewModelScope.launch {
+            val owner = sessions.current().catalogScope()
+            try {
+                val result = audioPlaybackAttempt(PlaybackRequest(target.id), true, api::playbackOptions, api::resolve)
+                currentCoroutineContext().ensureActive()
+                if (sessions.current().catalogScope() != owner) return@launch
+                val ready = result as? AudioPlaybackAttempt.Ready ?: throw IllegalStateException("No stream")
+                val d = language?.let { lang -> ready.descriptor.copy(preferredAudioLanguages = listOf(lang) + ready.descriptor.preferredAudioLanguages.filterNot { it.equals(lang, true) }) } ?: ready.descriptor
+                // Before start() stops it: its last report says "watched", not where the credits were.
+                if (completes) player.stop(completed = true)
+                currentRequest = ready.request; failedRequest = null
+                pausedRetry.reset()
+                unattendedAutoplays = if (auto) unattendedAutoplays + 1 else 0
+                _state.update { it.copy(advancing = false, message = null) }
+                start(d)
+            } catch (e: CancellationException) {
+                _state.update { it.copy(advancing = false, message = null) }
+                throw e
+            } catch (e: Exception) {
+                // The card does not come straight back: the episode plays on to its end, where it does.
+                flow = UpNextFlow.State(phase = UpNextFlow.Phase.Dismissed)
+                _state.update { it.copy(advancing = false, message = null) }
+                flash("Couldn't start ${target.title.ifBlank { "the next episode" }}. ${ApiErrors.describe(e).title}.")
+            }
+        }
+    }
+
+    // ---- Audio and subtitle lists (control row) ------------------------------------------------
+
+    fun openPicker(picker: TrackPicker) { _state.update { it.copy(picker = picker) }; armControlsHide() }
+    fun closePicker() { _state.update { it.copy(picker = null) }; if (_state.value.overlay == Overlay.Controls) armControlsHide() }
 
     // ---- Play / pause (the room's, when in one) -------------------------------------------------
 
@@ -785,6 +1001,9 @@ class PlayerViewModel @Inject constructor(
             _exit.tryEmit(Unit)
         }
     }
+
+    /** A short message over the picture, for the screen's own lists. */
+    fun flashMessage(text: String) = flash(text)
 
     /** A short message over the picture. */
     private fun flash(text: String) {
@@ -1182,6 +1401,8 @@ class PlayerViewModel @Inject constructor(
         /** The live reconnect attempt at which a room member's stream address is fetched again. */
         const val LIVE_ROOM_REFETCH_ATTEMPT = 3
         const val FLASH_MS = 2_500L
+        /** How often the skip / Up next state is looked at. */
+        const val FLOW_TICK_MS = 250L
         /** How often feed failover looks at the picture. */
         const val FEED_SAMPLE_MS = 1_000L
         /** A step of the position larger than this in one look is a jump (a new stream), not play. */

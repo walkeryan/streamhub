@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { createRoom, useChannels } from '../api/hooks'
 import type { Room } from '../api/types'
@@ -38,6 +38,14 @@ import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
 import { usePhone } from '../lib/layout'
 import { inShell } from '../shell'
+import { useProfilePreference } from '../api/profilePreferences'
+import { EXPAND_STATE, useDock } from '../player/dock'
+import { GlassButton, MiniBar } from '../player/MiniBar'
+import { SkipButton, StillWatching, UpNextCard } from '../player/PlayerExtras'
+import {
+  UP_NEXT_IDLE, asksStillWatching, creditsAt, episodeCode, episodeLine, introAt, streakAfterAutoplay, streakAfterInput,
+  thumbnailAt, upNextReducer, upNextStart,
+} from '../player/upNext'
 import '../styles/player.css'
 
 type Overlay = null | 'menu' | 'list' | 'bar'
@@ -50,11 +58,21 @@ const CHROME_IDLE_MS = 3000
 const DOUBLE_TAP_MS = 300
 type Range = [number, number]
 
-/** `room`: play as a member of a watch room. The room supplies the stream and the transport controls go to it. */
-export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () => void } = {}) {
-  const routeId = decodeURIComponent(useParams().id ?? '')
+/**
+ * `room`: play as a member of a watch room. The room supplies the stream and the transport controls go to it.
+ * `playId`/`playSearch`: the /play address this player plays (PlayerHost); `mini`: minimised to the bar at
+ * the bottom of the app, playing on while the viewer browses.
+ */
+export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
+  room?: RoomSession; onRejoin?: () => void; playId?: string; playSearch?: string; mini?: boolean
+} = {}) {
+  const params = useParams()
+  const routeId = playId ?? decodeURIComponent(params.id ?? '')
   const id = room ? room.room.id : routeId
-  const [sp] = useSearchParams()
+  const [routeSp] = useSearchParams()
+  const sp = useMemo(() => (playSearch !== undefined ? new URLSearchParams(playSearch) : routeSp), [playSearch, routeSp])
+  const miniRef = useRef(mini)
+  miniRef.current = mini
   const sourceId = sp.get('source')
   const variantId = sp.get('variant') ?? undefined
   const profileId = useSession((s) => s.profile?.id)
@@ -65,12 +83,23 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   const rewindAt = sp.get('rewind')
   const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId, { sourceId, catchupProgrammeId: catchup, rewindAt }), [profileId, audioChoice, id, variantId, sourceId, catchup, rewindAt])
   const location = useLocation()
-  const locationKey = location.key
+  // Browsing under a minimised player changes the address, not what this player plays.
+  const fullKey = useRef(location.key)
+  if (!mini) fullKey.current = location.key
+  const locationKey = fullKey.current
   const selectionKey = `${profileId}|${id}|${sp.toString()}|${locationKey}`
   const [manualChoice, setManualChoice] = useState<string | null>(null)
   const navigate = useNavigate()
+  const closeMini = useDock((s) => s.close)
+  /** Another stream of this player (a zap, a rewind, an audio choice, the next episode): the address follows it, or the mini player does. */
+  const replacePlay = useCallback((to: string) => {
+    if (!miniRef.current) { navigate(to, { replace: true }); return }
+    const url = new URL(to, 'http://player.invalid')
+    useDock.getState().update({ id: decodeURIComponent(url.pathname.replace(/^\/play\//, '')), search: url.search })
+  }, [navigate])
   const cancelPending = () => {
-    if (activeId.current === id && hasPlaybackEntry(location.state, location.pathname + location.search)) navigate(-1)
+    if (miniRef.current) closeMini()
+    else if (activeId.current === id && hasPlaybackEntry(location.state, location.pathname + location.search)) navigate(-1)
     else navigate('/live', {replace:true})
   }
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -268,7 +297,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     showFlash(`Speed ${speedLabel(next).toLowerCase()}`)
   }, [setPrefs, showFlash])
 
-  const exit = useCallback(() => navigate(-1), [navigate])
+  // Leaving: full screen goes back to where the player was opened from; minimised, the bar just closes.
+  const exit = useCallback(() => { if (miniRef.current) closeMini(); else navigate(-1) }, [navigate, closeMini])
   const leaveOrExit = roomCtl ? roomCtl.askLeave : exit
   const togglePlay = () => { if (roomCtl) { roomCtl.toggle(); return } const v = videoRef.current; if (!v) return; if (v.paused) pb.resume(); else pb.pause() }
   // OK on Play in the bar: once it plays again the remote is done there, so focus goes back to the picture and the bar may hide.
@@ -334,8 +364,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     blockingRef.current = true
     setLast(previous)
     setReplacing(from ? { to: cid, from } : null)
-    navigate(`/play/${encodeURIComponent(cid)}`, { replace: true })
-  }, [navigate, setLast])
+    replacePlay(`/play/${encodeURIComponent(cid)}`)
+  }, [replacePlay, setLast])
   const zap = useCallback((d: number) => {
     if (!list.length) return
     const currentIndex = list.findIndex((c) => c.id === activeId.current)
@@ -372,6 +402,136 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     if (wasHeld.current && !held) poke()
     wasHeld.current = held
   }, [held, poke])
+
+  // A committed seek shows where it is headed, not where the old stream still is.
+  const position = seek.heading ?? offset + time.cur
+
+  // ---- skip intro / credits, Up next, Still watching (the rules are player/upNext.ts) ----
+  const autoplayPref = useProfilePreference<boolean>('autoplay_next', true, (raw) => (typeof raw === 'boolean' ? raw : null))
+  const autoplay = autoplayPref.value
+  const autoplayRef = useRef(autoplay)
+  autoplayRef.current = autoplay
+  const current = desc?.id === id ? desc : null
+  // Only a title this player resolves itself: never in a room, on a channel, in catch-up or a recording.
+  const extras = !!current && !room && !current.live && !isChannel && !isRecording && !catchup && !rewindAt
+  const markers = useMemo(() => (extras && current ? current.markers ?? [] : []), [extras, current])
+  const nextEp = extras ? current?.next ?? null : null
+  const prevEp = extras ? current?.previous ?? null : null
+  const episodic = !!nextEp || !!prevEp || (extras && current?.episode_number != null)
+  const positionMs = position * 1000
+  const upStart = nextEp ? upNextStart(markers, duration > 0 ? duration * 1000 : current?.duration_ms) : null
+  const [card, dispatchCard] = useReducer(upNextReducer, UP_NEXT_IDLE)
+  useEffect(() => { dispatchCard({ type: 'reset' }) }, [id])
+  const positionStep = Math.floor(positionMs / 250)
+  useEffect(() => { dispatchCard({ type: 'position', positionMs: positionStep * 250, startMs: upStart }) }, [positionStep, upStart])
+  const cardShown = !!nextEp && card.phase !== 'hidden'
+  useEffect(() => {
+    if (!cardShown) return
+    const tick = window.setInterval(() => dispatchCard({ type: 'tick', ms: 250, playing: videoRef.current ? !videoRef.current.paused : false, autoplay: autoplayRef.current }), 250)
+    return () => window.clearInterval(tick)
+  }, [cardShown])
+  // The card's own clock follows the picture's end and every seek.
+  const hasNext = !!nextEp
+  const offsetRef = useRef(offset)
+  offsetRef.current = offset
+  const upStartRef = useRef(upStart)
+  upStartRef.current = upStart
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || !hasNext) return
+    const ended = () => dispatchCard({ type: 'ended', autoplay: autoplayRef.current })
+    const seeking = () => dispatchCard({ type: 'seek', toMs: (offsetRef.current + v.currentTime) * 1000, startMs: upStartRef.current })
+    v.addEventListener('ended', ended)
+    v.addEventListener('seeking', seeking)
+    return () => { v.removeEventListener('ended', ended); v.removeEventListener('seeking', seeking) }
+  }, [hasNext])
+  // A restart-at-offset seek starts a new stream instead of seeking the element.
+  useEffect(() => { if (seek.heading !== null) dispatchCard({ type: 'seek', toMs: seek.heading * 1000, startMs: upStartRef.current }) }, [seek.heading])
+  // Still watching: autoplays in a row with nobody pressing, clicking or touching anything.
+  const streak = useRef(0)
+  const [still, setStill] = useState(false)
+  // The prompt is a dialog: its buttons have the keys, not the player's shortcuts.
+  if (still) blockingRef.current = true
+  useEffect(() => {
+    const input = () => { streak.current = streakAfterInput() }
+    window.addEventListener('keydown', input, true)
+    window.addEventListener('pointerdown', input, true)
+    return () => { window.removeEventListener('keydown', input, true); window.removeEventListener('pointerdown', input, true) }
+  }, [])
+  // The audio language chosen for this episode is asked for again in the next one.
+  const carryLanguage = useRef<string | null>(null)
+  const languageNow = (): string | null => {
+    if (current?.audio_track != null) return current.audio_tracks?.find((t) => t.index === current.audio_track)?.language ?? null
+    return pb.tracks().audio.find((t) => t.active)?.language ?? null
+  }
+  const audioLanguages = pb.tracks().audio.map((t) => t.language ?? '').join(',')
+  useEffect(() => {
+    const wanted = carryLanguage.current
+    if (!wanted || !current) return
+    if (current.audio_track != null) {
+      carryLanguage.current = null
+      const track = (current.audio_tracks ?? []).find((t) => t.language === wanted)
+      if (track && track.index !== current.audio_track) pb.selectAudioTrack(track.index)
+      return
+    }
+    const tracks = pb.tracks().audio
+    if (!tracks.length) return
+    carryLanguage.current = null
+    const track = tracks.find((t) => t.language === wanted)
+    if (track && !track.active) pb.setAudio(track.id)
+    // pb's functions are new every render; the descriptor and the tracks are what this follows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, audioLanguages])
+  /** `auto`: the countdown ran out. `manual`: Skip credits, Play next, the next-episode button. */
+  const goNext = (how: 'auto' | 'manual') => {
+    if (!nextEp) return
+    if (how === 'auto' && asksStillWatching(streak.current)) {
+      pb.pause()
+      dispatchCard({ type: 'dismiss' })
+      setStill(true)
+      return
+    }
+    streak.current = how === 'auto' ? streakAfterAutoplay(streak.current) : streakAfterInput()
+    carryLanguage.current = languageNow()
+    pb.markCompleted()
+    dispatchCard({ type: 'reset' })
+    setStill(false)
+    replacePlay(`/play/${encodeURIComponent(nextEp.id)}`)
+  }
+  const goPrevious = () => { if (prevEp) { dispatchCard({ type: 'reset' }); replacePlay(`/play/${encodeURIComponent(prevEp.id)}`) } }
+  const goNextRef = useRef(goNext)
+  goNextRef.current = goNext
+  useEffect(() => { if (card.fire) goNextRef.current('auto') }, [card.fire])
+  // A film's (or a last episode's) Skip credits: it was watched to the end, and the player closes.
+  const finish = () => { pb.markCompleted(); exit() }
+  const intro = extras ? introAt(markers, positionMs) : null
+  const credits = extras && !nextEp ? creditsAt(markers, positionMs) : null
+  const skip = still ? null
+    : intro ? { label: 'Skip intro', testId: 'skip-intro', run: () => seek.seekNow(intro.end_ms / 1000) }
+    : cardShown || credits ? { label: 'Skip credits', testId: 'skip-credits', run: () => (nextEp ? goNext('manual') : finish()) }
+    : null
+  const showPage = current?.show ? `/title/${encodeURIComponent(current.show.id)}` : null
+  const backToShow = () => {
+    setStill(false)
+    if (miniRef.current) { closeMini(); if (showPage) navigate(showPage); return }
+    if (showPage) navigate(showPage, { replace: true }); else exit()
+  }
+  const preview = useMemo(() => {
+    const t = extras ? current?.thumbnails : null
+    return t ? (seconds: number) => thumbnailAt(t.url, t.interval_ms, seconds * 1000) : null
+  }, [extras, current])
+  const marks = useMemo(() => markers.map((m) => ({ type: m.type, from: m.start_ms / 1000, to: m.end_ms / 1000 })), [markers])
+
+  // ---- minimise / expand ----
+  const canMinimise = !room && !tv && state !== 'handoff'
+  const minimise = () => {
+    if (!canMinimise) return
+    useDock.getState().minimise({ id: activeId.current, search: sp.toString() ? `?${sp}` : '' })
+    setOverlay(null); setInfo(false); setHelp(false)
+    if (Number(window.history.state?.idx) > 0) navigate(-1)
+    else navigate(showPage ?? '/', { replace: true })
+  }
+  const expand = useCallback(() => navigate(`/play/${encodeURIComponent(activeId.current)}${sp.toString() ? `?${sp}` : ''}`, { state: EXPAND_STATE }), [navigate, sp])
 
   // ---- what a shortcut does (shortcuts.ts decides which key means what) ----
   const run = (action: ShortcutAction, repeat = false) => {
@@ -410,13 +570,15 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   // zapping with the controls hidden keeps them hidden (poke() runs on every key)
   const hideIfHidden = useCallback((visible: boolean) => { if (!visible) hideChrome() }, [hideChrome])
   // A room never zaps: its live channel takes the keys a title does.
-  const handlers = { id, live: live && !room, titleLive: live, inRoom: !!room, canSeek, isChannel, zap, zapTo, togglePlay, run, seek, poke, showOsd, toast, hideIfHidden }
+  const handlers = { id, live: live && !room, titleLive: live, inRoom: !!room, canSeek, isChannel, zap, zapTo, togglePlay, run, seek, poke, showOsd, toast, hideIfHidden, mini, skip: skip?.run ?? null }
   const apiRef = useRef(handlers)
   apiRef.current = handlers
   useEffect(() => {
     let timer = 0
     const onKey = (e: KeyboardEvent) => {
       const a = apiRef.current
+      // Minimised, the keys are the page's: the bar is reached and used like any other control.
+      if (a.mini) return
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
       // A real volume key has set the device's volume already: the player's as well would count it twice.
@@ -488,6 +650,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
         } break
         case 'Enter': handled()
           if (a.live) setOverlay(visible ? 'bar' : 'list')
+          else if (!visible && a.skip) a.skip()  // OK with the controls hidden takes a skip that is offered (Netflix-style)
           else {
             // OK pauses, and a remote then stands on the scrubber: Left/Right to look for a place, Down for the buttons.
             const pausing = !a.titleLive && videoRef.current?.paused === false
@@ -534,6 +697,9 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     if (audio.blocked || activeId.current !== id) { cancelPending(); return true }
     // A seek that has not been made yet is the first thing Back takes away.
     if (seek.cancel()) return true
+    // Still watching? Back goes back to the show; the Up next card is put away, and the episode plays on.
+    if (still) { backToShow(); return true }
+    if (cardShown && overlayRef.current !== 'menu' && overlayRef.current !== 'list') { dispatchCard({ type: 'dismiss' }); return true }
     // Then whatever is open, topmost first: a menu, the information panel, the control bar.
     const o = overlayRef.current
     if (o === 'menu' || o === 'list') { closeOverlay(); return true }
@@ -542,6 +708,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     if (chromeRef.current && !pausedRef.current) { hideChrome(); return true }
     // Back out of a room asks first: leaving gives the seat up.
     if (roomCtl) { roomCtl.askLeave(); return true }
+    // Back while a film or an episode plays keeps it playing, minimised; paused, it leaves.
+    if (!live && canMinimise && !pausedRef.current && state === 'playing') { minimise(); return true }
     const last = useUi.getState().lastChannelId
     if (!live || !last || last === activeId.current) return false
     if (backTimer.current) {
@@ -552,7 +720,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     setBackHint(true)
     backTimer.current = window.setTimeout(() => { backTimer.current = 0; setBackHint(false); exit() }, BACK_TWICE_MS)
     return true
-  })
+  }, !mini)
   // menu and list remember and restore the focused control; the bar moves focus itself (setOverlay)
   const tr = pb.tracks()
   // The server encoded one track of the file: the others are a new stream away, not a player switch.
@@ -560,6 +728,21 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   // The audio menu of a stream that names no tracks has nothing to choose: focus starts on what it does have.
   const menuFirst = menuSection === 'audio' && !fileTracks.length && !tr.audio.length ? (pb.audioBlocked ? 'pm:consent' : 'pm:close') : 'pm:first'
   useOverlayFocus(overlay === 'menu' || overlay === 'list', overlay === 'list' ? 'pl:current' : menuFirst)
+  const title = desc?.title ?? channel?.name ?? 'Loading…'
+  // What the bar's audio and subtitle buttons say, and the lines of the top bar and the mini player.
+  const fileTrack = fileTracks.find((t) => t.index === desc?.audio_track)
+  const audioValue = fileTrack ? trackLabel(fileTrack) : tr.audio.find((t) => t.active)?.label ?? 'Default'
+  const subsValue = tr.subs.find((t) => t.active)?.label ?? 'Off'
+  const topLine = episodic ? episodeLine(current?.show?.title, current?.season_number, current?.episode_number) || null : null
+  const miniTitle = current?.show?.title ?? (live ? channel?.name ?? title : title)
+  const miniLine = episodic ? [episodeCode(current?.season_number, current?.episode_number), title].filter(Boolean).join(' · ') : live ? channel?.now?.title ?? null : null
+  const mayTogether = mayStartRoom && !room && !catchup && !rewindAt && !isRecording
+  // Back to full screen from the mini player: the controls show, as on opening a film.
+  const wasMini = useRef(mini)
+  useEffect(() => {
+    if (wasMini.current && !mini) poke()
+    wasMini.current = mini
+  }, [mini, poke])
 
   useEffect(() => { if (pb.audioBlocked) openMenu('audio') }, [pb.audioBlocked, openMenu])
 
@@ -569,14 +752,11 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   useEffect(() => {
     if (!sleepAt) return
     const id2 = window.setTimeout(() => {
-      videoRef.current?.pause(); setSleep(null); toast('Sleep timer ended. Playback stopped.'); navigate(-1)
+      videoRef.current?.pause(); setSleep(null); toast('Sleep timer ended. Playback stopped.'); exit()
     }, Math.max(0, sleepAt - Date.now()))
     return () => window.clearTimeout(id2)
-  }, [sleepAt, setSleep, toast, navigate])
+  }, [sleepAt, setSleep, toast, exit])
 
-  const title = desc?.title ?? channel?.name ?? 'Loading…'
-  // A committed seek shows where it is headed, not where the old stream still is.
-  const position = seek.heading ?? offset + time.cur
   const pct = live && channel?.now ? progressOf(channel.now.start, channel.now.stop, now) : 0
   const loaded = (restartable ? time.produced : time.buffered).map(([from, to]): Range => [offset + from, offset + to])
   const hint = seek.pending ? seekHint(seek.pending.target - seek.pending.base) : null
@@ -587,18 +767,18 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
     try { navigator.mediaSession.setPositionState({ duration, position: Math.min(duration, Math.max(0, sessionAt * 5)), playbackRate: speed }) } catch { /* not supported, or a position it rejects */ }
   }, [live, duration, sessionAt, speed])
 
-  // The channel banner is placed above the control bar, whose height depends on the screen and on what the channel offers.
+  // The channel banner, the skip button and the Up next card sit above the control bar, whose height depends on the screen and on what is offered.
   const rootRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const bar = bottomRef.current
-    if (!bar || !live || typeof ResizeObserver === 'undefined') return
+    if (!bar || typeof ResizeObserver === 'undefined') return
     const measure = () => rootRef.current?.style.setProperty('--player-bar', `${bar.offsetHeight}px`)
     const watch = new ResizeObserver(measure)
     watch.observe(bar)
     measure()
     return () => watch.disconnect()
-  }, [live, state])
+  }, [live, state, mini])
 
   // ---- pointer and touch on the picture ----
   // A mouse click plays or pauses and a double click is full screen. A finger shows or hides the controls,
@@ -635,14 +815,24 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
   }
 
   return (
-    <div className="player" ref={rootRef} data-testid="player" data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} data-stream-start={restartable ? desc.start_position_ms ?? 0 : undefined} role="main"
+    <div className="player" ref={rootRef} data-testid="player" data-mini={mini || undefined} data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} data-stream-start={restartable ? desc.start_position_ms ?? 0 : undefined} role="main"
       // A finger's taps are read on the picture (below); its drags on the controls keep them up through pointerdown.
-      onPointerMove={(e) => { if (e.pointerType !== 'touch') poke() }} onPointerDown={poke} style={{ cursor: showChrome ? 'default' : 'none' }}>
+      onPointerMove={(e) => { if (e.pointerType !== 'touch' && !mini) poke() }} onPointerDown={() => { if (!mini) poke() }} style={{ cursor: showChrome || mini ? 'default' : 'none' }}>
       {/* focus target for "the video itself": Up from the control bar lands here, so no hidden button keeps focus */}
-      <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>
-      <video ref={videoRef} playsInline poster={NO_POSTER} loop={live && desc?.mime === 'video/webm'} style={{ objectFit: aspect }} data-testid="video" aria-label={title}
+      {!mini && <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>}
+      {/* The same element full screen and minimised (it keeps its place among the children): the stream never restarts. */}
+      <video ref={videoRef} playsInline poster={NO_POSTER} loop={live && desc?.mime === 'video/webm'} style={{ objectFit: mini ? 'cover' : aspect }} data-testid="video" aria-label={title}
         onPointerDown={(e) => { pointer.current = { kind: e.pointerType, shown: chromeRef.current } }}
-        onDoubleClick={() => { if (pointer.current.kind !== 'touch') fullscreen() }} onClick={onPictureClick} />
+        onDoubleClick={() => { if (pointer.current.kind !== 'touch' && !mini) fullscreen() }} onClick={(e) => { if (mini) expand(); else onPictureClick(e) }} />
+      {mini && (
+        <MiniBar title={miniTitle} line={miniLine} positionMs={position * 1000} durationMs={live ? null : duration > 0 ? duration * 1000 : null}
+          playing={!paused} live={live} hasPrevious={!!prevEp} hasNext={!!nextEp} thumb={<span className="mini-video-slot" />}
+          onPlayPause={togglePlay} onSeekBy={canSeek ? (delta) => seek.step(delta < 0 ? -1 : 1, { stepS: Math.abs(delta) / 1000 }) : undefined}
+          onPrevious={goPrevious} onNext={() => goNext('manual')} onExpand={expand} onClose={exit}
+          onTogether={mayTogether ? () => { expand(); void startTogether() } : undefined}
+          onAudio={() => { expand(); openMenu('audio') }} />
+      )}
+      {!mini && <>
 
       {!audio.blocked && (state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }} role="status">
@@ -685,52 +875,79 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
       {flash && <div className="player-flash" role="status" aria-live="polite" data-testid="player-flash">{flash}</div>}
       {sleepAt && <div className="label" style={{ position: 'absolute', zIndex: 4, top: '1rem', right: 'var(--safe-x)', background: 'rgba(8,10,16,.7)', padding: '0.25rem 0.75rem', borderRadius: 999, color: '#fff' }}>Sleep in {Math.max(1, Math.round((sleepAt - now) / 60_000))} min</div>}
 
+      {/* the Up next card, Skip intro / Skip credits, Still watching: over the picture, above the controls */}
+      {cardShown && !still && nextEp && (
+        <div className="pextras-card" data-chrome={showChrome}>
+          <UpNextCard next={nextEp} remainingMs={card.remainingMs} autoplay={autoplay} tv={tv || padRecent}
+            onPlay={() => goNext('manual')} onKeepWatching={() => dispatchCard({ type: 'dismiss' })} />
+        </div>
+      )}
+      {skip && <div className="pextras-skip" data-chrome={showChrome}><SkipButton label={skip.label} testId={skip.testId} onSkip={skip.run} /></div>}
+      {still && nextEp && (
+        <StillWatching title={current?.show?.title ?? title} image={nextEp.image} onContinue={() => goNext('manual')}
+          onLeave={backToShow} leaveLabel={showPage ? 'Back to the show' : 'Back'} />
+      )}
+
       {/* top bar + controls */}
       <div className="player-ui" data-show={showChrome} data-testid="player-ui">
         <div className="top">
-          <FocusGroup focusKey="pt" className="flex gap-3 items-center">
-            <Button focusKey="pt:back" iconOnly icon="back" label={room ? 'Leave room' : 'Back'} onEnter={leaveOrExit} />
-          </FocusGroup>
-          <div className="min-w-0"><h1 className="title-xl truncate" data-testid="player-title">{title}</h1>{desc?.subtitle && <p className="label truncate" style={{ color: 'rgba(255,255,255,.75)' }}>{desc.subtitle}</p>}</div>
+          <div className="ptitle min-w-0">
+            {topLine && <p className="ptitle-line truncate" data-testid="player-line">{topLine}</p>}
+            <h1 className="ptitle-main truncate" data-testid="player-title">{title}</h1>
+            {!topLine && desc?.subtitle && <p className="ptitle-line truncate">{desc.subtitle}</p>}
+          </div>
           {roomCtl?.top}
+          <FocusGroup focusKey="pt" className="ptop-actions">
+            {canMinimise && <GlassButton focusKey="pt:mini" icon="minimise" label="Minimise" title="Minimise: keep playing while you browse" onEnter={minimise} testId="player-minimise" />}
+            <GlassButton focusKey="pt:back" icon="x" label={room ? 'Leave room' : 'Close player'} onEnter={leaveOrExit} testId="player-close" />
+          </FocusGroup>
         </div>
         <div className="bottom" ref={bottomRef} onPointerEnter={() => { overChrome.current = true }} onPointerLeave={() => { overChrome.current = false }}>
           {!live && (
             <Scrubber position={position} duration={duration} loaded={loaded} target={seek.pending?.target ?? null} hint={hint}
               busy={seek.heading !== null} disabled={!canSeek} onSeek={seek.seekNow} onStep={(dir) => seek.step(dir)}
-              onEnter={() => { if (seek.hasPending()) seek.commit(); else playFromBar() }} />
+              onEnter={() => { if (seek.hasPending()) seek.commit(); else playFromBar() }} marks={marks} preview={preview} />
+          )}
+          {!live && (
+            <div className="ptimes">
+              <span data-testid="player-elapsed">{fmtDuration(position)}</span>
+              <span role="button" tabIndex={-1} className="ptime" data-testid="player-time" onClick={() => setPrefs({ remaining: !prefs.remaining })}
+                aria-label={`${fmtDuration(position)} of ${fmtDuration(duration)}. Select to show ${prefs.remaining ? 'the length' : 'the time remaining'}.`}
+                title={prefs.remaining ? 'Show the length' : 'Show the time remaining'}>
+                {prefs.remaining ? `−${fmtDuration(Math.max(0, duration - position))}` : fmtDuration(duration)}
+              </span>
+            </div>
           )}
 
-          <FocusGroup focusKey="pb" className="pbar" data-testid="player-bar">
+          <FocusGroup focusKey="pb" className="pbar" data-testid="player-bar" preferred="pb:play">
             <div className="pbar-row">
-              <div className="pbar-group">
-                <Button focusKey="pb:play" primary iconOnly icon={paused ? 'play' : 'pause'} label={paused ? 'Play' : 'Pause'} title={`${paused ? 'Play' : 'Pause'} (Space)`} onEnter={playFromBar} />
-                {!live && <Button focusKey="pb:back10" disabled={!canSeek} ghost iconOnly icon="back10" label="Back 10 seconds" title="Back 10 seconds (←)" onEnter={() => seek.step(-1)} />}
-                {!live && <Button focusKey="pb:fwd10" disabled={!canSeek} ghost iconOnly icon="fwd10" label="Forward 10 seconds" title="Forward 10 seconds (→)" onEnter={() => seek.step(1)} />}
+              <div className="pbar-group pbar-start">
+                <GlassButton focusKey="pb:audio" icon="audio" label="Audio" title="Audio (A)" onEnter={() => openMenu('audio')} testId="player-audio-btn" />
+                {!phone && <span className="pbar-value truncate" data-testid="player-audio-value">{audioValue}</span>}
+                <GlassButton focusKey="pb:subs" icon="cc" pressed={tr.subs.some((t) => t.active)} label="Subtitles" title="Subtitles (C turns them on or off)" onEnter={() => openMenu('subs')} testId="player-subs-btn" />
+                {!phone && <span className="pbar-value truncate" data-testid="player-subs-value">{subsValue}</span>}
+              </div>
+              <div className="pbar-group pbar-center">
+                {episodic && <GlassButton focusKey="pb:prev" icon="prev" label="Previous episode" disabled={!prevEp} onEnter={goPrevious} testId="player-prev" />}
+                {!live && <GlassButton focusKey="pb:back10" disabled={!canSeek} icon="back10" label="Back 10 seconds" title="Back 10 seconds (←)" onEnter={() => seek.step(-1)} />}
+                {zappable && <GlassButton focusKey="pb:ch-" icon="prev" label="Channel down" title="Channel down (↓)" onEnter={() => zap(-1)} />}
+                <GlassButton focusKey="pb:play" big icon={paused ? 'play' : 'pause'} label={paused ? 'Play' : 'Pause'} title={`${paused ? 'Play' : 'Pause'} (Space)`} onEnter={playFromBar} testId="player-play" />
+                {zappable && <GlassButton focusKey="pb:ch+" icon="next" label="Channel up" title="Channel up (↑)" onEnter={() => zap(1)} />}
+                {!live && <GlassButton focusKey="pb:fwd30" disabled={!canSeek} icon="fwd30" label="Forward 30 seconds" title="Forward 30 seconds (Shift+→)" onEnter={() => seek.step(1, { stepS: 30 })} />}
+                {episodic && <GlassButton focusKey="pb:next" icon="next" label="Next episode" disabled={!nextEp} onEnter={() => goNext('manual')} testId="player-next" />}
+              </div>
+              <div className="pbar-group pbar-end">
                 <div className="pvol">
-                  <Button focusKey="pb:mute" ghost iconOnly icon={prefs.muted || prefs.volume === 0 ? 'mute' : 'audio'} pressed={prefs.muted} label={prefs.muted ? 'Unmute' : 'Mute'} title={`${prefs.muted ? 'Unmute' : 'Mute'} (M)`} onEnter={toggleMute} testId="player-mute" />
+                  <GlassButton focusKey="pb:mute" icon={prefs.muted || prefs.volume === 0 ? 'mute' : 'volume'} pressed={prefs.muted} label={prefs.muted ? 'Unmute' : 'Mute'} title={`${prefs.muted ? 'Unmute' : 'Mute'} (M)`} onEnter={toggleMute} testId="player-mute" />
                   <input type="range" className="pvol-slider" min={0} max={100} step={5} tabIndex={-1} aria-label="Volume" data-testid="player-volume"
                     value={prefs.muted ? 0 : Math.round(prefs.volume * 100)} onChange={(e) => changeVolume(Number(e.target.value) / 100)}
                     // The arrows are seek and volume keys, not this slider's: give the keyboard back once the mouse lets go.
                     onPointerUp={(e) => e.currentTarget.blur()} />
                 </div>
-                {!live && (
-                  <Button focusKey="pb:time" ghost className="ptime" testId="player-time" onEnter={() => setPrefs({ remaining: !prefs.remaining })}
-                    label={`${fmtDuration(position)} of ${fmtDuration(duration)}. Select to show ${prefs.remaining ? 'the length' : 'the time remaining'}.`}>
-                    {fmtDuration(position)} <span>/ {prefs.remaining ? `−${fmtDuration(Math.max(0, duration - position))}` : fmtDuration(duration)}</span>
-                  </Button>
-                )}
-                {zappable && <Button focusKey="pb:ch-" ghost iconOnly icon="down" label="Channel down" title="Channel down (↓)" onEnter={() => zap(-1)} />}
-                {zappable && <Button focusKey="pb:ch+" ghost iconOnly icon="up" label="Channel up" title="Channel up (↑)" onEnter={() => zap(1)} />}
-                {zappable && <Button focusKey="pb:list" ghost icon="tv" onEnter={() => setOverlay('list')} testId="player-list-btn" {...(phone ? { iconOnly: true, label: 'Channels', title: 'Channels' } : { children: 'Channels' })} />}
-              </div>
-              <div className="pbar-group pbar-end">
-                <Button focusKey="pb:subs" ghost iconOnly icon="cc" pressed={tr.subs.some((t) => t.active)} label="Subtitles" title="Subtitles (C turns them on or off)" onEnter={() => openMenu('subs')} testId="player-subs-btn" />
-                <Button focusKey="pb:audio" ghost iconOnly icon="tracks" label="Audio" title="Audio (A)" onEnter={() => openMenu('audio')} testId="player-audio-btn" />
-                <Button focusKey="pb:menu" ghost iconOnly icon="settings" label="Settings" title="Settings (S)" onEnter={() => openMenu('settings')} testId="player-menu-btn" />
-                {!(phone && room) && <Button focusKey="pb:info" ghost iconOnly icon="info" pressed={info} label="Stream information" title="Stream information (I)" onEnter={() => setInfo((shown) => !shown)} testId="player-info-btn" />}
-                {!(phone && room) && !tv && <Button focusKey="pb:pip" ghost iconOnly icon="pip" label="Picture in picture" title="Picture in picture (P)" onEnter={() => void pip()} testId="player-pip" />}
-                {!tv && <Button focusKey="pb:fs" ghost iconOnly icon="fullscreen" label="Full screen" title="Full screen (F)" onEnter={fullscreen} />}
+                {zappable && <GlassButton focusKey="pb:list" icon="episodes" label="Channels" title="Channels (OK)" onEnter={() => setOverlay('list')} testId="player-list-btn" />}
+                {mayTogether && <GlassButton focusKey="pb:together" icon="people" disabled={startingRoom} label="Watch together" onEnter={() => void startTogether()} testId="player-together-btn" />}
+                {!tv && <GlassButton focusKey="pb:fs" icon="fullscreen" label="Full screen" title="Full screen (F)" onEnter={fullscreen} />}
+                <GlassButton focusKey="pb:menu" icon="gear" label="Settings" title="Settings (S)" onEnter={() => openMenu('settings')} testId="player-menu-btn" />
                 {roomCtl?.bar}
               </div>
             </div>
@@ -741,7 +958,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
                 {zappable && !pb.bufferWindow && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
                   const next = new URLSearchParams(sp); next.delete("catchup");
                   if (at) next.set("rewind", at); else next.delete("rewind");
-                  navigate(`/play/${encodeURIComponent(id)}?${next}`, { replace: true });
+                  replacePlay(`/play/${encodeURIComponent(id)}?${next}`);
                 }} />}
               </div>
             )}
@@ -749,13 +966,12 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
           {padRecent && showChrome && <PadHintRow hints={padHints({ live, zappable, room: !!room, canSeek, paused })} />}
         </div>
       </div>
-
       <ChannelAudioPrompt audio={audio} onCancel={cancelPending} onChoose={(option, explicit) => {
         const next = new URLSearchParams(sp)
         next.set('variant', option.variant_id)
         if (explicit) next.set('audio_choice', grantAudioConsent(id, option.variant_id, { sourceId, catchupProgrammeId: catchup, rewindAt }))
         else next.delete('audio_choice')
-        navigate(`/play/${encodeURIComponent(id)}?${next}`, { replace: true })
+        replacePlay(`/play/${encodeURIComponent(id)}?${next}`)
       }} />
 
       {/* channel OSD */}
@@ -822,7 +1038,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
                   {ASPECTS.map((a) => <Chip key={a.id} focusKey={first(`pm:asp:${a.id}`)} pressed={aspect === a.id} onEnter={() => setAspect(a.id)}>{a.label}</Chip>)}
                 </MenuSection>
               )}
-              {shows('settings') && !room && !catchup && !rewindAt && !isRecording && mayStartRoom && (
+              {shows('settings') && mayTogether && (
                 <MenuSection title="Watch together">
                   <Button focusKey="pm:together" icon="people" disabled={startingRoom} onEnter={() => void startTogether()} testId="player-together">{startingRoom ? 'Starting a room…' : 'Watch together'}</Button>
                   <span className="muted label pmenu-note">Start a room for this {isChannel ? 'channel' : 'title'} and invite others with a link or code.</span>
@@ -835,8 +1051,8 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
               )}
               {shows('settings') && (
                 <MenuSection title="More">
-                  {phone && room && <Button focusKey="pm:info" icon="info" onEnter={() => { closeOverlay(); setInfo(true) }}>Stream information</Button>}
-                  {phone && room && <Button focusKey="pm:pip" icon="pip" onEnter={() => { closeOverlay(); void pip() }}>Picture in picture</Button>}
+                  <Button focusKey="pm:info" icon="info" onEnter={() => { closeOverlay(); setInfo(true) }} testId="player-info-btn">Stream information</Button>
+                  {!tv && <Button focusKey="pm:pip" icon="pip" onEnter={() => { closeOverlay(); void pip() }} testId="player-pip">Picture in picture</Button>}
                   <Button focusKey="pm:keys" icon="list" onEnter={() => { closeOverlay(); setHelp(true) }} testId="player-keys-btn">{helpTitle()}</Button>
                 </MenuSection>
               )}
@@ -865,6 +1081,7 @@ export function Player({ room, onRejoin }: { room?: RoomSession; onRejoin?: () =
           </FocusGroup>
         </div>
       )}
+      </>}
     </div>
   )
 }

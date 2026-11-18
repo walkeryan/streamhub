@@ -222,7 +222,7 @@ test('stored preferences survive anything a browser might hand back', () => {
   assert.deepEqual(parsePrefs('not json'), DEFAULT_PREFS)
   assert.deepEqual(parsePrefs('[1,2]'), DEFAULT_PREFS)
   assert.deepEqual(parsePrefs(JSON.stringify({ volume: 7, muted: 'yes', speed: 1.3, remaining: true, subtitle: 'English' })), { volume: 1, muted: false, speed: 1.25, remaining: true, subtitle: 'English' })
-  assert.deepEqual(parsePrefs(JSON.stringify({ volume: 0.35, muted: true, speed: 0.1 })), { volume: 0.35, muted: true, speed: 0.5, remaining: false, subtitle: null })
+  assert.deepEqual(parsePrefs(JSON.stringify({ volume: 0.35, muted: true, speed: 0.1 })), { volume: 0.35, muted: true, speed: 0.5, remaining: true, subtitle: null })
 })
 
 // ---- stream information ----

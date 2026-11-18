@@ -344,11 +344,13 @@ class CatalogService:
     async def _lazy_store(self, source_id: str, items: list[CatalogItem]) -> None:
         await upsert_titles(self._db, [item_row(source_id, it, LAZY_GEN) for it in items])
 
-    async def children_rows(self, row: Title) -> list[Title]:
-        """Seasons/episodes for a show/series/season, fetched lazily from the adapter and stored."""
-        src = await self.sources.get(row.source_id)
-        prov = self.sources.provider(src)
-        if isinstance(prov, DetailProvider):
+    async def children_rows(self, row: Title, *, fetch: bool = True) -> list[Title]:
+        """Seasons/episodes for a show/series/season, fetched lazily from the adapter and stored.
+
+        ``fetch=False`` answers from what is stored already, without asking the source."""
+        src = await self.sources.get(row.source_id) if fetch else None
+        prov = self.sources.provider(src) if src is not None else None
+        if prov is not None and isinstance(prov, DetailProvider):
             try:
                 kids = await prov.children(row_to_item(row))
                 for kid in kids:

@@ -3,7 +3,8 @@ import { currentAccessToken } from './api/client'
 import { hasAudioConsent } from './player/audioConsent'
 import { useSession } from './store/session'
 import { useUi } from './store/ui'
-import { bridgeOf, shellViewport, titlePlay, type ShellPlay, type StreamHubTVBridge } from './shellProtocol'
+import { useDock } from './player/dock'
+import { bridgeOf, miniPlayerCommand, parseShellMessage, shellViewport, titlePlay, type MiniPlayerCommandName, type ShellPlay, type StreamHubTVBridge } from './shellProtocol'
 
 /*
  * Shell mode: this web app inside the Android TV app (see shellProtocol.ts for the bridge). Every
@@ -35,13 +36,24 @@ export function handOffUrl(to: string): boolean {
   return true
 }
 
+/** Drives the TV's player while it is in picture-in-picture (the mini player bar). False when the TV did not take it. */
+export function sendMiniPlayerCommand(command: MiniPlayerCommandName, deltaMs?: number): boolean {
+  const bridge = shellBridge()
+  if (!bridge || typeof bridge.message !== 'function') return false
+  try { return bridge.message(miniPlayerCommand(command, deltaMs)) !== false } catch { return false }
+}
+
 /** What Back does in the page, registered by nav/back.tsx (the same handling as Escape and Backspace). */
 let back: (() => boolean) | null = null
 export function setShellBack(handler: (() => boolean) | null): void { back = handler }
 
 declare global {
   interface Window {
-    streamhubShell?: { back: () => boolean; token: (id: string, rejected: string | null) => void; playbackEnded: () => void }
+    streamhubShell?: {
+      back: () => boolean; token: (id: string, rejected: string | null) => void; playbackEnded: () => void
+      /** A TV → page message envelope (shellProtocol.ts parseShellMessage). True when it was understood. */
+      message: (json: unknown) => boolean
+    }
   }
 }
 
@@ -68,7 +80,14 @@ export function installShell(): void {
       }, () => bridge.deliverToken(String(id), 'null'))
     },
     // The TV's player closed: progress on tiles and rows is read again; screen and focus are untouched.
-    playbackEnded: () => { void queryClient.invalidateQueries() },
+    // A mini player bar it had is gone with it.
+    playbackEnded: () => { useDock.getState().setShell(null); void queryClient.invalidateQueries() },
+    message: (json) => {
+      const m = parseShellMessage(json)
+      if (!m) return false
+      if (m.kind === 'mini_player') useDock.getState().setShell(m.state)
+      return true
+    },
   }
 
   // The TV signs in through its own pairing screen: a page with no session hands back to it.
