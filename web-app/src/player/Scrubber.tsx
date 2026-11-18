@@ -27,6 +27,10 @@ export function Scrubber(p: {
   onSeek: (titleSeconds: number) => void
   onStep: (dir: -1 | 1) => void
   onEnter: () => void
+  /** The intro and credits ranges, marked on the bar (title seconds). */
+  marks?: ReadonlyArray<{ type: string; from: number; to: number }>
+  /** A scrub preview's address for a place in the title, when the server has previews for it. */
+  preview?: ((titleSeconds: number) => string) | null
 }) {
   const track = useRef<HTMLDivElement>(null)
   // Fractions of the bar: where the pointer rests, and where it is being dragged to.
@@ -73,6 +77,9 @@ export function Scrubber(p: {
         }}
         onPointerCancel={() => { dragging.current = false; setDrag(null); setHover(null) }}
         onPointerLeave={() => { if (!dragging.current) setHover(null) }}>
+        {p.duration > 0 && p.marks?.map((m, i) => (
+          <i key={`m${i}`} className="scrub-mark" data-type={m.type} data-testid="scrub-mark" style={{ left: pct(m.from, p.duration), width: pct(Math.max(0, m.to - m.from), p.duration) }} />
+        ))}
         <div className="scrub-rail">
           {!p.busy && p.loaded.map(([from, to], i) => (
             <i key={i} className="scrub-loaded" data-testid="scrub-loaded" style={{ left: pct(from, p.duration), width: pct(Math.max(0, to - from), p.duration) }} />
@@ -82,8 +89,9 @@ export function Scrubber(p: {
         {usable && <span className="scrub-thumb" data-testid="scrub-thumb" data-busy={p.busy} style={{ left: pct(p.position, p.duration) }} />}
         {usable && ghost !== null && <span className="scrub-thumb scrub-ghost" data-testid="scrub-ghost" style={{ left: pct(ghost, p.duration) }} />}
         {usable && bubble !== null && (
-          <span className="scrub-bubble" data-testid="scrub-bubble" style={{ left: pct(bubble, p.duration), transform: `translateX(-${pct(bubble, p.duration)})` }}>
-            {fmtDuration(bubble)}{drag === null && p.target !== null && p.hint ? <b>{p.hint}</b> : null}
+          <span className="scrub-bubble" data-testid="scrub-bubble" data-preview={!!p.preview} style={{ left: pct(bubble, p.duration), transform: `translateX(-${pct(bubble, p.duration)})` }}>
+            {p.preview && <img className="scrub-preview" src={p.preview(bubble)} alt="" data-testid="scrub-preview" onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} onLoad={(e) => { e.currentTarget.style.visibility = '' }} />}
+            <span className="scrub-time">{fmtDuration(bubble)}{drag === null && p.target !== null && p.hint ? <b>{p.hint}</b> : null}</span>
           </span>
         )}
       </div>
