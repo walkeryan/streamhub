@@ -411,7 +411,7 @@ fun UpNextCard(model: UpNextCardModel, onPlay: () -> Unit, modifier: Modifier = 
                         Image(PlayerIcons.Play, null, Modifier.size(11.dp), colorFilter = ColorFilter.tint(PlayerPalette.Ink))
                         Text("Play next", color = PlayerPalette.Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
-                    Text("OK", color = PlayerPalette.Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
+                    Text("Press OK", color = PlayerPalette.Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
                 }
             }
         }
