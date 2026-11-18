@@ -94,3 +94,20 @@ async def test_one_copy_is_unchanged_and_no_seasons_keeps_its_episodes() -> None
             }
         ],
     )
+
+
+async def test_an_episode_tile_shows_its_own_picture_not_the_series_backdrop() -> None:
+    only = show("lib", "l")
+    still = episode("lib", "l", 1, 1)
+    still.poster, still.backdrop = "still-1.jpg", "series-art.jpg"
+    bare = episode("lib", "l", 1, 2)
+    bare.backdrop = "series-art.jpg"
+    service = catalog({("lib", "l"): [still, bare]})
+    ctx: Any = SimpleNamespace(
+        title_tile=lambda row: {"title": row.title, "poster": row.poster, "backdrop": row.backdrop}
+    )
+    _, episodes = await service._merged_seasons([only], ctx)
+    assert [(e["poster"], e["backdrop"]) for e in episodes] == [
+        ("still-1.jpg", "still-1.jpg"),
+        (None, "series-art.jpg"),  # no picture of its own: the series art is better than nothing
+    ]

@@ -597,6 +597,10 @@ class CatalogService:
             t["title"] = ids.episode_display_title(k.title, k.episode_number)
             t["episode_number"] = k.episode_number
             t["runtime_min"] = (k.duration_ms // 60000) if k.duration_ms else None
+            # Its own picture, not the series' backdrop: a library server gives every episode the show's
+            # background art too, and wide tiles prefer a backdrop, so each episode looked the same.
+            if t.get("poster"):
+                t["backdrop"] = t["poster"]
         return t
 
     async def _merged_seasons(
