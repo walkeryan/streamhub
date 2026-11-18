@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useDeleteRecording, useDeleteRecordingRule, usePatchRecordingRule, useRecordingRules, useRecordings } from '../api/hooks'
 import type { Recording, RecordingRule } from '../api/types'
-import { Button, Chip, Empty, ErrorState, GlassIconButton, GlassPanel, Icon, Modal, OverflowMenu, PageHeader, SectionHeader, Skeleton } from '../ds'
+import { Button, Chip, Empty, ErrorState, GlassIconButton, Icon, Modal, OverflowMenu, PageHeader, SectionHeader, Skeleton } from '../ds'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
@@ -94,12 +94,12 @@ export function Recordings() {
   const tabbed = allowed && !!list.data?.enabled && !list.error
   if (!allowed && !isAdmin) body = barred
   else if (list.data && !list.data.enabled) body = isAdmin ? (
-    <div role="status" data-testid="recordings-off"><GlassPanel className="rec-off">
+    <div className="ds-panel rec-off" role="status" data-testid="recordings-off">
       <span className="ds-empty-icon" aria-hidden="true"><Icon name="record" /></span>
       <SectionHeader title="Recording is not set up on this server" />
       <p className="muted">Nothing can be recorded until the server has a folder to record into. Set RECORDINGS_DIR to a writable folder on the library disk and restart the server; Record then appears on the guide.</p>
       <FocusGroup className="lib-actions"><Button focusKey="rec:guide" primary icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button></FocusGroup>
-    </GlassPanel></div>
+    </div>
   ) : <Empty icon="record" title="Recording is not available" hint="Recording has not been set up on this server." />
   else if (!allowed) body = barred
   else if (list.error) body = <ErrorState error={list.error} onRetry={() => void list.refetch()} />
