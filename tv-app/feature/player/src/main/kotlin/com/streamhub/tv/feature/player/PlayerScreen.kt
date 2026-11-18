@@ -29,6 +29,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.animation.core.animateDpAsState
+import com.streamhub.tv.core.ui.components.ChoiceListDialog
+import com.streamhub.tv.core.ui.components.ListChoice
 import com.streamhub.tv.core.player.TrackOption
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
@@ -42,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Brush
@@ -121,13 +126,25 @@ private class OkPress {
  *         short-press OK action fires on key *up* and a hold opens the menu.
  *  Room:  play, pause and seek are the room's (everyone moves together); a live room does not zap and
  *         OK plays/pauses; Back asks "Leave the room?" before leaving
+ *  Skip:  while the controls are hidden OK activates the visible Skip intro / Skip credits (or the Up next
+ *         card's Play next); Back dismisses the Up next card ("Keep watching")
+ *  Mini:  Back while a title plays (and the minimise button) shrinks the player into picture-in-picture
+ *         when [onMinimise] is given; [inPip] shows the picture alone
  */
 @Composable
-fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
+fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMinimise: (() -> Unit)? = null, inPip: Boolean = false) {
     val s by vm.state.collectAsStateWithLifecycle()
     val ps by vm.player.state.collectAsStateWithLifecycle()
     val together by vm.watchTogether.collectAsStateWithLifecycle()
+    if (inPip) {
+        // Picture-in-picture: the picture alone; the web app's bar carries the controls.
+        Box(Modifier.fillMaxSize().background(Color.Black)) { VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect) }
+        return
+    }
     val rootFocus = remember { FocusRequester() }
+    val timelineFocus = remember { FocusRequester() }
+    val skipFocus = remember { FocusRequester() }
+    val cardFocus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     var lastBackAt by remember { mutableLongStateOf(0L) }
     var pendingExit by remember { mutableStateOf<Job?>(null) }
@@ -139,8 +156,9 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
 
     LaunchedEffect(Unit) { vm.exit.collect { onExit() } }
     LaunchedEffect(ps.audioBlocked) {if(ps.audioBlocked) vm.openMenu()}
-    LaunchedEffect(s.overlay) {
-        if (s.overlay == Overlay.None || s.overlay == Overlay.Osd) runCatching { rootFocus.requestFocus() }
+    // Focus comes home when an overlay closes, and when a skip button or the card that held it goes away.
+    LaunchedEffect(s.overlay, s.skipIntroTo != null, s.skipCredits, s.upNextCard != null, s.stillWatching, s.picker) {
+        if ((s.overlay == Overlay.None || s.overlay == Overlay.Osd) && !s.stillWatching && s.picker == null) runCatching { rootFocus.requestFocus() }
     }
 
     fun perform(command: PlayerCommand) {
@@ -156,8 +174,11 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             PlayerCommand.TogglePlayPause -> { vm.togglePlayPause(); vm.showOsd() }
             PlayerCommand.Play -> { vm.resumePlayback(); vm.showOsd() }
             PlayerCommand.Pause -> { vm.pausePlayback(); vm.showOsd() }
-            is PlayerCommand.Seek -> { vm.scrubBy(command.deltaMs); vm.showOsd() }
+            // Seeking from the remote puts focus on the timeline, so the next Left/Right keeps seeking.
+            is PlayerCommand.Seek -> { vm.scrubBy(command.deltaMs); vm.showOsd(ControlsFocus.Timeline) }
             PlayerCommand.LastChannel -> vm.lastChannel()
+            PlayerCommand.NextItem -> vm.playNextEpisode()
+            PlayerCommand.PreviousItem -> vm.playPreviousEpisode()
         }
     }
 
@@ -171,12 +192,15 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                 val menuOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu || s.overlay == Overlay.Rewind || s.overlay == Overlay.Buffer
                 val controls = s.overlay == Overlay.Controls
                 val live = s.live && !s.bufferTimeshift
-                // Every press counts as activity for the control row's 5 s idle timer.
-                if (e.type == KeyEventType.KeyDown) vm.touchControls()
+                // Every press counts as activity for the control row's 5 s idle timer, and shows somebody is
+                // watching (Still watching? counts autoplays with no press between).
+                if (e.type == KeyEventType.KeyDown) { vm.touchControls(); vm.userInteracted() }
                 fun resolve(longPress: Boolean = false) = PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress, inRoom)
                 if (resolve() == PlayerCommand.Back) {
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                     when {
+                        // "Keep watching": the card goes until the very end.
+                        s.upNextCard != null -> { vm.dismissUpNext(); if (controls) vm.hideOverlay() }
                         menuOpen || controls -> vm.hideOverlay()
                         // Leaving a room is leaving other people: ask first.
                         inRoom -> vm.askLeaveRoom()
@@ -192,6 +216,8 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                                 pendingExit = scope.launch { delay(PlayerViewModel.BACK_DOUBLE_MS); backHint = false; onExit() }
                             }
                         }
+                        // A title that is playing shrinks into the mini player; the web app shows underneath.
+                        onMinimise != null && !s.live && !inRoom && s.descriptor != null && vm.player.wantsToPlay -> onMinimise()
                         else -> onExit()
                     }
                     return@onPreviewKeyEvent true
@@ -218,6 +244,8 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
                                 // remotes that send no auto-repeat while held
                                 wasLong -> perform(resolve(longPress = true))
                                 vm.commitNumber() -> Unit
+                                // Netflix-style: OK takes the skip button (or the card) that is showing.
+                                !s.live && vm.activateVisibleSkip() -> Unit
                                 else -> perform(resolve())
                             }
                         }
@@ -261,6 +289,12 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
         }
         // "Watch together" from the menu: the new room's code and QR code; Start moves this playback into it.
         together?.let { WatchTogetherDialog(it, onStart = vm::startTogetherRoom, onRetry = vm::retryTogetherRoom, onCancel = vm::cancelTogetherRoom, carryOn = true) }
+        if (s.stillWatching) {
+            Dialog(onDismissRequest = vm::stillWatchingBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                StillWatchingPanel(s.upNext.next, onContinue = vm::stillWatchingContinue, onBack = vm::stillWatchingBack)
+            }
+        }
+        s.picker?.let { TrackPickerDialog(vm, it, ps) }
         if (s.leaveAsk) LeaveRoomDialog(isHost = room?.isHost == true, onLeave = vm::leaveRoom, onEnd = vm::endRoom, onStay = vm::stayInRoom)
         // The room is over: say why, then back to the title it was opened from.
         s.roomEnded?.let { ErrorDialog(it, onRetry = onExit, onDismiss = onExit, dismissLabel = "Back") }
@@ -278,9 +312,12 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
         AnimatedVisibility(s.overlay == Overlay.Osd || s.numberEntry.isNotEmpty(), enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
             Osd(s, ps)
         }
-        AnimatedVisibility(s.overlay == Overlay.Controls && s.numberEntry.isEmpty(), enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomCenter)) {
-            FilmControls(vm, s, ps)
+        val controlsUp = s.overlay == Overlay.Controls && s.numberEntry.isEmpty()
+        AnimatedVisibility(controlsUp, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+            val links = ControlsLinks(above = when { s.skipIntroTo != null || s.skipCredits -> skipFocus; s.upNextCard != null -> cardFocus; else -> null })
+            VodControls(controlsModel(s, ps, vm), controlsActions(vm, s, onExit, onMinimise), s.controlsFocus, links, timelineFocus)
         }
+        SkipAndUpNext(vm, s, controlsUp, skipFocus, cardFocus, timelineFocus, Modifier.align(Alignment.BottomEnd))
         if (s.numberEntry.isNotEmpty()) {
             ChannelNumberOverlay(
                 s.numberEntry, ChannelNumberEntry.match(s.numberEntry, s.channels) { it.number }?.name,
@@ -371,94 +408,149 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
     }
 }
 
+/** The control overlay's view of the screen (titles, timeline, labels, the lines worth saying). */
+private fun controlsModel(s: PlayerScreenState, ps: PlayerUiState, vm: PlayerViewModel): ControlsModel {
+    val d = s.descriptor
+    val (kicker, title) = d?.let(::titleBlock) ?: (null to "")
+    val room = s.room
+    val position = s.scrubTargetMs ?: s.titlePositionMs(ps.positionMs)
+    val duration = s.titleDurationMs(ps.durationMs)
+    val seekable = s.canSeek(ps.seekable)
+    val plan = s.upNext
+    val seeking = s.scrubTargetMs != null
+    val notes = listOfNotNull(
+        when {
+            room != null && room.controlsLocked && !room.isHost -> "Only the host can control playback"
+            room != null -> "Play, pause and seek move everyone in the room"
+            s.bufferTimeshift -> "Buffered history · Go Live is in Settings"
+            d?.archiveStart != null -> "Provider archive · Go Live is in Settings"
+            !seekable -> "This stream can't be seeked"
+            else -> null
+        },
+        ps.audioNotice,
+        s.sleepEndsAt?.let { "Sleep in ${((it - System.currentTimeMillis()) / 60_000).coerceAtLeast(0)} min" },
+    )
+    val audio = ps.audioTracks.firstOrNull { it.selected }?.label?.let(::shortTrackLabel) ?: "Audio"
+    val subtitles = if (ps.subtitlesOff) "Off" else ps.textTracks.firstOrNull { it.selected }?.label?.let(::shortTrackLabel) ?: "Off"
+    return ControlsModel(
+        kicker = kicker,
+        title = title,
+        positionMs = position,
+        bufferedMs = s.titlePositionMs(ps.bufferedMs),
+        durationMs = duration,
+        seeking = seeking,
+        thumbnailUrl = if (seeking) thumbnailUrl(d?.thumbnails, position, vm.serverUrl) else null,
+        markers = d?.markers.orEmpty(),
+        // In a room the button says what the room is doing: this player follows a moment later.
+        playing = room?.clock?.playing ?: ps.isPlaying,
+        seekable = seekable,
+        episodeButtons = plan.kind != UpNextFlow.Kind.None && (plan.next != null || plan.previous != null),
+        hasPrevious = plan.previous != null,
+        hasNext = plan.next != null,
+        audioLabel = audio,
+        subtitleLabel = subtitles,
+        notes = notes,
+    )
+}
+
+private fun controlsActions(vm: PlayerViewModel, s: PlayerScreenState, onExit: () -> Unit, onMinimise: (() -> Unit)?) = ControlsActions(
+    onClose = onExit,
+    onScrub = vm::scrubBy,
+    onTogglePlay = vm::togglePlayPause,
+    onBack10 = { vm.scrubBy(-PlayerKeyMap.SEEK_STEP_MS) },
+    onForward30 = { vm.scrubBy(PlayerKeyMap.MEDIA_SEEK_STEP_MS) },
+    onPrevious = vm::playPreviousEpisode,
+    onNext = vm::playNextEpisode,
+    onAudio = { vm.openPicker(TrackPicker.Audio) },
+    onSubtitles = { vm.openPicker(TrackPicker.Subtitles) },
+    // A room for whatever is playing, with this TV as its host, where the web player offers one.
+    onWatchTogether = if (vm.roomStart(s) != null) vm::startWatchTogether else null,
+    // A room is other people: it is left on purpose, never shrunk away.
+    onMinimise = onMinimise?.takeIf { s.roomCode == null },
+    onSettings = vm::openMenu,
+)
+
 /**
- * Film control row: the scrubber has focus first, the buttons sit one Down below it. Everything a
- * film needs is reachable with the D-pad and Select; nothing here depends on a media or Menu key.
+ * Skip intro / Skip credits and the Up next card, bottom-right. They sit above the timeline while
+ * the controls are up (and can be focused from it with Up) and drop to the bottom when they are not,
+ * where OK takes them.
  */
 @Composable
-private fun FilmControls(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiState) {
-    val t = LocalThemeTokens.current
-    val d = s.descriptor
-    val scrubFocus = remember { FocusRequester() }
-    val room = s.room
-    // In a room the button says what the room is doing: this player follows a moment later.
-    val playing = room?.clock?.playing ?: ps.isPlaying
-    val seekable = s.canSeek(ps.seekable)
-    LaunchedEffect(Unit) { withFrameNanos { }; runCatching { scrubFocus.requestFocus() } }
+private fun SkipAndUpNext(vm: PlayerViewModel, s: PlayerScreenState, controlsUp: Boolean, skipFocus: FocusRequester, cardFocus: FocusRequester, timelineFocus: FocusRequester, modifier: Modifier) {
+    val skipLabel = when {
+        s.skipIntroTo != null -> "Skip intro"
+        s.skipCredits -> "Skip credits"
+        else -> null
+    }
+    val card = s.upNextCard
+    if (skipLabel == null && card == null) return
+    val bottom by animateDpAsState(if (controlsUp) 185.dp else 33.dp, label = "skipLift")
     Column(
-        Modifier.fillMaxWidth()
-            .background(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.92f)))
-            .padding(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY)
-            .padding(top = 64.dp)
-            .focusGroup(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier.padding(end = Tokens.Canvas.SafeMarginX, bottom = bottom),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(d?.title.orEmpty(), style = MaterialTheme.typography.headlineSmall, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        d?.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        Scrubber(
-            positionMs = s.scrubTargetMs ?: s.titlePositionMs(ps.positionMs),
-            durationMs = s.titleDurationMs(ps.durationMs),
-            playing = playing,
-            seekable = seekable,
-            onSeek = vm::scrubBy,
-            onToggle = vm::togglePlayPause,
-            modifier = Modifier.focusRequester(scrubFocus),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ShButton(if (playing) "Pause" else "Play", vm::togglePlayPause)
-            ShButton("−10 s", { vm.scrubBy(-PlayerKeyMap.SEEK_STEP_MS) }, enabled = seekable)
-            ShButton("+10 s", { vm.scrubBy(PlayerKeyMap.SEEK_STEP_MS) }, enabled = seekable)
-            ShButton("Start over", vm::startOver, enabled = seekable)
-            ShButton("Audio & subtitles", vm::openMenu)
+        AnimatedVisibility(card != null, enter = fadeIn() + slideInHorizontally { it / 3 }, exit = fadeOut()) {
+            card?.let {
+                UpNextCard(
+                    it, onPlay = vm::playNextEpisode,
+                    Modifier.focusRequester(cardFocus).focusProperties {
+                        canFocus = controlsUp
+                        down = if (skipLabel != null) skipFocus else timelineFocus
+                    },
+                )
+            }
         }
-        Text(
-            when {
-                room != null && room.controlsLocked && !room.isHost -> "Only the host can control playback"
-                room != null -> "Play, pause and seek move everyone in the room · Back to leave"
-                s.bufferTimeshift -> "Buffered history · Go Live is under Audio & subtitles"
-                d?.archiveStart != null -> "Provider archive · Go Live is under Audio & subtitles"
-                !seekable -> "This stream can't be seeked"
-                else -> "◀ ▶ seek, hold to go faster · Select play/pause"
-            },
-            style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f),
-        )
-        ps.audioNotice?.let { Text(it, color = t.textMuted, style = MaterialTheme.typography.labelMedium) }
-        s.sleepEndsAt?.let {
-            val min = ((it - System.currentTimeMillis()) / 60_000).coerceAtLeast(0)
-            Text("Sleep in $min min", style = MaterialTheme.typography.labelMedium, color = t.accent)
+        AnimatedVisibility(skipLabel != null, enter = fadeIn(), exit = fadeOut()) {
+            SkipButton(
+                skipLabel ?: "", onClick = { if (s.skipIntroTo != null) vm.skipIntro() else vm.skipCredits() },
+                Modifier.focusRequester(skipFocus).focusProperties {
+                    canFocus = controlsUp
+                    down = timelineFocus
+                    if (card != null) up = cardFocus
+                },
+            )
         }
     }
 }
 
-/** Focusable progress bar: Left/Right seek (faster while held), Select toggles play/pause. */
+/** The audio or subtitle list from the control row. Tracks this TV cannot decode are listed, not choosable. */
 @Composable
-private fun Scrubber(
-    positionMs: Long, durationMs: Long, playing: Boolean, seekable: Boolean,
-    onSeek: (Long) -> Unit, onToggle: () -> Unit, modifier: Modifier = Modifier,
-) {
-    FocusSurface(
-        onClick = onToggle,
-        modifier = modifier.fillMaxWidth().height(44.dp).onPreviewKeyEvent { e ->
-            val direction = when (e.key) { Key.DirectionLeft -> -1; Key.DirectionRight -> 1; else -> 0 }
-            if (direction == 0) false else {
-                if (e.type == KeyEventType.KeyDown && seekable) onSeek(direction * PlayerKeyMap.seekStepMs(e.nativeKeyEvent.repeatCount))
-                // Consumed even at either end of the film: there is nothing beside the scrubber to move to.
-                true
-            }
-        },
-        containerColor = Color.Transparent,
-        focusedContainerColor = Color.White.copy(alpha = 0.14f),
-        scaleOnFocus = false,
-        glow = false,
-    ) { focused ->
-        Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(if (playing) "▶" else "❚❚", color = Color.White, style = MaterialTheme.typography.labelLarge)
-            Text(fmt(positionMs), color = Color.White, style = MaterialTheme.typography.labelLarge)
-            ProgressLine(if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f, Modifier.weight(1f), height = if (focused) 8.dp else 4.dp)
-            if (durationMs > 0) Text("-" + fmt((durationMs - positionMs).coerceAtLeast(0)), color = Color.White, style = MaterialTheme.typography.labelLarge)
+private fun TrackPickerDialog(vm: PlayerViewModel, picker: TrackPicker, ps: PlayerUiState) {
+    when (picker) {
+        TrackPicker.Audio -> {
+            val tracks = ps.audioTracks
+            ChoiceListDialog(
+                title = "Audio",
+                choices = tracks.mapIndexed { i, tr -> ListChoice(i.toString(), tr.label + if (tr.supported) "" else UNSUPPORTED_TRACK, enabled = tr.supported) },
+                selectedKey = tracks.indexOfFirst { it.selected }.takeIf { it >= 0 }?.toString(),
+                subtitle = if (tracks.isEmpty()) "Audio track details are not available for this stream." else ps.audioNotice,
+                onChoose = { key ->
+                    val tr = tracks.getOrNull(key.toInt())
+                    if (tr != null && !vm.player.selectTrack(tr, C.TRACK_TYPE_AUDIO)) vm.flashMessage("Audio tracks changed. Choose again.")
+                    vm.closePicker()
+                },
+                onDismiss = vm::closePicker,
+            )
+        }
+        TrackPicker.Subtitles -> {
+            val tracks = ps.textTracks
+            ChoiceListDialog(
+                title = "Subtitles",
+                choices = listOf(ListChoice(SUBTITLES_OFF, "Off")) + tracks.mapIndexed { i, tr -> ListChoice(i.toString(), tr.label + if (tr.supported) "" else UNSUPPORTED_TRACK, enabled = tr.supported) },
+                selectedKey = if (ps.subtitlesOff) SUBTITLES_OFF else tracks.indexOfFirst { it.selected }.takeIf { it >= 0 }?.toString() ?: SUBTITLES_OFF,
+                onChoose = { key ->
+                    if (key == SUBTITLES_OFF) vm.player.disableSubtitles()
+                    else tracks.getOrNull(key.toInt())?.let { vm.player.selectTrack(it, C.TRACK_TYPE_TEXT) }
+                    vm.closePicker()
+                },
+                onDismiss = vm::closePicker,
+            )
         }
     }
 }
+
+private const val SUBTITLES_OFF = "off"
 
 /** OK while watching live: compact channel list overlay; focus starts on the playing channel. */
 @Composable
@@ -602,6 +694,11 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         ShChip("Off", ps.subtitlesOff, { vm.player.disableSubtitles() }, if (firstAudio < 0 && !topSection) Modifier.focusRequester(first) else Modifier)
         ps.textTracks.forEach { tr ->
             ShChip(tr.label + if (tr.supported) "" else UNSUPPORTED_TRACK, !ps.subtitlesOff && tr.selected, { vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) }, enabled = tr.supported)
+        }
+        // The profile's "Autoplay next episode" (the web settings have the same switch).
+        if (s.upNext.kind != UpNextFlow.Kind.None) {
+            Text("Playback", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
+            ShChip(if (s.autoplayNext) "Autoplay next episode: On" else "Autoplay next episode: Off", s.autoplayNext, { vm.setAutoplayNext(!s.autoplayNext) })
         }
         Text("Picture", style = MaterialTheme.typography.titleSmall, color = t.text, modifier = Modifier.padding(top = 8.dp))
         ShButton("Aspect: ${s.aspect.label}", vm::cycleAspect)

@@ -1,4 +1,4 @@
-"""/playback/resolve, /playback/progress, /stream/{token}[/index.m3u8], images proxy."""
+"""/playback/resolve, /playback/progress, /stream/{token}[/index.m3u8], images proxy, scrub previews."""
 
 from __future__ import annotations
 
@@ -706,6 +706,27 @@ async def image_proxy(token: str, request: Request, c: C) -> Response:
             # One URL per image for everyone (image_grants): every cache may keep it until it expires.
             "Cache-Control": cache_control(d),
             # Never let a browser reinterpret or run what a provider called an image (SVG included).
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
+
+
+@router.get("/thumbnails/{token}", tags=["playback"], include_in_schema=False)
+async def thumbnail(token: str, c: C, ms: int = Query(0, ge=0, le=7 * 24 * 3600 * 1000)) -> Response:
+    """One scrub preview frame: the frame of the granted preview index nearest ``ms`` (``services/thumbnails``).
+
+    Signed and viewer-independent like ``/images/{token}``: the URL came with a descriptor this
+    viewer was allowed, and every cache may keep a frame until the grant's week ends.
+    """
+    from app.services.image_grants import cache_control
+
+    body, grant = await c.thumbnails.frame(token, ms)
+    return Response(
+        body,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": cache_control(grant),
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'none'; sandbox",
         },

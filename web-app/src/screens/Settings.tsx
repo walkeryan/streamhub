@@ -16,6 +16,7 @@ import { RequestManagerSettings } from '../components/RequestManagerSettings'
 import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
 import { HomeNetworkSettings } from '../components/HomeNetworkSettings'
 import { useState } from 'react'
+import { useProfilePreference } from '../api/profilePreferences'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ok, refreshMe } from '../api/client'
@@ -261,7 +262,33 @@ function ParentalTab() {
 }
 
 /* ------------------------------ playback / server ------------------------------ */
+/** This profile's player preference, read by the web and the TV players alike (`autoplay_next`, missing = on). */
+function AutoplaySetting() {
+  const pref = useProfilePreference<boolean>('autoplay_next', true, (raw) => (typeof raw === 'boolean' ? raw : null))
+  return (
+    <section className="flex flex-col gap-2" data-testid="autoplay-setting">
+      <h3 className="label">Autoplay next episode</h3>
+      <FocusGroup focusKey="pb:autoplay" className="flex gap-2 flex-wrap">
+        <Chip focusKey="pbo:autoplay:on" pressed={pref.value} onEnter={() => pref.update(true)} testId="autoplay-on">On</Chip>
+        <Chip focusKey="pbo:autoplay:off" pressed={!pref.value} onEnter={() => pref.update(false)} testId="autoplay-off">Off</Chip>
+      </FocusGroup>
+      <p className="muted label">{pref.error && pref.ready ? 'Could not save. Try again.' : pref.value
+        ? 'At the end of an episode the next one starts after a 10-second countdown.'
+        : 'At the end of an episode, the next one waits for you to choose Play next.'}</p>
+    </section>
+  )
+}
+
 function PlaybackTab() {
+  return (
+    <div className="flex flex-col gap-5">
+      <AutoplaySetting />
+      <ServerPlaybackSettings />
+    </div>
+  )
+}
+
+function ServerPlaybackSettings() {
   const { data, error, refetch } = useSettings()
   const admin = useCan('settings.admin')
   const qc = useQueryClient()

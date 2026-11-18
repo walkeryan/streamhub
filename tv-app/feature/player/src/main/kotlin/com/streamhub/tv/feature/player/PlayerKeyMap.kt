@@ -23,6 +23,9 @@ sealed interface PlayerCommand {
     data object Pause : PlayerCommand
     data class Seek(val deltaMs: Long) : PlayerCommand
     data object LastChannel : PlayerCommand
+    /** Next / previous episode (media next / previous on a title; nothing when it has no neighbour). */
+    data object NextItem : PlayerCommand
+    data object PreviousItem : PlayerCommand
 }
 
 /**
@@ -32,6 +35,7 @@ sealed interface PlayerCommand {
  *  Live:  Up/Down, CH+/CH- zap · 0-9 channel number · Select channel list · Left archive · Right menu
  *  Film:  Select or Down brings up the control row (scrubber + buttons) · Left/Right seek 10 s
  *  Both:  hold Select or Menu = audio/subtitle/picture menu · media keys always work
+ *  Title: media next / previous = next / previous episode
  *
  *  Room:  a watch room stays on what it is watching, so on a live channel there is no zapping,
  *         channel list, number entry or archive: Select plays/pauses for everyone, Up/Down show the banner
@@ -62,6 +66,8 @@ object PlayerKeyMap {
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> return PlayerCommand.OpenMenu
             KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE -> return PlayerCommand.ShowInfo
             KeyEvent.KEYCODE_LAST_CHANNEL -> return if (isLive && !inRoom) PlayerCommand.LastChannel else PlayerCommand.None
+            KeyEvent.KEYCODE_MEDIA_NEXT -> return if (!isLive && !inRoom) PlayerCommand.NextItem else PlayerCommand.None
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> return if (!isLive && !inRoom) PlayerCommand.PreviousItem else PlayerCommand.None
         }
         if (isSelect(key)) return when {
             longPress -> PlayerCommand.OpenMenu

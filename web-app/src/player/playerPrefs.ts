@@ -18,7 +18,7 @@ export const SPEED_MIN = 0.5, SPEED_MAX = 2, SPEED_STEP = 0.25
 /** 0.5× to 2× in quarters. */
 export const SPEEDS: readonly number[] = Array.from({ length: (SPEED_MAX - SPEED_MIN) / SPEED_STEP + 1 }, (_, i) => SPEED_MIN + i * SPEED_STEP)
 export const VOLUME_STEP = 0.05
-export const DEFAULT_PREFS: PlayerPrefs = { volume: 1, muted: false, speed: 1, remaining: false, subtitle: null }
+export const DEFAULT_PREFS: PlayerPrefs = { volume: 1, muted: false, speed: 1, remaining: true, subtitle: null }
 
 const unit = (n: unknown, fallback: number): number => (typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback)
 /** The nearest speed the player offers; anything unreadable is normal speed. */
@@ -34,7 +34,7 @@ export const nextVolume = (volume: number, dir: -1 | 1): number => Math.min(1, M
 export function parsePrefs(raw: string | null): PlayerPrefs {
   let found: Partial<Record<keyof PlayerPrefs, unknown>> = {}
   try { const parsed: unknown = raw ? JSON.parse(raw) : null; if (parsed && typeof parsed === 'object') found = parsed } catch { /* an unreadable value is no value */ }
-  return { volume: unit(found.volume, DEFAULT_PREFS.volume), muted: found.muted === true, speed: clampSpeed(found.speed), remaining: found.remaining === true, subtitle: typeof found.subtitle === 'string' ? found.subtitle.slice(0, 80) : null }
+  return { volume: unit(found.volume, DEFAULT_PREFS.volume), muted: found.muted === true, speed: clampSpeed(found.speed), remaining: found.remaining !== false, subtitle: typeof found.subtitle === 'string' ? found.subtitle.slice(0, 80) : null }
 }
 
 // lsGet/lsSet swallow a missing or blocked localStorage: the player then simply forgets.

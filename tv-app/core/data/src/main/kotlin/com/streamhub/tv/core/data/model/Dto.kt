@@ -556,6 +556,18 @@ data class PlaybackDescriptor(
     @SerialName("audio_track") val audioTrack: Int? = null,
     /** What is playing and how it reaches this TV, for the player's stream information; null for a hand-off. Informational only. */
     @SerialName("media_info") val mediaInfo: MediaInfo? = null,
+    // ---- Player revamp (all optional; see PlaybackExtras.kt) ----
+    /** Intro and credits stretches, from the source; empty when it has none. */
+    @Serializable(with = PlaybackMarkersSerializer::class) val markers: List<PlaybackMarker> = emptyList(),
+    /** Episodes only: the show, and where in it this episode is. */
+    @Serializable(with = PlaybackShowOrNull::class) val show: PlaybackShow? = null,
+    @SerialName("season_number") val seasonNumber: Int? = null,
+    @SerialName("episode_number") val episodeNumber: Int? = null,
+    /** Episodes only: the following episode (across into the next season) and the one before. */
+    @Serializable(with = UpNextOrNull::class) val next: UpNext? = null,
+    @Serializable(with = UpNextOrNull::class) val previous: UpNext? = null,
+    /** Scrub previews; null when the source has none. */
+    @Serializable(with = PlaybackThumbnailsOrNull::class) val thumbnails: PlaybackThumbnails? = null,
 )
 
 /**

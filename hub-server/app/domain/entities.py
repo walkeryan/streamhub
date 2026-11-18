@@ -157,6 +157,27 @@ class StreamTarget:
 
 
 @dataclass(slots=True)
+class PlaybackMarker:
+    """A stretch of a title the player can skip: its opening titles or its end credits."""
+
+    type: str  # "intro" | "credits"
+    start_ms: int
+    end_ms: int
+
+
+@dataclass(slots=True)
+class PlaybackExtras:
+    """What a library server knows about a file beyond how to stream it.
+
+    ``preview_index_url`` is the server's own address for the file's scrub preview index (a BIF
+    file), fetched with the adapter's image headers; None when it has generated none.
+    """
+
+    markers: list[PlaybackMarker] = field(default_factory=list)
+    preview_index_url: str | None = None
+
+
+@dataclass(slots=True)
 class WatchState:
     """One item's resume point as the library server's own account has it."""
 

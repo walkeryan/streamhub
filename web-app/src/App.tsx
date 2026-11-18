@@ -32,8 +32,8 @@ import { Sources } from './screens/Sources'
 import { Pair } from './screens/Pair'
 import { ShellPlay } from './screens/ShellPlay'
 import { inShell } from './shell'
+import { PlayerHost } from './player/PlayerHost'
 
-const Player = lazy(() => import('./screens/Player').then((m) => ({ default: m.Player })))
 const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })))
 // watch rooms and recordings
@@ -121,8 +121,9 @@ export function App() {
     body = (
       <Suspense fallback={null}>
         <Routes key={profile.id}>
-          {/* Inside the Android TV app the TV's own player plays (shell.ts). */}
-          <Route path="/play/:id" element={inShell() ? <ShellPlay /> : <Player />} />
+          {/* The player itself lives above the routes (PlayerHost), so it can keep playing minimised.
+              Inside the Android TV app the TV's own player plays (shell.ts). */}
+          <Route path="/play/:id" element={inShell() ? <ShellPlay /> : null} />
           <Route path="/room/:code" element={<RoomScreen />} />
           <Route element={<Shell />}>
             <Route index element={<Home />} />
@@ -144,6 +145,7 @@ export function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
+        <PlayerHost key={profile.id} />
         {who.open && switchable.data && <WhoIsWatching users={switchable.data} />}
       </Suspense>
     )

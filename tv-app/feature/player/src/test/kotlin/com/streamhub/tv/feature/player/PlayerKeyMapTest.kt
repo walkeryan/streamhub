@@ -131,4 +131,12 @@ class PlayerKeyMapTest {
             assertEquals("key $key", film(key), PlayerKeyMap.resolve(key, isLive = false, menuOpen = false, controlsVisible = false, inRoom = true))
         }
     }
+
+    @Test fun mediaNextAndPreviousMoveBetweenEpisodesOfATitleOnly() {
+        assertEquals(PlayerCommand.NextItem, film(KeyEvent.KEYCODE_MEDIA_NEXT))
+        assertEquals(PlayerCommand.PreviousItem, film(KeyEvent.KEYCODE_MEDIA_PREVIOUS))
+        assertEquals("with the controls up too", PlayerCommand.NextItem, film(KeyEvent.KEYCODE_MEDIA_NEXT, controls = true))
+        assertEquals(PlayerCommand.None, live(KeyEvent.KEYCODE_MEDIA_NEXT))
+        assertEquals("a room stays on its title", PlayerCommand.None, PlayerKeyMap.resolve(KeyEvent.KEYCODE_MEDIA_NEXT, isLive = false, menuOpen = false, controlsVisible = false, inRoom = true))
+    }
 }
