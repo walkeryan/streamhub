@@ -254,7 +254,7 @@ test('Home is composed from shelves: New Releases, shelves with See all, Recentl
   expect(ids.at(-1)).toBe('recent')
   // Every row is compact: posters for titles, a captioned wide tile for what is in progress.
   await expect(page.locator('.feature-card')).toHaveCount(0)
-  await expect(page.locator('[data-row="continue"] .tile-landscape .cap').first()).toHaveCSS('opacity', '1')
+  await expect(page.locator('[data-row="continue"] .ds-still-cap').first()).toBeVisible()
   // The hero features the New Releases shelf, and says where its title plays the way a tile does.
   await expect(page.getByTestId('hero-title')).toHaveText('Neon Cartographers')
   await expect(page.getByTestId('hero').locator('.badge')).toHaveText(['In your library'])
@@ -262,7 +262,7 @@ test('Home is composed from shelves: New Releases, shelves with See all, Recentl
   // name over the top of its posters.
   const poster = (await page.locator('[data-row="shelf:movies:New Releases"] .tile-poster').first().boundingBox())!
   expect(poster.y).toBeLessThan(720)
-  await expect(page.locator('[data-row="shelf:movies:New Releases"] .row-title')).toBeInViewport({ ratio: 1 })
+  await expect(page.locator('[data-row="shelf:movies:New Releases"] .ds-section-title')).toBeInViewport({ ratio: 1 })
   await expect(page.locator('[data-row="shelf:shows:Netflix"]')).toHaveAttribute('aria-label', 'Netflix · Shows')
   await page.locator('[data-row="shelf:shows:Netflix"]').getByTestId('see-all').click()
   await expect(page).toHaveURL(/\/browse\/shows\?category=Netflix$/)
@@ -529,7 +529,7 @@ test('TV browser at 1920x1080: Movies shows three shelves on the first screen an
   // Icon-only glass buttons beside Play, reached with the remote; the focused one names itself.
   await tv.page.keyboard.press('ArrowRight')
   await expect(tv.page.getByRole('button', { name: 'Start over', exact: true })).toHaveAttribute('data-focused', 'true')
-  await expect(tv.page.locator('.tp-glass-wrap:has([data-focused="true"]) .tp-tip')).toHaveText('Start over')
+  await expect(tv.page.locator('.ds-glass-wrap:has([data-focused="true"]) .ds-glass-tip')).toHaveText('Start over')
   for (let i = 0; i < 3; i++) await tv.page.keyboard.press('ArrowRight')
   await expect(tv.page.getByTestId('title-more')).toHaveAttribute('data-focused', 'true')
   await tv.page.keyboard.press('Enter')

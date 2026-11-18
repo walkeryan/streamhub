@@ -143,7 +143,7 @@ test('keyboard only: a notice can be dismissed without opening it', async ({ pag
   for (let i = 0; i < 4 && (await open.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowUp')
   await expect(open).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowRight')
-  await expect(focused(page)).toHaveText('Dismiss')
+  await expect(focused(page)).toHaveAttribute('aria-label', /^Dismiss: /)
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('notices')).toHaveCount(0)
   // Focus moved on before the banner left.

@@ -5,12 +5,12 @@ test('Home rows retain titles and remote focus on desktop and mobile', async ({ 
   await signIn(page)
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowDown')
-  // Continue Watching: wide artwork, always captioned with the title.
+  // Continue Watching: wide artwork, always captioned with the title (under the still).
   const focused = page.locator('[data-row="continue"] [data-testid="tile"][data-focused="true"]')
   await expect(focused).toHaveCount(1)
-  await expect(focused.locator('.cap')).not.toBeEmpty()
-  await expect(focused.locator('.cap')).toHaveCSS('opacity', '1')
-  const art = await focused.boundingBox()
+  await expect(focused.locator('.ds-still-cap')).not.toBeEmpty()
+  await expect(focused.locator('.ds-still-cap')).toBeVisible()
+  const art = await focused.locator('.ds-still-art').boundingBox()
   expect(art!.width / art!.height).toBeCloseTo(16 / 9, 1)
   await page.waitForTimeout(250) // allow focus transitions to finish for visual evidence
   await page.screenshot({ path: '/tmp/streamhub-reference-home-desktop.png' })

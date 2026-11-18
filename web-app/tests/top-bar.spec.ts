@@ -58,8 +58,7 @@ for (const [width, height] of [[1920, 1080], [1024, 768]] as const) {
       const bar = await expectOneRow(page, width)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 
-      // The hero starts under the bar, not behind it.
-      expect((await rect(page.getByTestId('hero'))).y).toBeGreaterThanOrEqual(bar.height - 0.5)
+      // The hero's art runs up under the clear bar (as on the title page); its title and Play start below it.
       expect((await rect(page.getByTestId('hero-title'))).y).toBeGreaterThanOrEqual(bar.height)
       expect((await rect(play)).y).toBeGreaterThanOrEqual(bar.height)
 
