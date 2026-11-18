@@ -115,6 +115,7 @@ object UpNextFlow {
         var s = state.copy(lastLookMs = look.nowMs)
         if (plan.kind != Kind.Episode) return s to Effect.None
         val before = start == null || look.positionMs < start - REARM_SLACK_MS
+        val wasUp = cardShowing(state)
         s = when (s.phase) {
             Phase.Waiting -> when {
                 look.ended -> s.copy(phase = Phase.AtEnd, countedMs = 0)
@@ -130,8 +131,9 @@ object UpNextFlow {
             Phase.AtEnd -> if (!look.ended && before) s.copy(phase = Phase.Waiting, countedMs = 0) else s
             Phase.Done -> s
         }
-        // The countdown runs while the picture plays, and at the end (where nothing plays any more).
-        if (autoplay && (s.phase == Phase.Showing || s.phase == Phase.AtEnd) && (look.playing || look.ended)) {
+        // The countdown runs while the picture plays, and at the end (where nothing plays any more). It
+        // starts at the look after the card appeared (or restarted at the end), not with the gap before it.
+        if (autoplay && wasUp && s.phase == state.phase && cardShowing(s) && (look.playing || look.ended)) {
             val counted = s.countedMs + step
             if (counted >= COUNTDOWN_MS) return s.copy(phase = Phase.Done, countedMs = COUNTDOWN_MS) to Effect.CountdownDone
             s = s.copy(countedMs = counted)
