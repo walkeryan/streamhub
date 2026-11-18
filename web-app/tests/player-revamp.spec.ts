@@ -209,7 +209,7 @@ test('inside the TV app, the bar follows the TV player in picture-in-picture and
   })
   await signIn(page)
   const state = { id: EP(1, 2), title: 'Fixture Show', subtitle: 'S1 · E2 · Slack Water', image: null, position_ms: 61_000, duration_ms: 3_000_000, playing: true, has_next: true, has_previous: true, live: false }
-  expect(await page.evaluate((s) => window.streamhubShell!.message(JSON.stringify({ v: 1, kind: 'mini_player', state: s })), state)).toBe(true)
+  expect(await page.evaluate((s) => (window as unknown as { streamhubShell: { message: (json: string) => boolean } }).streamhubShell.message(JSON.stringify({ v: 1, kind: 'mini_player', state: s })), state)).toBe(true)
   const bar = page.getByTestId('shell-mini-player')
   await expect(bar).toBeVisible()
   await expect(bar).toContainText('Fixture Show')
@@ -223,6 +223,6 @@ test('inside the TV app, the bar follows the TV player in picture-in-picture and
     { v: 1, kind: 'mini_player_command', command: 'next', delta_ms: null },
     { v: 1, kind: 'mini_player_command', command: 'expand', delta_ms: null },
   ])
-  await page.evaluate(() => window.streamhubShell!.message('{"v":1,"kind":"mini_player","state":null}'))
+  await page.evaluate(() => (window as unknown as { streamhubShell: { message: (json: string) => boolean } }).streamhubShell.message('{"v":1,"kind":"mini_player","state":null}'))
   await expect(bar).toHaveCount(0)
 })
