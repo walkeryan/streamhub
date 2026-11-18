@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { searchBox, signIn } from './helpers'
+import { searchBox, signIn, titleMenu } from './helpers'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -61,7 +61,7 @@ test('the only source plays at once even with unverified audio, and picking a so
   // Choosing a source from the sheet plays it straight away.
   await page.goto('/title/tmdb%3Amovie%3A140607')
   await page.evaluate(() => sessionStorage.removeItem('test.resolve'))
-  await page.getByTestId('title-source').click()
+  await titleMenu(page, 'title-source')
   await page.getByRole('button', { name: /My library · Audio unverified/ }).click()
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.resolve'))).not.toBeNull()
   expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem('test.resolve')))!)).toMatchObject({ variant_id: 'lib:iptv:fr', allow_unverified_audio: true })

@@ -114,34 +114,35 @@ test.describe('on a phone', () => {
     await expect(page.getByTestId('active-filter')).toHaveCount(0)
   })
 
-  test('title page: one row of primary actions, the rest in a menu, one audio and version control', async ({ page }) => {
+  test('title page: Play and the glass buttons on one row, the rest in the ⋯ sheet, audio and version from it', async ({ page }) => {
     await enter(page, '/title/tmdb%3Amovie%3A103')
     const play = page.getByTestId('title-play'), list = page.getByRole('button', { name: 'My List', exact: true }), more = page.getByTestId('title-more')
+    // Resume: the minutes left are under the picture; the button keeps them in its label.
     await expect(play).toContainText('Resume')
+    await expect(play).toHaveAttribute('aria-label', /Resume · \d+ min left/)
     const line = await middle(play)
-    expect(Math.abs((await middle(list)) - line)).toBeLessThan(2)
-    expect(Math.abs((await middle(more)) - line)).toBeLessThan(2)
-    await expect(page.getByTestId('title-detail').getByRole('button', { name: /Trailer|Favorite|Mark watched/ })).toHaveCount(0)
-    // The audio and version pickers are one control that states what Play will use.
+    for (const button of [page.getByRole('button', { name: 'Start over', exact: true }), page.getByRole('button', { name: 'Mark watched', exact: true }), list, more]) {
+      expect(Math.abs((await middle(button)) - line)).toBeLessThan(2)
+    }
+    // The seldom-used actions and the audio and version pickers are not on the page itself.
+    await expect(page.getByTestId('title-detail').getByRole('button', { name: /Trailer|favorites|Watch together/ })).toHaveCount(0)
     await expect(page.getByTestId('title-audio-tracks')).toHaveCount(0)
-    const choice = page.getByTestId('title-source')
-    await expect(choice).toContainText('Audio & version')
-    await expect(choice).toContainText('English · 5.1 · AC-3 · Plex')
-    expect(await bottom(choice)).toBeLessThanOrEqual((await page.getByTestId('rail').boundingBox())!.y)
     expect(await fits(page)).toBe(true)
-    await choice.tap()
+
+    await more.tap()
+    const menu = page.getByTestId('title-more-menu')
+    await expect(menu.getByRole('menuitem')).toContainText(['Add to favorites', 'Audio · English · 5.1 · AC-3', 'Version · Plex', 'Show trailer'])
+    await menu.getByRole('menuitem', { name: 'Add to favorites', exact: true }).tap()
+    await expect(menu.getByRole('menuitem', { name: 'Remove from favorites', exact: true })).toBeVisible()
+    await menu.getByRole('menuitem', { name: /^Audio · / }).tap()
+    await expect(menu).toHaveCount(0)
     const dialog = page.getByRole('dialog', { name: 'Audio & version', exact: true })
     await expect(dialog.getByTestId('title-audio-tracks')).toBeVisible()
     await expect(dialog.getByRole('button', { name: /^Plex · / })).toBeVisible()
     await dialog.getByRole('button', { name: 'French · Stereo · AAC', exact: true }).tap()
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).tap()
-    await expect(choice).toContainText('French · Stereo · AAC · Plex')
-
     await more.tap()
-    const menu = page.getByTestId('title-more-menu')
-    await expect(menu.locator('.menu-item')).toHaveText(['Add to favorites', 'Trailer', 'Mark watched'])
-    await menu.getByRole('button', { name: 'Add to favorites', exact: true }).tap()
-    await expect(menu.getByRole('button', { name: 'Remove from favorites', exact: true })).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: 'Audio · French · Stereo · AAC', exact: true })).toBeVisible()
     await menu.getByRole('button', { name: 'Close', exact: true }).tap()
     await expect(menu).toHaveCount(0)
     await list.tap()
@@ -524,13 +525,23 @@ test('TV browser at 1920x1080: Movies shows three shelves on the first screen an
 
   await tv.page.goto('/title/tmdb%3Amovie%3A103')
   await expect(tv.page.getByTestId('title-play')).toHaveAttribute('data-focused', 'true')
-  await expect(tv.page.getByRole('button', { name: 'Choose source', exact: true })).toBeVisible()
-  await expect(tv.page.getByRole('button', { name: 'Trailer', exact: true })).toBeVisible()
-  await expect(tv.page.getByTestId('title-audio-tracks')).toBeVisible()
-  await expect(tv.page.getByTestId('title-more')).toHaveCount(0)
-  // The poster sits beside the text, not a screen-width away from it.
-  const poster = (await tv.page.locator('.title-poster').boundingBox())!, head = (await tv.page.getByRole('heading', { level: 1 }).boundingBox())!
-  expect(head.x - (poster.x + poster.width)).toBeLessThan(60)
+  await expect(tv.page.getByTestId('title-play')).toHaveText(/Resume · \d+ min left/)
+  // Icon-only glass buttons beside Play, reached with the remote; the focused one names itself.
+  await tv.page.keyboard.press('ArrowRight')
+  await expect(tv.page.getByRole('button', { name: 'Start over', exact: true })).toHaveAttribute('data-focused', 'true')
+  await expect(tv.page.locator('.tp-glass-wrap:has([data-focused="true"]) .tp-tip')).toHaveText('Start over')
+  for (let i = 0; i < 3; i++) await tv.page.keyboard.press('ArrowRight')
+  await expect(tv.page.getByTestId('title-more')).toHaveAttribute('data-focused', 'true')
+  await tv.page.keyboard.press('Enter')
+  await expect(tv.page.getByTestId('title-more-menu')).toBeVisible()
+  await expect(tv.page.getByTestId('title-together')).toHaveAttribute('data-focused', 'true')
+  await tv.page.keyboard.press('Escape')
+  await expect(tv.page.getByTestId('title-more-menu')).toHaveCount(0)
+  await expect(tv.page.getByTestId('title-more')).toHaveAttribute('data-focused', 'true')
+  // The picture sits beside the text, not a screen-width away from it.
+  const picture = (await tv.page.locator('.tp-pic-art').boundingBox())!, head = (await tv.page.getByRole('heading', { level: 1 }).boundingBox())!
+  expect(head.x - (picture.x + picture.width)).toBeLessThan(60)
+  expect(await fits(tv.page)).toBe(true)
   await tv.context.close()
 })
 

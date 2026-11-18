@@ -74,7 +74,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await page.keyboard.press('Enter')
   await expect(titlePhase(page)).toHaveText('Requested')
   await expect(request).toHaveCount(0)
-  await expect(focused(page)).toHaveText('Watchlist')
+  await expect(focused(page)).toHaveAttribute('aria-label', 'My List')
 
   // My requests lists it; a viewer gets no approval controls.
   await more(page, 'nav-requests')

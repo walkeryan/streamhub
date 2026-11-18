@@ -18,7 +18,7 @@ test('keyboard only: Home -> title -> player, Escape restores focus', async ({ p
 
   await expect(page).toHaveURL(/\/title\//)
   await expect(page.getByTestId('title-detail')).toBeVisible()
-  await expect(page.getByTestId('available-on')).toContainText('Availability data by JustWatch')
+  await expect(page.getByTestId('justwatch-attribution')).toContainText('Availability data by JustWatch')
   await expect(page.locator('.fx[data-focused="true"]').first()).toContainText(/Play|Resume/)
 
   // Enter on Play starts the stream straight away

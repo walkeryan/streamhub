@@ -15,6 +15,13 @@ export async function signIn(page: Page, { accept = true }: { accept?: boolean }
   }
 }
 
+/** The title page keeps its seldom-used actions (Watch together, Version, Trailer...) behind the ⋯ button. */
+export async function titleMenu(page: Page, testId: string) {
+  await page.getByTestId('title-more').click()
+  await expect(page.getByTestId('title-more-menu')).toBeVisible()
+  await page.getByTestId(testId).click()
+}
+
 /** Sports, Requests, Sources and Settings live in the More menu. */
 export async function openMore(page: Page, name: string) {
   await page.getByTestId('nav-more').click()
