@@ -1,10 +1,11 @@
 import { memo } from 'react'
-import { FocusGroup, Focusable } from '../nav/Focusable'
+import { Focusable } from '../nav/Focusable'
 import { Icon } from './Icon'
 import { FeatureCard } from './FeatureCard'
 import { ProgressBar, SourceChips } from './ui'
 import { Initials, SafeImg } from './SafeImg'
 import { cn, fmtTime, hueOf, progressOf, useNow } from '../lib/util'
+import { AvailableTick, HRow, SectionHeader, StillCard } from '../ds'
 import { useGo } from '../nav/back'
 import { tileRequest } from '../lib/requests'
 import { RequestTileStatus } from './RequestStatus'
@@ -74,12 +75,10 @@ export const MediaTile = memo(function MediaTile(p: {
           <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
           {/* A request on its way says where it is, in place of where the title plays. */}
           {request ? <RequestTileStatus progress={request} of={p.tile.title} /> : p.mark === 'availability' ? (
-            p.tile.sources.some((s) => s.playable_in_app) && <span className="tile-check" role="img" aria-label="Available to watch" data-testid="tile-available"><Icon name="check" size={14} /></span>
+            p.tile.sources.some((s) => s.playable_in_app) && <AvailableTick />
           ) : <div className="tile-badges">{p.tile.sources.length ? <TileBadge sources={p.tile.sources} /> : <span className="badge">Not available here</span>}</div>}
-          {p.tile.is_favorite && <span style={{ position: 'absolute', top: 6, left: 6, color: 'var(--t-accent)' }}><Icon name="heart" size={16} filled /></span>}
-          {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && (
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}><ProgressBar pct={p.tile.progress_pct} /></div>
-          )}
+          {p.tile.is_favorite && <span className="tile-fav" role="img" aria-label="Favorite"><Icon name="heart" filled /></span>}
+          {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && <ProgressBar pct={p.tile.progress_pct} className="tile-progress" />}
         </div>
       )}
     </Focusable>
@@ -110,9 +109,28 @@ export function ChannelTile(p: { tile: TileT; scope: string; onFocusTile?: (t: T
           <span className="channel-name truncate">{t.subtitle ? `${t.subtitle} · ` : ''}{t.title}</span>
           <span className="channel-now clamp2">{t.now_playing?.title ?? 'No programme data'}</span>
         </div>
-        {pct !== null && <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}><ProgressBar pct={pct} /></div>}
+        {pct !== null && <ProgressBar pct={pct} />}
       </div>
     </Focusable>
+  )
+}
+
+/**
+ * A title in progress as a landscape still with its name and where it is under it (Continue Watching):
+ * the backdrop (else the poster), the progress along its foot, a request's status or where it plays in
+ * its corner.
+ */
+export function LandscapeTile(p: { tile: TileT; scope: string; onFocusTile?: (t: TileT) => void }) {
+  const open = useOpenTile()
+  const t = p.tile
+  const request = tileRequest(t)
+  const pct = t.progress_pct ?? 0
+  return (
+    <StillCard focusKey={`${p.scope}::${t.id}`} testId="tile" label={t.title} onEnter={() => open(t)} onFocus={() => p.onFocusTile?.(t)}
+      image={t.backdrop ?? t.poster} fallbackName={t.title} title={t.title} meta={t.subtitle ?? t.year ?? undefined}
+      progressPct={pct} watched={pct >= 100}
+      badge={request ? undefined : namesSource(t.sources) ? <TileBadge sources={t.sources} /> : undefined}
+      corner={request ? <RequestTileStatus progress={request} of={t.title} /> : undefined} />
   )
 }
 
@@ -162,19 +180,21 @@ export function TileRow(p: {
   const now = useNow(30_000) // one clock per row, not per media card
   if (!p.tiles.length) return null
   return (
-    <section aria-label={p.title} data-testid="row" data-row={p.id} className="tile-row">
-      <h2 className="row-title">{p.title}</h2>
-      <FocusGroup focusKey={`row:${p.id}`} className={cn('row-scroll', p.presentation === 'wide' && 'feature-row')} remember>
+    <section aria-label={p.title} data-testid="row" data-row={p.id} data-layout={layout} className="tile-row ds-section">
+      <SectionHeader title={p.title} />
+      <HRow focusKey={`row:${p.id}`} className={cn(p.presentation === 'wide' && 'feature-row')}>
         {p.tiles.map((t) =>
           p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
             <ChannelTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
+          ) : layout === 'landscape' ? (
+            // artwork cut for a wide tile rarely carries the title, so it is always captioned (under it)
+            <LandscapeTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
           ) : (
-            // artwork cut for a wide tile rarely carries the title, so it is always captioned
-            <MediaTile key={t.id} tile={t} scope={p.id} layout={layout === 'landscape' ? 'landscape' : 'poster'} titleAlways={layout === 'landscape'} onFocusTile={p.onFocusTile} />
+            <MediaTile key={t.id} tile={t} scope={p.id} layout="poster" onFocusTile={p.onFocusTile} />
           ),
         )}
         {p.seeAll && <SeeAllTile scope={p.id} title={p.title} to={p.seeAll} count={p.count} layout={layout === 'landscape' || layout === 'channel' ? layout : 'poster'} />}
-      </FocusGroup>
+      </HRow>
     </section>
   )
 }
