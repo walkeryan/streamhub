@@ -125,16 +125,16 @@ export function BrowseGrid(p: {
   const current = rail.reduce<string | null>((label, j) => (j.offset <= at ? j.label : label), rail[0]?.label ?? null)
 
   if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />
-  if (!q.data || q.isPlaceholderData) return <div className="grid-tiles">{Array.from({ length: 12 }, (_, i) => <Skeleton key={i} style={{ aspectRatio: '2/3' }} />)}</div>
+  if (!q.data || q.isPlaceholderData) return <div className="grid-tiles" aria-hidden="true">{Array.from({ length: 12 }, (_, i) => <Skeleton key={i} className="ds-skel-tile" style={{ aspectRatio: '2/3' }} />)}</div>
   if (!tiles.length) return <>{p.empty}</>
   return <div className="browse-grid-wrap">
     <div className="browse-grid-main" ref={main}>
       {hasPreviousPage && <div ref={top} className="browse-sentinel" aria-hidden="true" />}
-      {isFetchingPreviousPage && <p className="label py-2" role="status">Loading earlier titles…</p>}
+      {isFetchingPreviousPage && <p className="label browse-more" role="status">Loading earlier titles…</p>}
       <FocusGroup focusKey="browse:grid" className="grid-tiles">{tiles.map((t) => <MediaTile key={t.id} tile={t} scope="browse" />)}</FocusGroup>
       {hasNextPage && <div ref={bottom} className="browse-sentinel" aria-hidden="true" />}
-      <div className="py-4" aria-live="polite">
-        {isFetchNextPageError ? <p className="label">More titles could not be loaded. <Button focusKey="browse:retry-more" className="btn-chip" onEnter={() => void fetchNextPage()}>Try again</Button></p>
+      <div className="browse-more" aria-live="polite">
+        {isFetchNextPageError ? <FocusGroup className="browse-more-error"><span className="label">More titles could not be loaded.</span><Button focusKey="browse:retry-more" className="btn-chip" icon="refresh" onEnter={() => void fetchNextPage()}>Try again</Button></FocusGroup>
           : isFetchingNextPage ? <p className="label" role="status">Loading more titles…</p> : null}
       </div>
     </div>
