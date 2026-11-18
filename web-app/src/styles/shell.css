@@ -1,0 +1,155 @@
+/* ---------- app shell: page background, the top bar (TV, desktop), the bottom bar (phone), toasts ----------
+   Wide screens: one bar across the top, its entries inside the 48/27 dp safe area. It is clear over the
+   top of a page (Home's billboard and a title's backdrop run under it, as in the approved mockup) and
+   frosts once the page scrolls under it. --bar-h is what that bar takes from the top of every screen:
+   nothing on a phone, whose bar is at the bottom. No left side rail (the owner's decision).
+   (tokens.rail.* in the shared design tokens describe the TV app's left rail; nothing here reads them.) */
+:root { --bar-h: calc(var(--safe-y) + 2.5625rem); --bottom-bar-h: calc(3.75rem + env(safe-area-inset-bottom)); }
+@media (max-width: 720px) { :root { --bar-h: 0rem; } }
+
+/* The page: the theme's background with a faint accent glow from the top right, fixed while the page scrolls. */
+.shell { display: block; min-height: 100dvh; padding-top: var(--bar-h); isolation: isolate; }
+.shell::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(70rem 40rem at 85% -10%, color-mix(in srgb, var(--t-accent) 9%, transparent), transparent 70%),
+    radial-gradient(60rem 40rem at -10% 110%, color-mix(in srgb, var(--t-text) 4%, transparent), transparent 70%);
+}
+.main { min-height: calc(100dvh - var(--bar-h)); }
+@media (max-width: 720px) {
+  .main { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+}
+.page-pad { padding: var(--safe-y) var(--safe-x); }
+@media (max-width: 720px) { .page-pad { padding: 1rem; } }
+/* Under the bar a screen is already inside the top safe margin: it gives that room back to its content. */
+@media (min-width: 721px) { .main .page-pad { padding-top: 1rem; } }
+/* A billboard or backdrop that runs up under the clear bar. Its container must be `display: flow-root`, or the
+   negative margin collapses through it and pulls <main> under the bar (spatial navigation measures <main>). */
+.under-bar { margin-top: calc(-1 * var(--bar-h)); }
+
+/* navigation (.rail: the classes, test ids and focus keys keep the name of the left rail this replaced) */
+.rail { position: fixed; z-index: 40; display: flex; }
+.rail-item { display: flex; align-items: center; flex: none; border-radius: var(--r-md); color: var(--t-text-muted); white-space: nowrap; }
+.rail-item svg { flex: none; }
+.rail-item .lbl { font-weight: 500; }
+.rail-item[aria-current='page'] { color: var(--t-text); }
+/* Wide: wordmark, the places to watch by name, then Search, More and the profile at the far end. Nothing opens on
+   hover or focus and nothing slides over the screen. The row may not wrap: a tablet closes the gaps first, then
+   gives up the wordmark. */
+@media (min-width: 721px) {
+  .rail {
+    --rail-pad: 0.875rem;
+    inset: 0 0 auto 0; height: var(--bar-h); align-items: flex-start; gap: 0.25rem;
+    padding: var(--safe-y) var(--safe-x) 0;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--t-bg) 82%, transparent), color-mix(in srgb, var(--t-bg) 0%, transparent));
+    transition: background-color var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease);
+  }
+  /* Scrolled: the page passes under a frosted bar with a hairline at its foot. */
+  html[data-scrolled] .rail { background-color: color-mix(in srgb, var(--t-bg) 92%, transparent); box-shadow: 0 1px 0 var(--surface-edge); }
+  .rail-brand {
+    margin-right: 1.25rem; font-size: 1.1rem; font-weight: 800; line-height: 2.25rem; letter-spacing: -0.02em; white-space: nowrap; cursor: pointer; color: var(--t-text);
+  }
+  .rail-brand b { color: var(--t-accent); font-weight: inherit; }
+  .rail-gap { flex: 1; min-width: 0.5rem; }
+  .rail-item { height: 2.25rem; padding: 0 var(--rail-pad); font-size: 0.85rem; }
+  .rail-item.fx[data-focused='true'] { transform: none; outline-color: var(--t-accent); outline-offset: 0; box-shadow: none; background: color-mix(in srgb, var(--t-accent) 14%, transparent); color: var(--t-text); }
+  @media (hover: hover) { .rail-item:hover { color: var(--t-text); } }
+  /* More and the profile: round glass, as on every screen. */
+  .rail-icon { width: 2.25rem; padding: 0; justify-content: center; border-radius: 50%; color: var(--t-text); }
+  .rail-icon + .rail-icon { margin-left: 0.375rem; }
+  .rail-icon:not([data-testid='nav-profile']) { background: var(--glass-fill); border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen); }
+  .rail-icon.fx[data-focused='true'] { background: var(--glass-fill-hi); box-shadow: var(--glow-accent); outline-offset: 0.125rem; }
+  /* icons are drawn in pixels; here they keep pace with the names beside them on a TV */
+  .rail-icon svg { width: 1.2rem; height: 1.2rem; }
+  .rail-icon > span[aria-hidden] { box-shadow: 0 0 0 2px color-mix(in srgb, #fff 22%, transparent); }
+  /* the whole height of the bar above and below an entry takes the click or the tap */
+  .rail-item::before { content: ''; position: absolute; inset: calc(-1 * var(--safe-y)) 0 -0.3125rem; }
+  /* the current section: full-strength text over an accent line (the focus ring is a different shape) */
+  .rail-item[aria-current='page']::after { content: ''; position: absolute; inset: auto var(--rail-pad) 0; height: 0.15rem; border-radius: 999px; background: var(--t-accent); }
+  .rail-icon[aria-current='page']::after { inset-inline: 0.5rem; bottom: -0.35rem; }
+  .rail-icon[aria-current='page'] svg { color: var(--t-accent); }
+  /* The search box: a glass pill with the magnifier. It takes room from the gap beside it when it is in
+     use and gives way before any name in the row does; it never pushes one off. */
+  .rail-search {
+    display: flex; align-items: center; gap: 0.5rem; flex: 0 1 14rem; min-width: 2.25rem; height: 2.25rem; padding: 0 0.8rem; margin-right: 0.25rem;
+    border-radius: var(--r-pill); background: var(--glass-tint); border: 1px solid var(--glass-line); color: var(--t-text-muted);
+    cursor: text; transition: flex-basis var(--dur-fast) var(--ease), outline-color var(--dur-focus) var(--ease), background-color var(--dur-fast) var(--ease);
+  }
+  .rail-search.fx[data-focused='true'] { transform: none; box-shadow: none; outline-color: var(--t-accent); background: var(--glass-tint-hi); }
+  .rail-search[data-open], .rail-search[data-filled] { color: var(--t-text); }
+  .rail-search[data-open] { flex-basis: 20rem; }
+  .rail-search[aria-current='page'] svg { color: var(--t-accent); }
+  .rail-search svg { flex: none; width: 1.1rem; height: 1.1rem; }
+  .rail-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; font-size: var(--text-label); }
+  .rail-search input::placeholder { color: var(--t-text-muted); opacity: 0.9; }
+  .rail-search-clear { display: grid; place-items: center; flex: none; width: 1.5rem; height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--t-text-muted); cursor: pointer; }
+  .rail-search-clear:hover { color: var(--t-text); }
+  .rail-search-clear svg { width: 1rem; height: 1rem; }
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (min-width: 721px) {
+    html[data-scrolled] .rail { -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2); background-color: color-mix(in srgb, var(--t-bg) 78%, transparent); }
+  }
+}
+@media (min-width: 721px) and (max-width: 1000px) {
+  .rail { --rail-pad: 0.625rem; gap: 0; }
+  .rail-brand { margin-right: 0.75rem; }
+  /* No room for a field beside eight entries: the magnifier alone, until the box is in use. Then it opens
+     over the row, and closes when the caret leaves it. */
+  .rail-search:not([data-open]) { flex: none; width: 2.25rem; padding: 0; justify-content: center; border-color: transparent; background: transparent; cursor: pointer; }
+  .rail-search:not([data-open]) input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .rail-search:not([data-open]) .rail-search-clear { display: none; }
+  .rail-search:not([data-open]) svg { width: 1.375rem; height: 1.375rem; }
+  .rail-search:not([data-open])[data-filled] svg { color: var(--t-accent); }
+  .rail-search[data-open] { position: absolute; z-index: 6; inset: var(--safe-y) var(--safe-x) auto; margin: 0; background: var(--t-surface-alt); }
+}
+@media (min-width: 721px) and (max-width: 800px) { .rail-brand { display: none; } }
+/* Phone: a frosted bar of five along the bottom, each an icon over its name; the current one's icon sits in an accent pill. */
+@media (max-width: 720px) {
+  .rail {
+    inset: auto 0 0 0; width: 100%; height: var(--bottom-bar-h); flex-direction: row; gap: 0;
+    padding: 0.25rem 0.25rem calc(0.25rem + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--t-surface) 94%, transparent);
+    border-top: 1px solid var(--glass-line); overflow: hidden;
+  }
+  .rail-item { flex: 1 1 0; min-width: 0; height: 100%; flex-direction: column; justify-content: center; gap: 0.2rem; padding: 0; }
+  .rail-item svg { width: 3.25rem; height: 1.75rem; padding: 0.15rem 0; border-radius: var(--r-pill); transition: background-color var(--dur-fast) var(--ease); }
+  .rail-item .lbl { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 0.6875rem; line-height: 1.2; }
+  .rail-item[aria-current='page'] .lbl { font-weight: 650; }
+  .rail-item[aria-current='page'] svg { color: var(--t-accent); background: color-mix(in srgb, var(--t-accent) 18%, transparent); }
+  .rail-item.fx[data-focused='true'] { transform: none; outline-offset: calc(-1 * var(--focus-border)); box-shadow: none; }
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (max-width: 720px) {
+    .rail { background: color-mix(in srgb, var(--t-surface) 80%, transparent); -webkit-backdrop-filter: blur(16px) saturate(1.2); backdrop-filter: blur(16px) saturate(1.2); }
+  }
+}
+/* Remote/TV surfaces remain solid: no moving-video backdrop sampling. */
+@media (hover: none) and (pointer: coarse) and (min-width: 721px), (min-width: 1800px), (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  html[data-scrolled] .rail { -webkit-backdrop-filter: none; backdrop-filter: none; background-color: var(--t-bg); }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  @media (max-width: 720px) { .rail { background: var(--t-surface); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+}
+/* The More sheet: one row per place, the current one marked with the accent. */
+.menu-item { display: flex; align-items: center; gap: 0.875rem; min-height: 3rem; padding: 0 1rem; border-radius: var(--r-md); background: var(--glass-tint); border: 1px solid var(--glass-line); font-weight: 600; }
+.menu-item svg { flex: none; color: var(--t-text-muted); }
+.menu-item[aria-current='page'] { box-shadow: inset 0.1875rem 0 var(--t-accent); }
+.menu-item[aria-current='page'] svg { color: var(--t-accent); }
+.menu-item.fx[data-focused='true'] { background: color-mix(in srgb, var(--t-accent) 14%, transparent); }
+
+/* ---------- toasts: a frosted card with the tone's icon, bottom right (bottom centre above the bar on a phone) ---------- */
+.toasts { position: fixed; z-index: 90; right: var(--safe-x); bottom: 1.5rem; display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; max-width: min(28rem, calc(100vw - 2rem)); pointer-events: none; }
+.toast {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem 0.7rem 0.8rem; border-radius: var(--r-lg);
+  background: var(--pop-bg); color: var(--t-text); border: 1px solid var(--pop-line); box-shadow: var(--shadow-pop);
+  font-size: var(--text-label); font-weight: 550; animation: toast-in var(--dur-base) var(--ease);
+}
+.toast-icon { flex: none; width: 1.1rem; height: 1.1rem; padding: 0.2rem; box-sizing: content-box; border-radius: 50%; color: var(--t-accent-text); background: var(--t-accent); }
+.toast[data-tone='error'] .toast-icon { background: var(--t-danger); color: #fff; }
+.toast[data-tone='success'] .toast-icon { background: var(--t-success); color: #06210f; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(0.5rem); } }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .toast { background: color-mix(in srgb, var(--t-surface) 88%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+}
+@media (max-width: 720px) { .toasts { bottom: calc(var(--bottom-bar-h) + 0.75rem); right: 1rem; left: 1rem; max-width: none; align-items: center; } }

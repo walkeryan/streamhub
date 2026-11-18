@@ -1,0 +1,57 @@
+/* Movies & Shows, Discover, Search, My List, Requests and Recordings (phase 2: the library screens own this file). */
+
+/* Browse: the grid loads as it scrolls; beside it, a rail of jumps for the current sort (A-Z, years, …). */
+.browse-grid-wrap { display: flex; align-items: flex-start; gap: 0.5rem; }
+.browse-grid-main { flex: 1; min-width: 0; }
+.browse-sentinel { height: 1px; }
+.browse-jumps { position: sticky; top: calc(var(--bar-h) + 0.75rem); flex: none; display: flex; flex-direction: column; align-items: stretch;
+  max-height: calc(100dvh - var(--bar-h) - 1.5rem); overflow-y: auto; scrollbar-width: none; padding: 0.25rem 0; }
+.browse-jumps::-webkit-scrollbar { display: none; }
+.browse-jump { min-width: 2.75rem; padding: 0.125rem 0.5rem; border-radius: 999px; text-align: center; font-size: 0.75rem; line-height: 1.35;
+  font-variant-numeric: tabular-nums; color: var(--t-text-muted); cursor: pointer; white-space: nowrap; }
+.browse-jump:hover { color: var(--t-text); }
+.browse-jump[aria-current='true'] { color: var(--t-accent-text); background: var(--t-accent); font-weight: 600; }
+@media (max-width: 720px) {
+  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - 6rem); }
+  .browse-jump { min-width: 2rem; padding-inline: 0.25rem; font-size: 0.6875rem; }
+}
+/* Search results: one page of up to three sections. Broadcasts and channels are short rows in as many
+   columns as fit, so a full section stays a few lines tall above the posters. */
+.search-page { display: flex; flex-direction: column; gap: 1rem; min-height: 20rem; }
+.search-page-field { max-width: 32rem; }
+.search-sections { display: flex; flex-direction: column; gap: 1.75rem; padding-bottom: 2rem; }
+.search-section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+[data-testid='search-results'][data-stale] { opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
+.search-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(22rem, 100%), 1fr)); gap: 0.5rem; }
+.search-row {
+  display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; min-height: 3.5rem; padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md); background: var(--t-surface); border: 1px solid var(--surface-edge);
+}
+.search-row[data-focused='true'] { background-color: color-mix(in srgb, var(--t-accent) 12%, var(--t-surface)); }
+.search-row-copy { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.search-row-title { font-weight: 600; }
+.search-row-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.search-row-line > :first-child { flex: none; }
+.search-row-when { color: var(--t-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.search-row-number { color: var(--t-text-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+.search-grid { padding: 0; }
+.search-tile { position: relative; min-width: 0; }
+.search-kind { position: absolute; left: 0.375rem; top: 0.375rem; z-index: 6; pointer-events: none; }
+.search-more { display: flex; }
+.search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; padding: 0.5rem 0; }
+
+/* Movies and Shows: the title and Filter on one band (on a phone the Movies/Shows switch, with Filter at
+   the end of its line), then content. */
+.browse-head { display: flex; flex-direction: column; gap: 0.75rem; padding-bottom: 0.75rem; }
+.browse-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
+.browse-switch { display: flex; gap: 0.5rem; }
+@media (max-width: 720px) { .browse-bar { justify-content: space-between; } }
+
+/* ---------- recordings ---------- */
+.rec-row { display: flex; align-items: center; gap: 0.75rem 1rem; flex-wrap: wrap; }
+/* On a phone the text keeps the row and the actions go under it. */
+.rec-row > :first-child { flex-basis: 16rem; }
+/* A choice with a line of explanation under its name. */
+.rec-choice { justify-content: flex-start; height: auto; padding-block: 0.5rem; text-align: left; white-space: normal; }
+/* A choice in the Record dialog that needs a word from the viewer. */
+.rec-option { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border-radius: var(--radius-md); background: color-mix(in srgb, var(--t-text) 5%, transparent); }

@@ -1,3 +1,22 @@
+/* The player's frame, top and bottom bars and the channel OSD (moved here from base.css). */
+/* player */
+.player { position: fixed; inset: 0; background: #000; color: #fff; z-index: 60; overflow: hidden; }
+.player video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; }
+/* What the player shows while a stream starts: the title's poster or the channel's logo, modest and centred. */
+.player-splash-art { max-width: min(40vw, 22rem); max-height: 42dvh; object-fit: contain; border-radius: var(--radius-lg); box-shadow: 0 1rem 3rem rgba(0, 0, 0, .5); }
+.player-ui { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; justify-content: space-between; opacity: 0; transition: opacity var(--dur-base) var(--ease); pointer-events: none; }
+.player-ui[data-show='true'] { opacity: 1; pointer-events: auto; }
+.player-ui .top { padding: var(--safe-y) var(--safe-x) 1.5rem; background: linear-gradient(to bottom, rgba(0,0,0,.7), transparent); display: flex; gap: 1rem; align-items: center; }
+.player-ui .bottom { padding: 3rem var(--safe-x) var(--safe-y); background: linear-gradient(to top, rgba(0,0,0,.85), transparent); display: flex; flex-direction: column; gap: 0.75rem; }
+.player .btn { background: rgba(255,255,255,.16); color: #fff; }
+.player .btn-primary { background: var(--t-accent); color: var(--t-accent-text); }
+.osd { position: absolute; z-index: 4; left: var(--safe-x); bottom: 2.5rem; right: var(--safe-x); padding: 1rem 1.25rem; border-radius: var(--radius-lg); background: rgba(8,10,16,.82); display: flex; flex-direction: column; gap: .5rem; transition: opacity var(--dur-base) var(--ease), transform var(--dur-base) var(--ease); }
+.osd[data-show='false'] { opacity: 0; transform: translateY(0.75rem); pointer-events: none; }
+/* while the control bar is visible, sit the channel OSD above it instead of on top of the buttons */
+.player-ui[data-show='true'] ~ .osd { bottom: calc(var(--safe-y) + 4.25rem); }
+.osd-num { font-size: var(--text-title); font-weight: 700; color: var(--t-accent); min-width: 3.5rem; }
+.numpad { position: absolute; z-index: 5; top: 2rem; right: var(--safe-x); font-size: var(--text-display); font-weight: 700; background: rgba(8,10,16,.75); padding: .25rem 1.25rem; border-radius: var(--radius-md); }
+.osd { border: 1px solid rgba(255, 255, 255, .18); box-shadow: var(--surface-shadow); }
 /* The player's scrubber, control bar and overlays. Kept apart from base.css so the app shell can
    change beside it; loaded with the player, after base.css, whose .player rules it builds on. */
 
@@ -180,23 +199,19 @@
   background: linear-gradient(0deg, rgba(0,0,0,.88) 0%, rgba(0,0,0,.6) 45%, transparent 100%);
 }
 
-/* ---------- glass buttons (mockup .gb) ---------- */
-.gbtn {
-  display: grid; place-items: center; flex: none; width: max(2.7rem, 44px); height: max(2.7rem, 44px); border-radius: 50%; cursor: pointer; color: #fff;
-  background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.05)); border: 1px solid rgba(255,255,255,.18);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 6px 18px rgba(0,0,0,.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-}
-.gbtn svg { width: 1.3rem; height: 1.3rem; }
-.gbtn.fx[data-focused='true'], .gbtn:hover {
-  outline: 0; transform: scale(1.06); background: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.1));
+/* ---------- glass buttons: the design system's .ds-glass (ds.css), white over the picture (mockup .gb) ---------- */
+.player .ds-glass { width: max(2.7rem, 44px); height: max(2.7rem, 44px); }
+.player .ds-glass.ds-glass-lg { width: max(3.6rem, 52px); height: max(3.6rem, 52px); }
+/* Over moving video the ring hugs the button, and the glass brightens. */
+:is(.player, .mini-bar) .ds-glass.fx[data-focused='true'] {
+  outline: 0; transform: scale(1.06); background: var(--glass-fill-hi);
   box-shadow: 0 0 0 0.15rem var(--t-accent), 0 0 1rem color-mix(in srgb, var(--t-accent) 45%, transparent);
 }
-.gbtn[aria-pressed='true'] { background: color-mix(in srgb, var(--t-accent) 30%, rgba(255,255,255,.08)); border-color: color-mix(in srgb, var(--t-accent) 70%, transparent); }
-.gbtn[aria-disabled='true'] { opacity: 0.35; cursor: default; transform: none; box-shadow: none; }
-.gbtn-big { width: max(3.6rem, 52px); height: max(3.6rem, 52px); background: #fff; color: #0a0e1c; border-color: #fff; }
-.gbtn-big svg { width: 1.5rem; height: 1.5rem; }
-.gbtn-big.fx[data-focused='true'], .gbtn-big:hover { background: #fff; }
+@media (hover: hover) {
+  :is(.player, .mini-bar) .ds-glass:not([aria-disabled='true']):hover { transform: scale(1.06); box-shadow: 0 0 0 0.15rem var(--t-accent), 0 0 1rem color-mix(in srgb, var(--t-accent) 45%, transparent); }
+}
+:is(.player, .mini-bar) .ds-glass[aria-pressed='true'] { color: #fff; background: color-mix(in srgb, var(--t-accent) 30%, rgba(255,255,255,.08)); border-color: color-mix(in srgb, var(--t-accent) 70%, transparent); }
+:is(.player, .mini-bar) .ds-glass-solid, :is(.player, .mini-bar) .ds-glass-solid.fx[data-focused='true'] { background: #fff; color: #0a0e1c; }
 
 /* ---------- timeline (mockup .track) ---------- */
 .player .scrub-hit { height: 2rem; }
@@ -289,7 +304,7 @@
   .player .pbar-center { grid-area: center; gap: 0.5rem; }
   .player .pbar-start { grid-area: start; gap: 0.5rem; }
   .player .pbar-end { grid-area: end; gap: 0.5rem; flex-basis: auto; justify-content: flex-end; }
-  .gbtn-big { width: 3.5rem; height: 3.5rem; }
+  .player .ds-glass.ds-glass-lg { width: 3.5rem; height: 3.5rem; }
   .pextras-skip, .pextras-card { right: 1rem; }
   .pextras-skip[data-chrome='true'] { bottom: calc(var(--player-bar, 13rem) - 2.5rem); }
   .pextras-card[data-chrome='true'] { bottom: calc(var(--player-bar, 13rem) + 1.25rem); }
