@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from './helpers'
+import { signIn, titleMenu } from './helpers'
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -130,8 +130,8 @@ test('Sports says nothing about audio: the player asks, as for any channel, when
 test('Title source chooser distinguishes verified tracks from the actual default audio', async ({ page }) => {
   await signIn(page)
   await page.goto('/title/tmdb%3Amovie%3Amulti')
-  // Play plays; the chooser is the viewer's own errand, from Choose source.
-  await page.getByTestId('title-source').click()
+  // Play plays; the chooser is the viewer's own errand, from Version in the ⋯ menu.
+  await titleMenu(page, 'title-source')
   await expect(page.getByRole('dialog')).toContainText('Verified tracks: English, French · Default audio: French')
   expect(await bodies(page)).toEqual([])
 })

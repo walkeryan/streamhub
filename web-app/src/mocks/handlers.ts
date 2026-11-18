@@ -2,7 +2,7 @@ import type { components } from '../api/schema'
 import { delay, http, HttpResponse } from 'msw'
 import type { Channel, PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
-  DISCLAIMER, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf,
+  DISCLAIMER, EPISODE_NAMES, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf, showSeed,
   searchBroadcasts, sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
@@ -79,7 +79,7 @@ function episodeDescriptor(id: string): PlaybackDescriptor | null {
   const eps = (s: number) => episodesOf(show, s)
   const here = eps(season)[n - 1]
   if (!series || !here) return null
-  const name = (t: Tile) => t.title.replace(/^\d+\.\s*/, '')
+  const name = (t: Tile) => t.title.replace(/^(?:\d+\.|E\d+ ·)\s*/, '')
   const upNext = (s: number, e: number) => {
     const t = eps(s)[e - 1]
     return t ? { id: t.id, title: name(t), subtitle: `S${s} · E${e}`, image: t.backdrop ?? null, duration_ms: 30_000 } : null
@@ -155,7 +155,8 @@ export const handlers = [
       const option = { variant_id: variant, source_id: variant.split(':')[1], source_name: 'Verified fixture', provider_label: id, kind: 'channel', audio_languages: ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: 'audio_track_metadata', preferred_audio_available: true }
       return HttpResponse.json({ id, preferred_languages: ['eng'], options: [option], automatic_variant_id: variant, selection_required: false })
     }
-    const tile = tileById(id)
+    const episode = /^tmdb:episode:(\d+):(\d+):\d+$/.exec(id)
+    const tile = tileById(id) ?? (episode ? episodesOf(Number(episode[1]), Number(episode[2])).find((e) => e.id === id) : undefined)
     // Films carry a probed two-track file; series keep source-reported audio and list no tracks.
     const audio_tracks: components['schemas']['AudioTrack'][] = tile?.kind === 'movie' ? [
       { index: 0, language: 'eng', codec: 'ac3', channels: 6, title: null, default: true },
@@ -296,10 +297,26 @@ export const handlers = [
   http.get(`${B}/titles/:id`, async ({ params }) => {
     const id = decodeURIComponent(String(params.id))
     await delay(80)
-    if (id.startsWith('tmdb:season:')) {
-      const [, , show, season] = id.split(':')
+    // Seasons and episodes of a fixture series, each naming its show and season as the server does.
+    if (id.startsWith('tmdb:season:') || id.startsWith('tmdb:episode:')) {
+      const [, kind, show, season, number] = id.split(':')
+      const seed = showSeed(Number(show))
       const eps = episodesOf(Number(show), Number(season))
-      return HttpResponse.json({ ...eps[0]!, id, kind: 'season', title: `Season ${season}`, episodes: eps, seasons: [], attribution: 'Availability data by JustWatch' })
+      if (!seed || !eps.length) return HttpResponse.json({ code: 'not_found', message: 'Title not found' }, { status: 404 })
+      const parent = {
+        show: { id: `tmdb:tv:${seed.n}`, title: seed.title, backdrop: tileOf(seed).backdrop },
+        season: { id: `tmdb:season:${show}:${season}`, title: `Season ${season}`, number: Number(season) },
+        episode_number: kind === 'episode' ? Number(number) : null, episode_count: kind === 'episode' ? eps.length : null,
+        episode_title: kind === 'episode' ? EPISODE_NAMES[Number(number) - 1] ?? null : null,
+      }
+      const common = { attribution: 'Availability data by JustWatch', content_rating: 'TV-14', parent, cast: [], seasons: [], genres: seed.genres }
+      if (kind === 'season') return HttpResponse.json({ ...eps[0]!, ...common, id, kind: 'season', title: `Season ${season}`, episodes: eps, progress_pct: null, overview: seed.overview, runtime_min: null })
+      const ep = eps.find((e) => e.id === id)
+      if (!ep) return HttpResponse.json({ code: 'not_found', message: 'Title not found' }, { status: 404 })
+      return HttpResponse.json({
+        ...ep, ...common, episodes: [], runtime_min: ep.runtime_min, rating: seed.rating, release_date: `${seed.year}-0${Number(season)}-${String(10 + Number(number)).padStart(2, '0')}`,
+        overview: `${EPISODE_NAMES[Number(number) - 1]}: ${seed.overview}`,
+      })
     }
     const seed = seedFor(id)
     const t = tileById(id)
@@ -310,11 +327,38 @@ export const handlers = [
     const show = seed.kind === 'show' && a.sources.length > 0
     return HttpResponse.json({
       ...a, overview: seed.overview, genres: seed.genres, runtime_min: seed.runtime,
-      cast: ['Mara Ellison', 'Theo Okafor', 'Junko Hale', 'Luis Ferreira'].map((name, i) => ({ name, character: ['Lead', 'Rival', 'Mentor', 'Stranger'][i] ?? '', photo: null })),
+      cast: ['Mara Ellison', 'Theo Okafor', 'Junko Hale', 'Luis Ferreira', 'Ines Varga', 'Kofi Mensah'].map((name, i) => ({ name, character: ['Lead', 'Rival', 'Mentor', 'Stranger', 'Harbor Master', 'Ferryman'][i] ?? '', photo: null })),
       seasons: show ? seasonsOf(seed.n) : [], episodes: show ? episodesOf(seed.n, 1) : [],
+      content_rating: seed.kind === 'show' ? 'TV-14' : 'PG-13', release_date: `${seed.year}-03-14`,
       request_seasons: seed.kind === 'show' && a.requestable ? [1, 2, 3] : [],
       attribution: 'Availability data by JustWatch',
     })
+  }),
+  // The household's activity: invented entries for a few fixture titles. A kids profile sees the kids' only.
+  http.get(`${B}/titles/:id/activity`, async ({ params, request }) => {
+    const id = decodeURIComponent(String(params.id))
+    await delay(60)
+    const me = profiles.find((p) => p.id === currentProfileId(request))
+    const hours = (n: number) => new Date(Date.now() - n * 3_600_000).toISOString()
+    const all: Array<components['schemas']['TitleActivityEntry'] & { kids: boolean }> = id === 'tmdb:tv:201' ? [
+      { profile_id: 'p1', name: 'Alex', me: false, action: 'watching', at: hours(2), season_number: 1, episode_number: 2, progress_pct: 31, minutes_left: 33, season_finished: false, kids: false },
+      { profile_id: 'p2', name: 'Guest', me: false, action: 'finished', at: hours(72), season_number: 1, episode_number: 6, season_finished: true, kids: false },
+      { profile_id: 'p3', name: 'Kids', me: false, action: 'listed', at: hours(24 * 8), season_finished: false, kids: true },
+    ] : id === 'tmdb:movie:103' ? [
+      { profile_id: 'p2', name: 'Guest', me: false, action: 'finished', at: hours(30), season_finished: false, kids: false },
+    ] : []
+    const entries = all
+      .filter((e) => !me?.kids || e.kids || e.profile_id === me.id)
+      .map(({ kids: _kids, ...e }) => ({ ...e, me: e.profile_id === me?.id }))
+    return HttpResponse.json({ id, entries })
+  }),
+  // More like this: other fixture titles of the same kind; what plays here carries its in-app badge.
+  http.get(`${B}/titles/:id/similar`, async ({ params }) => {
+    const id = decodeURIComponent(String(params.id))
+    await delay(120)
+    const kind = id.startsWith('tmdb:tv:') ? 'show' : id.startsWith('tmdb:movie:') ? 'movie' : null
+    const tiles = kind ? [...titles, ...unavailable].filter((t) => t.kind === kind && t.id !== id).slice(0, 10) : []
+    return HttpResponse.json({ id, tiles })
   }),
   // Fixture metadata catalog; source/language scope changes availability only.
   // Audio evidence here is the explicit English fixture used by playback/options.
@@ -477,7 +521,13 @@ export const handlers = [
     }
     return HttpResponse.json(d)
   }),
-  http.post(`${B}/playback/progress`, () => new HttpResponse(null, { status: 204 })),
+  // A stop at the end marks a title watched, a stop at the start unwatched, as the server reads them.
+  http.post(`${B}/playback/progress`, async ({ request }) => {
+    const b = (await request.json()) as { id: string; position_ms: number; duration_ms?: number | null; state: string }
+    if (b.state === 'stopped' && b.position_ms <= 0) delete progress[b.id]
+    else if (b.state === 'stopped' && b.duration_ms && b.position_ms >= b.duration_ms) progress[b.id] = { pos: b.duration_ms, dur: b.duration_ms }
+    return new HttpResponse(null, { status: 204 })
+  }),
 
   http.get(`${B}/favorites`, () => HttpResponse.json([
     ...channels.filter((c) => fav.has(c.id)).map(withNowNext).map(channelTile),

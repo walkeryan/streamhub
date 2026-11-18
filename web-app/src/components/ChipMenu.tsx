@@ -62,7 +62,7 @@ export function ChipMenu({ focusKey, name, value, all, options, onChange, testId
  * when it would cross the window's right edge, and scrolling inside itself when it is longer than the room it has.
  * Like a dialog it traps Back and the arrows, and puts focus back on the chip when it closes.
  */
-function Popover({ anchor, firstFocusKey, onClose, children }: { anchor: RefObject<FocusableHandle | null>; firstFocusKey: string; onClose: () => void; children: ReactNode }) {
+export function Popover({ anchor, firstFocusKey, onClose, children, className }: { anchor: RefObject<FocusableHandle | null>; firstFocusKey: string; onClose: () => void; children: ReactNode; className?: string }) {
   const box = useRef<HTMLDivElement>(null)
   useBackHandler(() => { onClose() })
   useOverlayFocus(true, firstFocusKey)
@@ -89,7 +89,7 @@ function Popover({ anchor, firstFocusKey, onClose, children }: { anchor: RefObje
   }, [anchor])
   return createPortal(
     <div className="chip-menu-scrim" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={box} className="chip-menu">{children}</div>
+      <div ref={box} className={className ? `chip-menu ${className}` : 'chip-menu'}>{children}</div>
     </div>,
     document.body,
   )

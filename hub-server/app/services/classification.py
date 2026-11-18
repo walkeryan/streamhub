@@ -67,6 +67,17 @@ def summarize(
     }
 
 
+def rating_code(evidence: Any) -> str | None:
+    """The one US classification a title's evidence settles on (``PG-13``, ``TV-14``), for display; else None."""
+    if not isinstance(evidence, dict) or evidence.get("status") != "known":
+        return None
+    for record in evidence.get("records") or []:
+        if isinstance(record, dict) and record.get("country") == "US" and record.get("status") == "known":
+            code = record.get("code")
+            return str(code) if code else None
+    return None
+
+
 def tmdb_age_evidence(data: dict[str, Any], media_type: str) -> dict[str, Any]:
     field = "release_dates" if media_type == "movie" else "content_ratings"
     scope = "movie" if media_type == "movie" else "series"

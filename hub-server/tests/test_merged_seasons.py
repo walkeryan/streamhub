@@ -82,7 +82,17 @@ async def test_one_copy_is_unchanged_and_no_seasons_keeps_its_episodes() -> None
     flat = catalog({("iptv", "p"): [episode("iptv", "p", 1, 1)]})
     assert await flat._merged_seasons([only], CTX) == (
         [],
-        [{"title": "Episode 1", "sources": [], "id": "lib:iptv:p:s1e1", "kind": "episode"}],
+        [
+            {
+                "title": "Episode 1",
+                "sources": [],
+                "id": "lib:iptv:p:s1e1",
+                "kind": "episode",
+                "season_number": 1,
+                "episode_number": 1,
+                "runtime_min": None,
+            }
+        ],
     )
 
 

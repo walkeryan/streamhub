@@ -233,6 +233,7 @@ class MetaTitle:
 
     age_evidence: dict[str, Any] = field(default_factory=dict)
     season_numbers: list[int] = field(default_factory=list)  # tv: regular seasons, specials excluded
+    release_date: str | None = None  # ISO date of the release (movie) or first air date (tv)
 
 
 @dataclass(slots=True)

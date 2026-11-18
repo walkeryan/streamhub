@@ -4,6 +4,7 @@
 - watch/providers per region (JustWatch data)
 - trending/all/week for the hero when the user has no sources
 - find/{imdb_id}
+- movie|tv recommendations ("More like this" on a title page)
 - responses cached in the SQLite cache table with TTL; 429 handled with backoff
 """
 
@@ -48,6 +49,11 @@ def _year(date: str | None) -> int | None:
     return None
 
 
+def _date(value: Any) -> str | None:
+    text = str(value or "")[:10]
+    return text if len(text) == 10 and text[4] == "-" and text[:4].isdigit() else None
+
+
 def to_meta(d: dict[str, Any], media_type: str | None = None) -> MetaTitle | None:
     mt = media_type or d.get("media_type")
     if mt not in ("movie", "tv"):
@@ -77,6 +83,7 @@ def to_meta(d: dict[str, Any], media_type: str | None = None) -> MetaTitle | Non
         media_type=mt,
         title=title,
         year=_year(d.get("release_date") or d.get("first_air_date")),
+        release_date=_date(d.get("release_date") or d.get("first_air_date")),
         overview=d.get("overview") or None,
         poster=image_url(d.get("poster_path"), "w342"),
         backdrop=image_url(d.get("backdrop_path"), "w1280"),
@@ -236,6 +243,22 @@ class TmdbClient:
             return None
         vids.sort(key=lambda v: (not v.get("official"), (v.get("iso_639_1") or "") != "en"))
         return str(vids[0]["key"])
+
+    async def recommendations(self, media_type: str, tmdb_id: int, limit: int = 20) -> list[MetaTitle]:
+        """TMDB's "more like this" for one title, cached like the details. Adult results are dropped here."""
+        if media_type not in ("movie", "tv"):
+            return []
+        data = await self._get(f"/{media_type}/{tmdb_id}/recommendations", TTL_DETAILS, page=1)
+        out: list[MetaTitle] = []
+        for row in (data or {}).get("results") or []:
+            if not isinstance(row, dict) or row.get("adult"):
+                continue
+            meta = to_meta(row, row.get("media_type") or media_type)
+            if meta is not None and meta.media_type == media_type and meta.tmdb_id != tmdb_id:
+                out.append(meta)
+            if len(out) >= limit:
+                break
+        return out
 
     async def season(self, tmdb_id: int, season: int) -> dict[str, Any] | None:
         return await self._get(f"/tv/{tmdb_id}/season/{season}", TTL_DETAILS)

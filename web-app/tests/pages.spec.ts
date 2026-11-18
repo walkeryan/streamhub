@@ -41,7 +41,7 @@ test('title detail: availability attribution and hand-off labelling', async ({ p
   await signIn(page)
   await page.goto('/title/' + encodeURIComponent('tmdb:movie:105')) // Netflix only
   await expect(page.getByTestId('title-play')).toContainText('Open in app')
-  await expect(page.getByTestId('available-on')).toContainText('Availability data by JustWatch')
+  await expect(page.getByTestId('justwatch-attribution')).toContainText('Availability data by JustWatch')
 })
 
 test('a poster still arriving leaves its tile blank, then fades in whole: it never paints top to bottom', async ({ page }) => {

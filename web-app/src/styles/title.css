@@ -1,0 +1,182 @@
+/* ---------- title page (films, series, seasons, episodes) ----------
+   One page for the TV (in its WebView), browsers and phones. Sizes follow the approved mockup drawn at
+   1600 px wide, where 1 rem is 20 px (the root scales with the window, so the TV gets the same layout).
+   Glass controls are drawn from the theme's text colour, so a light theme gets dark glass. */
+.tp { position: relative; isolation: isolate; }
+.tp-bg { position: absolute; inset: 0 0 auto 0; height: min(100dvh, 56rem); overflow: hidden; z-index: -1; pointer-events: none; }
+.tp .tp-bg .hero-layer { filter: blur(0.125rem) saturate(1.05); transform: scale(1.03); }
+.tp-veil {
+  position: absolute; inset: 0; z-index: 1;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--t-bg) 97%, transparent) 0%, color-mix(in srgb, var(--t-bg) 88%, transparent) 38%, color-mix(in srgb, var(--t-bg) 55%, transparent) 70%, color-mix(in srgb, var(--t-bg) 35%, transparent) 100%),
+    linear-gradient(0deg, var(--t-bg) 0%, transparent 45%);
+}
+.tp-page { padding: 2rem var(--safe-x) calc(var(--safe-y) + 2rem); display: flex; flex-direction: column; gap: 2.2rem; }
+
+/* Picture on the left, everything about the title on the right. */
+.tp-hero { display: flex; gap: 2.2rem; align-items: flex-start; min-width: 0; }
+.tp-pic { flex: none; width: 23.5rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.tp-pic-art {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 0.7rem; overflow: hidden; background: var(--t-surface-alt);
+  box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, .55), 0 0 0 1px color-mix(in srgb, var(--t-text) 8%, transparent);
+}
+.tp-pic-art[data-shape='poster'] { width: 15.6rem; aspect-ratio: 2 / 3; }
+.tp-pic-art > img, .tp-pic-art > .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tp-pic-bar { position: absolute; left: 0.7rem; right: 0.7rem; bottom: 0.6rem; height: 0.25rem; }
+.tp-pic-cap { text-align: center; color: var(--t-text-muted); font-size: 0.75rem; }
+.tp-pic-art[data-shape='poster'] + .tp-pic-cap { width: 15.6rem; }
+
+.tp-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tp-show {
+  display: inline-flex; align-items: center; gap: 0.4rem; max-width: 100%; width: max-content;
+  font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.08; padding: 0.05em 0.25em 0.1em; margin: -0.05em -0.25em 0;
+  border-radius: var(--radius-md);
+}
+.tp-show > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-wrap: balance; }
+.tp-show svg { flex: none; width: 1.5rem; height: 1.5rem; color: var(--t-text-muted); }
+.tp-show.fx[data-focused='true'] { transform: none; }
+h1.tp-show { cursor: default; }
+.tp-sub { margin-top: 0.4rem; font-size: 1.3rem; font-weight: 650; color: color-mix(in srgb, var(--t-text) 90%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-se { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.8rem; font-size: 0.85rem; color: var(--t-text-muted); }
+.tp-glass-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.6rem; border-radius: var(--radius-pill); color: var(--t-text);
+  background: color-mix(in srgb, var(--t-text) 9%, transparent); border: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent);
+}
+.tp-glass-chip.fx[data-focused='true'] { transform: scale(1.04); }
+.tp-meta { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; align-items: center; margin-top: 0.7rem; font-size: 0.8rem; color: var(--t-text-muted); }
+.tp-rating { border: 1.5px solid color-mix(in srgb, var(--t-text) 78%, transparent); color: var(--t-text); font-weight: 700; font-size: 0.65rem; padding: 0.05rem 0.35rem; border-radius: 0.25rem; line-height: 1.4; }
+.tp-star { color: var(--t-text); } .tp-star b { color: #ffcc33; font-weight: 400; }
+
+/* The one orange button with words, then round glass buttons with none. */
+.tp-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: center; margin-top: 1.4rem; }
+.tp-actions .tp-play {
+  display: inline-flex; align-items: center; gap: 0.6rem; height: 2.9rem; padding: 0 1.4rem; border-radius: 0.6rem; max-width: 100%;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--t-accent) 62%, #fff 38%), var(--t-accent)); color: var(--t-accent-text);
+  font-size: 0.95rem; font-weight: 750; white-space: nowrap; box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--t-accent) 35%, transparent);
+}
+.tp-actions .tp-play > span { overflow: hidden; text-overflow: ellipsis; }
+.tp-actions .tp-play svg { flex: none; width: 1.1rem; height: 1.1rem; }
+.tp-actions .tp-play.fx[data-focused='true'] { transform: scale(1.04); outline-color: var(--t-focus-ring); }
+.tp-glass {
+  display: grid; place-items: center; flex: none; width: 2.9rem; height: 2.9rem; border-radius: 50%; color: var(--t-text);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--t-text) 16%, transparent), color-mix(in srgb, var(--t-text) 5%, transparent));
+  border: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--t-text) 25%, transparent), 0 0.3rem 0.9rem rgba(0, 0, 0, .35);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.tp-glass svg { width: 1.3rem; height: 1.3rem; }
+.tp-glass[aria-pressed='true'] { color: var(--t-accent); }
+.tp-glass.fx[data-focused='true'] { transform: scale(1.06); outline-color: var(--t-accent); box-shadow: 0 0 1rem color-mix(in srgb, var(--t-accent) 45%, transparent); }
+/* The label a glass button has instead of words: shown under it while it has focus (TV, keyboard) or the pointer. */
+.tp-glass-wrap { position: relative; display: inline-grid; }
+.tp-tip {
+  position: absolute; top: calc(100% + 0.45rem); left: 50%; transform: translateX(-50%); z-index: 6; pointer-events: none;
+  padding: 0.2rem 0.55rem; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--t-surface) 94%, transparent); color: var(--t-text);
+  font-size: 0.7rem; font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity var(--dur-fast) var(--ease);
+  border: 1px solid color-mix(in srgb, var(--t-text) 14%, transparent);
+}
+.tp-glass-wrap:has(> .fx[data-focused='true']) .tp-tip { opacity: 1; }
+@media (hover: hover) { .tp-glass-wrap:hover .tp-tip { opacity: 1; } }
+
+/* The ⋯ menu: a short list under its button (a sheet on a phone). */
+.tp-menu.chip-menu { width: 15rem; padding: 0.4rem; border-radius: 0.7rem; background: color-mix(in srgb, var(--t-surface) 96%, transparent); border-color: color-mix(in srgb, var(--t-text) 18%, transparent); box-shadow: 0 1.2rem 3rem rgba(0, 0, 0, .6); }
+.tp-menu-list { display: flex; flex-direction: column; gap: 0.1rem; }
+.tp-menu-item { display: flex; align-items: center; gap: 0.7rem; min-height: 2.4rem; padding: 0 0.7rem; border-radius: 0.45rem; font-size: 0.8rem; font-weight: 500; color: var(--t-text); white-space: nowrap; }
+.tp-menu-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tp-menu-item svg { flex: none; width: 1rem; height: 1rem; color: var(--t-text-muted); }
+.tp-menu-item[aria-pressed='true'] svg { color: var(--t-accent); }
+.tp-menu-item.fx[data-focused='true'] { transform: none; outline-offset: calc(-1 * var(--focus-border)); outline-color: var(--t-accent); box-shadow: none; background: color-mix(in srgb, var(--t-accent) 16%, transparent); }
+.tp-menu-sep { border: 0; border-top: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); margin: 0.3rem 0.4rem; }
+.dialog .tp-menu-item { min-height: 3rem; font-size: var(--text-body); background: var(--t-surface-alt); border-radius: var(--radius-md); }
+.dialog .tp-menu-list { gap: 0.5rem; }
+.dialog .tp-menu-item svg { width: 1.25rem; height: 1.25rem; }
+
+.tp-overview { margin-top: 1.1rem; max-width: 38rem; font-size: 0.9rem; line-height: 1.6; color: color-mix(in srgb, var(--t-text) 88%, transparent); }
+.tp-spec { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.3rem 0.9rem; margin-top: 1rem; font-size: 0.8rem; max-width: 38rem; }
+.tp-spec dt { color: var(--t-text-muted); }
+.tp-spec dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-status { margin-top: 1rem; max-width: 38rem; }
+.tp-note { margin-top: 1rem; color: var(--t-text-muted); font-size: 0.8rem; }
+
+/* Sections below the hero: a heading, then a row that scrolls sideways out to the window's edge. */
+.tp-section h2 { display: flex; align-items: baseline; gap: 0.6rem; margin: 0 0 0.6rem; font-size: 1.2rem; font-weight: 750; letter-spacing: -0.01em; }
+.tp-section h2 small { color: var(--t-text-muted); font-weight: 500; font-size: 0.75rem; letter-spacing: 0; }
+.tp-row { display: flex; gap: 0.9rem; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; margin-inline: calc(-1 * var(--safe-x)); padding: 0.4rem var(--safe-x) 0.6rem; scroll-padding-inline: var(--safe-x); }
+.tp-row::-webkit-scrollbar { display: none; }
+.tp-seasons { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.2rem; }
+.tp-count { margin-left: 0.4rem; color: var(--t-text-muted); font-size: 0.75rem; }
+
+/* Season strip: landscape stills with the number, name and runtime under each. */
+.tp-ep { flex: none; width: 11.8rem; border-radius: 0.5rem; }
+.tp-ep-art { position: relative; aspect-ratio: 16 / 9; border-radius: 0.5rem; overflow: hidden; background: var(--t-surface-alt); box-shadow: 0 0 0 1px color-mix(in srgb, var(--t-text) 8%, transparent); }
+.tp-ep-art .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tp-ep[aria-current='page'] .tp-ep-art { box-shadow: 0 0 0 0.15rem var(--t-accent); }
+.tp-ep-bar { position: absolute; left: 0.4rem; right: 0.4rem; bottom: 0.35rem; }
+.tp-ep-tick { position: absolute; right: 0.4rem; top: 0.4rem; width: 1.2rem; height: 1.2rem; border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, .6); color: #7ee08a; }
+.tp-ep-tick svg { width: 0.8rem; height: 0.8rem; stroke-width: 3; }
+.tp-ep p { margin-top: 0.4rem; font-size: 0.75rem; color: color-mix(in srgb, var(--t-text) 88%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-ep p small { color: var(--t-text-muted); font-size: inherit; }
+.tp-ep.fx[data-focused='true'] { transform: scale(1.04); outline-offset: 0.15rem; }
+.tp-ep-fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 0.5rem; text-align: center; font-weight: 700; font-size: 0.8rem; color: #fff; }
+
+/* Activity: who in the household did what. */
+.tp-acts { display: flex; gap: 0.9rem; flex-wrap: wrap; }
+.tp-act {
+  display: flex; gap: 0.7rem; align-items: center; min-width: 0; max-width: 100%; padding: 0.7rem 1rem 0.7rem 0.7rem; border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--t-text) 9%, transparent); border: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent);
+}
+.tp-act-face { flex: none; width: 2.6rem; height: 2.6rem; border-radius: 50%; display: grid; place-items: center; overflow: hidden; font-weight: 800; font-size: 1rem; color: #fff; }
+.tp-act-text { min-width: 0; display: flex; flex-direction: column; }
+.tp-act-text b { font-size: 0.85rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-act-text small { color: var(--t-text-muted); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-act-bar { margin-top: 0.3rem; width: 7.5rem; max-width: 100%; }
+
+/* Cast & Crew: round photos, the name, the part. */
+.tp-cast { flex: none; width: 7.5rem; text-align: center; border-radius: var(--radius-md); }
+.tp-cast-photo { position: relative; width: 7.5rem; height: 7.5rem; border-radius: 50%; overflow: hidden; background: var(--t-surface-alt); box-shadow: 0 0 0 1px color-mix(in srgb, var(--t-text) 12%, transparent), 0 0.5rem 1.3rem rgba(0, 0, 0, .45); }
+.tp-cast-photo .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 20%; }
+.tp-cast-photo .tp-cast-initials { position: absolute; inset: 0; display: grid; place-items: center; font-size: 2rem; font-weight: 800; color: #fff; }
+.tp-cast b { display: block; margin-top: 0.6rem; font-size: 0.8rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-cast small { display: block; color: var(--t-text-muted); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-cast.fx[data-focused='true'] { transform: scale(1.04); outline: none; box-shadow: none; }
+.tp-cast.fx[data-focused='true'] .tp-cast-photo { outline: var(--focus-border) solid var(--t-focus-ring); outline-offset: 0.15rem; }
+
+/* More like this: posters with the green tick on what plays here, the name under each. */
+.tp-like { flex: none; width: 8.6rem; }
+.tp-like .tile-poster { width: 8.6rem; height: 12.9rem; }
+.tp-like > p { margin-top: 0.4rem; font-size: 0.75rem; color: color-mix(in srgb, var(--t-text) 88%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-attribution { margin-top: -1rem; }
+
+/* Narrower windows: the picture shrinks before anything wraps. */
+@media (max-width: 1100px) and (min-width: 721px) {
+  .tp-pic { width: 18rem; }
+  .tp-show { font-size: 1.9rem; }
+}
+
+/* Phones: everything stacks; the picture spans the width; the glass buttons stay on the Play button's line. */
+@media (max-width: 720px) {
+  .tp-page { padding: 1rem 1rem 6rem; gap: 1.75rem; }
+  .tp-hero { flex-direction: column; gap: 1rem; }
+  .tp-pic { width: 100%; }
+  .tp-pic-art[data-shape='poster'] { width: 9rem; align-self: flex-start; }
+  .tp-pic-art[data-shape='poster'] + .tp-pic-cap { width: 9rem; }
+  .tp-show { font-size: 1.6rem; }
+  .tp-sub { font-size: 1.1rem; white-space: normal; }
+  .tp-actions { flex-wrap: nowrap; gap: 0.5rem; margin-top: 1rem; }
+  .tp-actions .tp-play { flex: 1; min-width: 0; height: 2.75rem; padding: 0 1rem; justify-content: center; font-size: 1rem; }
+  .tp-glass { width: 2.75rem; height: 2.75rem; }
+  .tp-tip { display: none; }
+  .tp-overview { font-size: 1rem; }
+  .tp-spec { font-size: 0.875rem; grid-template-columns: 5rem minmax(0, 1fr); }
+  .tp-section h2 { font-size: 1.2rem; }
+  .tp-row { margin-inline: -1rem; padding-inline: 1rem; scroll-padding-inline: 1rem; gap: 0.75rem; }
+  .tp-ep { width: 13rem; }
+  .tp-ep p { font-size: 0.875rem; }
+  .tp-acts { flex-wrap: nowrap; overflow-x: auto; margin-inline: -1rem; padding-inline: 1rem; scrollbar-width: none; }
+  .tp-act { flex: none; max-width: 85vw; }
+  .tp-act-text b { font-size: 0.95rem; } .tp-act-text small { font-size: 0.8125rem; }
+  .tp-cast { width: 6rem; } .tp-cast-photo { width: 6rem; height: 6rem; }
+  .tp-cast b { font-size: 0.875rem; } .tp-cast small { font-size: 0.8125rem; }
+  .tp-like { width: 7.5rem; } .tp-like .tile-poster { width: 7.5rem; height: 11.25rem; }
+  .tp-like > p { font-size: 0.8125rem; }
+}

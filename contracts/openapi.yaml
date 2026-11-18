@@ -447,11 +447,67 @@ components:
             genres: {type: array, items: {type: string}}
             runtime_min: {type: integer, nullable: true}
             cast: {type: array, items: {type: object, properties: {name: {type: string}, character: {type: string}, photo: {type: string, nullable: true}}}}
-            seasons: { type: array, items: { $ref: '#/components/schemas/Tile' } }
-            episodes: { type: array, items: { $ref: '#/components/schemas/Tile' } }
+            seasons: { type: array, items: { $ref: '#/components/schemas/EpisodeTile' } }
+            episodes: { type: array, items: { $ref: '#/components/schemas/EpisodeTile' } }
             attribution: {type: string, description: "e.g. 'Availability data by JustWatch'"}
             request_seasons: {type: array, items: {type: integer}, description: "Requestable series only: season numbers a request may pick from (empty = whole series only). With request_missing, the seasons the library is missing."}
             request_missing: {type: boolean, description: "The library has part of this series; a request asks for the seasons in request_seasons that it is missing."}
+            parent: { oneOf: [{ $ref: '#/components/schemas/TitleParent' }, { type: 'null' }], description: "Seasons and episodes: the show and season they belong to, read from stored rows. Null for everything else, and when nothing above the row is known." }
+            content_rating: {type: string, nullable: true, description: "The US classification the stored evidence settles on (PG-13, TV-14); an episode or season shows its series'. Null when unknown or conflicting."}
+            release_date: {type: string, nullable: true, description: "ISO date: the episode's air date, a film's release or a series' first air date, where known."}
+
+    EpisodeTile:
+      description: "A season or an episode as a title page lists it: a Tile with the numbers it is ordered by."
+      allOf:
+        - $ref: '#/components/schemas/Tile'
+        - type: object
+          properties:
+            season_number: {type: integer, nullable: true}
+            episode_number: {type: integer, nullable: true}
+            runtime_min: {type: integer, nullable: true}
+
+    TitleParent:
+      type: object
+      properties:
+        show: { oneOf: [{ type: object, required: [id, title], properties: { id: {type: string, description: "The series' hub id (tmdb:tv:... when identified)"}, title: {type: string}, backdrop: {type: string, nullable: true} } }, { type: 'null' }] }
+        season: { oneOf: [{ type: object, required: [id, title], properties: { id: {type: string}, title: {type: string}, number: {type: integer, nullable: true} } }, { type: 'null' }] }
+        episode_number: {type: integer, nullable: true}
+        episode_count: {type: integer, nullable: true, description: "Episodes stored for this episode's season (\"Episode 3 of 8\")."}
+        episode_title: {type: string, nullable: true, description: "The episode's own name, without the provider's release line."}
+
+    TitleActivity:
+      type: object
+      required: [id, entries]
+      properties:
+        id: {type: string}
+        entries:
+          type: array
+          description: "Newest first, at most 6, one per profile. Only profiles the viewer sees on Who's watching, plus the viewer (me). Empty for an adult title; a kids profile sees kids profiles only."
+          items: { $ref: '#/components/schemas/TitleActivityEntry' }
+
+    TitleActivityEntry:
+      type: object
+      required: [profile_id, name, me, action, at]
+      properties:
+        profile_id: {type: string}
+        name: {type: string}
+        avatar: {type: string, nullable: true}
+        picture: {type: string, nullable: true}
+        me: {type: boolean}
+        action: {type: string, enum: [watching, finished, listed], description: "watching: in progress; finished: watched to the end (an episode, with season_finished on a season's last one); listed: added to My List."}
+        at: {type: string, format: date-time}
+        season_number: {type: integer, nullable: true}
+        episode_number: {type: integer, nullable: true}
+        progress_pct: {type: number, nullable: true}
+        minutes_left: {type: integer, nullable: true}
+        season_finished: {type: boolean, default: false}
+
+    SimilarTitles:
+      type: object
+      required: [id, tiles]
+      properties:
+        id: {type: string}
+        tiles: { type: array, items: { $ref: '#/components/schemas/Tile' }, description: "Same media type as the title, at most 20; adult titles left out; a title that plays here carries its in-app badge." }
 
     BrowseJumps:
       type: object
@@ -1786,6 +1842,18 @@ paths:
       responses: {'200': {description: Available source variants and audio evidence, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackOptions'}}}}}
   /titles/{id}:
     get: { parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleDetail' } } } } } }
+  /titles/{id}/activity:
+    get:
+      summary: What the household's profiles did with a title (its series, for a season or an episode)
+      description: Loaded after the title so the page never waits on it. The same permission, rating and adult gates as GET /titles/{id}.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/TitleActivity' } } } } }
+  /titles/{id}/similar:
+    get:
+      summary: More like this — metadata-provider recommendations for a title (its series, for a season or an episode)
+      description: Cached like other metadata answers; empty without metadata or for an adult title. The rating ceiling applies as on every listing.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SimilarTitles' } } } } }
   /discover/{section}:
     get:
       summary: Paged metadata discovery independent of available sources

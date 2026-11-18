@@ -211,6 +211,10 @@ class MetadataProvider(Protocol):
         """YouTube video key of the best official trailer, if TMDB has one."""
         ...
 
+    async def recommendations(self, media_type: str, tmdb_id: int, limit: int = 20) -> list[MetaTitle]:
+        """Titles like this one, of the same media type, adult ones left out."""
+        ...
+
     def image_url(self, path: str | None, size: str = "w500") -> str | None: ...
 
 

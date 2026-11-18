@@ -87,7 +87,8 @@ useSession.subscribe((session, previous) => {
 export function useGo() {
   const navigate = useNavigate()
   const loc = useLocation()
-  return (to: string, opts?: { replace?: boolean }) => {
+  // `state.from` records the screen that was left, so a screen can tell where Back would take it (see Title).
+  return (to: string, opts?: { replace?: boolean; state?: Record<string, unknown> }) => {
     // Inside the Android TV app its own player plays: this screen stays as it is, focus included.
     if (to.startsWith('/play/') && handOffUrl(to)) return
     memory.set(loc.key, getCurrentFocusKey())
@@ -97,8 +98,8 @@ export function useGo() {
       const token = ++playbackEntrySequence
       playbackEntries.set(token, {profile:session.profile.id,generation:session.generation,url:to,index})
       if (playbackEntries.size > 100) playbackEntries.delete(playbackEntries.keys().next().value!)
-      navigate(to, {...opts,state:{playbackEntry:token}})
-    } else navigate(to, opts)
+      navigate(to, {...opts,state:{from:loc.pathname + loc.search,...opts?.state,playbackEntry:token}})
+    } else navigate(to, {...opts,state:{from:loc.pathname + loc.search,...opts?.state}})
   }
 }
 

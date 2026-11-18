@@ -81,7 +81,8 @@ test('Trailer asks the TV for the trailer, which it opens in its YouTube app; no
   await expect(page.getByTestId('title-play')).toBeVisible()
   const opened: string[] = []
   page.on('popup', (p) => opened.push(p.url()))
-  await page.getByRole('button', { name: 'Trailer' }).click()
+  await page.getByTestId('title-more').click()
+  await page.getByRole('menuitem', { name: 'Show trailer' }).click()
   await expect.poll(async () => (await shellState(page)).plays.length).toBe(1)
   expect(JSON.parse((await shellState(page)).plays[0]!)).toEqual({ v: 1, kind: 'title', id: `trailer:${FILM}` })
   await expect(page).toHaveURL(new RegExp(`/title/${encodeURIComponent(FILM)}`))

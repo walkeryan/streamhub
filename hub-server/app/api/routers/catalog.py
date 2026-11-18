@@ -11,6 +11,7 @@ from fastapi import APIRouter, Query, Request, Response
 from app.api import schemas as S
 from app.api.deps import C, P, SourcesAdmin
 from app.api.policy_route import PolicyCatalogRoute
+from app.services import title_extras as extras
 from app.services.adult import adult_scope, require_adult
 from app.services.auth import Principal
 from app.services.errors import Forbidden, NotFound, ServiceError
@@ -222,6 +223,27 @@ async def title(id: str, c: C, p: P) -> dict[str, Any]:
     detail = await c.catalog.detail(id, p.profile_id)
     await require_adult(c.db, p, id)
     return await c.requests.annotate_detail(p, detail)
+
+
+@router.get("/titles/{id}/activity", response_model=S.TitleActivity, tags=["catalog"])
+async def title_activity(id: str, c: C, p: P, response: Response) -> dict[str, Any]:
+    """What the household's profiles did with this title; asked for after the title, so the page never waits."""
+    # The same doors as the title itself: whoever may not open it hears nothing about who watched it.
+    await require_watch(c.db, p.permissions, id)
+    await require_adult(c.db, p, id)
+    response.headers["Cache-Control"] = "private, no-store"
+    return await extras.title_activity(c.catalog, id, p.profile_id)
+
+
+@router.get("/titles/{id}/similar", response_model=S.SimilarTitles, tags=["catalog"])
+async def title_similar(id: str, c: C, p: P, response: Response) -> dict[str, Any]:
+    """More like this: the metadata provider's recommendations, with what plays here ticked."""
+    await require_watch(c.db, p.permissions, id)
+    await require_adult(c.db, p, id)
+    response.headers["Cache-Control"] = "private, no-store"
+    # A list like any other: adult titles stay out, whatever this session has unlocked.
+    with listing_scope(p, False):
+        return await c.requests.annotate(p, await extras.similar_titles(c.catalog, id, p.profile_id))
 
 
 @router.get("/discover/{section}", response_model=S.DiscoveryPage, tags=["catalog"])

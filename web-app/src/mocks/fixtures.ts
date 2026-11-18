@@ -1,4 +1,4 @@
-import type { Channel, Programme, SearchProgramme, Shelf, Source, SourceBadge, Tile, Profile, Row } from '../api/types'
+import type { Channel, Programme, SearchProgramme, Shelf, Source, SourceBadge, Tile, EpisodeTile, Profile, Row } from '../api/types'
 import { backdrop, logo, poster } from './art'
 
 export const DISCLAIMER = {
@@ -54,6 +54,7 @@ const seeds: Seed[] = [
 export const progress: Record<string, { pos: number; dur: number }> = {
   'tmdb:movie:101': { pos: 48 * 60_000, dur: 118 * 60_000 },
   'tmdb:movie:103': { pos: 20 * 60_000, dur: 109 * 60_000 },
+  'tmdb:episode:201:1:1': { pos: 48 * 60_000, dur: 48 * 60_000 },
   'tmdb:episode:201:1:2': { pos: 15 * 60_000, dur: 48 * 60_000 },
 }
 
@@ -129,21 +130,24 @@ const adultSeeds = shelved('movie', 471, 'After Dark', 2024, ['Velvet Hours', 'T
 export const adultShelf = (section: 'movies' | 'shows'): Shelf[] =>
   section === 'movies' ? [{ name: 'After Dark', count: adultSeeds.length, items: adultSeeds.map(tileOf), browse_path: '/browse/movies?category=After%20Dark' }] : []
 
-export function episodesOf(show: number, season: number): Tile[] {
+export const EPISODE_NAMES = ['Landfall', 'Slack Water', 'What the Net Held', 'Glass Floats', 'The Long Ebb', 'Spring Tide']
+export function episodesOf(show: number, season: number): EpisodeTile[] {
   const s = seeds.find((x) => x.n === show)
   if (!s) return []
   return Array.from({ length: 6 }, (_, i) => {
     const id = `tmdb:episode:${show}:${season}:${i + 1}`
     const pr = progress[id]
     return {
-      id, kind: 'episode' as const, title: `${i + 1}. ${['Landfall', 'Slack Water', 'What the Net Held', 'Glass Floats', 'The Long Ebb', 'Spring Tide'][i]}`,
-      subtitle: `S${season} · E${i + 1}`, year: s.year, poster: null, backdrop: backdrop(`${s.title}${season}${i}`), progress_pct: pr ? (pr.pos / pr.dur) * 100 : null,
-      is_favorite: false, sources: s.sources,
+      id, kind: 'episode' as const, title: `E${i + 1} · ${EPISODE_NAMES[i]}`,
+      subtitle: `S${season} · E${i + 1}`, year: s.year, poster: null, backdrop: backdrop(`${s.title}${season}${i}`), progress_pct: pr ? Math.min(100, (pr.pos / pr.dur) * 100) : null,
+      is_favorite: false, sources: s.sources, season_number: season, episode_number: i + 1, runtime_min: s.runtime + ((i * 3) % 5) - 2,
     }
   })
 }
-export const seasonsOf = (show: number): Tile[] =>
-  [1, 2].map((n) => ({ id: `tmdb:season:${show}:${n}`, kind: 'season' as const, title: `Season ${n}`, poster: null, backdrop: null, sources: [], is_favorite: false }))
+export const seasonsOf = (show: number): EpisodeTile[] =>
+  [1, 2].map((n) => ({ id: `tmdb:season:${show}:${n}`, kind: 'season' as const, title: `Season ${n}`, poster: null, backdrop: null, sources: [], is_favorite: false, season_number: n }))
+/** The show a fixture episode or season id belongs to. */
+export const showSeed = (show: number) => seeds.find((x) => x.n === show && x.kind === 'show')
 
 /* ---------- live ---------- */
 const groups = ['News', 'Sports', 'Movies', 'Kids', 'Music', 'Local']

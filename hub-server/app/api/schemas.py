@@ -324,16 +324,76 @@ class CastMember(_M):
     photo: str | None = None
 
 
+class EpisodeTile(Tile):
+    """A season or episode of a series as the title page lists it, with the numbers it is ordered by."""
+
+    season_number: int | None = None
+    episode_number: int | None = None
+    runtime_min: int | None = None
+
+
+class ParentShow(_M):
+    id: str
+    title: str
+    backdrop: str | None = None
+
+
+class ParentSeason(_M):
+    id: str
+    title: str
+    number: int | None = None
+
+
+class TitleParent(_M):
+    """Where a season or an episode sits: its show, its season, and its place in that season."""
+
+    show: ParentShow | None = None
+    season: ParentSeason | None = None
+    episode_number: int | None = None
+    episode_count: int | None = None
+    episode_title: str | None = Field(default=None, description="The episode's own name, without the release line")
+
+
 class TitleDetail(Tile):
     overview: str = ""
     genres: list[str] = Field(default_factory=list)
     runtime_min: int | None = None
     cast: list[CastMember] = Field(default_factory=list)
-    seasons: list[Tile] = Field(default_factory=list)
-    episodes: list[Tile] = Field(default_factory=list)
+    seasons: list[EpisodeTile] = Field(default_factory=list)
+    episodes: list[EpisodeTile] = Field(default_factory=list)
     attribution: str = ""
     request_seasons: list[int] = Field(default_factory=list)
     request_missing: bool = False
+    parent: TitleParent | None = None
+    content_rating: str | None = None
+    release_date: str | None = None
+
+
+class TitleActivityEntry(_M):
+    """What one profile of the household last did with a title."""
+
+    profile_id: str
+    name: str
+    avatar: str | None = None
+    picture: str | None = None
+    me: bool = False
+    action: Literal["watching", "finished", "listed"]
+    at: datetime
+    season_number: int | None = None
+    episode_number: int | None = None
+    progress_pct: float | None = None
+    minutes_left: int | None = None
+    season_finished: bool = False
+
+
+class TitleActivity(_M):
+    id: str
+    entries: list[TitleActivityEntry] = Field(default_factory=list)
+
+
+class SimilarTitles(_M):
+    id: str
+    tiles: list[Tile] = Field(default_factory=list)
 
 
 class BrowsePage(_M):

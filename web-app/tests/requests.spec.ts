@@ -38,6 +38,8 @@ async function bar(page: Page, testId: string) {
 async function more(page: Page, testId: string) {
   await bar(page, 'nav-more')
   const item = page.getByTestId('more-menu').getByTestId(testId)
+  // The menu takes focus a moment after it opens; a press before that walks the page underneath.
+  await expect(page.getByTestId('more-menu').locator('[data-focused="true"]')).toHaveCount(1)
   for (let i = 0; i < 8 && (await item.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowDown')
   await expect(item).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
@@ -74,7 +76,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await page.keyboard.press('Enter')
   await expect(titlePhase(page)).toHaveText('Requested')
   await expect(request).toHaveCount(0)
-  await expect(focused(page)).toHaveText('Watchlist')
+  await expect(focused(page)).toHaveAttribute('aria-label', 'My List')
 
   // My requests lists it; a viewer gets no approval controls.
   await more(page, 'nav-requests')

@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { signIn } from './helpers'
+import { signIn, titleMenu } from './helpers'
 
 // A film only the library has: playable here, so it can be watched together.
 const FILM = 'tmdb:movie:110'
@@ -38,7 +38,7 @@ async function link(a: Page, b: Page) {
 
 async function startRoom(page: Page, path = FILM_PATH): Promise<string> {
   await page.goto(path)
-  await page.getByTestId('title-together').click()
+  await titleMenu(page, 'title-together')
   await expect(page.getByTestId('room-share')).toBeVisible()
   const code = await page.getByTestId('room-code').innerText()
   expect(code).toMatch(CODE)
@@ -461,7 +461,11 @@ test('Watch together needs rooms.create and Join a room needs rooms.join', async
   const kid = await person(browser, 'p3', 'Kids')
   await kid.goto(FILM_PATH)
   await expect(kid.getByTestId('title-play')).toBeVisible()
+  await kid.getByTestId('title-more').click()
+  await expect(kid.getByTestId('title-more-menu')).toBeVisible()
   await expect(kid.getByTestId('title-together')).toHaveCount(0)
+  await kid.keyboard.press('Escape')
+  await expect(kid.getByTestId('title-more-menu')).toHaveCount(0)
   await kid.getByTestId('title-play').click()
   await expect(kid.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await kid.keyboard.press('s')
