@@ -52,6 +52,8 @@ fun FocusSurface(
     scaleOnFocus: Boolean = true,
     glow: Boolean = true,
     enabled: Boolean = true,
+    /** The focus ring; the glass components pass the theme's accent. */
+    ringColor: Color = LocalThemeTokens.current.focusRing,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable BoxScope.(focused: Boolean) -> Unit,
 ) {
@@ -80,7 +82,7 @@ fun FocusSurface(
             .clip(shape)
             .background(bg, shape)
             .then(click)
-            .then(if (ring > 0.dp) Modifier.border(ring, t.focusRing, shape) else Modifier),
+            .then(if (ring > 0.dp) Modifier.border(ring, ringColor, shape) else Modifier),
     ) {
         content(focused)
     }
