@@ -40,6 +40,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.streamhub.tv.core.ui.components.DialogText
+import com.streamhub.tv.core.ui.components.DialogTitle
+import com.streamhub.tv.core.ui.components.GlassPanel
+import com.streamhub.tv.core.ui.components.ScreenTitle
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Icon
@@ -172,7 +177,7 @@ private fun People(s: WhoState, gate: Boolean, onPick: (SwitchableUser) -> Unit)
     val startId = (s.users.firstOrNull { it.current } ?: s.users.first()).id
     InitialFocusOnce(initial = first, restore = grid)
     Column(Modifier.fillMaxSize().padding(SafeArea), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Who's watching?", style = MaterialTheme.typography.displaySmall, color = t.text, modifier = Modifier.padding(top = 24.dp))
+        ScreenTitle("Who's watching?", Modifier.padding(top = 24.dp))
         Text(
             if (gate) "Choose yourself to start. Press Back to leave StreamHub." else "Choose who is watching now. Press Back to return.",
             style = MaterialTheme.typography.bodyLarge, color = t.textMuted, modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
@@ -205,6 +210,7 @@ private fun PersonCard(user: SwitchableUser, serverUrl: String?, busy: Boolean, 
         shape = RoundedCornerShape(Tokens.Radius.Lg),
         containerColor = t.surface,
         focusedContainerColor = t.surfaceAlt,
+        ringColor = t.accent,
     ) {
         Column(Modifier.fillMaxSize().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(Modifier.size(96.dp).background(t.accent, CircleShape), contentAlignment = Alignment.Center) {
@@ -232,13 +238,12 @@ private fun PersonCard(user: SwitchableUser, serverUrl: String?, busy: Boolean, 
 /** Back on the cold-start picker: there is nothing behind it to go back to, so the choice is to stay or leave the app. */
 @Composable
 private fun ExitDialog(onStay: () -> Unit, onExit: () -> Unit) {
-    val t = LocalThemeTokens.current
     val stay = remember { FocusRequester() }
-    Dialog(onDismissRequest = onStay) {
-        Column(Modifier.width(460.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Leave StreamHub?", style = MaterialTheme.typography.titleLarge, color = t.text)
-            Text("Someone has to be chosen before anything can be watched on this TV.", style = MaterialTheme.typography.bodyLarge, color = t.textMuted)
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Dialog(onDismissRequest = onStay, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        GlassPanel(Modifier.width(560.dp)) {
+            DialogTitle("Leave StreamHub?")
+            DialogText("Someone has to be chosen before anything can be watched on this TV.")
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 ShButton("Choose who's watching", onStay, Modifier.focusRequester(stay), style = ButtonStyle.Primary)
                 ShButton("Exit app", onExit)
             }
