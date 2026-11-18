@@ -37,18 +37,18 @@ export function OwnerPinSetup({pendingToken,onApproved,recovery=false,onCommitti
     finally{window.clearTimeout(timer);callbacks.current.onCommitting?.(false);if(request.current===controller){request.current=null;if(live.current)setBusy(false)}}
   }
   const wait=Math.max(0,Math.ceil((retryAt-now)/1000))
-  return <section className="flex flex-col gap-3" data-testid="owner-pin-setup">
-    <h2 className="heading">{recovery?"Recover owner PIN":"Set up owner PIN"}</h2>
-    <p>Setting or replacing the owner PIN requires separate approval on your VM. Google sign-in alone cannot reset it. Keep this page open while the owner approves this exact request locally.{recovery?" Your existing PIN keeps working until the approved replacement is saved.":""}</p>
-    {(status?.setup_request_id||status?.recovery_request_id) && <p>Local approval request: <code>{status.setup_request_id??status.recovery_request_id}</code></p>}
+  return <section className="acct-group" data-testid="owner-pin-setup">
+    <h2 className="ds-section-title">{recovery?"Recover owner PIN":"Set up owner PIN"}</h2>
+    <p className="acct-note">Setting or replacing the owner PIN requires separate approval on your VM. Google sign-in alone cannot reset it. Keep this page open while the owner approves this exact request locally.{recovery?" Your existing PIN keeps working until the approved replacement is saved.":""}</p>
+    {(status?.setup_request_id||status?.recovery_request_id) && <p className="acct-small">Local approval request: <code>{status.setup_request_id??status.recovery_request_id}</code></p>}
     {(recovery?status?.recovery_authorized:status?.setup_authorized) ? <>
       <p>Local approval received. Enter the new 6–12 digit PIN privately below. Do not send it in chat. This replaces the owner PIN and signs existing sessions out.</p>
       <FocusableInput focusKey="owner-setup:pin" label="New owner PIN" type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} readOnly={busy} value={pin} onChange={setPin} onSubmit={()=>void submit()} />
       <FocusableInput focusKey="owner-setup:confirm" label="Confirm new owner PIN" type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} readOnly={busy} value={confirm} onChange={setConfirm} onSubmit={()=>void submit()} />
       {confirm && pin!==confirm && <p role="status">The PIN entries do not match.</p>}
       <Button focusKey="owner-setup:save" primary disabled={busy||wait>0||!/^\d{6,12}$/.test(pin)||pin!==confirm} onEnter={()=>void submit()}>{busy?'Saving privately…':recovery?'Replace owner PIN':'Set owner PIN'}</Button>
-    </> : <p role="status">{busy?'Finishing the current request…':'Waiting for local VM approval. No PIN can be set yet.'}</p>}
-    {wait>0&&<p role="status">Try again in {wait} seconds.</p>}{error&&<p role="alert">{error}</p>}
-    <Button focusKey="owner-setup:check" disabled={busy||wait>0} onEnter={()=>void check()}>Check local approval</Button>
+    </> : <p role="status" className="auth-status">{busy?'Finishing the current request…':'Waiting for local VM approval. No PIN can be set yet.'}</p>}
+    {wait>0&&<p role="status">Try again in {wait} seconds.</p>}{error&&<p role="alert" className="acct-error">{error}</p>}
+    <div><Button focusKey="owner-setup:check" icon="refresh" disabled={busy||wait>0} onEnter={()=>void check()}>Check local approval</Button></div>
   </section>
 }

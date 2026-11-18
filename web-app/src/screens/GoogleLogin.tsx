@@ -138,33 +138,40 @@ export function LoginGate() {
     committing.current=false;setFinishing(false);setPending(null);completion=undefined;clearOAuthMarkers();setError('Authorization outcome is unknown. Sign in with Google and your owner PIN again. The previous submission will not be retried.');navigate('/?owner_pin_uncertain=1',{replace:true})
   }
   useBackHandler(()=>{cancelOwner();return true},!!pending)
-  if(pending)return <main className="page-pad flex flex-col gap-5" style={{maxWidth:'48rem',margin:'auto'}} data-testid="pending-owner-login">
-    <h1 className="display">Finish owner sign-in</h1>
-    <FocusGroup focusKey="owner-login" className="flex flex-col gap-4">
-      {setup?<OwnerPinSetup recovery={!pending.setup_required} key={pending.profile.id} pendingToken={pending.pending_token} onCommitting={critical} onUncertain={uncertain} onApproved={finishOwner}/>:<OwnerPin targetId={pending.profile.id} targetName={pending.profile.name} action="login" pendingToken={pending.pending_token} onCommitting={critical} onUncertain={uncertain} onApproved={finishOwner}/>}
-      {!pending.setup_required&&<Button focusKey="owner-login:mode" disabled={finishing} onEnter={()=>setSetup(value=>!value)}>{setup?"Back to PIN entry":"Owner PIN setup or recovery"}</Button>}
-      <Button focusKey="owner-login:cancel" disabled={finishing} onEnter={cancelOwner}>Cancel owner sign-in</Button>
-    </FocusGroup>
+  if(pending)return <main className="auth-screen" data-testid="pending-owner-login">
+    <div className="auth-col auth-col-wide">
+      <span className="auth-mark" aria-hidden="true">Stream<b>Hub</b></span>
+      <h1 className="auth-title">Finish owner sign-in</h1>
+      <FocusGroup focusKey="owner-login" className="auth-panel">
+        {setup?<OwnerPinSetup recovery={!pending.setup_required} key={pending.profile.id} pendingToken={pending.pending_token} onCommitting={critical} onUncertain={uncertain} onApproved={finishOwner}/>:<OwnerPin targetId={pending.profile.id} targetName={pending.profile.name} action="login" pendingToken={pending.pending_token} onCommitting={critical} onUncertain={uncertain} onApproved={finishOwner}/>}
+        <div className="acct-actions">
+          {!pending.setup_required&&<Button focusKey="owner-login:mode" disabled={finishing} onEnter={()=>setSetup(value=>!value)}>{setup?"Back to PIN entry":"Owner PIN setup or recovery"}</Button>}
+          <Button focusKey="owner-login:cancel" ghost disabled={finishing} onEnter={cancelOwner}>Cancel owner sign-in</Button>
+        </div>
+      </FocusGroup>
+    </div>
   </main>
   if (waiting) return <WaitingForApproval onSignOut={() => { stopWaiting(); completion = undefined; invited = undefined }} />
-  if (config.isPending) return <main className="p-8"><p>Loading sign-in…</p></main>
-  if (config.error) return <main className="p-8"><ErrorState error={config.error} onRetry={() => void config.refetch()} /></main>
+  if (config.isPending) return <main className="auth-screen"><p className="acct-note">Loading sign-in…</p></main>
+  if (config.error) return <main className="auth-screen"><div className="auth-col"><ErrorState error={config.error} onRetry={() => void config.refetch()} /></div></main>
   const c = config.data
   // An older server always offered the profile picker unless Google was required; a current one says
   // whether this browser may use it (it is for the home network).
   const profiles = c.profiles_enabled ?? !c.google_required
   const ways = [c.google_enabled, !!c.plex_enabled, !!c.password_enabled].filter(Boolean).length
   if (!ways && profiles && !error && !busy) return <>{notice && <p role="alert" className="page-pad" data-testid="signed-out-notice">{notice}</p>}<ProfilePicker /></>
-  return <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="sign-in">
-    <FocusGroup focusKey="google-login" className="flex flex-col items-center gap-6" style={{ width: 'min(34rem, 100%)' }}>
-      <h1 className="display" style={{ textAlign: 'center' }}>Welcome to StreamHub</h1>
-      <p style={{ textAlign: 'center' }}>{ways === 1 && c.google_enabled ? 'Sign in with Google to watch or pair your TV.' : 'Sign in to watch or pair your TV.'}</p>
-      {(c.google_enabled || c.plex_enabled) && <p className="muted" style={{ textAlign: 'center' }}>{c.signup_mode === 'invite_only'
+  return <main className="auth-screen" data-testid="sign-in">
+    <FocusGroup focusKey="google-login" className="auth-col">
+      <span className="auth-mark" aria-hidden="true">Stream<b>Hub</b></span>
+      <h1 className="auth-title">Welcome to StreamHub</h1>
+      <div className="auth-panel">
+      <p>{ways === 1 && c.google_enabled ? 'Sign in with Google to watch or pair your TV.' : 'Sign in to watch or pair your TV.'}</p>
+      {(c.google_enabled || c.plex_enabled) && <p className="acct-note">{c.signup_mode === 'invite_only'
         ? 'New here? You need an invite link from the person who runs this StreamHub.'
         : 'New here? Sign in, and the person who runs this StreamHub is asked to approve you.'}</p>}
       {notice && <p role="alert" data-testid="signed-out-notice">{notice}</p>}
       {typing ? <PasswordSignIn onBack={() => { setTyping(false); setError(null) }} onSignedIn={(t) => { setSession(t.access_token, t.refresh_token, t.profile); qc.clear() }} />
-        : <FocusGroup focusKey="signin-ways" className="flex flex-col gap-3" style={{ width: 'min(22rem, 100%)' }} role="group" label="Ways to sign in">
+        : <FocusGroup focusKey="signin-ways" className="auth-ways" role="group" label="Ways to sign in">
           {c.google_enabled && <Button primary focusKey="google:signin" disabled={busy} testId="signin-google" onEnter={() => {
             window.location.assign(`/api/v1/auth/google/start?return_to=${encodeURIComponent(returnPath())}`)
           }}>{busy ? 'Completing sign-in…' : 'Continue with Google'}</Button>}
@@ -174,7 +181,8 @@ export function LoginGate() {
       {!ways && <p role="alert">{c.google_required && c.profiles_enabled === undefined
         ? 'Google sign-in is not configured yet. Contact the server owner.'
         : 'No way of signing in from here is switched on. Ask the person who runs this StreamHub.'}</p>}
-      {error && <p role="alert" data-testid="signin-error">{error}</p>}
+      {error && <p role="alert" data-testid="signin-error" className="acct-error">{error}</p>}
+      </div>
       {profiles && <ProfilePicker embedded />}
     </FocusGroup>
   </main>
@@ -193,14 +201,16 @@ function PasswordSignIn({ onBack, onSignedIn }: { onBack: () => void; onSignedIn
     catch (e) { setPassword(''); setError(signInError(e, 'Sign-in failed. Please try again.')); void setFocus('password:password') }
     finally { setBusy(false) }
   }
-  return <FocusGroup focusKey="password-form" className="flex flex-col gap-3" style={{ width: 'min(22rem, 100%)' }} role="group" label="Username and password">
-    <FocusableInput focusKey="password:username" label="Username" placeholder="Username" maxLength={64} autoCapitalize="none" autoComplete="username" value={username} onChange={setUsername} onSubmit={() => void setFocus('password:password')} />
-    <FocusableInput focusKey="password:password" label="Password" placeholder="Password" type="password" maxLength={256} autoComplete="current-password" value={password} onChange={setPassword} onSubmit={() => void submit()} />
-    {error && <p role="alert" data-testid="password-error">{error}</p>}
-    <div className="flex gap-3 flex-wrap">
+  return <FocusGroup focusKey="password-form" className="secret-form" style={{ width: 'min(26rem, 100%)' }} role="group" label="Username and password">
+    <div className="acct-field"><span className="acct-kicker" aria-hidden="true">Username</span>
+      <FocusableInput focusKey="password:username" label="Username" placeholder="Username" maxLength={64} autoCapitalize="none" autoComplete="username" value={username} onChange={setUsername} onSubmit={() => void setFocus('password:password')} /></div>
+    <div className="acct-field"><span className="acct-kicker" aria-hidden="true">Password</span>
+      <FocusableInput focusKey="password:password" label="Password" placeholder="Password" type="password" maxLength={256} autoComplete="current-password" value={password} onChange={setPassword} onSubmit={() => void submit()} /></div>
+    {error && <p role="alert" data-testid="password-error" className="acct-error">{error}</p>}
+    <div className="acct-actions">
       <Button focusKey="password:go" primary disabled={busy || !username.trim() || !password} onEnter={() => void submit()} testId="password-submit">{busy ? 'Signing in…' : 'Sign in'}</Button>
       <Button focusKey="password:back" onEnter={onBack}>Other ways to sign in</Button>
     </div>
-    <p className="label">Forgot it? The person who runs this StreamHub can send you a link to choose a new one.</p>
+    <p className="acct-small">Forgot it? The person who runs this StreamHub can send you a link to choose a new one.</p>
   </FocusGroup>
 }

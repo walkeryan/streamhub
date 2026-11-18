@@ -157,6 +157,6 @@ test('the person page picks one way to sign in: a password, typed twice', async 
   await page.keyboard.press('Enter')
   await expect(dialog).toHaveCount(0)
   await expect(row.getByTestId('user-pin-kind')).toHaveText('Signs in with a password')
-  await expect(page.getByTestId('user-pin-clear')).toHaveText('Remove password')
+  await expect(page.getByTestId('user-pin-clear')).toHaveAttribute('aria-label', 'Remove password')
   expect(await page.evaluate(() => (window as unknown as { sentPins: unknown[] }).sentPins)).toEqual([{ pin: 'river stones', kind: 'password' }])
 })

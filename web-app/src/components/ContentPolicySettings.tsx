@@ -10,6 +10,7 @@ import { useSession } from '../store/session'
 import { useCan } from '../api/me'
 import { Button, Chip, ErrorState, Modal } from './ui'
 import { FocusGroup } from '../nav/Focusable'
+import { SectionHeader } from '../ds/Section'
 
 const MOVIES = ['G', 'PG', 'PG-13', 'R', 'NC-17']
 const TV = ['TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA']
@@ -18,11 +19,11 @@ export function ContentPolicySettings() {
   const capability = useAuthCapabilities()
   const me = useSession((s) => s.profile)!
   const manages = useCan('users.manage')
-  if (capability.isPending) return <p role="status">Checking content-control availability…</p>
+  if (capability.isPending) return <p role="status" className="acct-note">Checking content-control availability…</p>
   if (capability.error) return <ErrorState error={capability.error} onRetry={() => void capability.refetch()} />
-  if (!capability.data?.content_policy_enabled) return <p>Server-enforced content controls are not enabled. Profile labels and hidden groups are display preferences, not access restrictions.</p>
-  if (!manages || me.content_restricted) return <p>Content restrictions are managed by the owner. They cannot be changed in this profile’s preferences.</p>
-  if (!capability.data.owner_pin_configured) return <p>Owner PIN setup is required before restricted profiles can be enabled. Open Settings → Profile → Owner PIN setup or recovery and request local VM approval.</p>
+  if (!capability.data?.content_policy_enabled) return <p className="acct-note">Server-enforced content controls are not enabled. Profile labels and hidden groups are display preferences, not access restrictions.</p>
+  if (!manages || me.content_restricted) return <p className="acct-note">Content restrictions are managed by the owner. They cannot be changed in this profile’s preferences.</p>
+  if (!capability.data.owner_pin_configured) return <p className="acct-note">Owner PIN setup is required before restricted profiles can be enabled. Open Settings → Profile → Owner PIN setup or recovery and request local VM approval.</p>
   return <AdminPolicies />
 }
 
@@ -31,10 +32,10 @@ function AdminPolicies() {
   const [target, setTarget] = useState<string | null>(null)
   const selected = profiles.data?.find((p) => p.id === target)
   const policy = useContentPolicy(target, !!selected)
-  return <section className="flex flex-col gap-4" data-testid="content-policies">
-    <h2 className="heading">Profile content restrictions</h2>
-    <p>Choose the profile to manage. Only explicitly allowed US movie and TV ratings are permitted when restrictions are on. Unknown or unrated content is blocked.</p>
-    {profiles.error ? <ErrorState error={profiles.error} onRetry={() => void profiles.refetch()} /> : <FocusGroup focusKey="policy:profiles" className="flex gap-2 flex-wrap">
+  return <section className="acct-group" data-testid="content-policies">
+    <SectionHeader title="Profile content restrictions" />
+    <p className="acct-note">Choose the profile to manage. Only explicitly allowed US movie and TV ratings are permitted when restrictions are on. Unknown or unrated content is blocked.</p>
+    {profiles.error ? <ErrorState error={profiles.error} onRetry={() => void profiles.refetch()} /> : <FocusGroup focusKey="policy:profiles" className="acct-chips">
       {profiles.data?.map((p) => <Chip key={p.id} focusKey={`policy:profile:${p.id}`} pressed={target === p.id} onEnter={() => setTarget(p.id)}>{p.name}</Chip>)}
     </FocusGroup>}
     {/* Whether a profile can be restricted is the server's rule; this only says what it will answer for an owner's. */}
@@ -75,22 +76,22 @@ function PolicyEditor({ policy, name }: { policy: ContentPolicy; name: string })
     } catch(e) {setArmed(null);setError(e instanceof Error && e.name==='TimeoutError'?'Save outcome is unknown. Reload this policy before authorizing another save.':e instanceof Error?e.message:'Policy could not be saved. Authorize again before retrying.')}
     finally{saving.current=false;setBusy(false)}
   }
-  return <FocusGroup focusKey="policy:editor" className="panel flex flex-col gap-4" data-testid="policy-editor">
-    <h3 className="heading">Restrictions for {name}</h3>
-    <Button focusKey="policy:restricted" disabled={busy} pressed={draft.restricted} onEnter={() => setDraft((d) => ({ ...d, restricted: !d.restricted, allow_unknown: !d.restricted ? false : d.allow_unknown }))}>{draft.restricted ? 'Restrictions on' : 'Restrictions off'}</Button>
-    <p>Exiting a restricted profile and saving content restrictions require the owner PIN. PIN setup and recovery require separate local VM approval.</p>
-    <p className="label">Allow these movie ratings (each rating is independent)</p>
-    <div className="flex gap-2 flex-wrap">{MOVIES.map((code) => <Button key={code} focusKey={`policy:movie:${code}`} pressed={draft.allowed_movie_codes.includes(code)} disabled={busy || !draft.restricted} onEnter={() => toggle('allowed_movie_codes', code)}>{code}</Button>)}</div>
-    <p className="label">Allow these TV ratings</p>
-    <div className="flex gap-2 flex-wrap">{TV.map((code) => <Button key={code} focusKey={`policy:tv:${code}`} pressed={draft.allowed_tv_codes.includes(code)} disabled={busy || !draft.restricted} onEnter={() => toggle('allowed_tv_codes', code)}>{code}</Button>)}</div>
-    <p>Unrated and unknown content is blocked for restricted profiles.</p>
-    <p className="label">Saving invalidates this profile’s existing sessions.{policy.profile_id === me.id ? ' This is your profile: saving signs you out.' : ''}</p>
-    {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
-    <div className="flex gap-2"><Button focusKey="policy:save" primary disabled={busy || !policy.feature_enabled} onEnter={() => {authorizationGeneration.current=useSession.getState().generation;setArmed({...draft,allowed_movie_codes:[...draft.allowed_movie_codes],allowed_tv_codes:[...draft.allowed_tv_codes]})}}>{busy ? 'Saving…' : `Save restrictions for ${name}`}</Button><Button focusKey="policy:reset" disabled={busy} onEnter={() => { setDraft(initial); setError(''); setMessage('') }}>Discard changes</Button></div>
+  return <FocusGroup focusKey="policy:editor" className="acct-row acct-group" data-testid="policy-editor">
+    <h3 className="ds-section-title">Restrictions for {name}</h3>
+    <div><Button focusKey="policy:restricted" disabled={busy} pressed={draft.restricted} onEnter={() => setDraft((d) => ({ ...d, restricted: !d.restricted, allow_unknown: !d.restricted ? false : d.allow_unknown }))}>{draft.restricted ? 'Restrictions on' : 'Restrictions off'}</Button></div>
+    <p className="acct-note">Exiting a restricted profile and saving content restrictions require the owner PIN. PIN setup and recovery require separate local VM approval.</p>
+    <p className="acct-kicker">Allow these movie ratings (each rating is independent)</p>
+    <div className="acct-chips">{MOVIES.map((code) => <Button key={code} className="btn-chip" focusKey={`policy:movie:${code}`} pressed={draft.allowed_movie_codes.includes(code)} disabled={busy || !draft.restricted} onEnter={() => toggle('allowed_movie_codes', code)}>{code}</Button>)}</div>
+    <p className="acct-kicker">Allow these TV ratings</p>
+    <div className="acct-chips">{TV.map((code) => <Button key={code} className="btn-chip" focusKey={`policy:tv:${code}`} pressed={draft.allowed_tv_codes.includes(code)} disabled={busy || !draft.restricted} onEnter={() => toggle('allowed_tv_codes', code)}>{code}</Button>)}</div>
+    <p className="acct-note">Unrated and unknown content is blocked for restricted profiles.</p>
+    <p className="acct-small">Saving invalidates this profile’s existing sessions.{policy.profile_id === me.id ? ' This is your profile: saving signs you out.' : ''}</p>
+    {error && <p role="alert" className="acct-error">{error}</p>}{message && <p role="status">{message}</p>}
+    <div className="acct-actions"><Button focusKey="policy:save" primary disabled={busy || !policy.feature_enabled} onEnter={() => {authorizationGeneration.current=useSession.getState().generation;setArmed({...draft,allowed_movie_codes:[...draft.allowed_movie_codes],allowed_tv_codes:[...draft.allowed_tv_codes]})}}>{busy ? 'Saving…' : `Save restrictions for ${name}`}</Button><Button focusKey="policy:reset" disabled={busy} onEnter={() => { setDraft(initial); setError(''); setMessage('') }}>Discard changes</Button></div>
     <Modal open={!!armed} onClose={()=>{if(!saving.current)setArmed(null)}} title={`Authorize restrictions for ${name}`} firstFocusKey="policy-auth:cancel" wide>
       {armed&&<OwnerPin targetId={policy.profile_id} targetName={name} action="admin" onApproved={async(result,signal)=>{if(!('owner_action_token' in result))throw new Error('Owner approval returned a different action.');await save(result,signal)}}/>}
       {busy&&<p role="status">Saving restrictions. Please wait for the result.</p>}
-      <Button focusKey="policy-auth:cancel" disabled={busy} onEnter={()=>{if(!saving.current)setArmed(null)}}>Cancel</Button>
+      <div><Button focusKey="policy-auth:cancel" ghost disabled={busy} onEnter={()=>{if(!saving.current)setArmed(null)}}>Cancel</Button></div>
     </Modal>
   </FocusGroup>
 }

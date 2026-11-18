@@ -14,6 +14,7 @@ import { LinkToCopy } from '../components/LinkToCopy'
 import { LimitsEditor, PermissionSwitches, Toggle } from '../components/PeopleControls'
 import { PASSWORD_MAX, PASSWORD_MIN, type PinKind } from '../components/SignInSecret'
 import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
+import { GlassIconButton, PageHeader, Section, SectionHeader } from '../ds'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
@@ -40,12 +41,12 @@ export function Users() {
   if (!allowed) return <Navigate to="/" replace />
   const failed = users.error ?? roles.error
   return (
-    <div className="page-pad flex flex-col gap-6" data-testid="users">
-      <h1 className="display">Users</h1>
+    <div className="page-pad acct-page" data-testid="users">
+      <PageHeader title="Users" meta={users.data ? `${users.data.filter((u) => u.status !== 'pending').length}` : undefined} />
       <FocusGroup focusKey="users:tabs" className="chip-scroll" role="tablist">
         {TABS.map(([id, label]) => <Chip key={id} focusKey={`users:tab:${id}`} pressed={tab === id} onEnter={() => setSp(id === 'people' ? {} : { tab: id }, { replace: true })} testId={`users-tab-${id}`}>{label}</Chip>)}
       </FocusGroup>
-      <div style={{ maxWidth: '64rem' }}>
+      <div className="acct-body acct-body-wide">
         {failed ? <ErrorState error={failed} onRetry={() => { void users.refetch(); void roles.refetch() }} />
           : !users.data || !roles.data ? <Skeleton style={{ height: '14rem' }} />
           : tab === 'people' ? <PeopleTab users={users.data} roles={roles.data} />
@@ -83,72 +84,73 @@ function PeopleTab({ users, roles }: { users: UserListItem[]; roles: Role[] }) {
     if (role) approve.mutate({ user: u, role }, done); else deny.mutate(u, done)
   }
   return (
-    <div className="flex flex-col gap-6">
+    <>
       {pending.length > 0 && (
-        <section className="flex flex-col gap-3" data-testid="pending-queue">
-          <h2 className="heading">Waiting for approval · {pending.length}</h2>
-          <FocusGroup focusKey="users:pending" className="flex flex-col gap-2">
+        <Section title="Waiting for approval" meta={pending.length} className="acct-group" testId="pending-queue">
+          <FocusGroup focusKey="users:pending" className="acct-list">
             {pending.map((u) => (
-              <div key={u.id} className="panel person-row" data-testid="pending-row">
+              <div key={u.id} className="acct-row person-row" data-testid="pending-row">
                 <Avatar name={u.display_name} avatar={u.avatar} picture={u.picture} />
                 <span className="who">
                   <strong className="truncate">{u.display_name}</strong>
-                  <span className="label truncate">{[u.email, `Asked ${ago(u.created_at)}`].filter(Boolean).join(' · ')}</span>
+                  <span className="acct-row-meta truncate">{[u.email, `Asked ${ago(u.created_at)}`].filter(Boolean).join(' · ')}</span>
                 </span>
-                {/* a phone has room for the three words, not for their icons as well */}
+                {/* Approve keeps its words (and, where there is room, its tick); the role and Deny are round glass. */}
                 <span className="row-actions">
                   <Button focusKey={`pending:${u.id}:approve`} primary icon={phone ? undefined : 'check'} disabled={approve.isPending || deny.isPending} onEnter={() => decide(u, roleFor(u))} testId="pending-approve">Approve as {roleFor(u).name}</Button>
-                  <Button focusKey={`pending:${u.id}:role`} label={`Choose another role for ${u.display_name}`} onEnter={() => setChoosing(u)} testId="pending-role">Role</Button>
-                  <Button focusKey={`pending:${u.id}:deny`} danger icon={phone ? undefined : 'x'} label={`Deny ${u.display_name}`} onEnter={() => setDenying(u)} testId="pending-deny">Deny</Button>
+                  <GlassIconButton focusKey={`pending:${u.id}:role`} icon="users" label={`Choose another role for ${u.display_name}`} tip="Role" onEnter={() => setChoosing(u)} testId="pending-role" expanded={choosing?.id === u.id} popup="dialog" />
+                  <GlassIconButton focusKey={`pending:${u.id}:deny`} icon="x" className="acct-danger" label={`Deny ${u.display_name}`} tip="Deny" onEnter={() => setDenying(u)} testId="pending-deny" />
                 </span>
               </div>
             ))}
           </FocusGroup>
-        </section>
+        </Section>
       )}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <h2 className="heading flex-1">People · {others.length}</h2>
+      <Section title="People" meta={others.length} className="acct-group"
+        action={<>
           {/* Add person first; Up from the list lands on the button nearest the rows' end, as it always has. */}
-          <Button focusKey="users:add-person" icon="link" onEnter={() => setInviting(true)} testId="users-add-person">Add person</Button>
-          <Button focusKey="users:add" icon="plus" onEnter={() => setAdding(true)} testId="users-add">Add managed user</Button>
-        </div>
-        <FocusGroup focusKey="users:list" className="flex flex-col gap-2">
+          <Button focusKey="users:add-person" primary icon="link" onEnter={() => setInviting(true)} testId="users-add-person">Add person</Button>
+          <GlassIconButton focusKey="users:add" icon="plus" label="Add managed user" onEnter={() => setAdding(true)} testId="users-add" />
+        </>}>
+        <FocusGroup focusKey="users:list" className="acct-list">
           {others.map((u) => (
-            <Focusable key={u.id} focusKey={`user:${u.id}`} className="panel person-row person-link fx-flat" role="link" label={`${u.display_name}, ${u.role_name ?? 'no role'}, ${STATUS[u.status] ?? u.status}`}
+            <Focusable key={u.id} focusKey={`user:${u.id}`} className="acct-row person-row person-link fx-flat" role="link" label={`${u.display_name}, ${u.role_name ?? 'no role'}, ${STATUS[u.status] ?? u.status}`}
               data-testid="user-row" onEnter={() => go(`/users/${encodeURIComponent(u.id)}`)}>
               <Avatar name={u.display_name} avatar={u.avatar} picture={u.picture} />
               <span className="who">
-                <span className="flex items-center gap-2 min-w-0"><strong className="truncate">{u.display_name}</strong>{u.id === me?.user.id && <span className="badge">You</span>}</span>
-                <span className="label">{[signInSummary(u), u.role_name ?? 'No role', `Last seen ${ago(u.last_seen_at)}`].join(' · ')}</span>
-                {u.now_playing.length > 0 && <span className="label flex items-center gap-1 min-w-0" data-testid="now-playing" style={{ color: 'var(--t-text)' }}>
+                <span className="acct-row-title"><strong className="truncate">{u.display_name}</strong>{u.id === me?.user.id && <span className="ds-pill acct-pill ds-pill-accent">You</span>}</span>
+                <span className="acct-row-meta">{[signInSummary(u), u.role_name ?? 'No role', `Last seen ${ago(u.last_seen_at)}`].join(' · ')}</span>
+                {u.now_playing.length > 0 && <span className="now-playing" data-testid="now-playing">
                   <Icon name="play" size={12} /><span className="truncate">Watching {u.now_playing.map((n) => n.title ?? 'something').join(', ')}</span>
                 </span>}
               </span>
-              <span className="row-end"><span className={`badge ${u.status === 'active' ? 'badge-ok' : 'badge-warn'}`}>{STATUS[u.status] ?? u.status}</span><Icon name="chevR" size={18} /></span>
+              <span className="row-end">
+                <span className="ds-pill acct-pill" data-tone={u.status === 'active' ? 'ok' : 'warn'}>{STATUS[u.status] ?? u.status}</span>
+                <Icon name="chevR" size={18} />
+              </span>
             </Focusable>
           ))}
         </FocusGroup>
-      </section>
+      </Section>
 
-      <Modal open={!!choosing} onClose={() => setChoosing(null)} title={`Role for ${choosing?.display_name ?? ''}`} firstFocusKey={`as:${choosing ? roleFor(choosing).id : ''}`}>
-        <p className="muted">They get this role's permissions and limits when you approve them. You can change it later.</p>
-        <FocusGroup focusKey="as:list" className="flex flex-col gap-2">
+      <Modal open={!!choosing} onClose={() => setChoosing(null)} title={`Role for ${choosing?.display_name ?? ''}`} firstFocusKey={`as:${choosing ? roleFor(choosing).id : ''}`} variant="sheet">
+        <p className="acct-note">They get this role's permissions and limits when you approve them. You can change it later.</p>
+        <FocusGroup focusKey="as:list" className="acct-list">
           {roles.map((r) => (
             <Button key={r.id} focusKey={`as:${r.id}`} pressed={!!choosing && roleFor(choosing).id === r.id} onEnter={() => { if (choosing) setChosen({ ...chosen, [choosing.id]: r.id }); setChoosing(null) }}>{r.name}</Button>
           ))}
         </FocusGroup>
       </Modal>
-      <Modal open={!!denying} onClose={() => setDenying(null)} title={`Deny ${denying?.display_name ?? ''}?`} firstFocusKey="deny:cancel">
+      <Modal open={!!denying} onClose={() => setDenying(null)} title={`Deny ${denying?.display_name ?? ''}?`} firstFocusKey="deny:cancel" variant="sheet">
         <p>Their request is removed. They can ask again by signing in.</p>
-        <div className="flex gap-3 flex-wrap">
+        <div className="acct-actions">
           <Button focusKey="deny:cancel" onEnter={() => setDenying(null)}>Keep waiting</Button>
           <Button focusKey="deny:ok" danger icon="x" onEnter={() => { const u = denying; setDenying(null); if (u) decide(u, null) }}>Deny</Button>
         </div>
       </Modal>
       {adding && <AddManagedUser roles={roles} fallback={fallback} onClose={() => setAdding(false)} />}
       {inviting && <AddPerson roles={roles} onClose={() => { setInviting(false); void setFocus('users:add-person') }} />}
-    </div>
+    </>
   )
 }
 
@@ -172,22 +174,22 @@ function AddPerson({ roles, onClose }: { roles: Role[]; onClose: () => void }) {
     })
   }
   return (
-    <Modal open onClose={onClose} title={made ? `Setup link for ${made.display_name ?? name}` : 'Add a person'} firstFocusKey={made ? 'person-link:copy' : 'person:name'} wide testId="add-person">
+    <Modal open onClose={onClose} title={made ? `Setup link for ${made.display_name ?? name}` : 'Add a person'} firstFocusKey={made ? 'person-link:copy' : 'person:name'} wide variant="sheet" testId="add-person">
       {made ? <>
         <p role="status" data-testid="person-made">Send this link to {made.display_name ?? name}. It works once, for three days, and is shown only now.</p>
         <LinkToCopy scope="person-link" url={made.url} label="Setup link" />
-        <p className="muted">They open it and choose how to sign in: Google, Plex, or a username and password. They can start watching straight away as {roles.find((r) => r.id === made.role_id)?.name ?? made.role_id}. Until then they are listed under Invites.</p>
+        <p className="acct-note">They open it and choose how to sign in: Google, Plex, or a username and password. They can start watching straight away as {roles.find((r) => r.id === made.role_id)?.name ?? made.role_id}. Until then they are listed under Invites.</p>
         <div><Button focusKey="person:done" primary onEnter={onClose} testId="add-person-done">Done</Button></div>
       </> : <>
-        <p className="muted">For someone who signs in for themselves, at home or away. You get a setup link to send them; nobody can register without one.</p>
+        <p className="acct-note">For someone who signs in for themselves, at home or away. You get a setup link to send them; nobody can register without one.</p>
         <FocusableInput focusKey="person:name" label="Name" placeholder="Name" maxLength={64} value={name} onChange={setName} onSubmit={submit} />
-        <section className="flex flex-col gap-2"><h3 className="label">Role</h3>
-          <FocusGroup focusKey="person:roles" className="flex gap-2 flex-wrap" role="group" label="Role">
+        <section className="acct-field"><h3 className="acct-kicker">Role</h3>
+          <FocusGroup focusKey="person:roles" className="acct-chips" role="group" label="Role">
             {offered.map((r) => <Chip key={r.id} focusKey={`person:role:${r.id}`} pressed={role === r.id} onEnter={() => setRole(r.id)}>{r.name}</Chip>)}
           </FocusGroup>
         </section>
-        {error && <p role="alert" style={{ color: 'var(--t-danger)' }}>{error}</p>}
-        <div className="flex gap-3 flex-wrap">
+        {error && <p role="alert" className="acct-error">{error}</p>}
+        <div className="acct-actions">
           <Button focusKey="person:ok" primary icon="link" disabled={create.isPending || !role} onEnter={submit} testId="add-person-ok">Create setup link</Button>
           <Button focusKey="person:cancel" onEnter={onClose}>Cancel</Button>
         </div>
@@ -219,43 +221,43 @@ function AddManagedUser({ roles, fallback, onClose }: { roles: Role[]; fallback:
     })
   }
   return (
-    <Modal open onClose={onClose} title="Add a managed user" firstFocusKey="add:name" wide testId="add-user">
-      <p className="muted">For someone who does not sign in for themselves, a child for instance. They appear on shared household devices and nowhere else.</p>
+    <Modal open onClose={onClose} title="Add a managed user" firstFocusKey="add:name" wide variant="sheet" testId="add-user">
+      <p className="acct-note">For someone who does not sign in for themselves, a child for instance. They appear on shared household devices and nowhere else.</p>
       <FocusableInput focusKey="add:name" label="Name" placeholder="Name" maxLength={64} value={name} onChange={setName} onSubmit={submit} />
-      <section className="flex flex-col gap-2"><h3 className="label">Picture</h3>
-        <FocusGroup focusKey="add:avatars" className="flex gap-2 flex-wrap" role="group" label="Picture">
+      <section className="acct-field"><h3 className="acct-kicker">Picture</h3>
+        <FocusGroup focusKey="add:avatars" className="acct-chips" role="group" label="Picture">
           {AVATARS.map((a) => (
             <Focusable key={a} focusKey={`add:avatar:${a}`} className="avatar-pick" aria-pressed={avatar === a} label={`Picture: ${a}`} onEnter={() => setAvatar(a)}><Avatar avatar={a} size={3} /></Focusable>
           ))}
         </FocusGroup>
       </section>
-      <section className="flex flex-col gap-2"><h3 className="label">Role</h3>
-        <FocusGroup focusKey="add:roles" className="flex gap-2 flex-wrap" role="group" label="Role">
+      <section className="acct-field"><h3 className="acct-kicker">Role</h3>
+        <FocusGroup focusKey="add:roles" className="acct-chips" role="group" label="Role">
           {roles.filter((r) => r.editable).map((r) => <Chip key={r.id} focusKey={`add:role:${r.id}`} pressed={role === r.id} onEnter={() => setRole(r.id)}>{r.name}</Chip>)}
         </FocusGroup>
       </section>
-      <section className="flex flex-col gap-2"><h3 className="label">Sign in with (optional)</h3>
-        <FocusGroup focusKey="add:kinds" className="flex gap-2 flex-wrap" role="group" label="Sign in with">
+      <section className="acct-field"><h3 className="acct-kicker">Sign in with (optional)</h3>
+        <FocusGroup focusKey="add:kinds" className="acct-chips" role="group" label="Sign in with">
           <Chip focusKey="add:kind:pin" pressed={kind === 'pin'} onEnter={() => chooseKind('pin')} testId="add-kind-pin">Number PIN</Chip>
           <Chip focusKey="add:kind:password" pressed={kind === 'password'} onEnter={() => chooseKind('password')} testId="add-kind-password">Password</Chip>
           <Chip focusKey="add:kind:arrows" pressed={kind === 'arrows'} onEnter={() => chooseKind('arrows')} testId="add-kind-arrows">Arrow pattern</Chip>
         </FocusGroup>
         {kind === 'arrows'
-          ? <div className="flex gap-3 items-center flex-wrap">
+          ? <div className="acct-actions">
             <Button focusKey="add:pin" onEnter={() => setDrawing(true)} testId="add-arrows">{pin ? 'Change pattern' : 'Choose pattern'}</Button>
-            <span className="label" data-testid="add-arrows-chosen">{pin ? `${pin.length} arrows chosen` : 'No pattern yet'}</span>
+            <span className="acct-small" data-testid="add-arrows-chosen">{pin ? `${pin.length} arrows chosen` : 'No pattern yet'}</span>
           </div>
           : <div style={{ width: '14rem', maxWidth: '100%' }}>
             {kind === 'pin'
               ? <FocusableInput key="pin" focusKey="add:pin" label="PIN, optional" type="password" inputMode="numeric" maxLength={8} placeholder="4 to 8 digits" value={pin} onChange={(v) => setPin(v.replace(/\D/g, ''))} onSubmit={submit} />
               : <FocusableInput key="password" focusKey="add:pin" label="Password, optional" type="password" autoComplete="new-password" maxLength={PASSWORD_MAX} placeholder={`${PASSWORD_MIN} to ${PASSWORD_MAX} characters`} value={pin} onChange={setPin} onSubmit={submit} />}
           </div>}
-        <p className="label">With one, nobody else on a shared device can switch to them.</p>
+        <p className="acct-small">With one, nobody else on a shared device can switch to them.</p>
       </section>
       <ArrowPinDialog open={drawing} onClose={() => { setDrawing(false); void setFocus('add:pin') }} title={`Arrow pattern for ${name.trim() || 'them'}`}
         onSubmit={async (digits) => { setPin(digits); setDrawing(false); void setFocus('add:pin') }} />
-      {error && <p role="alert" style={{ color: 'var(--t-danger)' }}>{error}</p>}
-      <div className="flex gap-3 flex-wrap">
+      {error && <p role="alert" className="acct-error">{error}</p>}
+      <div className="acct-actions">
         <Button focusKey="add:ok" primary icon="plus" disabled={create.isPending} onEnter={submit} testId="add-user-ok">Add user</Button>
         <Button focusKey="add:cancel" onEnter={onClose}>Cancel</Button>
       </div>
@@ -275,34 +277,34 @@ function RolesTab({ roles }: { roles: Role[] }) {
   const [removing, setRemoving] = useState<Role | null>(null)
   const remove = usePeopleChange((role: Role) => people.removeRole(role.id))
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-3 flex-wrap">
-        <p className="muted flex-1" style={{ minWidth: '14rem' }}>A role is a set of permissions and limits. Changing one reaches everyone who holds it on their next request.</p>
-        <Button focusKey="roles:new" icon="plus" onEnter={() => setEditing('new')} testId="role-new">New role</Button>
-      </div>
-      <FocusGroup focusKey="roles:list" className="flex flex-col gap-2">
+    <section className="acct-group">
+      <SectionHeader title="Roles" meta={roles.length} action={<Button focusKey="roles:new" primary icon="plus" onEnter={() => setEditing('new')} testId="role-new">New role</Button>} />
+      <p className="acct-note">A role is a set of permissions and limits. Changing one reaches everyone who holds it on their next request.</p>
+      <FocusGroup focusKey="roles:list" className="acct-list">
         {roles.map((r) => (
-          <div key={r.id} className="panel person-row" data-testid="role-row">
+          <div key={r.id} className="acct-row person-row" data-testid="role-row">
             <span className="who">
-              <span className="flex items-center gap-2 flex-wrap"><strong>{r.name}</strong><span className="badge">{r.builtin ? 'Built in' : 'Custom'}</span><span className="label">{r.user_count} {r.user_count === 1 ? 'person' : 'people'}</span></span>
-              <span className="label">{r.permissions.length} of {PERMISSION_COUNT} permissions · {limitsSummary(r.limits)}</span>
+              <span className="acct-row-title"><strong>{r.name}</strong><span className="ds-pill acct-pill">{r.builtin ? 'Built in' : 'Custom'}</span><span className="acct-row-meta">{r.user_count} {r.user_count === 1 ? 'person' : 'people'}</span></span>
+              <span className="acct-row-meta">{r.permissions.length} of {PERMISSION_COUNT} permissions · {limitsSummary(r.limits)}</span>
             </span>
-            <Button focusKey={`role:${r.id}`} label={`${r.editable ? 'Edit' : 'View'} the ${r.name} role`} onEnter={() => setEditing(r)} testId={`role-edit-${r.id}`}>{r.editable ? 'Edit' : 'View'}</Button>
+            <span className="row-actions">
+              <GlassIconButton focusKey={`role:${r.id}`} icon={r.editable ? 'settings' : 'eye'} label={`${r.editable ? 'Edit' : 'View'} the ${r.name} role`} tip={r.editable ? 'Edit' : 'View'} onEnter={() => setEditing(r)} testId={`role-edit-${r.id}`} />
+            </span>
           </div>
         ))}
       </FocusGroup>
       {editing && <RoleEditor key={editing === 'new' ? 'new' : editing.id} role={editing === 'new' ? null : editing} onClose={() => setEditing(null)}
         onRemove={(role) => { setEditing(null); setRemoving(role) }} />}
       {/* Asked in a dialog of its own, opening on the safe answer: a question swapped in under a parked cursor would hand it the dangerous one. */}
-      <Modal open={!!removing} onClose={() => setRemoving(null)} title={`Delete the ${removing?.name ?? ''} role?`} firstFocusKey="role:keep">
+      <Modal open={!!removing} onClose={() => setRemoving(null)} title={`Delete the ${removing?.name ?? ''} role?`} firstFocusKey="role:keep" variant="sheet">
         <p>Only a role nobody holds can be deleted.</p>
-        <div className="flex gap-3 flex-wrap">
+        <div className="acct-actions">
           <Button focusKey="role:keep" onEnter={() => setRemoving(null)}>Keep role</Button>
           <Button focusKey="role:remove-ok" danger icon="trash" disabled={remove.isPending} testId="confirm-role-delete"
             onEnter={() => { const role = removing; if (role) remove.mutate(role, { onSuccess: () => { toast(`${role.name} deleted.`, 'success'); void setFocus('roles:new') }, onError: (e) => toast(e.message, 'error'), onSettled: () => setRemoving(null) }) }}>Delete role</Button>
         </div>
       </Modal>
-    </div>
+    </section>
   )
 }
 
@@ -324,18 +326,18 @@ function RoleEditor({ role, onClose, onRemove }: { role: Role | null; onClose: (
     save.mutate(undefined, { onSuccess: (saved) => { toast(`${saved.name} saved.`, 'success'); onClose() }, onError: (e) => setError(e.message) })
   }
   return (
-    <Modal open onClose={onClose} title={role ? `${role.name} role` : 'New role'} firstFocusKey={role?.builtin ? 'role:edit:watch.library' : 'role:name'} wide testId="role-editor">
-      {fixed ? <p className="muted">Owner always has every permission and no limits. It cannot be edited or removed, and there is always at least one.</p>
+    <Modal open onClose={onClose} title={role ? `${role.name} role` : 'New role'} firstFocusKey={role?.builtin ? 'role:edit:watch.library' : 'role:name'} wide variant="sheet" testId="role-editor">
+      {fixed ? <p className="acct-note">Owner always has every permission and no limits. It cannot be edited or removed, and there is always at least one.</p>
         : !role?.builtin && <FocusableInput focusKey="role:name" label="Role name" placeholder="Role name" maxLength={64} value={name} onChange={setName} />}
       <PermissionSwitches scope="role:edit" held={permissions}
         onChange={fixed ? undefined : (id, on) => setPermissions(on ? [...permissions, id] : permissions.filter((p) => p !== id))} />
       {!fixed && <>
-        <h3 className="heading">Limits</h3>
+        <h3 className="ds-section-title">Limits</h3>
         <LimitsEditor scope="role:limit" limits={limits} onChange={(change) => setLimits({ ...limits, ...change })} />
         <Toggle focusKey="role:shared" label="Show on shared devices" hint={'People with this role are offered on a household device\'s "Who\'s watching?"'} on={shared} onChange={setShared} />
       </>}
-      {error && <p role="alert" style={{ color: 'var(--t-danger)' }}>{error}</p>}
-      <FocusGroup focusKey="role:actions" className="flex gap-3 flex-wrap">
+      {error && <p role="alert" className="acct-error">{error}</p>}
+      <FocusGroup focusKey="role:actions" className="acct-actions">
         {!fixed && <Button focusKey="role:save" primary disabled={save.isPending} onEnter={submit} testId="role-save">{role ? 'Save role' : 'Create role'}</Button>}
         <Button focusKey="role:close" onEnter={onClose}>{fixed ? 'Close' : 'Cancel'}</Button>
         {role && !role.builtin && <Button focusKey="role:remove" danger icon="trash" onEnter={() => onRemove(role)}>Delete role</Button>}
@@ -364,61 +366,63 @@ function InvitesTab({ roles }: { roles: Role[] }) {
     try { await navigator.clipboard.writeText(link); toast('Link copied.', 'success') } catch { toast('Copying is blocked here. Select the link and copy it.', 'error'); void setFocus('invite:link') }
   }
   return (
-    <div className="flex flex-col gap-6">
-      <section className="panel flex flex-col gap-4" data-testid="invite-form">
-        <h2 className="heading">New invite link</h2>
-        <p className="muted">Whoever opens the link and signs in (with Google, with Plex, or by choosing a username and password) becomes a user at once, with the role you pick. No approval step.</p>
-        <section className="flex flex-col gap-2"><h3 className="label">Role</h3>
-          <FocusGroup focusKey="invite:roles" className="flex gap-2 flex-wrap" role="group" label="Role">
+    <>
+      <section className="ds-panel acct-group" data-testid="invite-form">
+        <SectionHeader title="New invite link" />
+        <p className="acct-note">Whoever opens the link and signs in (with Google, with Plex, or by choosing a username and password) becomes a user at once, with the role you pick. No approval step.</p>
+        <section className="acct-field"><h3 className="acct-kicker">Role</h3>
+          <FocusGroup focusKey="invite:roles" className="acct-chips" role="group" label="Role">
             {offered.map((r) => <Chip key={r.id} focusKey={`invite:role:${r.id}`} pressed={role === r.id} onEnter={() => setRole(r.id)}>{r.name}</Chip>)}
           </FocusGroup>
         </section>
-        <section className="flex flex-col gap-2"><h3 className="label">Expires after</h3>
-          <FocusGroup focusKey="invite:expiry" className="flex gap-2 flex-wrap" role="group" label="Expires after">
+        <section className="acct-field"><h3 className="acct-kicker">Expires after</h3>
+          <FocusGroup focusKey="invite:expiry" className="acct-chips" role="group" label="Expires after">
             {EXPIRY.map(([h, text]) => <Chip key={h} focusKey={`invite:hours:${h}`} pressed={hours === h} onEnter={() => setHours(h)}>{text}</Chip>)}
           </FocusGroup>
         </section>
-        <section className="flex flex-col gap-2"><h3 className="label">Can be used</h3>
-          <FocusGroup focusKey="invite:uses" className="flex gap-2 flex-wrap" role="group" label="Can be used">
+        <section className="acct-field"><h3 className="acct-kicker">Can be used</h3>
+          <FocusGroup focusKey="invite:uses" className="acct-chips" role="group" label="Can be used">
             {USES.map((n) => <Chip key={n} focusKey={`invite:uses:${n}`} pressed={uses === n} onEnter={() => setUses(n)}>{n === 1 ? 'Once' : `${n} times`}</Chip>)}
           </FocusGroup>
         </section>
         <div><Button focusKey="invite:create" primary icon="link" disabled={create.isPending || !role} testId="invite-create"
           onEnter={() => create.mutate({ role_id: role, expires_in_hours: hours, max_uses: uses }, { onSuccess: (invite) => { setMade(invite); window.setTimeout(() => void setFocus('invite:copy'), 30) }, onError: (e) => toast(e.message, 'error') })}>Create invite link</Button></div>
         {made && (
-          <div className="flex flex-col gap-2" data-testid="invite-made" role="status">
+          <div className="acct-field" data-testid="invite-made" role="status">
             <p>Send this link to the person you are inviting. It is shown only now.</p>
-            <div className="flex gap-2 flex-wrap items-center">
-              <div style={{ flex: '1 1 16rem', minWidth: 0 }}><FocusableInput focusKey="invite:link" label="Invite link" value={link} onChange={() => undefined} readOnly /></div>
-              <Button focusKey="invite:copy" icon="copy" onEnter={() => void copy()} testId="invite-copy">Copy link</Button>
+            <div className="invite-link">
+              <FocusableInput focusKey="invite:link" label="Invite link" value={link} onChange={() => undefined} readOnly />
+              <GlassIconButton focusKey="invite:copy" icon="copy" label="Copy link" onEnter={() => void copy()} testId="invite-copy" />
             </div>
           </div>
         )}
       </section>
-      <section className="flex flex-col gap-3">
-        <h2 className="heading">Invites</h2>
-        {invites.error ? <ErrorState error={invites.error} onRetry={() => void invites.refetch()} /> : !invites.data ? <Skeleton style={{ height: '8rem' }} /> : !invites.data.length ? <p className="muted">No invites yet.</p> : (
-          <FocusGroup focusKey="invite:list" className="flex flex-col gap-2">
+      <section className="acct-group">
+        <SectionHeader title="Invites" meta={invites.data?.length || undefined} />
+        {invites.error ? <ErrorState error={invites.error} onRetry={() => void invites.refetch()} /> : !invites.data ? <Skeleton style={{ height: '8rem' }} /> : !invites.data.length ? <Empty compact icon="link" title="No invites yet" hint="Invite links you make are listed here until they are used up or expire." /> : (
+          <FocusGroup focusKey="invite:list" className="acct-list">
             {invites.data.map((i) => {
               const about = <span className="who">
-                <span className="flex items-center gap-2 flex-wrap"><strong>{i.display_name ? `${i.display_name} · ${i.role_name ?? i.role_id}` : i.role_name ?? i.role_id}</strong>{i.user_id && <span className="badge">Password setup</span>}<span className={`badge ${i.state === 'open' ? 'badge-ok' : ''}`}>{INVITE_STATE[i.state]}</span></span>
-                <span className="label">{[`Used ${i.uses} of ${i.max_uses}`, `${Date.parse(i.expires_at) > Date.now() ? 'Expires' : 'Expired'} ${new Date(i.expires_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, i.created_by_name ? `By ${i.created_by_name}` : null].filter(Boolean).join(' · ')}</span>
+                <span className="acct-row-title"><strong>{i.display_name ? `${i.display_name} · ${i.role_name ?? i.role_id}` : i.role_name ?? i.role_id}</strong>{i.user_id && <span className="ds-pill acct-pill">Password setup</span>}<span className="ds-pill acct-pill" data-tone={i.state === 'open' ? 'ok' : undefined}>{INVITE_STATE[i.state]}</span></span>
+                <span className="acct-row-meta">{[`Used ${i.uses} of ${i.max_uses}`, `${Date.parse(i.expires_at) > Date.now() ? 'Expires' : 'Expired'} ${new Date(i.expires_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, i.created_by_name ? `By ${i.created_by_name}` : null].filter(Boolean).join(' · ')}</span>
               </span>
               // A spent invite has nothing to press, but a remote still has to be able to walk down the list.
               return i.state === 'open' ? (
-                <div key={i.id} className="panel person-row" data-testid="invite-row" data-state={i.state}>
+                <div key={i.id} className="acct-row person-row" data-testid="invite-row" data-state={i.state}>
                   {about}
-                  <Button focusKey={`invite:${i.id}:revoke`} danger label={`Revoke the ${i.role_name ?? ''} invite`} testId="invite-revoke"
-                    onEnter={() => { void setFocus('invite:create'); revoke.mutate(i, { onSuccess: () => toast('Invite revoked.', 'success'), onError: (e) => toast(e.message, 'error') }) }}>Revoke</Button>
+                  <span className="row-actions">
+                    <GlassIconButton focusKey={`invite:${i.id}:revoke`} icon="trash" size="sm" className="acct-danger" label={`Revoke the ${i.role_name ?? ''} invite`} tip="Revoke" testId="invite-revoke"
+                      onEnter={() => { void setFocus('invite:create'); revoke.mutate(i, { onSuccess: () => toast('Invite revoked.', 'success'), onError: (e) => toast(e.message, 'error') }) }} />
+                  </span>
                 </div>
               ) : (
-                <Focusable key={i.id} focusKey={`invite:${i.id}`} className="panel person-row fx-flat" role="listitem" label={`${i.role_name ?? i.role_id} invite, ${INVITE_STATE[i.state]}`} data-testid="invite-row" data={{ state: i.state }}>{about}</Focusable>
+                <Focusable key={i.id} focusKey={`invite:${i.id}`} className="acct-row person-row fx-flat" role="listitem" label={`${i.role_name ?? i.role_id} invite, ${INVITE_STATE[i.state]}`} data-testid="invite-row" data={{ state: i.state }}>{about}</Focusable>
               )
             })}
           </FocusGroup>
         )}
       </section>
-    </div>
+    </>
   )
 }
 
@@ -430,27 +434,27 @@ function ActivityTab({ users, roles }: { users: UserListItem[]; roles: Role[] })
   const go = useGo()
   const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? id
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3 flex-wrap">
+    <section className="acct-group">
+      <div className="acct-actions">
         <CatalogPicker scope="audit:user" label="About" value={about} options={[{ id: '', label: 'Everyone' }, ...users.map((u) => ({ id: u.id, label: u.display_name }))]} onChange={(id) => setSp(id ? { tab: 'activity', user: id } : { tab: 'activity' }, { replace: true })} />
-        <p className="label">Who changed what about whom, newest first.</p>
+        <p className="acct-small">Who changed what about whom, newest first.</p>
       </div>
       {log.error ? <ErrorState error={log.error} onRetry={() => void log.refetch()} /> : !log.data ? <Skeleton style={{ height: '10rem' }} /> : !log.data.length ? (
-        <Empty title="Nothing recorded" hint={about ? 'No changes about or by this person yet.' : 'Changes to users, roles, invites and devices are listed here.'} />
+        <Empty icon="list" title="Nothing recorded" hint={about ? 'No changes about or by this person yet.' : 'Changes to users, roles, invites and devices are listed here.'} />
       ) : (
-        <FocusGroup focusKey="audit:list" className="flex flex-col gap-2" role="list" data-testid="audit-list">
+        <FocusGroup focusKey="audit:list" className="acct-list" role="list" data-testid="audit-list">
           {log.data.map((e) => {
             const person = e.target_user_id && users.some((u) => u.id === e.target_user_id && u.status !== 'pending') ? e.target_user_id : null
             return (
-              <Focusable key={e.id} focusKey={`audit:${e.id}`} className="panel audit-row fx-flat" role={person ? 'link' : 'listitem'} label={auditLine(e, roleName)} data={{ action: e.action }}
+              <Focusable key={e.id} focusKey={`audit:${e.id}`} className="acct-row audit-row fx-flat" role={person ? 'link' : 'listitem'} label={auditLine(e, roleName)} data={{ action: e.action }}
                 onEnter={person ? () => go(`/users/${encodeURIComponent(person)}`) : undefined}>
                 <span className="flex-1 min-w-0">{auditLine(e, roleName)}</span>
-                <time className="label" dateTime={e.at} title={new Date(e.at).toLocaleString()}>{ago(e.at)}</time>
+                <time className="acct-row-meta" dateTime={e.at} title={new Date(e.at).toLocaleString()}>{ago(e.at)}</time>
               </Focusable>
             )
           })}
         </FocusGroup>
       )}
-    </div>
+    </section>
   )
 }

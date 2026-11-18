@@ -78,25 +78,25 @@ export function WhoIsWatching({ users, mandatory, error, onRetry }: { users: Swi
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Who's watching?" className="who-screen" data-testid="who-is-watching" data-mandatory={!!mandatory}>
-      <FocusGroup focusKey="who" boundary className="flex flex-col items-center gap-8" style={{ width: 'min(60rem, 100%)' }}>
-        <h1 className="display" style={{ textAlign: 'center' }}>Who's watching?</h1>
-        {error ? <ErrorState error={error} onRetry={onRetry} /> : !users ? <p className="muted">Loading…</p> : (
+      <FocusGroup focusKey="who" boundary className="who-col">
+        <h1 className="who-title">Who's watching?</h1>
+        {error ? <ErrorState error={error} onRetry={onRetry} /> : !users ? <p className="acct-note">Loading…</p> : (
           <div className="who-grid">
             {users.map((u) => (
               <Focusable key={u.id} focusKey={`who:${u.id}`} className="who-card" label={`${u.display_name}${kindOf(u) ? `, ${NOUN[kindOf(u)!]} needed` : ''}${u.current ? ', watching now' : ''}`}
                 data-testid="who-card" data={{ current: u.current, locked: u.has_pin }} onEnter={() => void choose(u)}>
                 <span className="who-face">
-                  <Avatar name={u.display_name} avatar={u.avatar} picture={u.picture} size={6} />
+                  <Avatar name={u.display_name} avatar={u.avatar} picture={u.picture} size={7} />
                   {u.has_pin && <span className="who-lock" aria-hidden="true" data-testid="who-lock"><Icon name="lock" size={16} /></span>}
                 </span>
-                <span className="heading who-name">{u.display_name}</span>
-                <span className="label">{u.current ? 'Watching now' : u.role_name ?? ' '}</span>
+                <span className="who-name">{u.display_name}</span>
+                <span className="who-role">{u.current ? 'Watching now' : u.role_name ?? ' '}</span>
               </Focusable>
             ))}
           </div>
         )}
-        {problem && <p role="alert" data-testid="who-problem" style={{ color: 'var(--t-danger)', textAlign: 'center', maxWidth: '34rem' }}>{problem}</p>}
-        {!mandatory && <Button focusKey="who:close" onEnter={hide} testId="who-close">Cancel</Button>}
+        {problem && <p role="alert" data-testid="who-problem" className="acct-error" style={{ textAlign: 'center', maxWidth: '34rem' }}>{problem}</p>}
+        {!mandatory && <Button focusKey="who:close" ghost onEnter={hide} testId="who-close">Cancel</Button>}
       </FocusGroup>
       {asking && <AskSecretDialog open kind={kindOf(asking) ?? 'pin'} arrows={asking.pin_arrows} onClose={() => setAsking(null)} submitLabel="Switch"
         title={{ pin: `PIN for ${asking.display_name}`, arrows: `Arrow pattern for ${asking.display_name}`, password: `Password for ${asking.display_name}` }}

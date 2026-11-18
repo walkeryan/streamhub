@@ -471,7 +471,7 @@ test.describe('the Users screen', () => {
     for (const entry of ['2468', '2468']) { await page.keyboard.type(entry); await page.keyboard.press('Enter') }
     await expect(pin).toHaveCount(0)
     await expect(sharing).toContainText('Signs in with a number PIN')
-    await expect(page.getByTestId('user-pin-clear')).toHaveText('Remove PIN')
+    await expect(page.getByTestId('user-pin-clear')).toHaveAttribute('aria-label', 'Remove PIN')
     await page.getByTestId('user-pin-clear').click()
     await expect(sharing).toContainText('No PIN')
 
