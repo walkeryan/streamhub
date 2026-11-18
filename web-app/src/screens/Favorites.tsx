@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useFavorites, useHistory, useWatchlist } from '../api/hooks'
-import { Button, Chip, Empty, ErrorState, Skeleton } from '../components/ui'
-import { ChannelTile, MediaTile } from '../components/Tile'
+import { Button, ChannelTile, Chip, Empty, ErrorState, GlassIconButton, MediaTile, PageHeader, Section, Skeleton } from '../ds'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 
@@ -28,36 +27,42 @@ export function Favorites() {
   useRestoreFocus(!!data || !!error, `fav:tab:${tab.id}`)
   const chans = visible.filter((t) => t.kind === 'channel')
   const rest = visible.filter((t) => t.kind !== 'channel')
+  const pages = Math.max(1, Math.ceil(filtered.length / 80))
   return (
-    <div className="page-pad" data-testid="favorites">
-      <h1 className="title-xl mb-3">My List</h1>
-      <FocusGroup focusKey="fav:tabs" className="flex gap-2 flex-wrap mb-4" role="tablist">
-        {TABS.map((t) => <Chip key={t.id} focusKey={`fav:tab:${t.id}`} pressed={tab.id === t.id} testId={`mylist-${t.id}`} onEnter={() => { setSearch(''); setPage(0); setSp(t.id === 'favorites' ? {} : { tab: t.id }, { replace: true }) }}>{t.label}</Chip>)}
-      </FocusGroup>
+    <div className="page-pad lib-page" data-testid="favorites">
+      <PageHeader title="My List" className="lib-head">
+        <FocusGroup focusKey="fav:tabs" className="lib-chips" role="tablist">
+          {TABS.map((t) => <Chip key={t.id} focusKey={`fav:tab:${t.id}`} pressed={tab.id === t.id} testId={`mylist-${t.id}`} onEnter={() => { setSearch(''); setPage(0); setSp(t.id === 'favorites' ? {} : { tab: t.id }, { replace: true }) }}>{t.label}</Chip>)}
+        </FocusGroup>
+      </PageHeader>
       {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : <>
-        {(data?.length ?? 0) > 12 && <div className="mb-4" style={{ maxWidth: '26rem' }}><FocusableInput focusKey="fav:search" label={`Search ${noun}`} placeholder={`Search your ${noun}`} value={search} onChange={(v) => { setSearch(v); setPage(0) }} /></div>}
-        {isLoading ? <Skeleton style={{ height: '10rem' }} /> : !data?.length ? (
-          <Empty title={tab.empty} hint={tab.hint}>
-            <Button focusKey="fav:browse" primary onEnter={() => go('/browse/movies')}>Browse movies</Button>
+        {(data?.length ?? 0) > 12 && <div className="lib-search"><FocusableInput focusKey="fav:search" label={`Search ${noun}`} placeholder={`Search your ${noun}`} value={search} onChange={(v) => { setSearch(v); setPage(0) }} /></div>}
+        {isLoading ? <div className="grid-tiles lib-grid" aria-hidden="true">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="ds-skel-tile" style={{ aspectRatio: '2/3' }} />)}</div> : !data?.length ? (
+          <Empty icon="bookmark" title={tab.empty} hint={tab.hint}>
+            <Button focusKey="fav:browse" primary icon="film" onEnter={() => go('/browse/movies')}>Browse movies</Button>
           </Empty>
         ) : (
-          <div className="flex flex-col gap-6">
-            {!filtered.length && <Empty title={`No matching ${noun}`} hint="Try a shorter name. Everything on this list is still saved." />}
+          <div className="lib-sections">
+            {!filtered.length && <Empty icon="search" compact title={`No matching ${noun}`} hint="Try a shorter name. Everything on this list is still saved." />}
             {chans.length > 0 && (
-              <section><h2 className="heading mb-2">Channels</h2>
-                <FocusGroup focusKey="fav:channels" className="flex gap-4 flex-wrap" style={{ padding: '0.5rem' }}>
+              <Section title="Channels" meta={<span aria-hidden="true">{chans.length}</span>}>
+                <FocusGroup focusKey="fav:channels" className="fav-channels">
                   {chans.map((t) => <ChannelTile key={t.id} tile={t} scope="fav-ch" />)}
                 </FocusGroup>
-              </section>
+              </Section>
             )}
             {rest.length > 0 && (
-              <section><h2 className="heading">Movies and shows</h2>
-                <FocusGroup focusKey="fav:titles" className="grid-tiles">
+              <Section title="Movies and shows" meta={<span aria-hidden="true">{rest.length}</span>}>
+                <FocusGroup focusKey="fav:titles" className="grid-tiles lib-grid">
                   {rest.map((t) => <MediaTile key={t.id} tile={t} scope="fav" />)}
                 </FocusGroup>
-              </section>
+              </Section>
             )}
-            {filtered.length > 80 && <FocusGroup focusKey="fav:pages" className="flex gap-3 flex-wrap items-center"><Button focusKey="fav:prev" disabled={!pageIndex} onEnter={() => setPage(pageIndex - 1)}>Previous page</Button><span className="label">{filtered.length.toLocaleString()} {noun} · Page {pageIndex + 1} of {Math.max(1, Math.ceil(filtered.length / 80))}</span><Button focusKey="fav:next" disabled={(pageIndex + 1) * 80 >= filtered.length} onEnter={() => setPage(pageIndex + 1)}>Next page</Button></FocusGroup>}
+            {filtered.length > 80 && <FocusGroup focusKey="fav:pages" className="lib-pager">
+              <GlassIconButton focusKey="fav:prev" icon="chevL" label="Previous page" tipAt="above" disabled={!pageIndex} onEnter={() => setPage(pageIndex - 1)} />
+              <span className="label lib-pager-text">{filtered.length.toLocaleString()} {noun} · Page {pageIndex + 1} of {pages}</span>
+              <GlassIconButton focusKey="fav:next" icon="chevR" label="Next page" tipAt="above" disabled={(pageIndex + 1) * 80 >= filtered.length} onEnter={() => setPage(pageIndex + 1)} />
+            </FocusGroup>}
           </div>
         )}
       </>}

@@ -143,7 +143,9 @@ test('rules: every new episode from the guide, then switched off; a game offers 
 
   // Deleting says what goes with the rule.
   await page.getByTestId('recordings-tab-rules').click()
-  await rule.getByTestId('rule-delete').click()
+  // Edit and Delete are behind the rule's ⋯.
+  await rule.getByTestId('rule-more').click()
+  await page.getByTestId('rule-delete').click()
   await expect(page.getByTestId('rule-delete-confirm')).toContainText('also removes the upcoming recordings it scheduled')
   await page.getByTestId('rule-delete-go').click()
   await expect(rules).toHaveCount(2)
@@ -156,9 +158,9 @@ test('keyboard only: walk Upcoming, Recorded and Rules', async ({ page }) => {
   await expect(page.getByTestId('recording-row')).toHaveCount(3)
   await expect(page.getByTestId('recording-row').first().getByTestId('recording-badge')).toHaveText('Recording')
   await page.keyboard.press('ArrowDown')
-  await expect(focused(page)).toHaveText('Stop recording')
+  await expect(focused(page)).toHaveAttribute('aria-label', /^Stop recording: /)
   await page.keyboard.press('ArrowDown')
-  await expect(focused(page)).toHaveText('Cancel')
+  await expect(focused(page)).toHaveAttribute('aria-label', /^Cancel: /)
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('recording-row')).toHaveCount(2)
   // The row took its button with it: focus is back on the tab, not lost.
@@ -173,16 +175,18 @@ test('keyboard only: walk Upcoming, Recorded and Rules', async ({ page }) => {
   await expect(rows.filter({ hasText: 'Recording failed' }).getByTestId('recording-reason')).toHaveText('The disk fell below the free space the server keeps.')
   await expect(rows.filter({ hasText: 'Recording missed' }).getByTestId('recording-reason')).toHaveText('No connection to the provider was free for ten minutes.')
   await page.keyboard.press('ArrowDown')
-  await expect(focused(page)).toHaveText('Play')
+  await expect(focused(page)).toHaveAttribute('aria-label', /^Play: /)
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/play\/rec%3A/)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('recordings')).toBeVisible()
-  await expect(focused(page)).toHaveText('Play')
-  // Delete asks first, and Keep is where focus starts.
+  await expect(focused(page)).toHaveAttribute('aria-label', /^Play: /)
+  // Delete is behind ⋯ and asks first, and Keep is where focus starts.
   await page.keyboard.press('ArrowRight')
+  await expect(focused(page)).toHaveAttribute('aria-label', /^More actions: /)
+  await page.keyboard.press('Enter')
   await expect(focused(page)).toHaveText('Delete')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('recording-delete-confirm')).toContainText('its file are deleted from the server')
@@ -201,6 +205,8 @@ test('keyboard only: walk Upcoming, Recorded and Rules', async ({ page }) => {
   await page.keyboard.press('ArrowDown')
   await expect(focused(page)).toHaveAttribute('aria-label', 'On: Evening Edition')
   await page.keyboard.press('ArrowRight')
+  await expect(focused(page)).toHaveAttribute('aria-label', 'More actions: Evening Edition')
+  await page.keyboard.press('Enter')
   await expect(focused(page)).toHaveText('Edit')
   await page.keyboard.press('Enter')
   const edit = page.getByTestId('rule-edit-dialog')
@@ -210,7 +216,8 @@ test('keyboard only: walk Upcoming, Recorded and Rules', async ({ page }) => {
   await page.keyboard.press('Enter')
   await expect(page.getByText('Rule saved.')).toBeVisible()
   await expect(rules.first()).toContainText('Evening Edition Late')
-  await expect(focused(page)).toHaveText('Edit')
+  // Focus is back on the ⋯ it came from.
+  await expect(focused(page)).toHaveAttribute('aria-label', 'More actions: Evening Edition Late')
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('ArrowLeft')
   await expect(focused(page)).toHaveAttribute('aria-label', 'Off: Riverton Rovers')
