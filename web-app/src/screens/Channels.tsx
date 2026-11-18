@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useRecordings, useToggleFavorite, type ChannelFilters } from '../api/hooks'
 import type { Channel } from '../api/types'
-import { Button, Chip, ErrorState, Skeleton } from '../components/ui'
+import { Button, ErrorState, GlassIconButton, GlassPanel, ProgressBar, Skeleton } from '../ds'
 import { ChannelRow } from '../components/ChannelRow'
 import { FocusGroup } from '../nav/Focusable'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
@@ -9,7 +9,7 @@ import { useHistoryState } from '../nav/historyState'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { Preview } from '../player/Preview'
 import { useUi } from '../store/ui'
-import { fmtTime } from '../lib/util'
+import { fmtTime, progressOf, useNow } from '../lib/util'
 import { useCan } from '../api/me'
 import { RecordDialog } from '../recordings/RecordDialog'
 import { RecordingBadge } from '../recordings/RecordingBadge'
@@ -50,6 +50,8 @@ export function Channels({ filters, selectedChannelId, onSelectChannel, upKey, e
   const { boxRef, onScroll, win, placed, pointer, onPointerMove, revealRow } = useRowView({ filterKey: key, count, rowRem: ROW_REM, row, morePages: !!hasNextPage, onMeasure })
   const drawn = useChannelRows(feed, { win, placed }, row, focusRow)
   const focused = focusRow !== null ? channels[focusRow] ?? null : null
+  const now = useNow()
+  const nowPct = focused?.now ? progressOf(focused.now.start, focused.now.stop, now) : null
 
   const setChannelList = useUi((s) => s.setChannelList)
   const go = useGo()
@@ -114,7 +116,7 @@ export function Channels({ filters, selectedChannelId, onSelectChannel, upKey, e
 
   return <div className="live-catalog-layout" data-testid="live-channels" data-preview={!phone}>
     {query.error && !pages ? <div><ErrorState error={query.error} onRetry={() => void query.refetch()} /></div>
-      : !pages ? <div className="chan-list-skel">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} />)}</div>
+      : !pages ? <div className="chan-list-skel" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} />)}</div>
       : count === 0 ? <div>{empty}</div> : (
         <div ref={boxRef} className="chan-list" data-testid="channel-list" onScroll={onScroll} onPointerMoveCapture={onPointerMove}>
           <FocusGroup focusKey="live:list" className="chan-list-canvas" role="listbox" label="Channels" remember preferred={home} style={{ height: `${count * ROW_REM + 2}rem` }}>
@@ -134,13 +136,22 @@ export function Channels({ filters, selectedChannelId, onSelectChannel, upKey, e
     {/* A phone has no room for a preview: selecting a channel plays it. */}
     {!phone && <aside className="live-catalog-preview" aria-label="Preview">
       <Preview channelId={previewId} off={!previewEnabled} onTurnOn={() => setPreviewEnabled(true)} />
-      {focused && <div className="flex flex-col gap-1" data-testid="live-info"><h2 className="title-xl">{focused.number} · {focused.name}</h2><p className="flex items-center gap-2 flex-wrap">{focused.now ? `Now: ${focused.now.title} (${fmtTime(focused.now.start)} to ${fmtTime(focused.now.stop)})` : 'No programme data supplied for this channel'}<RecordingBadge state={focused.now?.recording_state} /></p>{focused.next && <p className="muted flex items-center gap-2 flex-wrap">Next: {focused.next.title} at {fmtTime(focused.next.start)}<RecordingBadge state={focused.next.recording_state} /></p>}</div>}
-      <FocusGroup focusKey="live:actions" className="flex gap-2 flex-wrap">
-        <Button focusKey="live:watch" primary icon="play" disabled={!focused} onEnter={() => focused && play(focused)}>Watch full screen</Button>
-        <Chip focusKey="live:preview" pressed={previewEnabled} onEnter={() => setPreviewEnabled((v) => !v)}>Preview {previewEnabled ? 'on' : 'off'}</Chip>
-        <Button focusKey="live:togglefav" icon="heart" disabled={!focused} pressed={!!focused?.is_favorite} onEnter={() => focused && toggleFav.mutate({ kind: 'channel', id: focused.id, on: !focused.is_favorite })}>{focused?.is_favorite ? 'Remove favorite' : 'Add favorite'}</Button>
-        {recordable && <Button focusKey="live:record" icon="record" disabled={!focused?.now && !focused?.next} onEnter={() => focused && setRecordingId(focused.id)} testId="live-record">Record</Button>}
-      </FocusGroup>
+      {/* What is on, then the one primary (Watch) and the rest as glass icons: the title page's action row. */}
+      <GlassPanel className="live-catalog-info">
+        {focused ? <div className="live-info" data-testid="live-info">
+          <h2 className="live-info-title truncate">{focused.number} · {focused.name}</h2>
+          <p className="live-info-now">{focused.now ? `Now: ${focused.now.title} (${fmtTime(focused.now.start)} to ${fmtTime(focused.now.stop)})` : 'No programme data supplied for this channel'}<RecordingBadge state={focused.now?.recording_state} /></p>
+          {nowPct !== null && <ProgressBar pct={nowPct} className="live-info-bar" />}
+          {focused.next && <p className="live-info-next">Next: {focused.next.title} at {fmtTime(focused.next.start)}<RecordingBadge state={focused.next.recording_state} /></p>}
+        </div> : <p className="muted live-info">Select a channel for what is on.</p>}
+        <FocusGroup focusKey="live:actions" className="live-actions">
+          <Button focusKey="live:watch" primary icon="play" disabled={!focused} onEnter={() => focused && play(focused)}>Watch full screen</Button>
+          <GlassIconButton focusKey="live:preview" icon="eye" label={`Preview ${previewEnabled ? 'on' : 'off'}`} pressed={previewEnabled} onEnter={() => setPreviewEnabled((v) => !v)} />
+          <GlassIconButton focusKey="live:togglefav" icon="heart" fillWhenPressed disabled={!focused} pressed={!!focused?.is_favorite} label={focused?.is_favorite ? 'Remove favorite' : 'Add favorite'}
+            onEnter={() => focused && toggleFav.mutate({ kind: 'channel', id: focused.id, on: !focused.is_favorite })} />
+          {recordable && <GlassIconButton focusKey="live:record" icon="record" label="Record" disabled={!focused?.now && !focused?.next} onEnter={() => focused && setRecordingId(focused.id)} testId="live-record" />}
+        </FocusGroup>
+      </GlassPanel>
     </aside>}
     <RecordDialog target={recordingChannel ? { channel: recordingChannel, programmes: [recordingChannel.now, recordingChannel.next].filter((p) => !!p) } : null} onClose={() => setRecordingId(null)} />
   </div>
