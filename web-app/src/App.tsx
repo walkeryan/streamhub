@@ -44,9 +44,21 @@ const UserDetail = lazy(() => import('./screens/UserDetail').then((m) => ({ defa
 
 bootTheme()
 
+/** html[data-scrolled] while the page is scrolled: the top bar is clear over the top of a page and frosts once content passes under it. */
+function useScrolledFlag() {
+  useEffect(() => {
+    const root = document.documentElement
+    const update = () => root.toggleAttribute('data-scrolled', window.scrollY > 8)
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    return () => { window.removeEventListener('scroll', update); root.removeAttribute('data-scrolled') }
+  }, [])
+}
+
 function Shell() {
   const loc = useLocation()
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
+  useScrolledFlag()
   return (
     <div className="shell">
       <Rail />
