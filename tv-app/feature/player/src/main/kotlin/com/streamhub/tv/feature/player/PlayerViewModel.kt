@@ -3,8 +3,14 @@ package com.streamhub.tv.feature.player
 import android.os.SystemClock
 import androidx.lifecycle.SavedStateHandle
 import androidx.media3.common.Player
+import com.streamhub.tv.core.data.repo.MeRepository
 import com.streamhub.tv.core.data.repo.RoomRepository
 import com.streamhub.tv.core.data.repo.RoomSeat
+import com.streamhub.tv.core.data.repo.WatchTogether
+import com.streamhub.tv.core.data.repo.WatchTogetherLauncher
+import com.streamhub.tv.core.data.model.Permissions
+import com.streamhub.tv.core.data.model.Room
+import com.streamhub.tv.core.data.room.roomShareUrl
 import com.streamhub.tv.core.data.room.RoomClient
 import com.streamhub.tv.core.data.room.RoomClock
 import com.streamhub.tv.core.data.room.RoomConnection
@@ -42,6 +48,7 @@ import com.streamhub.tv.core.data.repo.BufferLeaseApi
 import com.streamhub.tv.core.data.repo.BufferLeaseSession
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -56,6 +63,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import java.time.Instant
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackMode
@@ -124,6 +132,10 @@ data class PlayerScreenState(
      */
     val streamStartMs: Long = 0,
     val titleDurationMs: Long? = null,
+    /** The profile may start watch rooms (`rooms.create`), as read when this player opened. */
+    val mayStartRoom: Boolean = false,
+    /** `<server>/room/<code>` of the room this player is in, for the QR code of "Invite people". */
+    val roomShareUrl: String? = null,
 ) {
     /** Position in the title for a position of the player. */
     fun titlePositionMs(playerPositionMs: Long): Long = playerPositionMs + streamStartMs
@@ -170,6 +182,7 @@ class PlayerViewModel @Inject constructor(
     private val api: StreamHubApi,
     private val sessions: SessionStore,
     private val rooms: RoomRepository,
+    private val me: MeRepository,
     playerFactory: PlayerFactory,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState["key"])
@@ -219,6 +232,12 @@ class PlayerViewModel @Inject constructor(
     private var recoverySeq = 0
     /** Recoveries in a row that ended with the room still on a later start of its stream than the one loaded. */
     private var epochMisses = 0
+    /** Set between moving this playback into a room it started and putting that room where the TV was. */
+    @Volatile private var carryOver: CarryOver? = null
+
+    /** "Watch together" from the menu: the room is made and shown, and Start moves this playback into it. */
+    private val together = WatchTogetherLauncher(rooms, viewModelScope, join = ::switchIntoRoom)
+    val watchTogether: StateFlow<WatchTogether?> = together.state
 
     init {
         coordinator.registerActivePlayer(key) { stopCurrentPlayback() }
@@ -238,6 +257,11 @@ class PlayerViewModel @Inject constructor(
         // A room plays one stream for everyone: it never moves to another feed on its own.
         if (seat == null) viewModelScope.launch { watchFeeds() }
         viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) { reauthorized = false; pausedRetry.reset() } } }
+        viewModelScope.launch {
+            // Read afresh for the person playing: what was cached may be from before a switch in the web app.
+            try { me.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+            me.state.collect { access -> _state.update { it.copy(mayStartRoom = access.can(Permissions.ROOMS_CREATE)) } }
+        }
         viewModelScope.launch {
             sessions.session.map { it.catalogScope() }.distinctUntilChanged().drop(1).collect {
                 rewindJob?.cancel(); _state.update { it.copy(audioChoice=null) }; stopCurrentPlayback(); _exit.emit(Unit)
@@ -377,7 +401,9 @@ class PlayerViewModel @Inject constructor(
                 playingStream = stream
                 _state.update { it.copy(streamStartMs = stream?.startMs ?: 0, titleDurationMs = d.durationMs?.takeIf { len -> stream != null && len > 0 }) }
                 // Until the socket has said where the room is, the descriptor's resume position is the room's.
-                player.play(d, reportOwner, RoomSync.playerPosition(roomPosition() ?: d.resumePositionMs, stream))
+                // A room this TV has just started on its own stream starts where the TV was: the room is put there next.
+                val carried = carryOver?.positionMs?.takeIf { stream == null }
+                player.play(d, reportOwner, RoomSync.playerPosition(carried ?: roomPosition() ?: d.resumePositionMs, stream))
                 // A new room is paused at the start; until the room says "playing" this member waits.
                 if (roomClient?.state?.value?.clock?.playing != true) player.pause()
             } else if (startPositionMs != null) player.play(d, reportOwner, startPositionMs) else player.play(d, reportOwner)
@@ -570,14 +596,16 @@ class PlayerViewModel @Inject constructor(
         return client.state.value.clock?.let { RoomSync.positionAt(it, client.serverNowMs()) }
     }
 
-    private fun startRoom(s: RoomSeat) {
-        val client = rooms.client(s)
+    private fun startRoom(s: RoomSeat, isHost: Boolean = false) {
+        val client = rooms.client(s, isHost)
         roomClient = client
         roomJob?.cancel()
         _state.update { it.copy(roomCode = s.code, room = client.state.value, roomEnded = null) }
         roomJob = viewModelScope.launch {
             // Cancelling this job is how the room is left: run() gives the seat back on its way out.
             launch { client.run() }
+            launch { val url = sessions.current().serverUrl?.let { roomShareUrl(it, s.code) }; _state.update { it.copy(roomShareUrl = url) } }
+            carryOver?.let { carry -> launch { carryInto(client, carry) } }
             launch {
                 client.state.collect { room ->
                     _state.update { it.copy(room = room) }
@@ -626,7 +654,8 @@ class PlayerViewModel @Inject constructor(
             val room = client.state.value
             val clock = room.clock ?: continue
             val s = _state.value
-            if (room.connection != RoomConnection.Connected || currentStopped || s.failure != null || s.retrying) continue
+            // A room this TV just started is put where the TV was first: following its untouched start would jump back to zero.
+            if (room.connection != RoomConnection.Connected || currentStopped || s.failure != null || s.retrying || carryOver != null) continue
             val exo = player.exoPlayer
             if (exo.playbackState == Player.STATE_IDLE || exo.playbackState == Player.STATE_ENDED || player.state.value.audioBlocked) continue
             val stream = playingStream
@@ -707,6 +736,97 @@ class PlayerViewModel @Inject constructor(
                 live.laggingSince = 0L
                 if (holding) { live.holdingSince = 0L; live.holdArmed = false }
                 if (!exo.playWhenReady) player.resume()
+            }
+        }
+    }
+
+    // ---- Watch together: starting a room from what is playing --------------------------------------
+
+    /** What "Watch together" would open a room on now; null when the menu does not offer it. */
+    fun roomStart(s: PlayerScreenState = _state.value): RoomStart? =
+        RoomStartRules.roomStart(s.descriptor, currentRequest, s.mayStartRoom, inRoom = seat != null || s.roomCode != null)
+
+    fun startWatchTogether() {
+        val start = roomStart() ?: return
+        hideOverlay()
+        together.open(start.titleId, start.title, start.subject, start.variantId, start.audioTrack)
+    }
+    fun startTogetherRoom() = together.start()
+    fun retryTogetherRoom() = together.retry()
+    fun cancelTogetherRoom() { together.cancel(); showOsd() }
+
+    /**
+     * Start in the "Watch together" dialog: this playback becomes the host's seat in the room it just
+     * made, as a joined room plays (the room clock, RoomSync, the room's controls), without a second
+     * player. This player's own stream is given back first, since a one-connection source would
+     * refuse the room's; when the seat cannot be taken, that stream is resolved again where it was
+     * and the failure is the dialog's to show.
+     */
+    private suspend fun switchIntoRoom(room: Room, allowUnverifiedAudio: Boolean) {
+        if (seat != null) return
+        val d = _state.value.descriptor
+        val exo = player.exoPlayer
+        val wasPlaying = exo.playWhenReady
+        // A film carries on where it is; a channel has no position, and a live room plays on its own.
+        val positionMs = if (d != null && !d.live && !room.live) _state.value.titlePositionMs(exo.currentPosition).takeIf { it > 0 } else null
+        zapJob?.cancel(); numberJob?.cancel(); rewindJob?.cancel(); scrubJob?.cancel()
+        feedWatch = null; feedNotice = null; failedRequest = null
+        stopCurrentPlayback()
+        val joined = try {
+            rooms.joinInto(key, room.code, allowUnverifiedAudio)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            playOwnAgain(positionMs)
+            throw e
+        }
+        seat = joined
+        playingStream = joined.descriptor.roomStream()
+        autoRecoveries = 0; epochMisses = 0
+        carryOver = CarryOver(positionMs, wasPlaying)
+        _state.update { it.copy(failure = null, failureKeepsPlaying = false, scrubTargetMs = null, overlay = Overlay.None, live = joined.descriptor.live) }
+        startRoom(joined, isHost = room.isHost)
+        attachJob = viewModelScope.launch {
+            start(joined.descriptor)
+            if (joined.descriptor.live) loadChannelList(joined.descriptor)
+            showOsd()
+        }
+    }
+
+    /** Sends what [CarryOverRules] decides once the new room has said where it is, then lets RoomSync take over. */
+    private suspend fun carryInto(client: RoomClient, carry: CarryOver) {
+        try {
+            val room = client.state.first { CarryOverRules.step(carry, it) != CarryStep.Wait || it.connection == RoomConnection.Closed }
+            val step = CarryOverRules.step(carry, room)
+            if (step is CarryStep.Send) {
+                step.seekToMs?.let { client.seek(it) }
+                if (step.play) client.play()
+                // RoomSync takes over once the room has answered; before that it would follow the untouched start.
+                withTimeoutOrNull(CARRY_SETTLE_MS) { client.state.first { CarryOverRules.step(carry, it) !is CarryStep.Send } }
+            }
+        } finally {
+            if (carryOver === carry) carryOver = null
+        }
+    }
+
+    /** Playback before the room, again: the accepted request resolved afresh (its old address may have expired). */
+    private fun playOwnAgain(resumeAt: Long?) {
+        val request = currentRequest ?: _state.value.descriptor?.let { PlaybackRequest(it.id) } ?: return
+        attachJob?.cancel()
+        _state.update { it.copy(retrying = true) }
+        attachJob = viewModelScope.launch {
+            val owner = sessions.current().catalogScope()
+            try {
+                val fresh = coordinator.resolveAgain(request)
+                currentCoroutineContext().ensureActive()
+                if (sessions.current().catalogScope() != owner) return@launch
+                start(fresh, resumeAt)
+                if (fresh.live) loadChannelList(fresh)
+                _state.update { it.copy(retrying = false) }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(retrying = false) }
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(retrying = false, failure = ApiErrors.describe(e), failureKeepsPlaying = false) }
             }
         }
     }
@@ -913,7 +1033,7 @@ class PlayerViewModel @Inject constructor(
             val watching = feedWatch
             // A switch this run made whose resolve failed: the dialog is up for a channel that never started.
             val failedSwitch = watching != null && watching.tried.isNotEmpty() && failedRequest?.id == watching.channel && d?.id != watching.channel
-            val eligible = failedSwitch || (d != null && d.live && s.live && d.id.startsWith("ch:") && !s.bufferTimeshift && !currentStopped)
+            val eligible = seat == null && (failedSwitch || (d != null && d.live && s.live && d.id.startsWith("ch:") && !s.bufferTimeshift && !currentStopped))
             if (!eligible || d == null) { feedWatch = null; last = null; lastBuffered = null; continue }
             var w = if (failedSwitch) checkNotNull(watching) else watching?.takeIf { it.channel == d.id } ?: FeedFailover.watchChannel(d.id, now).also { last = null; lastBuffered = null }
             if (!failedSwitch && w.tried.isNotEmpty() && w.channel == d.id) feedNotice?.let { (from, to) -> feedNotice = null; flash(FeedFailover.notice(from, to)) }
@@ -1125,7 +1245,7 @@ class PlayerViewModel @Inject constructor(
             currentCoroutineContext().ensureActive()
             seat = current
             playingStream = current.descriptor.roomStream()
-            startRoom(current)
+            startRoom(current, isHost = _state.value.room?.isHost == true)
             fresh = current.descriptor
         }
         var chases = 0
@@ -1147,6 +1267,10 @@ class PlayerViewModel @Inject constructor(
     override fun onCleared() {
         rewindJob?.cancel(); attachJob?.cancel(); bufferHeartbeat?.cancel(); bufferSeekJob?.cancel()
         cleanupScope.launch { buffer.close() }
+        // A room made from the menu that nobody was let into is closed rather than left to expire.
+        (together.state.value?.phase as? WatchTogether.Phase.Ready)?.room?.code?.let { code ->
+            cleanupScope.launch { try { rooms.close(code) } catch (_: Exception) { } }
+        }
         coordinator.unregisterActivePlayer(key)
         // roomJob ends with viewModelScope; RoomClient.run() closes the socket normally on its way out, which frees the seat.
         rooms.release(key)
@@ -1182,6 +1306,8 @@ class PlayerViewModel @Inject constructor(
         /** The live reconnect attempt at which a room member's stream address is fetched again. */
         const val LIVE_ROOM_REFETCH_ATTEMPT = 3
         const val FLASH_MS = 2_500L
+        /** The longest a room this TV started waits for the server to confirm where it was put. */
+        const val CARRY_SETTLE_MS = 3_000L
         /** How often feed failover looks at the picture. */
         const val FEED_SAMPLE_MS = 1_000L
         /** A step of the position larger than this in one look is a jump (a new stream), not play. */

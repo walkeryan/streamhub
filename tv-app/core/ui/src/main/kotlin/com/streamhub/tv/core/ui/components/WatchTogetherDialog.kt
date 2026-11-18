@@ -36,13 +36,20 @@ internal fun watchTogetherHint(subject: RoomSubject): String = when (subject) {
     RoomSubject.Channel -> "Start when you're ready. A live room has no position: everyone watches the channel as it airs, and Play and Pause apply to everyone."
 }
 
+/** The same, for a room started from the player: Start keeps what is playing going, in the room. */
+internal fun watchTogetherCarryOnHint(subject: RoomSubject): String = when (subject) {
+    RoomSubject.Channel -> "Start keeps this channel playing here, with you as the room's host. A live room has no position: everyone watches the channel as it airs."
+    else -> "Start keeps this playing here from where you are, with you as the room's host. Everyone who joins catches up with you."
+}
+
 /**
  * The room's code, large enough to read across the room, and a QR code of `<server>/room/<code>` for
  * phones and computers. Start joins the room and opens the player; Back or Cancel closes the room.
- * Shared by a title's page, an episode's actions and Live TV.
+ * Shared by a title's page, an episode's actions, Live TV and the player's menu ([carryOn]: the
+ * player moves what it is playing into the room rather than opening it afresh).
  */
 @Composable
-fun WatchTogetherDialog(state: WatchTogether, onStart: () -> Unit, onRetry: () -> Unit, onCancel: () -> Unit) {
+fun WatchTogetherDialog(state: WatchTogether, onStart: () -> Unit, onRetry: () -> Unit, onCancel: () -> Unit, carryOn: Boolean = false) {
     val t = LocalThemeTokens.current
     val focus = remember { FocusRequester() }
     val phase = state.phase
@@ -84,7 +91,7 @@ fun WatchTogetherDialog(state: WatchTogether, onStart: () -> Unit, onRetry: () -
                         when {
                             phase.needsAudioConsent -> Text("This room's source has no confirmed audio in your languages. Start anyway to watch it with the audio it has.", style = MaterialTheme.typography.bodyMedium, color = t.text)
                             error != null -> Text("${error.title}. ${error.body}", style = MaterialTheme.typography.bodyMedium, color = t.danger)
-                            else -> Text(watchTogetherHint(state.subject), style = MaterialTheme.typography.bodyMedium, color = t.text)
+                            else -> Text(if (carryOn) watchTogetherCarryOnHint(state.subject) else watchTogetherHint(state.subject), style = MaterialTheme.typography.bodyMedium, color = t.text)
                         }
                         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             ShButton(

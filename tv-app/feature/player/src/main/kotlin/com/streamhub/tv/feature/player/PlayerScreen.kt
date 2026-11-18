@@ -72,6 +72,10 @@ import com.streamhub.tv.core.data.room.RoomUiState
 import com.streamhub.tv.core.player.PlayerUiState
 import com.streamhub.tv.core.player.VideoSurface
 import com.streamhub.tv.core.ui.components.ProgressLine
+import com.streamhub.tv.core.ui.components.QrCode
+import com.streamhub.tv.core.ui.components.WatchTogetherDialog
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.components.programmeProgress
@@ -122,6 +126,7 @@ private class OkPress {
 fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val ps by vm.player.state.collectAsStateWithLifecycle()
+    val together by vm.watchTogether.collectAsStateWithLifecycle()
     val rootFocus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     var lastBackAt by remember { mutableLongStateOf(0L) }
@@ -254,6 +259,8 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel()) {
             }
             room.waitingFor?.let { StatusBadge("Waiting for $it…", Modifier.align(Alignment.TopCenter).padding(top = Tokens.Canvas.SafeMarginY + 44.dp)) }
         }
+        // "Watch together" from the menu: the new room's code and QR code; Start moves this playback into it.
+        together?.let { WatchTogetherDialog(it, onStart = vm::startTogetherRoom, onRetry = vm::retryTogetherRoom, onCancel = vm::cancelTogetherRoom, carryOn = true) }
         if (s.leaveAsk) LeaveRoomDialog(isHost = room?.isHost == true, onLeave = vm::leaveRoom, onEnd = vm::endRoom, onStay = vm::stayInRoom)
         // The room is over: say why, then back to the title it was opened from.
         s.roomEnded?.let { ErrorDialog(it, onRetry = onExit, onDismiss = onExit, dismissLabel = "Back") }
@@ -532,6 +539,8 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
     var trackMessage by remember {mutableStateOf<String?>(null)}
     var streamInfo by remember { mutableStateOf(false) }
     val infoOpener = remember { FocusRequester() }
+    var invite by remember { mutableStateOf(false) }
+    val inviteOpener = remember { FocusRequester() }
     val dismissTrack:()->Unit={confirmation=null;menuScope.launch {withFrameNanos{};runCatching {(confirmOpener ?: first).requestFocus()}}}
     LaunchedEffect(ps.audioTracks) {
         if(confirmation!=null && confirmation !in ps.audioTracks) {confirmation=null;trackMessage="Audio tracks changed. Choose again.";withFrameNanos{};runCatching{first.requestFocus()}}
@@ -558,9 +567,11 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             )
             if (room?.isHost == true) {
                 ShButton(if (room.controlsLocked) "Let everyone control playback" else "Only I control playback", vm::toggleRoomLock, Modifier.focusRequester(first))
+                ShButton("Invite people", { invite = true }, Modifier.focusRequester(inviteOpener))
                 ShButton("Leave the room", vm::askLeaveRoom)
             } else {
                 ShButton("Leave the room", vm::askLeaveRoom, Modifier.focusRequester(first))
+                ShButton("Invite people", { invite = true }, Modifier.focusRequester(inviteOpener))
             }
         }
         if(isChannel) {
@@ -598,12 +609,15 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             PlayerViewModel.SLEEP_OPTIONS.forEach { m -> ShChip(m?.let { "$it" } ?: "Off", s.sleepMinutes == m, { vm.setSleep(m) }) }
         }
+        // A room for whatever is playing, with this TV as its host (the web player's "Watch together").
+        if (vm.roomStart(s) != null) ShButton("Watch together", vm::startWatchTogether, Modifier.padding(top = 8.dp))
         // What is playing and how it gets here: the server's facts and the player's own numbers.
         ShButton("Stream info", { streamInfo = true }, Modifier.focusRequester(infoOpener))
         if (ps.error != null) ShButton("Retry stream", vm::retry)
         ShButton("Close controls",vm::hideOverlay)
     }
     if (streamInfo) StreamInfoDialog(vm, s) { streamInfo = false; menuScope.launch { withFrameNanos { }; runCatching { infoOpener.requestFocus() } } }
+    if (invite && s.roomCode != null) InviteDialog(s.roomCode, s.roomShareUrl) { invite = false; menuScope.launch { withFrameNanos { }; runCatching { inviteOpener.requestFocus() } } }
     confirmation?.let {track ->
         val cancelFocus=remember {FocusRequester()}
         Dialog(onDismissRequest=dismissTrack) {
@@ -643,6 +657,38 @@ private fun RoomStrip(code: String, room: RoomUiState, modifier: Modifier = Modi
 }
 
 private const val MAX_STRIP_MEMBERS = 6
+
+/** "Invite people" in a room: its code to read out and a QR code of its link, as when it was started. */
+@Composable
+private fun InviteDialog(code: String, shareUrl: String?, onDismiss: () -> Unit) {
+    val t = LocalThemeTokens.current
+    val close = remember { FocusRequester() }
+    Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Row(
+            Modifier.width(820.dp).background(t.surface, RoundedCornerShape(Tokens.Radius.Lg)).padding(32.dp),
+            horizontalArrangement = Arrangement.spacedBy(32.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Invite people", style = MaterialTheme.typography.titleLarge, color = t.text)
+                Text("Room code", style = MaterialTheme.typography.labelLarge, color = t.textMuted)
+                Text(
+                    RoomCode.display(code),
+                    style = MaterialTheme.typography.displayLarge.copy(fontFamily = FontFamily.Monospace, fontSize = 64.sp, letterSpacing = 6.sp),
+                    color = t.accent,
+                )
+                Text(
+                    "On another TV: open Join a room from the menu and enter this code. On a phone or computer: scan the QR code" +
+                        (shareUrl?.let { " or open $it" } ?: "") + ".",
+                    style = MaterialTheme.typography.bodyMedium, color = t.textMuted,
+                )
+                ShButton("Done", onDismiss, Modifier.padding(top = 8.dp).focusRequester(close))
+            }
+            if (shareUrl != null) QrCode(shareUrl, size = 220.dp)
+        }
+        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { close.requestFocus() } }
+    }
+}
 
 /** Back in a room. Focus starts on staying: leaving is the choice that has to be made on purpose. */
 @Composable
