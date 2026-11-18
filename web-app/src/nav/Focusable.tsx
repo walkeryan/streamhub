@@ -3,6 +3,7 @@ import { FocusContext, useFocusable } from '@noriginmedia/norigin-spatial-naviga
 import type { FocusableComponentLayout } from '@noriginmedia/norigin-spatial-navigation-core'
 import { cn } from '../lib/util'
 import { setFocus } from './spatial'
+import { useTextEntry } from './textEntry'
 
 export interface FocusableProps {
   focusKey?: string
@@ -163,14 +164,17 @@ export function FocusableInput(p: {
 }) {
   const local = useRef<HTMLInputElement>(null)
   const inputRef = p.inputRef ?? local
+  // In a browser the field takes the caret as focus lands on it; on the TV OK starts editing (textEntry.ts).
+  const entry = useTextEntry(inputRef, { readOnly: p.readOnly, inputMode: p.inputMode })
   const { ref, focused, focusKey } = useFocusable({
     focusKey: p.focusKey,
     onFocus: () => {
-      inputRef.current?.focus({ preventScroll: true })
+      if (!entry.shell) inputRef.current?.focus({ preventScroll: true })
       ;(ref.current as HTMLElement | null)?.scrollIntoView?.({ block: 'nearest' })
       p.onFocused?.()
     },
-    onBlur: () => inputRef.current?.blur(),
+    onEnterPress: entry.start,
+    onBlur: entry.stop,
   })
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     const el = e.currentTarget
@@ -179,22 +183,24 @@ export function FocusableInput(p: {
     if ((e.key === 'ArrowLeft' && !atStart) || (e.key === 'ArrowRight' && !atEnd)) e.nativeEvent.stopPropagation()
     if (e.key === 'Enter') {
       e.nativeEvent.stopPropagation()
+      // On the TV the keyboard's Go/Search/Done ends editing: the remote moves on from here.
+      if (entry.shell) entry.stop()
       p.onSubmit?.()
     }
     if (e.key === 'Backspace') e.nativeEvent.stopPropagation()
   }
   return (
-    <div ref={ref} data-focused={focused} data-focus-key={focusKey} className={cn('fx field', p.className)}>
+    <div ref={ref} data-focused={focused} data-focus-key={focusKey} data-text-entry={entry.editing ? 'editing' : 'idle'} tabIndex={entry.shell ? -1 : undefined}
+      className={cn('fx field', p.className)}>
       <input
         ref={inputRef}
         tabIndex={-1}
         aria-label={p.label}
         type={p.type ?? 'text'}
-        inputMode={p.inputMode}
         maxLength={p.maxLength}
         autoCapitalize={p.autoCapitalize}
         autoComplete={p.autoComplete ?? "off"}
-        readOnly={p.readOnly}
+        {...entry.inputProps}
         spellCheck={false}
         placeholder={p.placeholder}
         value={p.value}

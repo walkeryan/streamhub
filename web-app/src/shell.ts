@@ -4,7 +4,8 @@ import { hasAudioConsent } from './player/audioConsent'
 import { useSession } from './store/session'
 import { useUi } from './store/ui'
 import { useDock } from './player/dock'
-import { bridgeOf, miniPlayerCommand, parseShellMessage, shellViewport, titlePlay, type MiniPlayerCommandName, type ShellPlay, type StreamHubTVBridge } from './shellProtocol'
+import { useVoice } from './lib/voiceSearch'
+import { bridgeOf, IME_HIDDEN_EVENT, miniPlayerCommand, parseShellMessage, shellViewport, titlePlay, type MiniPlayerCommandName, type ShellPlay, type StreamHubTVBridge } from './shellProtocol'
 
 /*
  * Shell mode: this web app inside the Android TV app (see shellProtocol.ts for the bridge). Every
@@ -86,6 +87,10 @@ export function installShell(): void {
       const m = parseShellMessage(json)
       if (!m) return false
       if (m.kind === 'mini_player') useDock.getState().setShell(m.state)
+      // Voice search: the TV's recogniser (started from the page's microphone or the remote's search key).
+      else if (m.kind === 'voice') useVoice.getState().receive(m)
+      // The on-screen keyboard closed (Back on it, its Done key): the field being typed in stops editing.
+      else if (m.kind === 'ime' && !m.visible) window.dispatchEvent(new Event(IME_HIDDEN_EVENT))
       return true
     },
   }
