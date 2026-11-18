@@ -4,7 +4,7 @@ import type { Notice } from '../api/types'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useGo } from '../nav/back'
 import { setFocus } from '../nav/spatial'
-import { Button } from './ui'
+import { GlassIconButton, Icon } from '../ds'
 
 const SHOWN = 3
 
@@ -33,10 +33,10 @@ export function HomeNotices() {
       {unread.map((n) => (
         <div key={n.id} className="panel notice" data-testid="notice" data-kind={n.kind}>
           <Focusable focusKey={`notice:${n.id}`} className="notice-open fx-flat" role="link" label={n.title} onEnter={() => open(n)}>
-            <strong>{n.title}</strong>
+            <Icon name="info" size={18} className="notice-icon" /><strong>{n.title}</strong>
             {n.body && <span className="muted"> · {n.body}</span>}
           </Focusable>
-          <Button focusKey={`notice:${n.id}:dismiss`} ghost icon="x" label={`Dismiss: ${n.title}`} onEnter={() => dismiss(n)}>Dismiss</Button>
+          <GlassIconButton focusKey={`notice:${n.id}:dismiss`} size="sm" icon="x" label={`Dismiss: ${n.title}`} tip="Dismiss" onEnter={() => dismiss(n)} />
         </div>
       ))}
     </FocusGroup>

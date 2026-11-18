@@ -3,14 +3,14 @@ import { WatchingNow } from '../components/WatchingNow'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
 import type { Tile } from '../api/types'
-import { Button, Crossfade, Empty, ErrorState, Meta, Skeleton, useLoadedImage } from '../components/ui'
+import { Button, Crossfade, Empty, ErrorState, Skeleton, useLoadedImage } from '../components/ui'
+import { GlassIconButton, Icon, SkeletonRow } from '../ds'
 import { SafeImg } from '../components/SafeImg'
 import { TileBadge, TileRow, namesSource } from '../components/Tile'
 import { FocusGroup } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useUi } from '../store/ui'
 import { useAdaptiveAccent } from '../lib/theme'
-import { cn } from '../lib/util'
 
 export const isPlayable = (t: Tile) => t.kind === 'channel' || t.sources.some((s) => s.playable_in_app)
 
@@ -46,49 +46,52 @@ export function Home() {
 
   if (error) return <div className="page-pad"><ErrorState error={error} onRetry={() => void refetch()} /></div>
   if (isLoading) return (
-    <div data-testid="home-loading">
-      <Skeleton style={{ height: '50dvh', borderRadius: 0 }} />
-      <div className="page-pad flex gap-4">{Array.from({ length: 7 }, (_, i) => <Skeleton key={i} style={{ width: 'var(--tile-poster-w)', height: 'var(--tile-poster-h)' }} />)}</div>
+    <div data-testid="home-loading" className="home">
+      <div className="home-hero"><Skeleton style={{ position: 'absolute', inset: 0, borderRadius: 0 }} /></div>
+      <div className="home-rows"><SkeletonRow layout="landscape" count={5} /><SkeletonRow layout="poster" /></div>
     </div>
   )
   if (!active) return (
     <div className="page-pad">
-      <Empty title="Nothing to watch yet" hint="Connect Plex, Jellyfin, an IPTV provider or your streaming services and your library shows up here.">
+      <Empty icon="source" title="Nothing to watch yet" hint="Connect Plex, Jellyfin, an IPTV provider or your streaming services and your library shows up here.">
         <Button focusKey="hero:play" primary icon="plus" onEnter={() => go('/sources')}>Add a source</Button>
       </Empty>
     </div>
   )
 
   const playable = isPlayable(active)
+  const shown = idx % Math.max(1, hero.length)
   return (
-    <div data-testid="home" className="home-discovery">
+    <div data-testid="home" className="home">
       <WatchingNow />
       <HomeNotices />
-      <section className="hero" aria-label="Featured" data-testid="hero" data-art={noArt ? 'none' : undefined}>
+      {/* The billboard: art under the clear top bar, the title, one line of facts, Play and Details. */}
+      <section className="home-hero" aria-label="Featured" data-testid="hero" data-art={noArt ? 'none' : undefined}>
         <Crossfade src={active.backdrop ?? active.poster} />
-        <div className="hero-body">
-          <h1 className="display" data-testid="hero-title"><SafeImg key={active.id} src={active.logo} alt={active.title} style={{ maxHeight: '3.5rem' }} fallback={active.title} /></h1>
-          <Meta items={[active.year, active.subtitle, active.rating ? `★ ${active.rating.toFixed(1)}` : null]} />
+        <div className="home-hero-body">
+          <h1 className="home-hero-title" data-testid="hero-title"><SafeImg key={active.id} src={active.logo} alt={active.title} fallback={active.title} /></h1>
+          <p className="ds-meta">
+            {active.year ? <span>{active.year}</span> : null}
+            {active.subtitle ? <span>{active.subtitle}</span> : null}
+            {active.rating ? <span className="ds-star"><b>★</b> {active.rating.toFixed(1)}</span> : null}
+          </p>
           {/* The same rule as a tile: one ordinary source says nothing. */}
           {namesSource(active.sources) && <div className="flex gap-2 flex-wrap" data-testid="hero-sources"><TileBadge sources={active.sources} max={3} /></div>}
-          <FocusGroup focusKey="hero" className="flex gap-3 flex-wrap items-center" onFocusChange={setHeroFocused} remember={false} preferred="hero:play">
-            <Button focusKey="hero:play" primary icon="play" testId="hero-play"
+          <FocusGroup focusKey="hero" className="home-hero-actions" onFocusChange={setHeroFocused} remember={false} preferred="hero:play">
+            <Button focusKey="hero:play" primary lg testId="hero-play"
               onEnter={() => go(playable ? `/play/${encodeURIComponent(active.id)}` : `/title/${encodeURIComponent(active.id)}`)}>
-              {playable ? 'Play' : 'Open in app'}
+              <Icon name="play" />{playable ? 'Play' : 'Open in app'}
             </Button>
-            <Button focusKey="hero:details" icon="info" testId="hero-details" onEnter={() => go(`/title/${encodeURIComponent(active.id)}`)}>Details</Button>
+            <GlassIconButton focusKey="hero:details" icon="info" label="Details" testId="hero-details" onEnter={() => go(`/title/${encodeURIComponent(active.id)}`)} />
             {hero.length > 1 && (
-              <div className="flex gap-1.5 ml-2" aria-hidden="true">
-                {hero.map((h, i) => (
-                  <i key={h.id} style={{ width: i === idx % hero.length ? 22 : 8, height: 8, borderRadius: 8, transition: 'width 180ms ease-out',
-                    background: i === idx % hero.length ? 'var(--t-accent)' : 'color-mix(in srgb, var(--t-text) 35%, transparent)' }} />
-                ))}
+              <div className="home-hero-dots" aria-hidden="true">
+                {hero.map((h, i) => <i key={h.id} data-on={i === shown} />)}
               </div>
             )}
           </FocusGroup>
         </div>
       </section>
-      <div className={cn('pb-16')} style={{ marginTop: '-0.5rem', position: 'relative', zIndex: 3 }}>
+      <div className="home-rows">
         {rows.map((r) => (
           <TileRow key={r.id} id={r.id} title={r.title} tiles={r.tiles} layout={r.layout} seeAll={r.browse_path} onFocusTile={setDriver} />
         ))}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useDeleteRecording, useDeleteRecordingRule, usePatchRecordingRule, useRecordingRules, useRecordings } from '../api/hooks'
 import type { Recording, RecordingRule } from '../api/types'
-import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
+import { Button, Chip, Empty, ErrorState, GlassIconButton, Icon, Modal, OverflowMenu, PageHeader, SectionHeader, Skeleton } from '../ds'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
@@ -55,6 +55,10 @@ export function Recordings() {
     if (list.data && !document.querySelector('.scrim') && !doesFocusableExist(getCurrentFocusKey())) void setFocus(`rec:tab:${tab}`)
   }, [list.data, rules.data, tab, shown])
 
+  /* ds-request: OverflowMenu could hand focus back to its button before it runs an item. Until it does, an item
+     that opens a dialog waits for the menu to close (its list holds focus until then), puts focus on the ⋯, and
+     then opens, so the dialog gives focus back to the ⋯ when it closes. */
+  const fromMenu = (button: string, open: () => void) => () => { window.setTimeout(() => { void setFocus(button); open() }, 0) }
   const failed = (e: Error) => toast(e.message, 'error')
   const cancel = (r: Recording) => {
     if (remove.isPending) return
@@ -83,72 +87,84 @@ export function Recordings() {
     if (rule) removeRule.mutate(rule.id, { onSuccess: () => toast('Rule deleted.', 'success'), onError: failed })
   }
 
-  const barred = <Empty title="Recordings are not available" hint="This profile cannot use recordings. Ask the person who runs this StreamHub." />
+  const rowsLoading = <div className="lib-list" aria-hidden="true">{Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="lib-row-skel" />)}</div>
+  const barred = <Empty icon="lock" title="Recordings are not available" hint="This profile cannot use recordings. Ask the person who runs this StreamHub." />
   let body
+  // The tabs belong in the title line only when there is a list to choose from.
+  const tabbed = allowed && !!list.data?.enabled && !list.error
   if (!allowed && !isAdmin) body = barred
   else if (list.data && !list.data.enabled) body = isAdmin ? (
-    <div className="panel flex flex-col gap-3 items-start" style={{ maxWidth: '44rem' }} role="status" data-testid="recordings-off">
-      <h2 className="title-xl">Recording is not set up on this server</h2>
+    <div className="ds-panel rec-off" role="status" data-testid="recordings-off">
+      <span className="ds-empty-icon" aria-hidden="true"><Icon name="record" /></span>
+      <SectionHeader title="Recording is not set up on this server" />
       <p className="muted">Nothing can be recorded until the server has a folder to record into. Set RECORDINGS_DIR to a writable folder on the library disk and restart the server; Record then appears on the guide.</p>
-      <Button focusKey="rec:guide" icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button>
+      <FocusGroup className="lib-actions"><Button focusKey="rec:guide" primary icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button></FocusGroup>
     </div>
-  ) : <Empty title="Recording is not available" hint="Recording has not been set up on this server." />
+  ) : <Empty icon="record" title="Recording is not available" hint="Recording has not been set up on this server." />
   else if (!allowed) body = barred
   else if (list.error) body = <ErrorState error={list.error} onRetry={() => void list.refetch()} />
-  else if (!list.data) body = <Skeleton style={{ height: '12rem' }} />
+  else if (!list.data) body = rowsLoading
   else body = <>
-    <FocusGroup focusKey="rec:tabs" className="flex gap-2 flex-wrap" role="tablist">
-      {TABS.map((t) => <Chip key={t.id} focusKey={`rec:tab:${t.id}`} pressed={tab === t.id} onEnter={() => setTab(t.id)} testId={`recordings-tab-${t.id}`}>{t.label}</Chip>)}
-    </FocusGroup>
     {tab === 'upcoming' && (upcoming.length === 0 ? (
-      <Empty title="Nothing is set to record" hint="Choose a programme on the guide, then Record: that programme, every new episode, or every game of a team.">
-        <Button focusKey="rec:guide" icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button>
+      <Empty icon="record" title="Nothing is set to record" hint="Choose a programme on the guide, then Record: that programme, every new episode, or every game of a team.">
+        <Button focusKey="rec:guide" primary icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button>
       </Empty>
     ) : (
-      <FocusGroup focusKey="rec:list" className="flex flex-col gap-2" style={{ maxWidth: '60rem' }}>
+      <FocusGroup focusKey="rec:list" className="lib-list">
         {upcoming.map((r) => (
-          <div key={r.id} className="panel rec-row" data-testid="recording-row" data-state={r.state}>
-            <div className="flex-1 min-w-0 flex flex-col gap-1">
-              <span className="flex items-center gap-2 min-w-0"><span className="truncate" style={{ fontWeight: 600 }}>{r.title}</span><RecordingBadge state={r.state} /></span>
+          <div key={r.id} className="ds-panel lib-row rec-row" data-testid="recording-row" data-state={r.state}>
+            <span className="rec-mark" data-state={r.state} aria-hidden="true"><Icon name="record" /></span>
+            <div className="lib-row-copy">
+              <span className="lib-row-line"><span className="lib-row-title">{r.title}</span><RecordingBadge state={r.state} /></span>
               <span className="label">{[r.subtitle, episodeLabel(r), sidesLabel(r.teams), r.channel_name, when(r), r.rule_id ? 'From a rule' : null].filter(Boolean).join(' · ')}</span>
             </div>
-            {mayChange && <Button focusKey={`rec:${r.id}:cancel`} danger icon="x" label={`${r.state === 'recording' ? 'Stop recording' : 'Cancel'}: ${r.title}`} onEnter={() => cancel(r)} testId="recording-cancel">{r.state === 'recording' ? 'Stop recording' : 'Cancel'}</Button>}
+            {mayChange && <div className="lib-row-actions">
+              <GlassIconButton focusKey={`rec:${r.id}:cancel`} icon="x" label={`${r.state === 'recording' ? 'Stop recording' : 'Cancel'}: ${r.title}`} tip={r.state === 'recording' ? 'Stop recording' : 'Cancel'} onEnter={() => cancel(r)} testId="recording-cancel" />
+            </div>}
           </div>
         ))}
       </FocusGroup>
     ))}
-    {tab === 'recorded' && (recorded.length === 0 ? <Empty title="No recordings yet" hint="Finished recordings are listed here, newest first." /> : (
-      <FocusGroup focusKey="rec:list" className="flex flex-col gap-2" style={{ maxWidth: '60rem' }}>
+    {tab === 'recorded' && (recorded.length === 0 ? <Empty icon="record" title="No recordings yet" hint="Finished recordings are listed here, newest first." /> : (
+      <FocusGroup focusKey="rec:list" className="lib-list">
         {recorded.map((r) => (
-          <div key={r.id} className="panel rec-row" data-testid="recording-row" data-state={r.state}>
-            <div className="flex-1 min-w-0 flex flex-col gap-1">
-              <span className="flex items-center gap-2 min-w-0"><span className="truncate" style={{ fontWeight: 600 }}>{r.title}</span>{r.state !== 'done' && <RecordingBadge state={r.state} />}</span>
+          <div key={r.id} className="ds-panel lib-row rec-row" data-testid="recording-row" data-state={r.state}>
+            <span className="rec-mark" data-state={r.state} aria-hidden="true"><Icon name={r.state === 'done' ? 'play' : 'alert'} /></span>
+            <div className="lib-row-copy">
+              <span className="lib-row-line"><span className="lib-row-title">{r.title}</span>{r.state !== 'done' && <RecordingBadge state={r.state} />}</span>
               <span className="label">{[r.subtitle, episodeLabel(r), sidesLabel(r.teams), r.channel_name, when(r), recordingSize(r.size_bytes)].filter(Boolean).join(' · ')}</span>
               {r.state !== 'done' && <span className="muted" data-testid="recording-reason">{r.error ?? (r.state === 'missed' ? 'No connection was free when it started.' : 'The recording did not finish.')}</span>}
             </div>
-            {r.state === 'done' && <Button focusKey={`rec:${r.id}:play`} primary icon="play" label={`Play: ${r.title}`} onEnter={() => go(`/play/${encodeURIComponent(`rec:${r.id}`)}`)} testId="recording-play">Play</Button>}
-            {mayChange && <Button focusKey={`rec:${r.id}:delete`} danger icon="trash" label={`${r.state === 'done' ? 'Delete' : 'Remove'}: ${r.title}`} onEnter={() => setDeleting(r)} testId="recording-delete">{r.state === 'done' ? 'Delete' : 'Remove'}</Button>}
+            <div className="lib-row-actions">
+              {r.state === 'done' && <GlassIconButton focusKey={`rec:${r.id}:play`} icon="play" label={`Play: ${r.title}`} tip="Play" onEnter={() => go(`/play/${encodeURIComponent(`rec:${r.id}`)}`)} testId="recording-play" />}
+              {/* Deleting is seldom and final: behind ⋯, and it still asks. */}
+              {mayChange && <OverflowMenu focusKey={`rec:${r.id}:more`} menuKey={`rec:${r.id}:menu`} title={r.title} label={`More actions: ${r.title}`} testId="recording-more"
+                items={[{ key: 'delete', icon: 'trash', label: r.state === 'done' ? 'Delete' : 'Remove', testId: 'recording-delete', onEnter: fromMenu(`rec:${r.id}:more`, () => setDeleting(r)) }]} />}
+            </div>
           </div>
         ))}
       </FocusGroup>
     ))}
-    {tab === 'rules' && (rules.error ? <ErrorState error={rules.error} onRetry={() => void rules.refetch()} /> : !rules.data ? <Skeleton style={{ height: '12rem' }} /> : ruleList.length === 0 ? (
-      <Empty title="No recording rules" hint="A rule records every new episode of a series, every game of a team, or every programme with a word in its title. Make one from a programme on the guide.">
-        <Button focusKey="rec:guide" icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button>
+    {tab === 'rules' && (rules.error ? <ErrorState error={rules.error} onRetry={() => void rules.refetch()} /> : !rules.data ? rowsLoading : ruleList.length === 0 ? (
+      <Empty icon="record" title="No recording rules" hint="A rule records every new episode of a series, every game of a team, or every programme with a word in its title. Make one from a programme on the guide.">
+        <Button focusKey="rec:guide" primary icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button>
       </Empty>
     ) : (
-      <FocusGroup focusKey="rec:list" className="flex flex-col gap-2" style={{ maxWidth: '60rem' }}>
+      <FocusGroup focusKey="rec:list" className="lib-list">
         {ruleList.map((rule) => (
-          <div key={rule.id} className="panel rec-row" data-testid="rule-row" data-enabled={rule.enabled}>
-            <div className="flex-1 min-w-0 flex flex-col gap-1">
-              <span className="truncate" style={{ fontWeight: 600 }}>{rule.match}</span>
+          <div key={rule.id} className="ds-panel lib-row rec-row" data-testid="rule-row" data-enabled={rule.enabled}>
+            <span className="rec-mark" data-state={rule.enabled ? 'rule' : 'off'} aria-hidden="true"><Icon name="list" /></span>
+            <div className="lib-row-copy">
+              <span className="lib-row-title">{rule.match}</span>
               <span className="label">{[RULE_KIND_LABEL[rule.kind], rule.channel_name ?? 'Any channel', rule.new_only ? 'New only' : 'Repeats too', rule.keep ? `Keeps the last ${rule.keep}` : 'Keeps all', rule.enabled ? null : 'Off'].filter(Boolean).join(' · ')}</span>
             </div>
-            {mayChange && <>
+            {mayChange && <div className="lib-row-actions">
               <Chip focusKey={`rule:${rule.id}:on`} pressed={rule.enabled} label={`${rule.enabled ? 'On' : 'Off'}: ${rule.match}`} onEnter={() => toggleRule(rule)} testId="rule-toggle">{rule.enabled ? 'On' : 'Off'}</Chip>
-              <Button focusKey={`rule:${rule.id}:edit`} label={`Edit: ${rule.match}`} onEnter={() => edit(rule)} testId="rule-edit">Edit</Button>
-              <Button focusKey={`rule:${rule.id}:delete`} danger icon="trash" label={`Delete: ${rule.match}`} onEnter={() => setDeletingRule(rule)} testId="rule-delete">Delete</Button>
-            </>}
+              <OverflowMenu focusKey={`rule:${rule.id}:more`} menuKey={`rule:${rule.id}:menu`} title={rule.match} label={`More actions: ${rule.match}`} testId="rule-more" items={[
+                { key: 'edit', icon: 'settings', label: 'Edit', testId: 'rule-edit', onEnter: fromMenu(`rule:${rule.id}:more`, () => edit(rule)) },
+                { key: 'delete', icon: 'trash', label: 'Delete', testId: 'rule-delete', onEnter: fromMenu(`rule:${rule.id}:more`, () => setDeletingRule(rule)), group: 1 },
+              ]} />
+            </div>}
           </div>
         ))}
       </FocusGroup>
@@ -156,20 +172,24 @@ export function Recordings() {
   </>
 
   return (
-    <div className="page-pad flex flex-col gap-6" data-testid="recordings">
-      <h1 className="display">Recordings</h1>
+    <div className="page-pad lib-page" data-testid="recordings">
+      <PageHeader title="Recordings" className="lib-head">
+        {tabbed && <FocusGroup focusKey="rec:tabs" className="lib-chips" role="tablist">
+          {TABS.map((t) => <Chip key={t.id} focusKey={`rec:tab:${t.id}`} pressed={tab === t.id} onEnter={() => setTab(t.id)} testId={`recordings-tab-${t.id}`}>{t.label}</Chip>)}
+        </FocusGroup>}
+      </PageHeader>
       {body}
       <Modal open={!!deleting} onClose={() => setDeleting(null)} title={`${deleting?.state === 'done' ? 'Delete' : 'Remove'} ${deleting?.title ?? ''}?`} firstFocusKey="recdel:cancel" testId="recording-delete-confirm">
         <p className="muted">{deleting?.state === 'done' ? 'The recording and its file are deleted from the server. This cannot be undone.' : 'It is taken off this list. Nothing was recorded.'}</p>
-        <div className="flex gap-3 flex-wrap">
-          <Button focusKey="recdel:cancel" onEnter={() => setDeleting(null)}>Keep</Button>
+        <div className="lib-actions">
+          <Button focusKey="recdel:cancel" ghost onEnter={() => setDeleting(null)}>Keep</Button>
           <Button focusKey="recdel:ok" danger icon="trash" onEnter={confirmDelete} testId="recording-delete-go">{deleting?.state === 'done' ? 'Delete recording' : 'Remove'}</Button>
         </div>
       </Modal>
       <Modal open={!!deletingRule} onClose={() => setDeletingRule(null)} title={`Delete the rule for ${deletingRule?.match ?? ''}?`} firstFocusKey="ruledel:cancel" testId="rule-delete-confirm">
         <p className="muted">Deleting a rule also removes the upcoming recordings it scheduled. Recordings that are already finished stay.</p>
-        <div className="flex gap-3 flex-wrap">
-          <Button focusKey="ruledel:cancel" onEnter={() => setDeletingRule(null)}>Keep rule</Button>
+        <div className="lib-actions">
+          <Button focusKey="ruledel:cancel" ghost onEnter={() => setDeletingRule(null)}>Keep rule</Button>
           <Button focusKey="ruledel:ok" danger icon="trash" onEnter={confirmDeleteRule} testId="rule-delete-go">Delete rule</Button>
         </div>
       </Modal>
@@ -177,15 +197,15 @@ export function Recordings() {
         <FocusGroup focusKey="ruleedit" className="flex flex-col gap-3">
           <span className="label">{editing?.kind === 'series' ? 'Series title' : editing?.kind === 'team' ? 'Team' : 'Title contains'}</span>
           <FocusableInput focusKey="ruleedit:match" label="Match" maxLength={80} value={draft.match} onChange={(match) => setDraft((d) => ({ ...d, match }))} onSubmit={saveRule} />
-          <div className="flex gap-2 flex-wrap items-center">
+          <div className="lib-chips">
             <Chip focusKey="ruleedit:new" pressed={draft.new_only} onEnter={() => setDraft((d) => ({ ...d, new_only: !d.new_only }))}>New only (skip repeats)</Chip>
           </div>
           <span className="label">Keep</span>
-          <FocusGroup focusKey="ruleedit:keep" className="flex gap-2 flex-wrap">
+          <FocusGroup focusKey="ruleedit:keep" className="lib-chips">
             {KEEP.map((n) => <Chip key={n ?? 'all'} focusKey={`ruleedit:keep:${n ?? 'all'}`} pressed={draft.keep === n} onEnter={() => setDraft((d) => ({ ...d, keep: n }))}>{n ? `Last ${n}` : 'All'}</Chip>)}
           </FocusGroup>
           <p className="muted label">Changing what a rule matches removes the upcoming recordings it scheduled and schedules the new matches.</p>
-          <div className="flex gap-3 flex-wrap">
+          <div className="lib-actions">
             <Button focusKey="ruleedit:save" primary disabled={!draft.match.trim() || patchRule.isPending} onEnter={saveRule} testId="rule-save">Save</Button>
             <Button focusKey="ruleedit:cancel" ghost onEnter={() => setEditing(null)}>Cancel</Button>
           </div>

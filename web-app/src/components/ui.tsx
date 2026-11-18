@@ -8,10 +8,15 @@ import { cn, reducedMotion } from '../lib/util'
 import { useUi } from '../store/ui'
 import type { SourceBadge, Tile } from '../api/types'
 
+/**
+ * A button with words. `primary` is the screen's one main action (the orange button); plain is a
+ * secondary text button (glass); `ghost` is the quietest (Cancel, Close). `lg` is the hero/title size.
+ * For an icon-only secondary action use the design system's GlassIconButton instead of `iconOnly`.
+ */
 export function Button(p: {
   focusKey?: string; icon?: string; children?: ReactNode; onEnter?: () => void; primary?: boolean; ghost?: boolean; danger?: boolean
   disabled?: boolean; pressed?: boolean; label?: string; className?: string; testId?: string; onFocus?: () => void; onBlur?: () => void
-  iconOnly?: boolean; scroll?: boolean; title?: string
+  iconOnly?: boolean; scroll?: boolean; title?: string; lg?: boolean
 }) {
   return (
     <Focusable
@@ -25,7 +30,7 @@ export function Button(p: {
       title={p.title}
       onFocus={p.onFocus}
       onBlur={p.onBlur}
-      className={cn('btn', p.primary && 'btn-primary', p.ghost && 'btn-ghost', p.danger && 'btn-danger', p.iconOnly && 'btn-icon', p.className)}
+      className={cn('btn', p.primary && 'btn-primary', p.ghost && 'btn-ghost', p.danger && 'btn-danger', p.iconOnly && 'btn-icon', p.lg && 'btn-lg', p.className)}
     >
       {p.icon && <Icon name={p.icon} size={20} />}
       {p.children}
@@ -81,12 +86,14 @@ export function Skeleton({ className, style }: { className?: string; style?: Rea
   return <div className={cn('skel', className)} style={style} aria-hidden="true" />
 }
 
-export function Empty({ title, hint, children }: { title: string; hint?: string; children?: ReactNode }) {
+/** Nothing here (yet): a glass disc with an icon, the title, a hint, then the way forward (children: buttons). */
+export function Empty({ title, hint, children, icon, compact }: { title: string; hint?: string; children?: ReactNode; icon?: string; compact?: boolean }) {
   return (
-    <div className="flex flex-col items-start gap-3 py-12 px-1" role="status">
+    <div className={cn('ds-empty', compact && 'ds-empty-compact')} role="status">
+      {icon && <span className="ds-empty-icon" aria-hidden="true"><Icon name={icon} /></span>}
       <h2 className="title-xl">{title}</h2>
       {hint && <p className="muted max-w-prose">{hint}</p>}
-      {children}
+      {children && <div className="ds-empty-actions">{children}</div>}
     </div>
   )
 }
@@ -94,10 +101,11 @@ export function Empty({ title, hint, children }: { title: string; hint?: string;
 export function ErrorState({ error, onRetry, children }: { error: unknown; onRetry?: () => void; children?: ReactNode }) {
   const msg = error instanceof Error ? error.message : 'Something went wrong.'
   return (
-    <div className="flex flex-col items-start gap-3 py-12" role="alert">
+    <div className="ds-empty" role="alert">
+      <span className="ds-empty-icon ds-empty-icon-alert" aria-hidden="true"><Icon name="alert" /></span>
       <h2 className="title-xl">Could not load this screen</h2>
       <p className="muted">{msg}</p>
-      <FocusGroup className="flex gap-3 flex-wrap">
+      <FocusGroup className="ds-empty-actions">
         {onRetry && <Button focusKey="retry" primary icon="refresh" onEnter={onRetry}>Try again</Button>}
         {children}
       </FocusGroup>
@@ -142,7 +150,10 @@ export function Toasts() {
   return (
     <div className="toasts" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className="toast" data-tone={t.tone} role="status">{t.text}</div>
+        <div key={t.id} className="toast" data-tone={t.tone} role="status">
+          <Icon name={t.tone === 'error' ? 'alert' : t.tone === 'success' ? 'check' : 'info'} size={18} className="toast-icon" />
+          <span>{t.text}</span>
+        </div>
       ))}
     </div>
   )

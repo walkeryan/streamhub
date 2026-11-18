@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { Channel, Programme } from '../api/types'
-import { Button, Modal } from '../components/ui'
-import { Icon } from '../components/Icon'
+import { Button, GlassIconButton, Icon, Modal } from '../ds'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { fmtTime } from '../lib/util'
 
@@ -21,17 +20,21 @@ export interface GuideDetailsProps {
 
 const metaOf = (c: Channel, p: Programme | null) =>
   [p && `${fmtTime(p.start)} to ${fmtTime(p.stop)}`, p?.category, `${c.number} ${c.name}`].filter(Boolean).join(' · ')
+/** The same words as a meta line: time, category, channel, spaced like the title page's. */
+const Meta = ({ c, p, className }: { c: Channel; p: Programme | null; className?: string }) =>
+  <p className={className ? `ds-meta ${className}` : 'ds-meta'}>{metaOf(c, p)}</p>
 
-/** What can be done with the programme: the same three things OK on its cell leads to, by name. */
-function Actions({ p, scope, after }: { p: GuideDetailsProps; scope: string; after?: () => void }) {
+/** What can be done with the programme: the same three things OK on its cell leads to. Watch is the one
+ * primary, with words; Record and Catch-up are glass icons named by their labels (a tooltip on focus). */
+function Actions({ p, scope, after, tipAt }: { p: GuideDetailsProps; scope: string; after?: () => void; tipAt?: 'above' | 'below' }) {
   const { channel: c, programme } = p
   if (!c) return null
   const over = !!programme && Date.parse(programme.stop) <= p.now
   const act = (run: () => void) => () => { after?.(); run() }
   return <>
-    <Button focusKey={`${scope}:watch`} className="btn-chip" primary icon="play" onEnter={act(() => p.onWatch(c))} testId="guide-watch">Watch</Button>
-    {programme && !over && p.recordable && <Button focusKey={`${scope}:record`} className="btn-chip" icon="record" onEnter={act(() => p.onRecord(c, programme))} testId="guide-record">Record</Button>}
-    {programme && over && programme.catchup_available && <Button focusKey={`${scope}:catchup`} className="btn-chip" icon="refresh" onEnter={act(() => p.onCatchup(c, programme))} testId="guide-catchup">Catch-up</Button>}
+    <Button focusKey={`${scope}:watch`} className="epg-watch" primary icon="play" onEnter={act(() => p.onWatch(c))} testId="guide-watch">Watch</Button>
+    {programme && !over && p.recordable && <GlassIconButton focusKey={`${scope}:record`} size="sm" icon="record" label="Record" tipAt={tipAt} onEnter={act(() => p.onRecord(c, programme))} testId="guide-record" />}
+    {programme && over && programme.catchup_available && <GlassIconButton focusKey={`${scope}:catchup`} size="sm" icon="restart" label="Catch-up" tipAt={tipAt} onEnter={act(() => p.onCatchup(c, programme))} testId="guide-catchup" />}
   </>
 }
 
@@ -44,9 +47,9 @@ export function GuideDetailsPanel(p: GuideDetailsProps) {
   return (
     <FocusGroup focusKey="guide:details" className="epg-details" role="region" label="Programme details" data-testid="guide-info">
       {c ? <>
-        <h2 className="heading truncate" aria-live="polite">{programme?.title ?? c.name}</h2>
+        <h2 className="epg-details-title truncate" aria-live="polite">{programme?.title ?? c.name}</h2>
         <div className="epg-details-actions"><Actions p={p} scope="guide:details" /></div>
-        <p className="label truncate epg-details-meta">{metaOf(c, programme)}</p>
+        <Meta c={c} p={programme} className="epg-details-meta" />
         <p className="label clamp2 epg-details-text">
           {p.recording && <><span data-testid="guide-recording" style={{ color: 'var(--t-text)' }}>{p.recording}</span>{programme?.description ? ' · ' : ''}</>}
           {programme ? programme.description : 'No programme data supplied for this channel.'}
@@ -65,17 +68,17 @@ export function GuideDetailsLine(p: GuideDetailsProps) {
   const title = programme?.title ?? c.name
   return <>
     <Focusable focusKey="guide:details" className="epg-details-line fx-flat" label={`Details: ${title}`} data-testid="guide-info" onEnter={() => setOpen(true)}>
-      <span className="truncate" style={{ fontWeight: 600, flex: 'none', maxWidth: '55%' }}>{title}</span>
-      <span className="label truncate" style={{ flex: 1 }}>{p.recording ? `${p.recording} · ` : ''}{metaOf(c, programme)}</span>
+      <span className="epg-details-line-title truncate">{title}</span>
+      <span className="label truncate epg-details-line-meta">{p.recording ? `${p.recording} · ` : ''}{metaOf(c, programme)}</span>
       <Icon name="chevR" size={14} />
     </Focusable>
     <Modal open={open} onClose={() => setOpen(false)} title={title} firstFocusKey="guide:sheet:watch" variant="sheet" testId="guide-sheet">
-      <p className="muted">{metaOf(c, programme)}</p>
+      <Meta c={c} p={programme} />
       {p.recording && <p className="label" data-testid="guide-recording">{p.recording}</p>}
-      <p>{programme ? programme.description : 'No programme data supplied for this channel.'}</p>
-      <FocusGroup focusKey="guide:sheet" className="flex gap-2 flex-wrap">
-        <Actions p={p} scope="guide:sheet" after={() => setOpen(false)} />
-        <Button focusKey="guide:sheet:close" className="btn-chip" onEnter={() => setOpen(false)}>Close</Button>
+      <p className="epg-sheet-text">{programme ? programme.description : 'No programme data supplied for this channel.'}</p>
+      <FocusGroup focusKey="guide:sheet" className="epg-sheet-actions">
+        <Actions p={p} scope="guide:sheet" after={() => setOpen(false)} tipAt="above" />
+        <Button focusKey="guide:sheet:close" className="epg-sheet-close" ghost onEnter={() => setOpen(false)}>Close</Button>
       </FocusGroup>
     </Modal>
   </>

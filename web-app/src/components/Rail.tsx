@@ -90,7 +90,7 @@ export function Rail() {
   return <>
     <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember={false} preferred={entry && `rail:${entry}`}
       onFocusChange={setHasFocus} data-testid="rail">
-      {!phone && <span className="rail-brand" onClick={() => open('/')}>StreamHub</span>}
+      {!phone && <span className="rail-brand" onClick={() => open('/')}>Stream<b>Hub</b></span>}
       {/* A phone names each icon; the top bar has the room to say the name alone. */}
       {(phone ? BAR : nav).map((n) => (
         <Focusable key={n.label} focusKey={`rail:${n.to}`} className="rail-item fx-flat" role="link" label={n.label}

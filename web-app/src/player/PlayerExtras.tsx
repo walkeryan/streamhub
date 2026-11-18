@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
 import { SafeImg } from '../components/SafeImg'
-import { PlayerIcon } from './PlayerIcon'
+import { Icon } from '../ds'
 import { COUNTDOWN_MS, countdownSeconds } from './upNext'
 import type { PlaybackDescriptor } from '../api/types'
 
@@ -12,7 +12,7 @@ type UpNext = NonNullable<PlaybackDescriptor['next']>
 export function SkipButton({ label, onSkip, testId }: { label: string; onSkip: () => void; testId: string }) {
   return (
     <Focusable focusKey="px:skip" className="pskip" onEnter={onSkip} label={label} data-testid={testId} scroll={false}>
-      <span>{label}</span><PlayerIcon name="skip" size={22} />
+      <span>{label}</span><Icon name="skip" size={22} />
     </Focusable>
   )
 }
@@ -37,7 +37,7 @@ export function UpNextCard(p: {
             <svg viewBox="0 0 56 56"><circle cx="28" cy="28" r={r} className="pupnext-track" /><circle cx="28" cy="28" r={r} className="pupnext-arc" strokeDasharray={c} strokeDashoffset={c * (1 - done)} /></svg>
             <b data-testid="up-next-count">{seconds}</b>
           </span>
-        ) : <span className="pupnext-ring pupnext-play" aria-hidden="true"><PlayerIcon name="play" size={22} /></span>}
+        ) : <span className="pupnext-ring pupnext-play" aria-hidden="true"><Icon name="play" size={22} /></span>}
       </Focusable>
       <div className="pupnext-text">
         <small>Up next{p.next.subtitle ? ` · ${p.next.subtitle}` : ''}</small>
@@ -64,7 +64,7 @@ export function StillWatching({ title, image, onContinue, onLeave, leaveLabel }:
         <h2 id="pstill-h" className="display">Still watching?</h2>
         <p>{title} is paused. Playback continues when you are back.</p>
         <div className="pstill-actions">
-          <Focusable focusKey="px:still:go" className="pupnext-btn pupnext-primary" onEnter={onContinue} data-testid="still-continue"><PlayerIcon name="play" size={20} />Continue watching</Focusable>
+          <Focusable focusKey="px:still:go" className="pupnext-btn pupnext-primary" onEnter={onContinue} data-testid="still-continue"><Icon name="play" size={20} />Continue watching</Focusable>
           <Focusable focusKey="px:still:leave" className="pupnext-btn" onEnter={onLeave} data-testid="still-leave">{leaveLabel}</Focusable>
         </div>
       </FocusGroup>

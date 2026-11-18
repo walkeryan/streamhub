@@ -6,6 +6,7 @@ import type { RequestManagerSettings as Stored } from '../api/types'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { useUi } from '../store/ui'
 import { Button } from './ui'
+import { GlassIconButton } from '../ds/GlassIconButton'
 
 /** Admin only: where approved requests are sent. The API key is write-only; the server never returns it. */
 export function RequestManagerSettings({ configured }: { configured: boolean }) {
@@ -41,15 +42,15 @@ export function RequestManagerSettings({ configured }: { configured: boolean }) 
   }
 
   return (
-    <section className="flex flex-col gap-2" data-testid="request-manager">
-      <h3 className="label">Request manager {configured ? '(connected)' : stored.data?.url ? '(API key missing)' : '(not set)'}</h3>
-      <p className="muted">Approved requests are sent to a Seerr-compatible server (Overseerr, Jellyseerr or Seerr). StreamHub keeps the approval.</p>
-      <FocusGroup focusKey="reqmgr" className="flex gap-3 flex-wrap items-center">
+    <section className="acct-field" data-testid="request-manager">
+      <h3 className="acct-kicker">Request manager {configured ? '(connected)' : stored.data?.url ? '(API key missing)' : '(not set)'}</h3>
+      <p className="acct-small">Approved requests are sent to a Seerr-compatible server (Overseerr, Jellyseerr or Seerr). StreamHub keeps the approval.</p>
+      <FocusGroup focusKey="reqmgr" className="acct-actions">
         <div style={{ width: '22rem', maxWidth: '100%' }}><FocusableInput focusKey="reqmgr:url" label="Request manager URL" inputMode="url" placeholder="http://requests.example.test:5055" value={shownUrl} onChange={setUrl} /></div>
         <div style={{ width: '18rem', maxWidth: '100%' }}><FocusableInput focusKey="reqmgr:key" label="Request manager API key" type="password" placeholder={stored.data?.api_key_set ? 'Saved. Paste a key to replace it' : 'API key'} value={key} onChange={setKey} /></div>
         <Button focusKey="reqmgr:save" primary disabled={busy || !shownUrl.trim() || (url === null && !key.trim())} onEnter={() => void save({ url: shownUrl.trim(), ...(key.trim() ? { api_key: key.trim() } : {}) })}>Save</Button>
-        <Button focusKey="reqmgr:test" disabled={busy || !configured} onEnter={() => void test()} testId="request-manager-test">Test connection</Button>
-        {stored.data?.url && <Button focusKey="reqmgr:remove" danger disabled={busy} onEnter={() => void save({ url: null })}>Remove</Button>}
+        <GlassIconButton focusKey="reqmgr:test" icon="check" label="Test connection" disabled={busy || !configured} onEnter={() => void test()} testId="request-manager-test" />
+        {stored.data?.url && <GlassIconButton focusKey="reqmgr:remove" icon="trash" className="acct-danger" label="Remove" tip="Remove request manager" disabled={busy} onEnter={() => void save({ url: null })} />}
       </FocusGroup>
       {result && <p role="status" data-testid="request-manager-result" style={{ color: result.ok ? undefined : 'var(--t-danger)' }}>{result.message}</p>}
     </section>

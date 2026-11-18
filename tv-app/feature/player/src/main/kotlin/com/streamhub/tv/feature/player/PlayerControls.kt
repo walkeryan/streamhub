@@ -70,14 +70,21 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.streamhub.tv.core.data.model.PlaybackMarker
 import com.streamhub.tv.core.data.model.UpNext
+import com.streamhub.tv.core.ui.components.ButtonStyle
+import com.streamhub.tv.core.ui.components.GlassButton
+import com.streamhub.tv.core.ui.components.GlassIcons
+import com.streamhub.tv.core.ui.components.PictureGlass
+import com.streamhub.tv.core.ui.components.ShButton
+import com.streamhub.tv.core.ui.theme.GlassInk
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 
 /*
  * The revamped player's look (approved mockup 3-player.png, v2.html): title block top-left, close
  * top-right, a wide timeline with intro/credits marked, elapsed and remaining, and one row of glass
- * buttons. The mockup is drawn at 1600 CSS px; the TV canvas is 960 dp, and its sizes are taken at
- * 0.75 so the 64 px margins land on the app's 48 dp safe area and everything reads from the sofa.
+ * buttons (the shared [GlassButton] of core/ui). The mockup is drawn at 1600 CSS px; the TV canvas
+ * is 960 dp, and its sizes are taken at 0.75 so the 64 px margins land on the app's 48 dp safe area
+ * and everything reads from the sofa.
  * Stateless: the screen hands in a [ControlsModel] and lambdas, so it renders in tests as it does here.
  */
 
@@ -86,11 +93,9 @@ internal object PlayerPalette {
     val Muted = Color(0xFFA7B0CF)
     val Kicker = Color(0xFFCFD5EA)
     val Times = Color(0xFFDFE3F2)
-    val Ink = Color(0xFF0A0E1C)
+    val Ink = GlassInk
     val Card = Color(0xE012172A)
-    val GlassLine = Color.White.copy(alpha = 0.18f)
-    val GlassTop = Color.White.copy(alpha = 0.16f)
-    val GlassBottom = Color.White.copy(alpha = 0.05f)
+    val GlassLine = PictureGlass.Line
 }
 
 private val MarginX = Tokens.Canvas.SafeMarginX
@@ -167,7 +172,7 @@ fun VodControls(model: ControlsModel, actions: ControlsActions, initialFocus: Co
             Text(model.title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
         }
         GlassButton(
-            PlayerIcons.Close, "Close", actions.onClose,
+            GlassIcons.Close, "Close", actions.onClose,
             Modifier.align(Alignment.TopEnd).padding(top = MarginTop, end = MarginX).focusRequester(closeFocus).focusProperties { down = timelineFocus },
         )
 
@@ -196,69 +201,26 @@ private fun ControlRow(model: ControlsModel, actions: ControlsActions, playFocus
     val upToTimeline = Modifier.focusProperties { up = timelineFocus }
     Box(modifier.fillMaxWidth().height(BigButton)) {
         Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
-            GlassButton(PlayerIcons.Audio, "Audio: ${model.audioLabel}", actions.onAudio, upToTimeline)
+            GlassButton(GlassIcons.Audio, "Audio: ${model.audioLabel}", actions.onAudio, upToTimeline)
             Text(model.audioLabel, color = PlayerPalette.Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 10.dp).widthIn(max = 150.dp))
-            GlassButton(PlayerIcons.Subtitles, "Subtitles: ${model.subtitleLabel}", actions.onSubtitles, upToTimeline.padding(start = 18.dp))
+            GlassButton(GlassIcons.Subtitles, "Subtitles: ${model.subtitleLabel}", actions.onSubtitles, upToTimeline.padding(start = 18.dp))
             Text(model.subtitleLabel, color = PlayerPalette.Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 10.dp).widthIn(max = 120.dp))
         }
         Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (model.episodeButtons) GlassButton(PlayerIcons.Previous, "Previous episode", actions.onPrevious, upToTimeline, enabled = model.hasPrevious)
-            GlassButton(PlayerIcons.Back, "Back 10 seconds", actions.onBack10, upToTimeline, enabled = model.seekable, badge = "10")
+            if (model.episodeButtons) GlassButton(GlassIcons.Previous, "Previous episode", actions.onPrevious, upToTimeline, enabled = model.hasPrevious)
+            GlassButton(GlassIcons.Back, "Back 10 seconds", actions.onBack10, upToTimeline, enabled = model.seekable, badge = "10")
             GlassButton(
-                if (model.playing) PlayerIcons.Pause else PlayerIcons.Play, if (model.playing) "Pause" else "Play", actions.onTogglePlay,
+                if (model.playing) GlassIcons.Pause else GlassIcons.Play, if (model.playing) "Pause" else "Play", actions.onTogglePlay,
                 upToTimeline.focusRequester(playFocus), size = BigButton, primary = true,
             )
-            GlassButton(PlayerIcons.Forward, "Forward 30 seconds", actions.onForward30, upToTimeline, enabled = model.seekable, badge = "30")
-            if (model.episodeButtons) GlassButton(PlayerIcons.Next, "Next episode", actions.onNext, upToTimeline, enabled = model.hasNext)
+            GlassButton(GlassIcons.Forward, "Forward 30 seconds", actions.onForward30, upToTimeline, enabled = model.seekable, badge = "30")
+            if (model.episodeButtons) GlassButton(GlassIcons.Next, "Next episode", actions.onNext, upToTimeline, enabled = model.hasNext)
         }
         Row(Modifier.align(Alignment.CenterEnd), horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
-            actions.onWatchTogether?.let { GlassButton(PlayerIcons.People, "Watch together", it, upToTimeline) }
-            actions.onMinimise?.let { GlassButton(PlayerIcons.Minimise, "Mini player", it, upToTimeline) }
-            GlassButton(PlayerIcons.Settings, "Settings", actions.onSettings, upToTimeline)
+            actions.onWatchTogether?.let { GlassButton(GlassIcons.People, "Watch together", it, upToTimeline) }
+            actions.onMinimise?.let { GlassButton(GlassIcons.Minimise, "Mini player", it, upToTimeline) }
+            GlassButton(GlassIcons.Settings, "Settings", actions.onSettings, upToTimeline)
         }
-    }
-}
-
-/**
- * The glass circle of the mockup. Focus is an accent ring and a slight lift (never colour alone);
- * [primary] is the large white play/pause. Disabled buttons are dimmed and skipped by the D-pad.
- */
-@Composable
-internal fun GlassButton(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    size: Dp = Button,
-    primary: Boolean = false,
-    enabled: Boolean = true,
-    badge: String? = null,
-) {
-    val t = LocalThemeTokens.current
-    val source = remember { MutableInteractionSource() }
-    val focused by source.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (focused) 1.12f else 1f, tween(Tokens.Focus.DURATION_MS), label = "glassScale")
-    val ink = if (primary) PlayerPalette.Ink else Color.White
-    val fill = when {
-        primary -> Brush.verticalGradient(listOf(Color.White, Color.White))
-        focused -> Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.34f), Color.White.copy(alpha = 0.18f)))
-        else -> Brush.verticalGradient(listOf(PlayerPalette.GlassTop, PlayerPalette.GlassBottom))
-    }
-    Box(
-        modifier
-            .scale(scale)
-            .size(size)
-            .shadow(if (focused) 14.dp else 6.dp, CircleShape, ambientColor = if (focused) t.accent else Color.Black, spotColor = if (focused) t.accent else Color.Black)
-            .clip(CircleShape)
-            .background(fill)
-            .border(if (focused) 3.dp else 1.dp, if (focused) t.accent else PlayerPalette.GlassLine, CircleShape)
-            .semantics { contentDescription = label }
-            .clickable(interactionSource = source, indication = null, enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        val alpha = if (enabled) 1f else 0.35f
-        Image(icon, null, Modifier.size(if (primary) size * 0.42f else size * 0.5f), colorFilter = ColorFilter.tint(ink.copy(alpha = alpha)))
-        if (badge != null) Text(badge, color = ink.copy(alpha = alpha), fontSize = 7.sp, fontWeight = FontWeight.Bold, modifier = Modifier.offset(y = 1.5.dp))
     }
 }
 
@@ -350,7 +312,7 @@ fun SkipButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(label, color = PlayerPalette.Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        Image(PlayerIcons.SkipForward, null, Modifier.size(17.dp), colorFilter = ColorFilter.tint(PlayerPalette.Ink))
+        Image(GlassIcons.SkipForward, null, Modifier.size(17.dp), colorFilter = ColorFilter.tint(PlayerPalette.Ink))
     }
 }
 
@@ -408,7 +370,7 @@ fun UpNextCard(model: UpNextCardModel, onPlay: () -> Unit, modifier: Modifier = 
                         Modifier.clip(RoundedCornerShape(7.dp)).background(Color.White).padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Image(PlayerIcons.Play, null, Modifier.size(11.dp), colorFilter = ColorFilter.tint(PlayerPalette.Ink))
+                        Image(GlassIcons.Play, null, Modifier.size(11.dp), colorFilter = ColorFilter.tint(PlayerPalette.Ink))
                         Text("Play next", color = PlayerPalette.Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Text("Press OK", color = PlayerPalette.Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
@@ -437,36 +399,9 @@ fun StillWatchingPanel(next: UpNext?, onContinue: () -> Unit, onBack: () -> Unit
                 color = PlayerPalette.Muted, fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
             Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                PillButton("Continue watching", onContinue, Modifier.focusRequester(first), primary = true)
-                PillButton("Back to the show", onBack)
+                ShButton("Continue watching", onContinue, Modifier.focusRequester(first), style = ButtonStyle.Primary)
+                ShButton("Back to the show", onBack)
             }
         }
-    }
-}
-
-@Composable
-private fun PillButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, primary: Boolean = false) {
-    val t = LocalThemeTokens.current
-    val source = remember { MutableInteractionSource() }
-    val focused by source.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (focused) 1.06f else 1f, tween(Tokens.Focus.DURATION_MS), label = "pillScale")
-    Box(
-        modifier
-            .scale(scale)
-            .height(46.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                when {
-                    focused -> Color.White
-                    primary -> t.accent
-                    else -> Color.White.copy(alpha = 0.12f)
-                },
-            )
-            .border(if (focused) 3.dp else 1.dp, if (focused) t.accent else PlayerPalette.GlassLine, RoundedCornerShape(10.dp))
-            .clickable(interactionSource = source, indication = null, onClick = onClick)
-            .padding(horizontal = 20.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = if (focused || primary) PlayerPalette.Ink else Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
     }
 }

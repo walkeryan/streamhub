@@ -1,5 +1,5 @@
 import { Focusable, type FocusableProps } from '../nav/Focusable'
-import { Icon } from './Icon'
+import { Icon } from '../ds'
 import { LogoBlock, ProgressBar } from './ui'
 import { fmtTime, progressOf, useNow } from '../lib/util'
 import type { Channel } from '../api/types'
@@ -19,17 +19,17 @@ export function ChannelRow(p: {
   return (
     <Focusable focusKey={p.focusKey} className={p.dense ? 'chan-row chan-row-dense fx-flat' : 'chan-row fx-flat'} role="option" data-testid="channel-row" label={`${c.number} ${c.name}${c.now ? `, now ${c.now.title}` : ''}${recordingStateLabel(c.now?.recording_state) ? `, ${recordingStateLabel(c.now?.recording_state)}` : ''}`}
       onEnter={p.onEnter} onFocus={p.onFocus} onArrow={p.onArrow} scroll={p.scroll ?? 'nearest'} style={p.style} data={p.data}>
-      <span className="heading" style={{ color: 'var(--t-text-muted)', textAlign: 'right' }}>{c.number}</span>
+      <span className="chan-row-num">{c.number}</span>
       <LogoBlock name={c.name} logo={c.logo} />
-      <span className="flex flex-col min-w-0 gap-0.5">
-        <span className="flex items-center gap-2 min-w-0">
-          <span className="truncate" style={{ fontWeight: 600 }}>{c.name}</span>
-          {c.is_favorite && <span style={{ color: 'var(--t-accent)' }}><Icon name="heart" size={14} filled /></span>}
+      <span className="chan-row-copy">
+        <span className="chan-row-line">
+          <span className="chan-row-name truncate">{c.name}</span>
+          {c.is_favorite && <span className="chan-row-fav"><Icon name="heart" size={14} filled /></span>}
         </span>
         {!p.compact && (
           <>
-            <span className="flex items-center gap-2 min-w-0"><span className="label truncate">{c.now ? `${c.now.title}` : 'No programme data'}</span><RecordingBadge state={c.now?.recording_state} short /></span>
-            {!p.dense && c.next && <span className="flex items-center gap-2 min-w-0"><span className="label truncate" style={{ opacity: 0.8 }}>Next · {fmtTime(c.next.start)} {c.next.title}</span><RecordingBadge state={c.next.recording_state} short /></span>}
+            <span className="chan-row-line"><span className="label truncate">{c.now ? `${c.now.title}` : 'No programme data'}</span><RecordingBadge state={c.now?.recording_state} short /></span>
+            {!p.dense && c.next && <span className="chan-row-line"><span className="label truncate chan-row-next">Next · {fmtTime(c.next.start)} {c.next.title}</span><RecordingBadge state={c.next.recording_state} short /></span>}
             {pct !== null && (p.dense ? <span className="chan-row-progress"><ProgressBar pct={pct} /></span> : <ProgressBar pct={pct} className="mt-1" />)}
           </>
         )}

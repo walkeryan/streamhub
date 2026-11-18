@@ -56,34 +56,35 @@ export function WaitingForApproval({ onSignOut }: { onSignOut: () => void }) {
   }, [check, outcome])
   useEffect(() => { const id = window.setTimeout(() => void setFocus(outcome === 'waiting' ? 'wait:check' : 'wait:out'), 50); return () => window.clearTimeout(id) }, [outcome])
 
-  const who = <p data-testid="waiting-who">Signed in as <strong>{pending.name}</strong>{pending.email ? <span className="muted"> · {pending.email}</span> : null}</p>
+  const who = <p data-testid="waiting-who" className="acct-note">Signed in as <strong>{pending.name}</strong>{pending.email ? <span className="muted"> · {pending.email}</span> : null}</p>
   return (
-    <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="waiting" data-outcome={outcome}>
-      <FocusGroup focusKey="wait" boundary className="flex flex-col gap-5" style={{ width: 'min(38rem, 100%)' }}>
+    <main className="auth-screen" data-testid="waiting" data-outcome={outcome}>
+      <FocusGroup focusKey="wait" boundary className="auth-col">
+        <span className="auth-mark" aria-hidden="true">Stream<b>Hub</b></span>
         {outcome === 'waiting' ? <>
-          <h1 className="display">Waiting for approval</h1>
+          <h1 className="auth-title">Waiting for approval</h1>
           {who}
-          {pending.invited && <p className="panel" role="status">That invitation link could not be used: it has expired, been used already or been withdrawn. Your request went to the owner for approval instead.</p>}
-          <section className="panel flex flex-col gap-3">
-            <h2 className="heading">What happens next</h2>
+          {pending.invited && <p className="ds-panel ds-panel-accent" role="status">That invitation link could not be used: it has expired, been used already or been withdrawn. Your request went to the owner for approval instead.</p>}
+          <section className="auth-panel">
+            <h2>What happens next</h2>
             <ol className="wait-steps">
               <li>The person who runs this StreamHub has been told you would like to join.</li>
               <li>They choose what you can watch and approve you.</li>
               <li>This page then opens StreamHub by itself. Keep it open, or come back to it later on this device.</li>
             </ol>
+            <p className="auth-status" role="status" aria-live="polite">
+              {unreachable ? 'The server cannot be reached right now. Still trying.' : checked ? `Not approved yet. Last checked at ${fmtTime(checked)}; checking again every few seconds.` : 'Checking…'}
+            </p>
           </section>
-          <p className="label" role="status" aria-live="polite">
-            {unreachable ? 'The server cannot be reached right now. Still trying.' : checked ? `Not approved yet. Last checked at ${fmtTime(checked)}; checking again every few seconds.` : 'Checking…'}
-          </p>
         </> : <>
-          <h1 className="display">{outcome === 'collected' ? 'You have been approved' : 'This request is closed'}</h1>
+          <h1 className="auth-title">{outcome === 'collected' ? 'You have been approved' : 'This request is closed'}</h1>
           {who}
-          <p role="alert">{outcome === 'collected'
+          <p role="alert" className="auth-panel">{outcome === 'collected'
             ? 'Your approval was already picked up, perhaps in another tab. Sign in again to start watching.'
             : 'It was declined, or it waited too long. You can sign in again to ask once more.'}</p>
         </>}
-        <div className="flex gap-3 flex-wrap">
-          {outcome === 'waiting' && <Button focusKey="wait:check" icon="refresh" onEnter={() => void check()} testId="waiting-check">Check now</Button>}
+        <div className="acct-actions">
+          {outcome === 'waiting' && <Button focusKey="wait:check" primary icon="refresh" onEnter={() => void check()} testId="waiting-check">Check now</Button>}
           <Button focusKey="wait:out" primary={outcome !== 'waiting'} onEnter={onSignOut} testId="waiting-signout">{outcome === 'waiting' ? 'Sign out' : 'Back to sign-in'}</Button>
         </div>
       </FocusGroup>

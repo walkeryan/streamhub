@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useEpgChunks, useRecordings, type ChannelFilters, type EpgRequest } from '../api/hooks'
 import type { Channel, Programme } from '../api/types'
-import { Button, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
+import { Button, Empty, ErrorState, Modal, Skeleton } from '../ds'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -222,7 +222,7 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
     <div data-testid="guide" className="epg-view" aria-label="Programme guide">
       {wide ? detailsSlot && createPortal(<GuideDetailsPanel {...details} />, detailsSlot) : <GuideDetailsLine {...details} />}
       {failed ? <ErrorState error={failed} onRetry={() => void ch.refetch()} /> : ch.isLoading ? <Skeleton className="epg-skel" /> : count === 0 ? (
-        <Empty title="No channels match" hint={scheduledOnly ? 'No current schedules match these filters. Try All channels, another language, or a different search.' : 'Try another language or a different channel name.'}>
+        <Empty icon="guide" title="No channels match" hint={scheduledOnly ? 'No current schedules match these filters. Try All channels, another language, or a different search.' : 'Try another language or a different channel name.'}>
           {scheduledOnly && <Button focusKey="guide:show-all" onEnter={onShowAll}>Show channels without schedules</Button>}
         </Empty>
       ) : (
@@ -246,7 +246,7 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
               })}
             </div>
             <div className="epg-foot label" style={{ top: `${HEAD_REM + count * ROW_REM}rem` }} role="status" data-testid="guide-end">
-              <span>{isFetchNextPageError ? <>More channels could not be loaded. <Button focusKey="guide:more" className="btn-chip" onEnter={() => void fetchNextPage()}>Try again</Button></>
+              <span>{isFetchNextPageError ? <>More channels could not be loaded. <Button focusKey="guide:more" className="btn-chip" icon="refresh" onEnter={() => void fetchNextPage()}>Try again</Button></>
                 : channelsEnd(hasNextPage, total)}</span>
             </div>
             <div aria-hidden="true" data-testid="now-line" className="epg-nowline" style={{ left: `calc(var(--epg-ch) + ${((now - span.from) / 60_000) * REM_PER_MIN}rem)` }} />
@@ -259,9 +259,9 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
         {catchup && (
           <>
             <p>{catchup.p.title} on {catchup.ch.name}, aired at {fmtTime(catchup.p.start)}.</p>
-            <div className="flex gap-3">
+            <div className="epg-sheet-actions">
               <Button focusKey="cu:play" primary icon="play" onEnter={() => { const c = catchup; setCatchup(null); go(`/play/${encodeURIComponent(c.ch.id)}?catchup=${encodeURIComponent(c.p.id)}`) }}>Play catch-up</Button>
-              <Button focusKey="cu:cancel" onEnter={() => setCatchup(null)}>Cancel</Button>
+              <Button focusKey="cu:cancel" ghost onEnter={() => setCatchup(null)}>Cancel</Button>
             </div>
           </>
         )}

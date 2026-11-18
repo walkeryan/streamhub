@@ -78,24 +78,24 @@ export function ArrowPinDialog(p: {
 
   return (
     <Modal open={p.open} onClose={p.onClose} title={p.title} firstFocusKey="arrows:up" testId="arrow-pin-dialog">
-      <p className="muted">Press the arrow keys or the buttons, {ARROWS_MIN} to {ARROWS_MAX} times. On "Who's watching?", picking this person then asks for the same arrows on the remote or keyboard, with no keypad and no OK.</p>
-      <p className="muted">Six arrows are much harder to guess than four.</p>
-      {p.note && <p className="muted">{p.note}</p>}
+      <p className="acct-note">Press the arrow keys or the buttons, {ARROWS_MIN} to {ARROWS_MAX} times. On "Who's watching?", picking this person then asks for the same arrows on the remote or keyboard, with no keypad and no OK.</p>
+      <p className="acct-small">Six arrows are much harder to guess than four.</p>
+      {p.note && <p className="acct-note">{p.note}</p>}
       <div className="pin-dots arrow-entered" role="status" aria-live="polite" data-testid="arrow-entered"
         aria-label={arrows.length ? `${arrows.length} arrows: ${arrows.map((a) => NAME[a]).join(', ')}` : 'No arrows entered'}>
         {arrows.length ? arrows.map((a, i) => <span key={i} aria-hidden="true">{GLYPH[a]}</span>) : <span className="label">{ARROWS_MIN} to {ARROWS_MAX} arrows</span>}
       </div>
-      {error && <p role="alert" data-testid="arrow-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
+      {error && <p role="alert" data-testid="arrow-error" className="acct-error">{error}</p>}
       <div className="arrow-pad" role="group" aria-label="Arrows">
         {PAD.map((a, i) => a
           ? <Button key={a} focusKey={`arrows:${a}`} className="pin-key" label={NAME[a]} onEnter={() => add(a)} testId={`arrow-${a}`}>{GLYPH[a]}</Button>
           : <span key={i} aria-hidden="true" />)}
       </div>
-      <p className="label">Typed as a PIN anywhere else, the pattern is its digits: ↑ 2, ← 4, → 6, ↓ 8.</p>
-      <div className="flex gap-3 flex-wrap">
+      <p className="acct-small">Typed as a PIN anywhere else, the pattern is its digits: ↑ 2, ← 4, → 6, ↓ 8.</p>
+      <div className="acct-actions">
         <Button focusKey="arrows:save" primary disabled={!ready} onEnter={() => void save()} testId="arrow-save">Save pattern</Button>
         <Button focusKey="arrows:clear" disabled={!arrows.length || busy} onEnter={clear} testId="arrow-clear">Clear</Button>
-        <Button focusKey="arrows:cancel" onEnter={p.onClose}>Cancel</Button>
+        <Button focusKey="arrows:cancel" ghost onEnter={p.onClose}>Cancel</Button>
       </div>
     </Modal>
   )
@@ -175,20 +175,23 @@ export function ArrowPinAskDialog(p: {
   const status = locked ? `Too many wrong patterns. Try again in ${clock(left)}.` : busy ? 'Checking…' : error
   return (
     <Modal open={p.open} onClose={p.onClose} title={p.title} firstFocusKey="arrowask:cancel" testId="arrow-ask-dialog">
-      {p.hint && <p className="muted">{p.hint}</p>}
-      <div className="pin-dots arrow-dots" role="status" aria-live="polite" data-testid="arrow-dots" data-entered={entered}
-        aria-label={`${entered} of ${p.length} arrows entered`}>
-        {Array.from({ length: p.length }, (_, i) => <i key={i} data-filled={i < entered} />)}
+      {/* Centred, as the TV draws it: what is asked, a disc per arrow filling in the accent, then how. */}
+      <div className="arrow-ask">
+        {p.hint && <p className="acct-note">{p.hint}</p>}
+        <div className="pin-dots arrow-dots" role="status" aria-live="polite" data-testid="arrow-dots" data-entered={entered}
+          aria-label={`${entered} of ${p.length} arrows entered`}>
+          {Array.from({ length: p.length }, (_, i) => <i key={i} data-filled={i < entered} />)}
+        </div>
+        {status
+          ? <p role="alert" data-testid={locked ? 'arrow-locked' : 'arrow-error'} className={busy ? 'acct-small' : 'acct-error'}>{status}</p>
+          : <p className="acct-small">Press {GLYPH.up} {GLYPH.left} {GLYPH.right} {GLYPH.down} {p.length} times. OK starts again, Back cancels.</p>}
+        <div className="arrow-pad" role="group" aria-label="Arrows">
+          {PAD.map((a, i) => a
+            ? <Button key={a} focusKey={`arrowask:${a}`} className="pin-key" label={NAME[a]} onEnter={() => add(a)} testId={`arrow-ask-${a}`}>{GLYPH[a]}</Button>
+            : <span key={i} aria-hidden="true" />)}
+        </div>
+        <div><Button focusKey="arrowask:cancel" onEnter={p.onClose}>Cancel</Button></div>
       </div>
-      {status
-        ? <p role="alert" data-testid={locked ? 'arrow-locked' : 'arrow-error'} style={{ color: busy ? undefined : 'var(--t-danger)' }}>{status}</p>
-        : <p className="label">Press {GLYPH.up} {GLYPH.left} {GLYPH.right} {GLYPH.down} {p.length} times. OK starts again, Back cancels.</p>}
-      <div className="arrow-pad" role="group" aria-label="Arrows">
-        {PAD.map((a, i) => a
-          ? <Button key={a} focusKey={`arrowask:${a}`} className="pin-key" label={NAME[a]} onEnter={() => add(a)} testId={`arrow-ask-${a}`}>{GLYPH[a]}</Button>
-          : <span key={i} aria-hidden="true" />)}
-      </div>
-      <div><Button focusKey="arrowask:cancel" onEnter={p.onClose}>Cancel</Button></div>
     </Modal>
   )
 }

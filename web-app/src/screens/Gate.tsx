@@ -5,6 +5,8 @@ import { useDisclaimer, useProfiles } from '../api/hooks'
 import type { AuthTokens, Profile } from '../api/types'
 import { Button, ErrorState, Modal } from '../components/ui'
 import { Icon } from '../components/Icon'
+import { Avatar } from '../components/Avatar'
+import { GlassPanel } from '../ds'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
 import { useSession } from '../store/session'
@@ -45,24 +47,25 @@ export function DisclaimerGate({ onAccepted, onExit, overlay }: { onAccepted: ()
   }
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Legal notice" data-testid="disclaimer-gate"
-      style={{ position: overlay ? 'fixed' : 'relative', inset: 0, zIndex: 100, minHeight: '100dvh', background: 'var(--t-bg)', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }}>
-      <FocusGroup focusKey="disc" boundary className="flex flex-col gap-6" style={{ width: 'min(46rem, 100%)' }}>
-        <div className="flex items-center gap-3"><Icon name="info" size={28} /><h1 className="display" style={{ fontSize: 'var(--text-title)' }}>Before you continue</h1></div>
-        {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : !data ? <p className="muted">Loading notice…</p> : declined ? (
-          <>
-            <p className="heading">You declined the notice.</p>
-            <p className="muted">StreamHub stays locked until you accept. You can close this tab, or read the notice again.</p>
+    <div role="dialog" aria-modal="true" aria-label="Legal notice" data-testid="disclaimer-gate" className="auth-screen"
+      style={overlay ? { position: 'fixed', inset: 0, zIndex: 100, overflow: 'auto' } : undefined}>
+      <FocusGroup focusKey="disc" boundary className="auth-col auth-col-wide">
+        <span className="auth-mark" aria-hidden="true">Stream<b>Hub</b></span>
+        <h1 className="auth-title">Before you continue</h1>
+        {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : !data ? <p className="acct-note">Loading notice…</p> : declined ? (
+          <GlassPanel className="acct-group">
+            <h2 className="ds-section-title">You declined the notice.</h2>
+            <p className="acct-note">StreamHub stays locked until you accept. You can close this tab, or read the notice again.</p>
             <div><Button focusKey="disc:accept" primary onEnter={() => { setDeclined(false); setLeft(3) }}>Read the notice again</Button></div>
-          </>
+          </GlassPanel>
         ) : (
           <>
-            <div className="panel flex flex-col gap-4" style={{ lineHeight: 1.55 }}>
+            <div className="auth-panel legal-text">
               {data.text.split(/\n{2,}/).map((para, i) => <p key={i}>{renderInline(para)}</p>)}
-              <p className="label">Notice version {data.version}</p>
+              <p className="acct-kicker">Notice version {data.version}</p>
             </div>
-            {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
-            <div className="flex gap-3 flex-wrap items-center">
+            {err && <p role="alert" className="acct-error">{err}</p>}
+            <div className="acct-actions">
               <Button focusKey="disc:accept" primary disabled={left > 0 || busy} onEnter={accept} testId="disclaimer-accept">
                 {left > 0 ? `I accept (${left})` : 'I accept'}
               </Button>
@@ -85,14 +88,17 @@ export function AwayFromHome({ name, onSignOut }: { name: string; onSignOut: () 
   const qc = useQueryClient()
   useEffect(() => { const id = window.setTimeout(() => void setFocus('away:retry'), 50); return () => window.clearTimeout(id) }, [])
   return (
-    <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="away-from-home">
-      <FocusGroup focusKey="away" boundary className="flex flex-col gap-5" style={{ width: 'min(38rem, 100%)' }}>
-        <h1 className="display">Only on the home network</h1>
-        <p role="alert">This account can only be used on the home network, and this device is somewhere else.</p>
-        <p className="muted">Signed in as {name}. Connect to the home network and try again, or ask the person who runs this StreamHub to let you watch away from home.</p>
-        <div className="flex gap-3 flex-wrap">
-          <Button focusKey="away:retry" primary icon="refresh" onEnter={() => { setAway(false); void qc.invalidateQueries() }} testId="away-retry">Try again</Button>
-          <Button focusKey="away:out" onEnter={() => { onSignOut(); qc.clear() }}>Sign out</Button>
+    <main className="auth-screen" data-testid="away-from-home">
+      <FocusGroup focusKey="away" boundary className="auth-col">
+        <span className="auth-mark" aria-hidden="true">Stream<b>Hub</b></span>
+        <h1 className="auth-title">Only on the home network</h1>
+        <div className="auth-panel">
+          <p role="alert">This account can only be used on the home network, and this device is somewhere else.</p>
+          <p className="acct-note">Signed in as {name}. Connect to the home network and try again, or ask the person who runs this StreamHub to let you watch away from home.</p>
+          <div className="acct-actions">
+            <Button focusKey="away:retry" primary icon="refresh" onEnter={() => { setAway(false); void qc.invalidateQueries() }} testId="away-retry">Try again</Button>
+            <Button focusKey="away:out" onEnter={() => { onSignOut(); qc.clear() }}>Sign out</Button>
+          </div>
         </div>
       </FocusGroup>
     </main>
@@ -131,15 +137,15 @@ export function ProfilePicker({ embedded }: { embedded?: boolean } = {}) {
   }
 
   return (
-    <main style={embedded ? { display: 'grid', placeItems: 'center' } : { minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 'var(--safe-y) var(--safe-x)' }} data-testid="profile-picker">
-      <FocusGroup focusKey="picker" className={embedded ? 'flex flex-col items-center gap-4' : 'flex flex-col items-center gap-8'}>
-        {embedded ? <h2 className="heading" style={{ textAlign: 'center' }}>At home? Pick a profile</h2> : <h1 className="display" style={{ textAlign: 'center' }}>Who is watching?</h1>}
-        {err && !pending && <p role="alert" data-testid="profile-refused">{err}</p>}
-        {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : !profiles ? <p className="muted">Loading profiles…</p> : (
-          <div className="flex gap-6 flex-wrap justify-center">
+    <main className={embedded ? 'picker-embedded' : 'picker-screen'} data-testid="profile-picker">
+      <FocusGroup focusKey="picker" className="who-col">
+        {embedded ? <h2 className="who-title">At home? Pick a profile</h2> : <h1 className="who-title">Who is watching?</h1>}
+        {err && !pending && <p role="alert" data-testid="profile-refused" className="acct-error" style={{ textAlign: 'center' }}>{err}</p>}
+        {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : !profiles ? <p className="acct-note">Loading profiles…</p> : (
+          <div className="who-grid">
             {profiles.map((p) => (
               <FocusGroup key={p.id} className="">
-                <ProfileCard p={p} onEnter={() => choose(p)} />
+                <ProfileCard p={p} size={embedded ? 4.5 : 7} onEnter={() => choose(p)} />
               </FocusGroup>
             ))}
           </div>
@@ -148,29 +154,34 @@ export function ProfilePicker({ embedded }: { embedded?: boolean } = {}) {
       {/* A profile whose PIN was chosen as a password is typed as text; an arrow pattern is typed as its digits. */}
       <Modal open={!!pending} onClose={() => setPending(null)} title={pending ? (pending.has_password || pending.pin_kind === 'password' ? `Password for ${pending.name}` : `PIN for ${pending.name}`) : ''} firstFocusKey="login:input">
         {pending && (
-          <>
-            <FocusableInput focusKey="login:input" label={pending.has_password || pending.pin_kind === 'password' ? 'Password' : 'PIN'} type="password" value={secret}
-              inputMode={pending.has_password || pending.pin_kind === 'password' ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
-            {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
-            <div className="flex gap-3">
+          <div className="secret-form">
+            <div className="acct-field">
+              <span className="acct-kicker" aria-hidden="true">{pending.has_password || pending.pin_kind === 'password' ? 'Password' : 'PIN'}</span>
+              <FocusableInput focusKey="login:input" label={pending.has_password || pending.pin_kind === 'password' ? 'Password' : 'PIN'} type="password" value={secret}
+                inputMode={pending.has_password || pending.pin_kind === 'password' ? 'text' : 'numeric'} onChange={setSecret} onSubmit={() => void login(pending, secret)} />
+            </div>
+            {err && <p role="alert" className="acct-error">{err}</p>}
+            <div className="acct-actions">
               <Button focusKey="login:go" primary disabled={busy || !secret} onEnter={() => void login(pending, secret)}>Sign in</Button>
               <Button focusKey="login:cancel" onEnter={() => setPending(null)}>Cancel</Button>
             </div>
-          </>
+          </div>
         )}
       </Modal>
     </main>
   )
 }
 
-function ProfileCard({ p, onEnter }: { p: Profile; onEnter: () => void }) {
+/** A profile as on "Who's watching?": the large face (ringed when focused), the name, then what it is. */
+function ProfileCard({ p, size, onEnter }: { p: Profile; size: number; onEnter: () => void }) {
   return (
-    <Focusable focusKey={`profile:${p.id}`} onEnter={onEnter} label={p.name} data-testid="profile-card" className="flex flex-col items-center gap-3 p-4 rounded-lg">
-      <span style={{ width: '6rem', height: '6rem', borderRadius: 999, display: 'grid', placeItems: 'center', fontSize: '2.25rem', fontWeight: 700, background: 'var(--t-accent)', color: 'var(--t-accent-text)' }}>
-        {p.name.slice(0, 1).toUpperCase()}
+    <Focusable focusKey={`profile:${p.id}`} onEnter={onEnter} label={p.name} data-testid="profile-card" className="who-card">
+      <span className="who-face">
+        <Avatar name={p.name} size={size} />
+        {(p.has_pin || p.has_password) && <span className="who-lock" aria-hidden="true"><Icon name="lock" size={16} /></span>}
       </span>
-      <span className="heading">{p.name}</span>
-      <span className="label">{p.kids ? 'Kids' : p.is_admin ? 'Admin' : p.has_pin ? 'PIN protected' : ' '}</span>
+      <span className="who-name">{p.name}</span>
+      <span className="who-role">{p.kids ? 'Kids' : p.is_admin ? 'Admin' : p.has_pin ? 'PIN protected' : ' '}</span>
     </Focusable>
   )
 }

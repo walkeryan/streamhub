@@ -106,7 +106,8 @@ test('three sections in order: On TV, Channels, Movies & Shows; a channel named 
   await enter(page, '/search?q=harbor')
   await expect(page.getByTestId('search-titles')).toBeVisible()
   expect(await sectionNames(page)).toEqual(['On TV', 'Channels', 'Movies & Shows'])
-  await expect(sections(page).locator('h2')).toHaveText(['On TV', 'Channels', 'Movies & Shows'])
+  // Each heading is the section's name, then (quieter) how many it found.
+  await expect(sections(page).locator('h2')).toHaveText([/^On TV\d/, /^Channels\d/, /^Movies & Shows\d/])
   // A broadcast says its title, when it is on and where; a channel its number, name and what is on.
   const broadcast = page.getByTestId('search-broadcast').first()
   await expect(broadcast).toContainText('Riverton Rovers vs Harbor City')

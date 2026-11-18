@@ -3,7 +3,8 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { searchView, useRecordings, useSearch } from '../api/hooks'
 import { useCan } from '../api/me'
 import type { Channel, SearchProgramme, SearchResult, SearchSectionName, Tile } from '../api/types'
-import { Attribution, Button, Chip, Empty, ErrorState, LogoBlock, Skeleton } from '../components/ui'
+import { Attribution, LogoBlock } from '../components/ui'
+import { Button, Chip, Empty, ErrorState, Icon, SectionHeader, Skeleton } from '../ds'
 import { MediaTile, openPath } from '../components/Tile'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -140,14 +141,14 @@ function SearchPage() {
     const count = visible(name, r)
     return (
       <section key={name} className="search-section" data-testid={`search-${name}`} aria-label={HEADINGS[name]}>
-        <h2 className="heading">{HEADINGS[name]}</h2>
+        <SectionHeader title={HEADINGS[name]} meta={r.sections[name].count > 0 ? <span aria-hidden="true">{r.sections[name].count.toLocaleString()}</span> : undefined} />
         {name === 'programmes' ? <FocusGroup focusKey="search:programmes" className="search-rows">
           {r.programmes.slice(0, count).map((p) => <BroadcastRow key={p.id} p={p} live={onNow(p)} when={startLabel(p.start, now)} onEnter={() => openBroadcast(p)} />)}
         </FocusGroup> : name === 'channels' ? <FocusGroup focusKey="search:channels" className="search-rows">
           {r.channels.slice(0, count).map((c) => <ChannelResult key={c.id} channel={c} onEnter={() => go(play(c.id))} />)}
         </FocusGroup> : <SearchTitles tiles={r.results} coming={coming} onOpen={(t) => go(openPath(t))} />}
         {(count < rows.length || (r.sections[name].more && !expanded.includes(name))) && <FocusGroup focusKey={`search:more:${name}:group`} className="search-more">
-          <Button focusKey={`search:more:${name}`} ghost disabled={loading} testId={`search-more-${name}`} onEnter={() => more(name, r)}>Show more</Button>
+          <Button focusKey={`search:more:${name}`} className="btn-chip" icon="chevD" disabled={loading} testId={`search-more-${name}`} onEnter={() => more(name, r)}>Show more</Button>
         </FocusGroup>}
       </section>
     )
@@ -162,7 +163,7 @@ function SearchPage() {
           // Nothing to keep on screen while this query loads (the last one found nothing, or the hub
           // has nothing and the provider has not answered): skeletons, not "No results" too soon.
           : !shown || (found === 0 && (loading || discovering)) ? <SearchSkeleton />
-          : found === 0 ? <Empty title={`No results for “${q}”`} hint="Check the spelling, or try fewer words. Channels are also found by number." />
+          : found === 0 ? <Empty icon="search" title={`No results for “${q}”`} hint="Check the spelling, or try fewer words. Channels are also found by number." />
           : <FocusGroup focusKey="search:results" className="search-sections">
             {shown.order.map((name) => section(name, shown))}
             {shown.results.length > 0 && <Attribution text={shown.attribution} />}
@@ -193,7 +194,7 @@ function SearchTitles({ tiles, coming, onOpen }: { tiles: Tile[]; coming: boolea
         </div>
       ))}
       {/* Where the titles only the metadata provider knows will go; the first of them takes this place. */}
-      {coming && <div className="search-tile" role="status" aria-label="Looking for more titles" data-testid="search-discovering"><Skeleton style={{ aspectRatio: '2/3' }} /></div>}
+      {coming && <div className="search-tile" role="status" aria-label="Looking for more titles" data-testid="search-discovering"><Skeleton className="ds-skel-tile" style={{ aspectRatio: '2/3' }} /></div>}
     </FocusGroup>
   )
 }
@@ -252,13 +253,19 @@ function SearchIdle() {
   const recents = useUi((s) => s.recentSearches)
   return (
     <FocusGroup focusKey="search:idle" className="search-idle" data-testid="search-idle">
-      <p className="muted">Movies, shows, channels and what is on TV.</p>
-      {recents.length > 0 && <FocusGroup focusKey="search:recent" className="flex gap-2 flex-wrap" role="group" label="Recent searches">
-        {recents.map((r) => <Chip key={r} focusKey={`search:recent:${r}`} onEnter={() => go(searchPath(r), { replace: true })}>{r}</Chip>)}
-      </FocusGroup>}
-      <FocusGroup focusKey="search:discover" className="flex gap-2 flex-wrap">
-        <Button focusKey="search:discover:movies" onEnter={() => go('/discover/movies')}>Popular movies</Button>
-        <Button focusKey="search:discover:shows" onEnter={() => go('/discover/shows')}>Popular shows</Button>
+      <div className="search-idle-lead">
+        <span className="ds-empty-icon" aria-hidden="true"><Icon name="search" /></span>
+        <p className="muted">Movies, shows, channels and what is on TV.</p>
+      </div>
+      {recents.length > 0 && <div className="search-idle-block">
+        <SectionHeader title="Recent searches" />
+        <FocusGroup focusKey="search:recent" className="lib-chips" role="group" label="Recent searches">
+          {recents.map((r) => <Chip key={r} focusKey={`search:recent:${r}`} onEnter={() => go(searchPath(r), { replace: true })}>{r}</Chip>)}
+        </FocusGroup>
+      </div>}
+      <FocusGroup focusKey="search:discover" className="lib-chips">
+        <Button focusKey="search:discover:movies" className="btn-chip" icon="film" onEnter={() => go('/discover/movies')}>Popular movies</Button>
+        <Button focusKey="search:discover:shows" className="btn-chip" icon="shows" onEnter={() => go('/discover/shows')}>Popular shows</Button>
       </FocusGroup>
     </FocusGroup>
   )
@@ -267,11 +274,11 @@ function SearchIdle() {
 function SearchSkeleton() {
   return (
     <div className="search-sections" data-testid="search-loading">
-      <div className="search-section"><Skeleton style={{ width: '6rem', height: '1.5rem' }} />
-        <div className="search-rows">{Array.from({ length: 3 }, (_, i) => <Skeleton key={i} style={{ height: '3.5rem' }} />)}</div>
+      <div className="search-section"><Skeleton className="ds-skel-title" style={{ width: '6rem' }} />
+        <div className="search-rows">{Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="search-row-skel" />)}</div>
       </div>
-      <div className="search-section"><Skeleton style={{ width: '10rem', height: '1.5rem' }} />
-        <div className="grid-tiles search-grid">{Array.from({ length: 12 }, (_, i) => <Skeleton key={i} style={{ aspectRatio: '2/3' }} />)}</div>
+      <div className="search-section"><Skeleton className="ds-skel-title" style={{ width: '10rem' }} />
+        <div className="grid-tiles search-grid">{Array.from({ length: 12 }, (_, i) => <Skeleton key={i} className="ds-skel-tile" style={{ aspectRatio: '2/3' }} />)}</div>
       </div>
     </div>
   )

@@ -1,16 +1,10 @@
 import type { CastMember, EpisodeTile, Tile, TitleActivityEntry } from './types'
-import { FocusGroup, Focusable } from '../../nav/Focusable'
+import { Focusable } from '../../nav/Focusable'
 import { SafeImg, initialsOf } from '../../components/SafeImg'
 import { Avatar } from '../../components/Avatar'
 import { MediaTile } from '../../components/Tile'
 import { ProgressBar } from '../../components/ui'
-import { hueOf } from '../../lib/util'
-import { TitleIcon } from './icons'
-
-const gradient = (name: string) => {
-  const h = hueOf(name)
-  return `linear-gradient(135deg, hsl(${h} 62% 56%), hsl(${(h + 30) % 360} 58% 38%))`
-}
+import { Captioned, HRow, Section, StillCard, nameGradient as gradient } from '../../ds'
 
 /** "S2 · E1" without the parts that are not known. */
 export function seLabel(season?: number | null, episode?: number | null): string {
@@ -44,13 +38,12 @@ export function activityText(e: TitleActivityEntry): string {
 export function ActivityRow({ entries }: { entries: TitleActivityEntry[] }) {
   if (!entries.length) return null
   return (
-    <section className="tp-section" aria-label="Activity" data-testid="title-activity">
-      <h2>Activity</h2>
+    <Section className="tp-section" title="Activity" testId="title-activity">
       <div className="tp-acts">
         {entries.map((e) => {
           const name = e.me ? 'You' : e.name
           return (
-            <div key={e.profile_id} className="tp-act" data-testid="activity-entry">
+            <div key={e.profile_id} className="tp-act ds-panel" data-testid="activity-entry">
               {e.avatar || e.picture ? <Avatar name={e.name} avatar={e.avatar} picture={e.picture} size={2.6} />
                 : <span className="tp-act-face" aria-hidden="true" style={{ background: e.me ? 'linear-gradient(135deg, var(--t-accent), color-mix(in srgb, var(--t-accent) 60%, #b3360f))' : gradient(e.name) }}>{name.slice(0, 1).toUpperCase()}</span>}
               <div className="tp-act-text">
@@ -62,7 +55,7 @@ export function ActivityRow({ entries }: { entries: TitleActivityEntry[] }) {
           )
         })}
       </div>
-    </section>
+    </Section>
   )
 }
 
@@ -71,9 +64,8 @@ export function CastRow({ cast, onOpen }: { cast: CastMember[]; onOpen: (name: s
   const people = cast.filter((c): c is CastMember & { name: string } => !!c.name).slice(0, 20)
   if (!people.length) return null
   return (
-    <section className="tp-section" aria-label="Cast and crew" data-testid="title-cast">
-      <h2>Cast &amp; Crew</h2>
-      <FocusGroup focusKey="title:cast" className="tp-row">
+    <Section className="tp-section" title="Cast & Crew" label="Cast and crew" testId="title-cast">
+      <HRow focusKey="title:cast">
         {people.map((c, i) => (
           <Focusable key={`${c.name}:${i}`} focusKey={`cast:${i}`} className="tp-cast" role="link" label={c.character ? `${c.name} as ${c.character}` : c.name} onEnter={() => onOpen(c.name)}>
             <div className="tp-cast-photo">
@@ -83,25 +75,23 @@ export function CastRow({ cast, onOpen }: { cast: CastMember[]; onOpen: (name: s
             {c.character && <small>{c.character}</small>}
           </Focusable>
         ))}
-      </FocusGroup>
-    </section>
+      </HRow>
+    </Section>
   )
 }
 
 export function SimilarRow({ tiles }: { tiles: Tile[] }) {
   if (!tiles.length) return null
   return (
-    <section className="tp-section" aria-label="More like this" data-testid="title-similar">
-      <h2>More like this</h2>
-      <FocusGroup focusKey="title:similar" className="tp-row">
+    <Section className="tp-section" title="More like this" testId="title-similar">
+      <HRow focusKey="title:similar">
         {tiles.map((t) => (
-          <div key={t.id} className="tp-like">
+          <Captioned key={t.id} className="tp-like" caption={t.title}>
             <MediaTile tile={t} scope="similar" mark="availability" />
-            <p>{t.title}</p>
-          </div>
+          </Captioned>
         ))}
-      </FocusGroup>
-    </section>
+      </HRow>
+    </Section>
   )
 }
 
@@ -115,15 +105,9 @@ export function EpisodeCard({ e, current, onOpen }: { e: EpisodeTile; current: b
   const name = episodeName(e)
   const number = e.episode_number != null && !/^\d+\./.test(name) ? `${e.episode_number} · ` : ''
   return (
-    <Focusable focusKey={`episodes::${e.id}`} className="tp-ep" role="link" aria-current={current ? 'page' : undefined} data-testid="episode"
-      label={`${number}${name}${e.runtime_min ? `, ${e.runtime_min} min` : ''}${pct >= 100 ? ', watched' : ''}`} onEnter={onOpen}>
-      <div className="tp-ep-art">
-        <SafeImg className="art" src={e.backdrop ?? e.poster} alt="" loading="lazy" draggable={false}
-          fallback={<span className="tp-ep-fallback" style={{ background: gradient(name) }}>{name}</span>} />
-        {pct > 0 && pct < 100 && <ProgressBar pct={pct} className="tp-ep-bar" />}
-        {pct >= 100 && <span className="tp-ep-tick" aria-hidden="true"><TitleIcon name="check" /></span>}
-      </div>
-      <p>{number}{name}{e.runtime_min ? <small> · {e.runtime_min} min</small> : null}</p>
-    </Focusable>
+    <StillCard focusKey={`episodes::${e.id}`} className="tp-ep" current={current} testId="episode" onEnter={onOpen}
+      label={`${number}${name}${e.runtime_min ? `, ${e.runtime_min} min` : ''}${pct >= 100 ? ', watched' : ''}`}
+      image={e.backdrop ?? e.poster} fallbackName={name} progressPct={pct} watched={pct >= 100}
+      title={`${number}${name}`} meta={e.runtime_min ? `${e.runtime_min} min` : undefined} />
   )
 }

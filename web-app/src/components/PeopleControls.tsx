@@ -3,7 +3,8 @@ import type { components } from '../api/schema'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { MOVIE_RATINGS, PERMISSION_GROUPS, STREAM_CHOICES, TV_RATINGS, type Limits } from '../lib/people'
 import { Icon } from './Icon'
-import { Button, Chip } from './ui'
+import { Chip } from './ui'
+import { GlassIconButton } from '../ds/GlassIconButton'
 
 type Permission = components['schemas']['Permission']
 
@@ -18,7 +19,7 @@ export function Toggle(p: { focusKey: string; label: string; hint?: string; on: 
         <span style={{ fontWeight: 600 }}>{p.label}</span>
         {p.hint && <span className="label">{p.hint}</span>}
       </span>
-      {p.note && <span className="badge" data-testid="toggle-note">{p.note}</span>}
+      {p.note && <span className="ds-pill acct-pill" data-testid="toggle-note">{p.note}</span>}
     </Focusable>
   )
 }
@@ -33,7 +34,7 @@ export function PermissionSwitches(p: { scope: string; held: readonly Permission
     <div className="flex flex-col gap-4">
       {PERMISSION_GROUPS.map((group) => (
         <section key={group.title} className="flex flex-col gap-2">
-          <h3 className="label">{group.title}</h3>
+          <h3 className="acct-kicker">{group.title}</h3>
           <FocusGroup focusKey={`${p.scope}:group:${group.title}`} className="toggle-list">
             {group.items.map((item) => {
               const on = p.held.includes(item.id)
@@ -42,7 +43,7 @@ export function PermissionSwitches(p: { scope: string; held: readonly Permission
                 <div key={item.id} className="toggle-row" data-permission={item.id} data-overridden={p.inherited ? overridden : undefined}>
                   <Toggle focusKey={`${p.scope}:${item.id}`} label={item.label} hint={item.hint} on={on} note={p.inherited ? (overridden ? 'Overridden' : 'From role') : undefined}
                     onChange={p.onChange && ((value) => p.onChange!(item.id, value))} />
-                  {overridden && p.onReset && <Button focusKey={`${p.scope}:${item.id}:reset`} ghost label={`Reset ${item.label} to the role`} onEnter={() => p.onReset!(item.id)}>Reset</Button>}
+                  {overridden && p.onReset && <GlassIconButton focusKey={`${p.scope}:${item.id}:reset`} icon="restart" size="sm" label={`Reset ${item.label} to the role`} tip="Reset to the role" onEnter={() => p.onReset!(item.id)} />}
                 </div>
               )
             })}
@@ -62,14 +63,14 @@ export function LimitsEditor(p: {
   overridden?: Partial<Record<keyof Limits, boolean>>; onReset?: (key: keyof Limits) => void
 }) {
   const row = (key: keyof Limits, title: string, chips: ReactNode) => (
-    <section className="flex flex-col gap-2" data-limit={key} data-overridden={p.overridden ? !!p.overridden[key] : undefined}>
+    <section className="acct-field" data-limit={key} data-overridden={p.overridden ? !!p.overridden[key] : undefined}>
       <div className="flex items-center gap-2 flex-wrap">
-        <h3 className="label">{title}</h3>
-        {p.overridden && <span className="badge">{p.overridden[key] ? 'Overridden' : 'From role'}</span>}
+        <h3 className="acct-kicker">{title}</h3>
+        {p.overridden && <span className="ds-pill acct-pill">{p.overridden[key] ? 'Overridden' : 'From role'}</span>}
       </div>
-      <FocusGroup focusKey={`${p.scope}:${key}`} className="flex gap-2 flex-wrap items-center" role="group" label={title}>
+      <FocusGroup focusKey={`${p.scope}:${key}`} className="acct-chips" role="group" label={title}>
         {chips}
-        {p.overridden?.[key] && p.onReset && <Button focusKey={`${p.scope}:${key}:reset`} ghost label={`Reset ${title.toLowerCase()} to the role`} onEnter={() => p.onReset!(key)}>Reset</Button>}
+        {p.overridden?.[key] && p.onReset && <GlassIconButton focusKey={`${p.scope}:${key}:reset`} icon="restart" size="sm" label={`Reset ${title.toLowerCase()} to the role`} tip="Reset to the role" onEnter={() => p.onReset!(key)} />}
       </FocusGroup>
     </section>
   )

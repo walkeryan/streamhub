@@ -53,13 +53,14 @@ export function OwnerPin({ targetId, targetName, action, pendingToken, onApprove
     } finally {window.clearTimeout(timer);callbacks.current.onCommitting?.(false);if(live.current)setCommitting(false);if(inFlight.current===controller){inFlight.current=null;if(live.current){setBusy(false);setPin('')}}}
   }
   const wait=Math.max(0,Math.ceil((retryAt-now)/1000))
-  return <div className="flex flex-col gap-3" data-testid="owner-pin">
-    <p>{action==='admin'?`Authorize content restrictions for ${targetName}.`:action==='login'?'Google identity confirmed. Enter the owner PIN to finish signing in.':`The owner PIN is required to switch to ${targetName}.`} This approval applies only to this action.</p>
+  return <div className="secret-form" data-testid="owner-pin">
+    <p className="acct-note">{action==='admin'?`Authorize content restrictions for ${targetName}.`:action==='login'?'Google identity confirmed. Enter the owner PIN to finish signing in.':`The owner PIN is required to switch to ${targetName}.`} This approval applies only to this action.</p>
+    {!uncertain&&<span className="acct-kicker" aria-hidden="true">Owner PIN</span>}
     {!uncertain&&<FocusableInput focusKey="owner-pin:input" label="Owner PIN" type="password" inputMode="numeric" autoComplete="current-password" maxLength={12} readOnly={busy} value={pin} onChange={setPin} onSubmit={()=>void submit()} />}
-    <p className="label">Enter your existing 6–12 digit owner PIN privately. Never send it in chat.</p>
+    <p className="acct-small">Enter your existing 6–12 digit owner PIN privately. Never send it in chat.</p>
     {wait>0 && <p role="status">Too many attempts. Try again in {wait} seconds.</p>}
-    {error && <p role="alert">{error}</p>}
+    {error && <p role="alert" className="acct-error">{error}</p>}
     {committing&&<p role="status">Finishing authorization… Please wait for the result.</p>}
-    {!uncertain&&<Button focusKey="owner-pin:verify" primary disabled={busy||wait>0||!/^\d{6,12}$/.test(pin)} onEnter={()=>void submit()}>{busy?'Verifying…':'Authorize with owner PIN'}</Button>}
+    {!uncertain&&<div><Button focusKey="owner-pin:verify" primary disabled={busy||wait>0||!/^\d{6,12}$/.test(pin)} onEnter={()=>void submit()}>{busy?'Verifying…':'Authorize with owner PIN'}</Button></div>}
   </div>
 }

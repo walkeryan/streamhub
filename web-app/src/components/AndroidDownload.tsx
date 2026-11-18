@@ -11,5 +11,5 @@ export function AndroidDownload({ focusKey, release }: { focusKey: string; relea
     link.click()
     link.remove()
   }
-  return <Button focusKey={focusKey} onEnter={download} testId="android-download">Download Android APK</Button>
+  return <Button focusKey={focusKey} icon="download" onEnter={download} testId="android-download">Download Android APK</Button>
 }

@@ -7,10 +7,10 @@ import {
 import { api, ok } from '../api/client'
 import type { EpisodeTile, PlaybackOption, Room, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Modal, ProgressBar, Skeleton } from '../components/ui'
+import { GlassIconButton, HRow, Icon, OverflowMenu, Section, SectionHeader, type OverflowItem } from '../ds'
 import { SafeImg } from '../components/SafeImg'
 import { CatalogPicker } from '../components/CatalogPicker'
-import { Popover } from '../components/ChipMenu'
-import { FocusGroup, Focusable, type FocusableHandle } from '../nav/Focusable'
+import { FocusGroup, Focusable } from '../nav/Focusable'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { useBackHandler, useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
@@ -27,7 +27,6 @@ import { useUi } from '../store/ui'
 import { ShareSheet } from '../room/ShareSheet'
 import { useCan } from '../api/me'
 import { handOff, inShell } from '../shell'
-import { TitleIcon } from './title/icons'
 import { ActivityRow, CastRow, EpisodeCard, SimilarRow } from './title/Sections'
 
 /** Seasons shown as chips; a series with more gets one drop-down. */
@@ -35,7 +34,6 @@ const MAX_SEASON_CHIPS = 8
 /** Audio tracks shown as chips; a file with more gets one drop-down. */
 const MAX_AUDIO_CHIPS = 4
 const titlePath = (id: string) => `/title/${encodeURIComponent(id)}`
-type IconName = Parameters<typeof TitleIcon>[0]['name']
 
 export function TitleScreen() {
   const id = decodeURIComponent(useParams().id ?? '')
@@ -48,24 +46,6 @@ function formatDate(iso: string | null | undefined): string | null {
   const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
   return new Date(Date.UTC(y!, m! - 1, d!)).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 }
-
-/** A round glass button with no words: its label is for assistive tech, and shows under it on focus or hover. */
-function Glass({ focusKey, icon, label, tip, pressed, onEnter, testId, buttonRef, expanded }: {
-  focusKey: string; icon: IconName; label: string; tip?: string; pressed?: boolean; onEnter: () => void; testId?: string
-  buttonRef?: React.Ref<FocusableHandle>; expanded?: boolean
-}) {
-  return (
-    <span className="tp-glass-wrap">
-      <Focusable ref={buttonRef} focusKey={focusKey} className="tp-glass" label={label} aria-pressed={pressed} onEnter={onEnter} data-testid={testId}
-        aria={expanded === undefined ? undefined : { haspopup: 'menu', expanded }}>
-        <TitleIcon name={icon} filled={icon === 'list' && pressed ? true : undefined} />
-      </Focusable>
-      <span className="tp-tip" aria-hidden="true">{tip ?? label}</span>
-    </span>
-  )
-}
-
-type MenuItem = { key: string; icon: IconName; label: string; onEnter: () => void; testId?: string; pressed?: boolean; disabled?: boolean; group: 1 | 2 }
 
 function TitleDetails({ id }: { id: string }) {
   const { data: t, error, refetch } = useTitle(id)
@@ -84,8 +64,6 @@ function TitleDetails({ id }: { id: string }) {
   const go = useGo()
   const phone = usePhone()
   const [picker, setPicker] = useState<null | 'play'>(params.get('choose') ? 'play' : null)
-  const [more, setMore] = useState(false)
-  const moreButton = useRef<FocusableHandle>(null)
   useEffect(() => {
     if (!picker) return
     const frame = requestAnimationFrame(() => setFocus('pick:cancel'))
@@ -271,34 +249,16 @@ function TitleDetails({ id }: { id: string }) {
   }
 
   // The ⋯ menu: what is seldom used. The pickers it opens are the ones the page always had.
-  const menu: MenuItem[] = [
-    ...(canPlay && mayStartRoom ? [{ key: 'together', icon: 'people', label: startingRoom ? 'Starting a room…' : 'Watch together', onEnter: () => void watchTogether(), testId: 'title-together', disabled: startingRoom, group: 1 } as MenuItem] : []),
-    ...(next ? [{ key: 'next', icon: 'next', label: 'Play next episode', onEnter: () => void play(next), testId: 'title-next', group: 1 } as MenuItem] : []),
-    ...(t.kind !== 'channel' ? [{ key: 'fav', icon: 'heart', label: t.is_favorite ? 'Remove from favorites' : 'Add to favorites', onEnter: toggleFavorite, testId: 'title-fav', pressed: !!t.is_favorite, group: 1 } as MenuItem] : []),
-    ...(choosable && tracks.length ? [{ key: 'audio', icon: 'audio', label: `Audio · ${playing ? trackLabel(playing) : 'Choose'}`, onEnter: () => setPicker('play'), testId: 'title-audio', group: 2 } as MenuItem] : []),
-    ...(choosable ? [{ key: 'source', icon: 'version', label: `Version · ${trackOption?.source_name ?? (inApp.length === 1 ? inApp[0]!.name : 'Choose')}`, onEnter: () => setPicker('play'), testId: 'title-source', group: 2 } as MenuItem] : []),
-    ...(t.kind !== 'channel' ? [{ key: 'trailer', icon: 'trailer', label: 'Show trailer', onEnter: openTrailer, testId: 'title-trailer', group: 2 } as MenuItem] : []),
-    ...(canRequest && (canPlay || handoff.length > 0) ? [{ key: 'request', icon: 'request', label: requestLabel, onEnter: startRequest, testId: 'title-request', group: 2 } as MenuItem] : []),
+  const menu: OverflowItem[] = [
+    ...(canPlay && mayStartRoom ? [{ key: 'together', icon: 'people', label: startingRoom ? 'Starting a room…' : 'Watch together', onEnter: () => void watchTogether(), testId: 'title-together', disabled: startingRoom, group: 1 } as OverflowItem] : []),
+    ...(next ? [{ key: 'next', icon: 'next', label: 'Play next episode', onEnter: () => void play(next), testId: 'title-next', group: 1 } as OverflowItem] : []),
+    // The favourite toggles in place, so the list then says what it has become.
+    ...(t.kind !== 'channel' ? [{ key: 'fav', icon: 'heart', label: t.is_favorite ? 'Remove from favorites' : 'Add to favorites', onEnter: toggleFavorite, testId: 'title-fav', pressed: !!t.is_favorite, fillWhenPressed: true, keepOpen: true, group: 1 } as OverflowItem] : []),
+    ...(choosable && tracks.length ? [{ key: 'audio', icon: 'audio', label: `Audio · ${playing ? trackLabel(playing) : 'Choose'}`, onEnter: () => setPicker('play'), testId: 'title-audio', group: 2 } as OverflowItem] : []),
+    ...(choosable ? [{ key: 'source', icon: 'version', label: `Version · ${trackOption?.source_name ?? (inApp.length === 1 ? inApp[0]!.name : 'Choose')}`, onEnter: () => setPicker('play'), testId: 'title-source', group: 2 } as OverflowItem] : []),
+    ...(t.kind !== 'channel' ? [{ key: 'trailer', icon: 'trailer', label: 'Show trailer', onEnter: openTrailer, testId: 'title-trailer', group: 2 } as OverflowItem] : []),
+    ...(canRequest && (canPlay || handoff.length > 0) ? [{ key: 'request', icon: 'plus', label: requestLabel, onEnter: startRequest, testId: 'title-request', group: 2 } as OverflowItem] : []),
   ]
-  const runMenu = (item: MenuItem) => {
-    // The favourite toggles in place, so the list then says what it has become; anything else closes it first.
-    if (item.key === 'fav') return item.onEnter()
-    setMore(false)
-    item.onEnter()
-  }
-  const firstMenuKey = `title:menu:${menu[0]?.key ?? 'close'}`
-  const menuList = (
-    <FocusGroup focusKey="title:menu" boundary className="tp-menu-list" role="menu" label="More actions" data-testid="title-more-menu">
-      {menu.map((item, i) => <span key={item.key} style={{ display: 'contents' }}>
-        {i > 0 && item.group !== menu[i - 1]!.group && <hr className="tp-menu-sep" />}
-        <Focusable focusKey={`title:menu:${item.key}`} className="tp-menu-item" role="menuitem" label={item.label} aria-pressed={item.pressed} disabled={item.disabled}
-          data-testid={item.testId} onEnter={() => runMenu(item)}>
-          <TitleIcon name={item.icon} filled={item.key === 'fav' && item.pressed ? true : undefined} /><span>{item.label}</span>
-        </Focusable>
-      </span>)}
-      {phone && <Button focusKey="title:menu:close" ghost onEnter={() => setMore(false)}>Close</Button>}
-    </FocusGroup>
-  )
 
   const audioChips = tracks.length > 0 && (
     <section className="flex flex-col gap-2" aria-label="Audio" data-testid="title-audio-tracks">
@@ -330,7 +290,7 @@ function TitleDetails({ id }: { id: string }) {
   const stripTitle = seasons.find((s) => s.id === stripSeason)?.title ?? (t.kind === 'season' ? t.title : undefined)
   const showLink = showId && showTitle ? (
     <Focusable focusKey="title:show" className="tp-show" role="link" label={`${showTitle}, open the show`} onEnter={() => go(titlePath(showId))} data-testid="title-show-link">
-      <span>{showTitle}</span><TitleIcon name="chev" />
+      <span>{showTitle}</span><Icon name="chevR" />
     </Focusable>
   ) : null
   const crumbs = (t.kind === 'episode' && (parent?.season || parent?.episode_number != null)) || (t.kind === 'season' && episodes.length > 0)
@@ -358,7 +318,7 @@ function TitleDetails({ id }: { id: string }) {
             {crumbs && (
               <FocusGroup focusKey="title:crumbs" className="tp-se">
                 {t.kind === 'episode' && parent?.season && (
-                  <Focusable focusKey="title:season" className="tp-glass-chip" role="link" label={`${parent.season.title}, open the season`} onEnter={() => go(titlePath(parent.season!.id))} data-testid="title-season-link">
+                  <Focusable focusKey="title:season" className="ds-pill" role="link" label={`${parent.season.title}, open the season`} onEnter={() => go(titlePath(parent.season!.id))} data-testid="title-season-link">
                     {parent.season.title}
                   </Focusable>
                 )}
@@ -366,31 +326,31 @@ function TitleDetails({ id }: { id: string }) {
                 {t.kind === 'season' && <span>{episodes.length} episode{episodes.length === 1 ? '' : 's'}</span>}
               </FocusGroup>
             )}
-            <p className="tp-meta">
-              {t.content_rating && <span className="tp-rating" aria-label={`Rated ${t.content_rating}`}>{t.content_rating}</span>}
+            <p className="tp-meta ds-meta">
+              {t.content_rating && <span className="tp-rating ds-rating" aria-label={`Rated ${t.content_rating}`}>{t.content_rating}</span>}
               {date ? <span>{date}</span> : t.year ? <span>{t.year}</span> : null}
               {t.runtime_min ? <span>{t.runtime_min} min</span> : null}
-              {t.rating ? <span className="tp-star"><b>★</b> {t.rating.toFixed(1)}</span> : null}
+              {t.rating ? <span className="ds-star"><b>★</b> {t.rating.toFixed(1)}</span> : null}
             </p>
 
             <FocusGroup focusKey="title:actions" className="tp-actions" preferred="title:play">
               {(canPlay || handoff.length > 0) && (
-                <Button focusKey="title:play" primary className="tp-play" onEnter={primary} testId="title-play" label={phone && left ? playLabel : undefined}>
-                  <TitleIcon name="play" /><span>{phone && left ? 'Resume' : playLabel}</span>
+                <Button focusKey="title:play" primary lg className="tp-play" onEnter={primary} testId="title-play" label={phone && left ? playLabel : undefined}>
+                  <Icon name="play" /><span>{phone && left ? 'Resume' : playLabel}</span>
                 </Button>
               )}
               {canRequest && !canPlay && !handoff.length && (
-                <Button focusKey="title:request" primary className="tp-play" onEnter={startRequest} testId="title-request"><TitleIcon name="request" /><span>{requestLabel}</span></Button>
+                <Button focusKey="title:request" primary lg className="tp-play" onEnter={startRequest} testId="title-request"><Icon name="plus" /><span>{requestLabel}</span></Button>
               )}
-              {canPlay && left && t.kind !== 'channel' && <Glass focusKey="title:restart" icon="restart" label="Start over" onEnter={() => void startOver()} testId="title-restart" />}
+              {canPlay && left && t.kind !== 'channel' && <GlassIconButton focusKey="title:restart" icon="restart" label="Start over" onEnter={() => void startOver()} testId="title-restart" />}
               {canPlay && t.kind !== 'channel' && (
-                <Glass focusKey="title:watched" icon="watched" label={watched ? 'Mark unwatched' : 'Mark watched'} pressed={watched} onEnter={() => void toggleWatched()} testId="title-watched" />
+                <GlassIconButton focusKey="title:watched" icon="watched" label={watched ? 'Mark unwatched' : 'Mark watched'} pressed={watched} onEnter={() => void toggleWatched()} testId="title-watched" />
               )}
               {t.kind !== 'channel' && (
-                <Glass focusKey="title:watchlist" icon="list" label="My List" tip={onWatchlist ? 'On My List' : 'Add to My List'} pressed={onWatchlist}
+                <GlassIconButton focusKey="title:watchlist" icon="bookmark" fillWhenPressed label="My List" tip={onWatchlist ? 'On My List' : 'Add to My List'} pressed={onWatchlist}
                   onEnter={() => toggleWatch.mutate({ id: t.id, on: !onWatchlist })} testId="title-watchlist" />
               )}
-              {menu.length > 0 && <Glass focusKey="title:more" icon="dots" label="More actions" tip="More" buttonRef={moreButton} expanded={more} onEnter={() => setMore(true)} testId="title-more" />}
+              <OverflowMenu focusKey="title:more" menuKey="title:menu" items={menu} title={showTitle ?? t.title} testId="title-more" menuTestId="title-more-menu" />
             </FocusGroup>
 
             {/* A finished earlier request says nothing about the seasons still missing. */}
@@ -408,7 +368,7 @@ function TitleDetails({ id }: { id: string }) {
         </div>
 
         {(seasons.length > 0 || episodes.length > 0) && (
-          <section className="tp-section" aria-label="Seasons and episodes" data-testid="episodes">
+          <Section className="tp-section" label="Seasons and episodes" testId="episodes">
             {seasons.length > 1 ? (
               <FocusGroup focusKey="title:seasons" className="tp-seasons">
                 {/* A long-running series would fill the screen with chips: past a row's worth, one control opens the list. */}
@@ -420,12 +380,12 @@ function TitleDetails({ id }: { id: string }) {
                   ))}
                 {episodes.length > 0 && <small className="tp-count">{episodes.length} episode{episodes.length === 1 ? '' : 's'}</small>}
               </FocusGroup>
-            ) : <h2>{stripTitle ?? 'Episodes'}{episodes.length > 0 && <small>{episodes.length} episode{episodes.length === 1 ? '' : 's'}</small>}</h2>}
-            <FocusGroup focusKey="title:episodes" className="tp-row" remember preferred={episodes.some((e) => e.id === t.id) ? `episodes::${t.id}` : undefined}>
+            ) : <SectionHeader title={stripTitle ?? 'Episodes'} meta={episodes.length > 0 && `${episodes.length} episode${episodes.length === 1 ? '' : 's'}`} />}
+            <HRow focusKey="title:episodes" preferred={episodes.some((e) => e.id === t.id) ? `episodes::${t.id}` : undefined}>
               {episodes.map((e) => <EpisodeCard key={e.id} e={e} current={e.id === t.id} onOpen={() => openEpisode(e)} />)}
               {!episodes.length && <p className="muted">{fetchSeason && seasonQ.isPending ? 'Loading episodes…' : 'No episodes listed.'}</p>}
-            </FocusGroup>
-          </section>
+            </HRow>
+          </Section>
         )}
 
         <ActivityRow entries={activity.data?.entries ?? []} />
@@ -433,9 +393,6 @@ function TitleDetails({ id }: { id: string }) {
         <SimilarRow tiles={similar.data?.tiles ?? []} />
         <div className="tp-attribution"><Attribution text={t.attribution || 'Availability data by JustWatch'} /></div>
       </div>
-
-      {phone ? <Modal open={more} onClose={() => setMore(false)} title={showTitle ?? t.title} firstFocusKey={firstMenuKey} variant="sheet">{menuList}</Modal>
-        : more && <Popover anchor={moreButton} firstFocusKey={firstMenuKey} onClose={() => setMore(false)} className="tp-menu">{menuList}</Popover>}
 
       <Modal open={picker !== null} onClose={() => setPicker(null)} title={canPlay ? 'Audio & version' : 'Open in'} firstFocusKey="pick:cancel" variant="sheet">
         <div className="flex flex-col gap-2">

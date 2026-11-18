@@ -26,7 +26,23 @@ dependencies {
     implementation(libs.zxing.core)
     // Poster Adaptive: dominant colour of the focused artwork
     implementation(libs.androidx.palette)
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }
+
+android {
+    testOptions { unitTests { isIncludeAndroidResources = true } }
+}
+
+// Robolectric screenshots of the glass screens and dialogs (written only when asked for:
+// -Pstreamhub.screenshots=<dir>, and -Pstreamhub.screenshotArt=<dir> for the picture behind player dialogs).
+tasks.withType<Test>().configureEach {
+    systemProperty("streamhub.screenshots", providers.gradleProperty("streamhub.screenshots").getOrElse(""))
+    systemProperty("streamhub.screenshotArt", providers.gradleProperty("streamhub.screenshotArt").getOrElse(""))
+}
+
 
 // ---------------------------------------------------------------------------------------------
 // Design tokens: design/tokens.json -> src/main/kotlin/.../Tokens.kt (checked in).

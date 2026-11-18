@@ -1,0 +1,316 @@
+/* Settings, people, sign-in, pairing, Who's watching and watch rooms (phase 2, group C: the account screens own
+   this file). Built on the design system (ds.css): glass rows and panels, glass icon buttons, the one orange
+   button per screen. Sizes are rem, so the TV (24 px root), desktops (16 px) and phones (15 px) share one layout. */
+
+/* ---------- account pages: Settings, Users, a person, Sources, Connect a TV ---------- */
+.acct-page { display: flex; flex-direction: column; gap: var(--gap-lg); min-width: 0; }
+.acct-page > .ds-page-head { margin-bottom: 0; }
+.acct-body { display: flex; flex-direction: column; gap: var(--gap-lg); max-width: 60rem; min-width: 0; }
+.acct-body-wide { max-width: 64rem; }
+/* A group of settings: a frosted card with its heading, a quiet note, then its controls. */
+.acct-group { display: flex; flex-direction: column; gap: 0.9rem; min-width: 0; }
+.acct-group > .ds-section-head { margin-bottom: 0; }
+.acct-note { color: var(--t-text-muted); font-size: var(--fs-body); max-width: 46rem; line-height: 1.55; }
+.acct-small { color: var(--t-text-muted); font-size: var(--fs-small); line-height: 1.45; }
+/* The small capitals that name a field or a choice ("STREAM PROXY", "YOUR CODE"), as on the TV's dialogs. */
+.acct-kicker { font-size: var(--fs-micro); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--t-text-muted); line-height: 1.4; }
+.acct-field { display: flex; flex-direction: column; gap: 0.45rem; min-width: 0; }
+.acct-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-md); min-width: 0; }
+.acct-error { color: var(--t-danger); }
+.acct-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; min-width: 0; }
+
+/* One thing in a list (a person, a device, a sign-in method, a role, a shelf): a glass row, its words, then its
+   actions at the far end. Rows wrap on a phone; their actions stay together. */
+.acct-row {
+  display: flex; align-items: center; gap: var(--gap-sm) 0.9rem; flex-wrap: wrap; min-width: 0; min-height: 3.6rem;
+  padding: 0.7rem 0.9rem; border-radius: var(--r-lg); background: var(--glass-tint); border: 1px solid var(--glass-line);
+}
+.acct-row.fx[data-focused='true'] { outline-color: var(--t-accent); background: color-mix(in srgb, var(--t-accent) 10%, var(--glass-tint)); }
+@media (hover: hover) { .acct-row.fx:hover { background: var(--glass-tint-hi); } }
+.acct-row-main { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.acct-row-title { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; min-width: 0; font-weight: 650; }
+.acct-row-title > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.acct-row-meta { color: var(--t-text-muted); font-size: var(--fs-small); min-width: 0; }
+.acct-row-end { flex: none; display: flex; align-items: center; gap: var(--gap-sm); margin-left: auto; }
+.acct-row-end > svg { color: var(--t-text-muted); }
+.acct-list { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+/* A status in a row: a quiet glass pill, green when it is fine, red when it needs someone. */
+.acct-pill { font-size: var(--fs-micro); font-weight: 650; padding: 0.15rem 0.55rem; }
+.acct-pill[data-tone='ok'] { background: color-mix(in srgb, var(--t-success) 22%, transparent); border-color: color-mix(in srgb, var(--t-success) 50%, transparent); }
+.acct-pill[data-tone='warn'] { background: color-mix(in srgb, var(--t-danger) 20%, transparent); border-color: color-mix(in srgb, var(--t-danger) 50%, transparent); }
+/* A destructive glass icon button reads red. */
+.acct-danger .ds-glass, .ds-glass.acct-danger { color: var(--t-danger); }
+
+/* ---------- switches (PeopleControls Toggle): the row names it, the switch at its end says on or off ---------- */
+.toggle {
+  display: flex; align-items: center; gap: 0.875rem; flex: 1; min-width: 0; min-height: 3.2rem; padding: 0.6rem 0.9rem;
+  border-radius: var(--r-lg); background: var(--glass-tint); border: 1px solid var(--glass-line);
+}
+.toggle > .flex { order: 1; }
+.toggle > .ds-pill { order: 2; flex: none; }
+.toggle-box {
+  order: 3; flex: none; position: relative; width: 2.6rem; height: 1.5rem; border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--t-text) 22%, transparent); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .25);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.toggle-box svg { display: none; }
+.toggle-box::after {
+  content: ''; position: absolute; top: 0.1875rem; left: 0.1875rem; width: 1.125rem; height: 1.125rem; border-radius: 50%;
+  background: var(--t-text); box-shadow: 0 1px 3px rgba(0, 0, 0, .35); transition: transform var(--dur-fast) var(--ease);
+}
+.toggle[aria-pressed='true'] .toggle-box { background: var(--t-accent); }
+.toggle[aria-pressed='true'] .toggle-box::after { transform: translateX(1.1rem); background: var(--t-accent-text); }
+.toggle[data-readonly='true'] .toggle-box { opacity: 0.6; }
+.toggle.fx[data-focused='true'] { outline-color: var(--t-accent); background: color-mix(in srgb, var(--t-accent) 10%, var(--glass-tint)); }
+.toggle-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr)); gap: 0.5rem; }
+.toggle-row { display: flex; align-items: stretch; gap: 0.5rem; min-width: 0; }
+.toggle-row > .btn { min-height: 0; }
+.toggle-row > .ds-glass-wrap { align-self: center; }
+
+/* ---------- Settings ---------- */
+.acct-me { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; min-width: 0; }
+.acct-me-who { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.acct-me-name { font-size: var(--fs-sub); font-weight: 750; letter-spacing: -0.01em; line-height: 1.25; }
+/* Theme cards: a glass card with a little screen in the theme's colours; the one in use is ringed in the accent. */
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr)); gap: var(--gap-row); padding: 0.4rem; margin: -0.4rem; }
+.theme-card { border-radius: var(--r-lg); padding: 0.7rem; background: var(--glass-tint); border: 1px solid var(--glass-line); display: flex; flex-direction: column; gap: 0.5rem; }
+.theme-card[aria-pressed='true'] { box-shadow: 0 0 0 0.15rem var(--t-accent); border-color: transparent; }
+.theme-card.fx[data-focused='true'] { outline-color: var(--t-accent); box-shadow: var(--glow-accent); }
+.theme-name { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-weight: 650; }
+.theme-preview { border-radius: var(--r-md); padding: 0.625rem; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; background: var(--t-bg); color: var(--t-text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t-text) 10%, transparent); }
+/* Home rows and Home shelves: a numbered row with its arrows and switch at the end. */
+.acct-order { min-height: 3.2rem; padding-block: 0.45rem; flex-wrap: nowrap; }
+.acct-order .acct-row-main { flex-basis: 0; }
+.acct-order[data-hidden='true'] .acct-row-title { opacity: 0.5; }
+.acct-pager { display: flex; align-items: center; gap: var(--gap-md); flex-wrap: wrap; }
+.attr-row { display: flex; align-items: center; gap: 0.9rem; min-width: 0; }
+.attr-row img { flex: none; }
+.legal-text { display: flex; flex-direction: column; gap: 0.8rem; line-height: 1.6; color: color-mix(in srgb, var(--t-text) 90%, transparent); }
+
+/* ---------- people: Users, a person, devices, invites, activity ---------- */
+.person-row { display: flex; align-items: center; gap: var(--gap-sm) 0.9rem; flex-wrap: wrap; min-width: 0; }
+.person-row .who { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.person-row .who > strong, .person-row .who .truncate { min-width: 0; }
+/* a row that is itself the link keeps its status and chevron on its one line */
+.person-link { flex-wrap: nowrap; }
+.person-link .who { flex-basis: 0; }
+.row-end { flex: none; display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
+.row-end > svg { color: var(--t-text-muted); }
+.row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-sm); margin-left: auto; }
+.audit-row { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; min-height: 0; }
+.audit-row time { flex: none; }
+.avatar-pick { border-radius: 999px; padding: 0.1875rem; }
+.avatar-pick[aria-pressed='true'] { box-shadow: 0 0 0 0.1875rem var(--t-accent); }
+.avatar-pick.fx[data-focused='true'] { outline-offset: 0.2rem; }
+.device-row, .history-row { min-height: 3.2rem; }
+.ud-head { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; min-width: 0; }
+.ud-head-who { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.ud-name { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: var(--fs-page); font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; }
+.ud-head-tools { display: flex; align-items: center; gap: var(--gap-md); flex: none; }
+.ud-face { border-radius: 50%; box-shadow: 0 0.5rem 1.4rem rgba(0, 0, 0, .4), 0 0 0 1px color-mix(in srgb, var(--t-text) 12%, transparent); }
+.now-playing { display: inline-flex; align-items: center; gap: 0.3rem; min-width: 0; color: var(--t-text); font-size: var(--fs-small); }
+.now-playing svg { flex: none; color: var(--t-accent); }
+.invite-link { display: flex; gap: var(--gap-sm); align-items: center; min-width: 0; }
+.invite-link > .field { flex: 1 1 16rem; min-width: 0; }
+
+/* ---------- Sources ---------- */
+.src-add { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); gap: var(--gap-row); }
+.src-add-card { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; padding: 1rem; border-radius: var(--r-lg); background: var(--glass-tint); border: 1px solid var(--glass-line); }
+.src-add-icon { flex: none; display: grid; place-items: center; width: 2.6rem; height: 2.6rem; margin-bottom: 0.35rem; border-radius: 50%; background: var(--glass-fill); border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen); color: var(--t-accent); }
+.src-add-icon svg { width: 1.25rem; height: 1.25rem; }
+.src-add-card b { font-weight: 700; }
+.src-add-card.fx[data-focused='true'] { outline-color: var(--t-accent); background: color-mix(in srgb, var(--t-accent) 10%, var(--glass-tint)); }
+.svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); gap: var(--gap-sm); }
+.svc-card { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; padding: 0.75rem 0.9rem; border-radius: var(--r-lg); background: var(--glass-tint); border: 1px solid var(--glass-line); }
+.svc-card b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-qr { flex: none; width: 10rem; height: 10rem; border-radius: var(--r-md); background: #fff; padding: 0.3rem; }
+
+/* ---------- full-screen sign-in pages: welcome, invitation, waiting, away, the legal notice ---------- */
+/* The page background of the shell (a faint accent glow), for the screens drawn before or outside it. */
+.auth-screen { position: relative; isolation: isolate; min-height: 100dvh; display: grid; place-items: center; padding: var(--page-y) var(--page-x); background: var(--t-bg); }
+.auth-screen::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(70rem 40rem at 85% -10%, color-mix(in srgb, var(--t-accent) 10%, transparent), transparent 70%),
+    radial-gradient(60rem 40rem at -10% 110%, color-mix(in srgb, var(--t-text) 5%, transparent), transparent 70%);
+}
+.auth-col { width: min(38rem, 100%); display: flex; flex-direction: column; gap: var(--gap-lg); min-width: 0; }
+.auth-col-wide { width: min(46rem, 100%); }
+/* The wordmark, as the top bar draws it. */
+.auth-mark { font-size: var(--fs-sub); font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
+.auth-mark b { color: var(--t-accent); font-weight: inherit; }
+.auth-title { font-size: var(--fs-hero); font-weight: 800; letter-spacing: -0.02em; line-height: 1.12; padding-bottom: 0.08em; text-wrap: balance; }
+/* The card that holds a sign-in step: frosted over the page, opaque on a TV. */
+.auth-panel {
+  display: flex; flex-direction: column; gap: 1rem; min-width: 0; padding: 1.6rem 1.8rem; border-radius: var(--r-xl);
+  background-color: color-mix(in srgb, var(--t-surface) 82%, transparent);
+  background-image: linear-gradient(160deg, var(--surface-sheen), transparent 60%);
+  border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen), var(--shadow-pop);
+}
+.auth-panel > h2 { font-size: var(--fs-section); font-weight: 750; letter-spacing: -0.01em; line-height: 1.3; }
+.auth-ways { display: flex; flex-direction: column; gap: var(--gap-sm); width: min(24rem, 100%); }
+.auth-ways .btn { width: 100%; }
+/* Codes: large, tabular, spaced, in the accent (Connect a TV, Plex's link code). */
+.auth-code { font-size: var(--fs-hero); font-weight: 800; letter-spacing: 0.22em; font-variant-numeric: tabular-nums; color: var(--t-accent); line-height: 1.15; overflow-wrap: anywhere; }
+.pair-code { min-height: 3.4rem; }
+.pair-code input { font-size: var(--fs-sub); font-weight: 750; letter-spacing: 0.3em; text-transform: uppercase; font-variant-numeric: tabular-nums; }
+.pair-wrap { width: min(40rem, 100%); }
+/* Steps: a numbered list, each number in a small accent disc. */
+.wait-steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 0.8rem; }
+.wait-steps li { counter-increment: step; display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); gap: 0.75rem; align-items: start; line-height: 1.5; }
+.wait-steps li::before {
+  content: counter(step); display: grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 50%;
+  background: color-mix(in srgb, var(--t-accent) 22%, transparent); border: 1px solid color-mix(in srgb, var(--t-accent) 55%, transparent);
+  color: var(--t-text); font-size: var(--fs-small); font-weight: 750; font-variant-numeric: tabular-nums;
+}
+.auth-status { display: flex; align-items: center; gap: 0.5rem; color: var(--t-text-muted); font-size: var(--fs-small); }
+.auth-status::before { content: ''; flex: none; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--t-accent); animation: room-pulse 1s var(--ease) infinite alternate; }
+.legal-scroll { max-height: min(52dvh, 30rem); overflow-y: auto; overscroll-behavior: contain; padding-right: 0.4rem; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--t-text) 28%, transparent) transparent; }
+@media (hover: none) and (pointer: coarse), (min-width: 1800px), (prefers-reduced-transparency: reduce) {
+  .auth-panel { background-color: var(--t-surface); }
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (min-width: 721px) and (max-width: 1799px) { .auth-panel { -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); } }
+}
+
+/* ---------- Who's watching? (and the profile picker): large faces on the page's background ---------- */
+.who-screen { position: fixed; inset: 0; z-index: 70; overflow: auto; display: grid; place-items: center; padding: var(--page-y) var(--page-x); background: var(--t-bg); isolation: isolate; }
+.who-screen::before, .picker-screen::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(60rem 36rem at 50% 0%, color-mix(in srgb, var(--t-accent) 10%, transparent), transparent 70%);
+}
+.picker-screen { position: relative; isolation: isolate; min-height: 100dvh; display: grid; place-items: center; padding: var(--page-y) var(--page-x); }
+.who-col { width: min(64rem, 100%); display: flex; flex-direction: column; align-items: center; gap: 2.4rem; }
+.who-title { font-size: var(--fs-hero); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; text-align: center; }
+.who-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 1.6rem 2.2rem; }
+.who-card { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; width: 9.5rem; padding: 0.6rem 0.4rem; border-radius: var(--r-lg); text-align: center; background: none; }
+/* Focus is drawn on the face: the ring and glow go round the picture, which lifts; the name brightens. */
+.who-card.fx[data-focused='true'] { outline-color: transparent; box-shadow: none; transform: none; }
+.who-face { position: relative; display: grid; width: max-content; border-radius: 50%; box-shadow: 0 0.6rem 1.6rem rgba(0, 0, 0, .45), 0 0 0 1px color-mix(in srgb, var(--t-text) 12%, transparent); transition: transform var(--dur-focus) var(--ease), box-shadow var(--dur-focus) var(--ease); }
+.who-card.fx[data-focused='true'] .who-face { transform: scale(1.07); box-shadow: 0 0 0 var(--ring-w) var(--t-focus-ring), 0 0 0 calc(var(--ring-w) + 0.2rem) color-mix(in srgb, var(--t-focus-ring) 25%, transparent), var(--glow-accent); }
+.who-lock { position: absolute; right: 0.15rem; bottom: 0.15rem; width: 2rem; height: 2rem; border-radius: 999px; display: grid; place-items: center; background: var(--pop-bg); color: var(--t-text); border: 1px solid var(--glass-line); box-shadow: var(--shadow-raise); }
+.who-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-section); font-weight: 650; color: color-mix(in srgb, var(--t-text) 78%, transparent); transition: color var(--dur-fast) var(--ease); }
+.who-card.fx[data-focused='true'] .who-name { color: var(--t-text); }
+.who-role { font-size: var(--fs-small); color: var(--t-text-muted); min-height: 1.2em; }
+.who-card[data-current='true'] .who-role { color: var(--t-accent); font-weight: 650; }
+@media (hover: hover) { .who-card.fx:hover .who-name { color: var(--t-text); } }
+@media (prefers-reduced-motion: reduce) { .who-card.fx[data-focused='true'] .who-face { transform: none; } }
+/* The picker under the ways to sign in: smaller faces, one section of the welcome card. */
+.picker-embedded { width: 100%; }
+.picker-embedded .who-col { gap: 1.2rem; }
+.picker-embedded .who-title { font-size: var(--fs-section); }
+.picker-embedded .who-card { width: 7.5rem; }
+.picker-embedded .who-name { font-size: var(--fs-body); }
+
+/* ---------- PIN, arrow pattern and password dialogs (as the TV draws them) ---------- */
+/* ds-request: Modal has no className; these lay its dialog out from what it holds (:has), until it can take one. */
+@media (min-width: 721px) {
+  .dialog:has(> .pin-side) {
+    width: min(50rem, 100%); display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto 1fr;
+    grid-template-areas: 'title keys' 'side keys'; gap: 0.75rem 2.4rem; padding: 2rem 2.2rem; align-items: start;
+  }
+  .dialog:has(> .pin-side) > .title-xl { grid-area: title; align-self: end; }
+  .dialog:has(> .pin-side) > .pin-side { grid-area: side; }
+  .dialog:has(> .pin-side) > .pin-keys { grid-area: keys; align-self: center; }
+}
+.dialog:has(> .pin-side) > .title-xl, .dialog:has(> .arrow-ask) > .title-xl, .dialog:has(> .secret-form) > .title-xl { font-size: var(--fs-page); font-weight: 800; letter-spacing: -0.02em; }
+.pin-side { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.pin-keys { display: flex; flex-direction: column; gap: 0.75rem; align-items: stretch; width: min(17.5rem, 100%); margin-inline: auto; }
+.pin-keys > div > .btn { width: 100%; }
+/* The digits: a box per digit up to the most a PIN has; entered ones ringed in the accent, holding a dot. */
+.pin-dots { display: flex; align-items: center; gap: 0.45rem; min-height: 3rem; flex-wrap: wrap; }
+.pin-dots i, .pin-dots .pin-slot { display: grid; place-items: center; width: 2.25rem; height: 3rem; border-radius: var(--r-md); background: var(--glass-tint); border: 1px solid var(--glass-line); }
+.pin-dots i { border: 0.125rem solid var(--t-accent); background: color-mix(in srgb, var(--t-accent) 10%, var(--glass-tint)); }
+.pin-dots i::after { content: ''; width: 0.75rem; height: 0.75rem; border-radius: 50%; background: var(--t-text); }
+.pin-pad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.6rem; width: 100%; }
+/* Keys: glass squares with big numerals. The focused key turns solid (the theme's text colour) inside an
+   accent ring, so whoever holds the remote sees at a glance where they are (the owner asked for this). */
+.pin-key { min-height: 3.6rem; padding: 0; border-radius: var(--r-lg); font-size: var(--fs-sub); font-weight: 650; font-variant-numeric: tabular-nums; }
+.pin-key svg { width: 1.4rem; height: 1.4rem; }
+.pin-key.fx[data-focused='true'], .pin-key.btn-primary.fx[data-focused='true'] {
+  transform: scale(1.04); background: var(--t-text); color: var(--t-bg); outline-color: var(--t-accent); border-color: transparent; box-shadow: var(--glow-accent);
+}
+.pin-key[aria-disabled='true']:not([data-focused='true']) { opacity: 0.5; }
+/* Choosing an arrow pattern: the arrows stay visible (this is where it is chosen), laid out like a D-pad. */
+.arrow-entered { gap: 0.5rem; justify-content: center; min-height: 3.2rem; padding: 0 1rem; border-radius: var(--r-lg); background: var(--glass-tint); border: 1px solid var(--glass-line); font-size: var(--fs-sub); font-weight: 700; color: var(--t-text); }
+.arrow-entered .label { font-size: var(--fs-small); font-weight: 500; }
+.arrow-pad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.6rem; width: min(13rem, 100%); margin-inline: auto; }
+.arrow-pad .pin-key { min-height: 3.4rem; }
+/* Asking for an arrow pattern: as many hollow discs as the pattern has arrows, filling with the accent. */
+.arrow-dots { justify-content: center; gap: 1rem; }
+.arrow-dots i { width: 2.4rem; height: 2.4rem; border-radius: 50%; background: var(--glass-tint); border: 1px solid var(--glass-line); }
+.arrow-dots i::after { content: none; }
+.arrow-dots i[data-filled='true'] { background: linear-gradient(180deg, color-mix(in srgb, var(--t-accent) 62%, #fff 38%), var(--t-accent)); border-color: transparent; box-shadow: var(--shadow-accent); }
+.arrow-ask { display: flex; flex-direction: column; gap: 1.1rem; align-items: center; text-align: center; }
+.arrow-ask > * { max-width: 100%; }
+.dialog:has(> .arrow-ask) { width: min(40rem, 100%); padding: 2rem; }
+.dialog:has(> .arrow-ask) > .title-xl { text-align: center; }
+/* A typed secret: a named field and the error in the danger colour. */
+.secret-form { display: flex; flex-direction: column; gap: 1rem; }
+.dialog:has(> .secret-form) { width: min(38rem, 100%); padding: 2rem; }
+.secret-form .field { min-height: 3.2rem; }
+/* Choosing a kind: three glass rows, the one in use marked. */
+.secret-choice { justify-content: flex-start; text-align: left; height: auto; min-height: 3.6rem; padding-block: 0.6rem; white-space: normal; width: 100%; }
+.secret-choice > span { min-width: 0; }
+
+/* ---------- watch rooms ---------- */
+/* The join screen wears the title page's look (title.css .tp-*): the backdrop under a veil, the picture, the
+   title, Join as the one orange button, the rest round glass. It is drawn without the shell's top bar. */
+.room-join { position: relative; min-height: 100dvh; }
+.room-join .tp-page { padding-top: max(var(--page-y), 2rem); }
+.room-kicker { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--t-text-muted); font-size: var(--fs-small); font-weight: 600; letter-spacing: 0.02em; margin-bottom: 0.5rem; }
+.room-kicker svg { color: var(--t-accent); }
+.room-members { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 1.2rem; max-width: 38rem; }
+.room-host { margin-top: 1rem; max-width: 38rem; color: color-mix(in srgb, var(--t-text) 88%, transparent); }
+.room-refusal { margin-top: 1.2rem; max-width: 38rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.room-skel-pic { width: 23.5rem; max-width: 100%; aspect-ratio: 16 / 9; border-radius: var(--r-lg); }
+@media (max-width: 720px) { .room-join .tp-page { padding-top: 1rem; } .room-skel-pic { width: 100%; } }
+/* Share sheet: the QR code beside the code and link; stacked on a phone. */
+.room-share { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1.25rem; align-items: center; }
+.room-qr { width: 9rem; height: 9rem; border-radius: var(--r-md); background: #fff; padding: 0.375rem; flex: none; }
+.room-qr img { width: 100%; height: 100%; }
+.room-code { font-size: var(--fs-page); font-weight: 800; letter-spacing: 0.2em; font-variant-numeric: tabular-nums; color: var(--t-accent); }
+.room-link { font-size: var(--fs-small); overflow-wrap: anywhere; user-select: all; }
+.room-code-field input { font-size: var(--fs-sub); font-weight: 750; letter-spacing: 0.2em; text-transform: uppercase; font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) { .room-share { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; } }
+/* Members: pills on the join screen and, over the video, in the player's top bar. */
+.room-member { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 1.85rem; padding: 0 0.7rem; border-radius: var(--r-pill); background: var(--glass-tint); border: 1px solid var(--glass-line); font-size: var(--fs-small); font-weight: 600; white-space: nowrap; }
+.room-member[data-host='true'] { background: color-mix(in srgb, var(--t-accent) 18%, transparent); border-color: color-mix(in srgb, var(--t-accent) 50%, transparent); }
+.room-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.375rem; margin-left: auto; max-width: 60%; color: #fff; }
+.room-strip .room-member { background: rgba(8,10,16,.72); border: 1px solid rgba(255,255,255,.18); color: #fff; }
+.room-strip .room-member[data-me='true'] { border-color: rgba(255,255,255,.55); }
+.room-buffering { display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 500; opacity: 0.85; }
+.room-buffering i, .room-waiting i { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: currentColor; flex: none; animation: room-pulse 1s var(--ease) infinite alternate; }
+@keyframes room-pulse { from { opacity: 0.25; } to { opacity: 1; } }
+.room-waiting { position: absolute; z-index: 4; left: 50%; top: 42%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 0.75rem; max-width: calc(100% - 2rem); padding: 0.875rem 1.25rem; border-radius: var(--r-lg); background: rgba(8,10,16,.86); border: 1px solid rgba(255,255,255,.18); color: #fff; font-size: var(--text-heading); font-weight: 600; }
+.room-waiting i { width: 0.75rem; height: 0.75rem; }
+/* A phone keeps back and title on one row: the members are a count that opens their list. */
+.room-count { margin-left: auto; flex: none; }
+.room-count .btn { min-height: 2.5rem; padding: 0 0.875rem; gap: 0.375rem; }
+.room-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.room-list li { display: flex; align-items: center; gap: 0.5rem; min-height: 2.75rem; border-bottom: 1px solid var(--surface-edge); font-weight: 600; }
+.room-list li:last-child { border-bottom: 0; }
+.room-list li .truncate { min-width: 0; }
+
+/* ---------- phones ---------- */
+@media (max-width: 720px) {
+  .acct-page { gap: 1.1rem; }
+  .acct-row { padding: 0.7rem 0.8rem; }
+  .auth-screen, .picker-screen { place-items: start center; padding: 1.5rem 1rem 2rem; }
+  .auth-panel { padding: 1.25rem 1.1rem; }
+  .auth-title { font-size: 1.75rem; }
+  .who-screen { padding: 1.5rem 1rem; }
+  .who-col { gap: 1.6rem; }
+  .who-title { font-size: 1.75rem; }
+  .who-grid { gap: 1rem 0.75rem; }
+  .who-card { width: 8.25rem; }
+  .who-name { font-size: 1.05rem; }
+  .ud-name { font-size: 1.4rem; }
+  .pin-keys { width: min(18rem, 100%); }
+  .pin-dots { justify-content: center; }
+  .pin-dots i, .pin-dots .pin-slot { width: 2rem; height: 2.6rem; }
+  .auth-code { font-size: 1.9rem; }
+}
+/* Connect a TV: the steps and the code in one card, centred in the page. */
+.pair-page { display: grid; justify-items: center; }
+.acct-row .src-add-icon { margin-bottom: 0; }

@@ -70,48 +70,59 @@ export function Pair() {
   }
   const back = () => { setState('idle'); setErr(null); window.setTimeout(() => void setFocus('pair:code'), 30) }
   return (
-    <div className="page-pad flex flex-col gap-5" style={{ maxWidth: '38rem' }} data-testid="pair">
-      <h1 className="display">Connect a TV</h1>
+    <div className="page-pad pair-page" data-testid="pair">
+      <div className="auth-col">
+      <h1 className="auth-title">Connect a TV</h1>
       {state === 'done' ? (
-        <div className="panel flex flex-col gap-3" role="status" data-testid="pair-done">
-          <h2 className="title-xl">TV connected</h2>
+        <div className="auth-panel" role="status" data-testid="pair-done">
+          <h2>TV connected</h2>
           <p>Your TV is signing in as {as}. You can close this page.</p>
-          {manages && shared && <p className="muted" data-testid="pair-shared">It is a shared household device: it opens on "Who's watching?".</p>}
-          <div><Button focusKey="pair:again" onEnter={() => { setCode(''); setState('idle') }}>Connect another TV</Button></div>
+          {manages && shared && <p className="acct-note" data-testid="pair-shared">It is a shared household device: it opens on "Who's watching?".</p>}
+          <div><Button focusKey="pair:again" primary onEnter={() => { setCode(''); setState('idle') }}>Connect another TV</Button></div>
         </div>
       ) : state === 'review' || state === 'busy' ? (
         // Keyed: the two steps sit at the same place in the tree, and a focusable keeps the focus key it was mounted with.
-        <FocusGroup key="review" focusKey="pair:review" className="panel flex flex-col gap-4" data-testid="pair-review-panel">
-          <h2 className="title-xl">A TV is asking to sign in as {as}</h2>
+        <FocusGroup key="review" focusKey="pair:review" className="auth-panel" data-testid="pair-review-panel">
+          <h2>A TV is asking to sign in as {as}</h2>
           <p role="alert">Only approve if you are holding its remote and it shows this code. Approving signs that device in as {as}{manages && shared ? ', as a shared household device' : ''}: whoever has it can watch as {as === me.name ? 'you' : as}.</p>
-          <p className="display" style={{ letterSpacing: '0.2em' }} data-testid="pair-code-shown" aria-label={`Code ${code.split('').join(' ')}`}>{code}</p>
-          <p className="label" data-testid="pair-asking">{asking && (asking.ip || asking.user_agent)
+          <div className="acct-field">
+            <span className="acct-kicker" aria-hidden="true">Code on the TV</span>
+            <p className="auth-code" data-testid="pair-code-shown" aria-label={`Code ${code.split('').join(' ')}`}>{code}</p>
+          </div>
+          <p className="acct-small" data-testid="pair-asking">{asking && (asking.ip || asking.user_agent)
             ? `Asked for from ${[asking.ip, asking.user_agent ? deviceName(null, 'tv', asking.user_agent) : null, asking.user_agent].filter(Boolean).join(' · ')}`
             : 'This server cannot say where the request came from. Check the code on the TV itself.'}</p>
-          <p className="muted">Did someone send you this code or a link to this page? Then it is their device, not yours. Do not approve it.</p>
-          {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
-          <div className="flex gap-3 flex-wrap">
+          <p className="acct-note">Did someone send you this code or a link to this page? Then it is their device, not yours. Do not approve it.</p>
+          {err && <p role="alert" className="acct-error">{err}</p>}
+          <div className="acct-actions">
             <Button focusKey="pair:cancel" disabled={state === 'busy'} onEnter={back} testId="pair-cancel">Not my TV</Button>
             <Button focusKey="pair:go" primary disabled={state === 'busy'} onEnter={() => void approve()} testId="pair-approve">{state === 'busy' ? 'Approving…' : 'Approve this TV'}</Button>
           </div>
         </FocusGroup>
       ) : (
-        <FocusGroup key="form" focusKey="pair:form" className="flex flex-col gap-4">
-          <p className="muted">Open StreamHub on your TV. It shows a 6-character code. Enter it here to sign the TV in.</p>
-          {fromLink && code === fromLink && <p className="panel" role="note" data-testid="pair-from-link">This page was opened with a code already filled in. Go on only if you are setting up a TV yourself right now and it shows <strong>{fromLink}</strong>. Nothing is approved until you confirm it on the next screen.</p>}
-          <FocusableInput focusKey="pair:code" label="TV code" placeholder="ABC123" maxLength={6} autoCapitalize="characters" value={code}
-            onChange={(v) => setCode(v.toUpperCase().replace(/[^A-Z0-9]/g, ''))} onSubmit={() => void review()} className="pair-code" />
+        <FocusGroup key="form" focusKey="pair:form" className="auth-panel">
+          <ol className="wait-steps">
+            <li>Open StreamHub on your TV. It shows a 6-character code.</li>
+            <li>Enter it here to sign the TV in.</li>
+          </ol>
+          {fromLink && code === fromLink && <p className="ds-panel ds-panel-accent" role="note" data-testid="pair-from-link">This page was opened with a code already filled in. Go on only if you are setting up a TV yourself right now and it shows <strong>{fromLink}</strong>. Nothing is approved until you confirm it on the next screen.</p>}
+          <div className="acct-field">
+            <span className="acct-kicker" aria-hidden="true">TV code</span>
+            <FocusableInput focusKey="pair:code" label="TV code" placeholder="ABC123" maxLength={6} autoCapitalize="characters" value={code}
+              onChange={(v) => setCode(v.toUpperCase().replace(/[^A-Z0-9]/g, ''))} onSubmit={() => void review()} className="pair-code" />
+          </div>
           {(profiles.data?.length ?? 0) > 1 && (
-            <div className="flex flex-col gap-2"><span className="label">Sign the TV in as</span>
-              <div className="flex gap-2 flex-wrap">{profiles.data!.filter((p) => !p.has_pin || p.id === me.id).map((p) => <Chip key={p.id} focusKey={`pair:p:${p.id}`} pressed={profileId === p.id} onEnter={() => setProfileId(p.id)}>{p.name}</Chip>)}</div>
+            <div className="acct-field"><span className="acct-kicker">Sign the TV in as</span>
+              <div className="acct-chips">{profiles.data!.filter((p) => !p.has_pin || p.id === me.id).map((p) => <Chip key={p.id} focusKey={`pair:p:${p.id}`} pressed={profileId === p.id} onEnter={() => setProfileId(p.id)}>{p.name}</Chip>)}</div>
             </div>
           )}
           {manages && <Toggle focusKey="pair:shared" label="This is a shared household device" hint={'A living-room TV, say. It opens on "Who\'s watching?" and anyone in the household can pick themselves.'}
             on={shared} onChange={setShared} testId="pair-shared-toggle" />}
-          {err && <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p>}
+          {err && <p role="alert" className="acct-error">{err}</p>}
           <div><Button focusKey="pair:next" primary disabled={state === 'checking' || code.length !== 6} onEnter={() => void review()} testId="pair-review">{state === 'checking' ? 'Checking…' : 'Continue'}</Button></div>
         </FocusGroup>
       )}
+      </div>
     </div>
   )
 }

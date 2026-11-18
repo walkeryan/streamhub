@@ -65,15 +65,15 @@ function SwitchDialog({ onClose }: { onClose: () => void }) {
   }
   const needsOwnerPin = !!target && (current.content_restricted || !owner || !target.content_restricted)
   return <Modal open onClose={cancel} title="Switch profile" firstFocusKey="switch:cancel" wide>
-    <p>Current profile: {current.name}. Viewing history and saved filters stay with each profile.</p>
-    {profiles.error ? <ErrorState error={profiles.error} onRetry={() => void profiles.refetch()} /> : <FocusGroup focusKey="switch:profiles" className="flex flex-wrap gap-3">
+    <p className="acct-note">Current profile: {current.name}. Viewing history and saved filters stay with each profile.</p>
+    {profiles.error ? <ErrorState error={profiles.error} onRetry={() => void profiles.refetch()} /> : <FocusGroup focusKey="switch:profiles" className="acct-chips">
       {profiles.data?.filter((p) => p.id !== current.id).map((p) => <Button key={p.id} focusKey={`switch:${p.id}`} disabled={busy||finishing} pressed={target?.id === p.id} onEnter={() => choose(p)}>{p.name}</Button>)}
     </FocusGroup>}
-    {target && <section className="flex flex-col gap-3"><h3 className="heading">Switch to {target.name}</h3>
+    {target && <section className="acct-group"><h3 className="ds-section-title">Switch to {target.name}</h3>
       {needsOwnerPin ? <OwnerPin key={target.id} targetId={target.id} targetName={target.name} action="profile_switch" onCommitting={value=>{committing.current=value;setFinishing(value)}} onUncertain={()=>{if(useSession.getState().generation===origin.current.generation){useSession.getState().clear();qc.clear();navigate("/?owner_pin_uncertain=1",{replace:true});onClose()}}} onApproved={async (result, signal) => { if (!isAuthTokens(result)) throw new Error("Owner authorization returned the wrong action."); await apply(result, signal, target.id) }} /> : <p>Your verified owner session authorizes entry into this restricted profile.</p>}
       {!needsOwnerPin && <Button focusKey="switch:confirm" primary disabled={busy} onEnter={() => void submit()}>{busy ? 'Switching…' : `Continue as ${target.name}`}</Button>}
     </section>}
-    {error && <p role="alert">{error}</p>}
-    <Button focusKey="switch:cancel" disabled={finishing} onEnter={cancel}>Cancel</Button>
+    {error && <p role="alert" className="acct-error">{error}</p>}
+    <div><Button focusKey="switch:cancel" ghost disabled={finishing} onEnter={cancel}>Cancel</Button></div>
   </Modal>
 }

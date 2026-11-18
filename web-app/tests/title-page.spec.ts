@@ -32,7 +32,7 @@ test('an episode names its show and season, and Back climbs to the season, then 
   const strip = page.getByTestId('episodes')
   await expect(strip.getByTestId('episode')).toHaveCount(6)
   await expect(strip.locator('[aria-current="page"]')).toContainText('Slack Water')
-  await expect(strip.getByTestId('episode').first().locator('.tp-ep-tick')).toHaveCount(1)
+  await expect(strip.getByTestId('episode').first().locator('.ds-tick')).toHaveCount(1)
   // Opened directly (no title page before it): Back goes up, not out.
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(new RegExp(`${SEASON}$`))

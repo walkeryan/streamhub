@@ -100,7 +100,7 @@ test('keyboard only: request a movie, see it approved, open the notice when it a
   await expect(row.getByTestId('request-bar')).toHaveCount(0)
   await expect(page.getByTestId('requests-tab-mine')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowDown')
-  await expect(focused(page)).toHaveText('Details')
+  await expect(focused(page)).toHaveAttribute('aria-label', /^Details: /)
   await page.keyboard.press('Enter')
   await expect(titlePhase(page)).toHaveText('Searching')
   await expect(page.getByTestId('title-request')).toHaveCount(0)
@@ -143,7 +143,7 @@ test('keyboard only: a notice can be dismissed without opening it', async ({ pag
   for (let i = 0; i < 4 && (await open.getAttribute('data-focused')) !== 'true'; i++) await page.keyboard.press('ArrowUp')
   await expect(open).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowRight')
-  await expect(focused(page)).toHaveText('Dismiss')
+  await expect(focused(page)).toHaveAttribute('aria-label', /^Dismiss: /)
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('notices')).toHaveCount(0)
   // Focus moved on before the banner left.
@@ -176,7 +176,7 @@ test.describe('as an admin', () => {
     await expect(row).toContainText('Season 2')
     await expect(row).toContainText('Requested by Guest')
     await page.keyboard.press('ArrowDown')
-    await expect(focused(page)).toHaveText('Details')
+    await expect(focused(page)).toHaveAttribute('aria-label', /^Details: /)
     await page.keyboard.press('ArrowRight')
     await expect(focused(page)).toHaveText('Approve')
     await page.keyboard.press('ArrowRight')
@@ -198,7 +198,7 @@ test.describe('as an admin', () => {
     await expect(row.getByTestId('request-detail')).toHaveText('Already on a service')
     await expect(page.getByTestId('request-approve')).toHaveCount(0)
     // The decided row's buttons are gone; focus lands on what is left of it.
-    await expect(focused(page)).toHaveText('Details')
+    await expect(focused(page)).toHaveAttribute('aria-label', /^Details: /)
     const told = (await elsewhere(page, 'p2', 'GET', '/notices')).json as { notices: Array<{ kind: string; body: string; ref_id: string }> }
     expect(told.notices.map((n) => [n.kind, n.body, n.ref_id])).toEqual([['request_declined', 'Already on a service', 'tmdb:tv:302']])
   })

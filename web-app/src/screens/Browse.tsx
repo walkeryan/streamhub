@@ -4,11 +4,10 @@ import { useProfilePreference } from '../api/profilePreferences'
 import { useBrowseGenres } from '../api/browseGenres'
 import { useParams, useSearchParams } from 'react-router'
 import { useBrowseCategories, useBrowseLanguages, useBrowseShelves, useSources, type BrowseFilters } from '../api/hooks'
-import { Button, Chip, Empty, Modal, Skeleton } from '../components/ui'
+import { Button, Chip, Empty, GlassIconButton, GlassPanel, Icon, Modal, PageHeader, SkeletonRow } from '../ds'
 import { BrowseGrid } from '../components/BrowseGrid'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { useAdultUnlock } from '../components/AdultUnlock'
-import { Icon } from '../components/Icon'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
 import { TileRow } from '../components/Tile'
 import { FocusGroup } from '../nav/Focusable'
@@ -108,59 +107,78 @@ export function Browse() {
     clear()
   }
 
-  if (!saved.ready) return <div className="page-pad" data-testid="browse"><h1 className="title-xl">{TITLES[section] ?? section}</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="browse:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
+  const heading = TITLES[section] ?? section
+  const countText = count.fetching && count.total === null ? 'Updating…' : `${(count.total ?? 0).toLocaleString()} titles`
+  if (!saved.ready) return <div data-testid="browse"><div className="page-pad browse-head">
+    <PageHeader title={heading} className="lib-head" />
+    {saved.error ? <div className="ds-empty" role="alert">
+      <span className="ds-empty-icon ds-empty-icon-alert" aria-hidden="true"><Icon name="alert" /></span>
+      <p className="muted">{saved.error}</p>
+      <FocusGroup className="ds-empty-actions"><Button focusKey="browse:retry-prefs" primary icon="refresh" onEnter={() => void saved.retry()}>Retry</Button></FocusGroup>
+    </div>
+      : <p className="sr-only" role="status">Loading saved filters…</p>}
+  </div>{!saved.error && <div className="browse-shelves"><SkeletonRow layout="poster" count={8} /></div>}</div>
   return <div data-testid="browse" data-view={onShelves ? 'shelves' : 'grid'}>
     <div className="page-pad browse-head">
-      <FocusGroup focusKey="browse:filters" className="browse-bar">
-        {phone ? <FocusGroup focusKey="browse:switch" className="browse-switch" role="group" label="Library">
-          <h1 className="sr-only">{TITLES[section] ?? section}</h1>
-          <Chip focusKey="browse:switch:movies" pressed={kind === 'movies'} onEnter={() => { if (kind !== 'movies') go('/browse/movies', { replace: true }) }}>Movies</Chip>
-          <Chip focusKey="browse:switch:shows" pressed={kind === 'shows'} onEnter={() => { if (kind !== 'shows') go('/browse/shows', { replace: true }) }}>Shows</Chip>
-        </FocusGroup> : <h1 className="title-xl">{TITLES[section] ?? section}</h1>}
-        {!onShelves && <Button focusKey="browse:order" ghost onEnter={() => setOrder(order === 'asc' ? 'desc' : 'asc')} testId="browse-order" label={`Sorted ${DIRECTION[sort][order]}. Reverse the order`}>{DIRECTION[sort][order]}</Button>}
-        <Button focusKey="browse:filter" icon="filter" onEnter={() => setSheet(`browse:sort:${sort}`)} testId="browse-filter">Filter</Button>
-      </FocusGroup>
+      {/* On a phone the Movies/Shows switch takes the title's place (the name stays for assistive tech). */}
+      <PageHeader title={heading} meta={!onShelves && !phone ? <span aria-hidden="true">{countText}</span> : undefined} className="lib-head browse-title">
+        <FocusGroup focusKey="browse:filters" className="browse-bar">
+          {phone && <FocusGroup focusKey="browse:switch" className="browse-switch" role="group" label="Library">
+            <Chip focusKey="browse:switch:movies" pressed={kind === 'movies'} onEnter={() => { if (kind !== 'movies') go('/browse/movies', { replace: true }) }}>Movies</Chip>
+            <Chip focusKey="browse:switch:shows" pressed={kind === 'shows'} onEnter={() => { if (kind !== 'shows') go('/browse/shows', { replace: true }) }}>Shows</Chip>
+          </FocusGroup>}
+          {/* The order is a state as much as an action: it keeps its words ("A to Z"). */}
+          {!onShelves && <Button focusKey="browse:order" className="btn-chip" icon={order === 'asc' ? 'up' : 'down'} onEnter={() => setOrder(order === 'asc' ? 'desc' : 'asc')} testId="browse-order" label={`Sorted ${DIRECTION[sort][order]}. Reverse the order`}>{DIRECTION[sort][order]}</Button>}
+          <GlassIconButton focusKey="browse:filter" icon="filter" label="Filter" onEnter={() => setSheet(`browse:sort:${sort}`)} testId="browse-filter" expanded={sheet !== null} popup="dialog" />
+        </FocusGroup>
+      </PageHeader>
       {filtered && <FocusGroup focusKey="browse:active" className="chip-scroll" role="group" label="Active filters">
         {active.map((f) => <Chip key={f.id} focusKey={`browse:active:${f.id}`} label={`Remove filter ${f.text}`} testId="active-filter" onEnter={() => drop(f.id, f.clear)}>{f.text}<Icon name="x" size={14} /></Chip>)}
-        <Button focusKey="browse:clear" ghost onEnter={reset}>Clear filters</Button>
+        <Button focusKey="browse:clear" ghost className="btn-chip" onEnter={reset}>Clear filters</Button>
       </FocusGroup>}
-      {adult.unlocked && <FocusGroup focusKey="browse:adult" className="flex items-center gap-3 flex-wrap" data-testid="adult-unlocked">
+      {adult.unlocked && <GlassPanel className="lib-note" testId="adult-unlocked">
+        <Icon name="eye" size={18} />
         <span className="label">Adult titles are shown on this device.</span>
-        <Button focusKey="browse:adult-lock" ghost icon="lock" onEnter={adult.lock} testId="adult-lock">Lock</Button>
-      </FocusGroup>}
-      {!onShelves && <p className="label" aria-live="polite">{count.fetching && count.total === null ? 'Updating…' : `${(count.total ?? 0).toLocaleString()} titles`}</p>}
+        <FocusGroup focusKey="browse:adult" className="lib-note-action">
+          <GlassIconButton focusKey="browse:adult-lock" size="sm" icon="lock" label="Lock adult titles" tip="Lock" onEnter={adult.lock} testId="adult-lock" />
+        </FocusGroup>
+      </GlassPanel>}
+      {/* The count is in the title line on wide screens; this line says it to assistive tech, and shows it on a phone. */}
+      {!onShelves && <p className={phone ? 'label' : 'sr-only'} aria-live="polite">{countText}</p>}
       {saved.error && <p className="label" role="alert">{saved.error}</p>}
     </div>
-    {onShelves ? (shelves.data ? <FocusGroup focusKey="browse:shelves" className="pb-16">
+    {onShelves ? (shelves.data ? <FocusGroup focusKey="browse:shelves" className="browse-shelves">
       {shelves.data.shelves.map((s) => <TileRow key={s.name} id={`shelf:${s.name}`} title={s.name} tiles={s.items} count={s.count} seeAll={s.browse_path} />)}
-    </FocusGroup> : <div className="page-pad flex gap-4" style={{ paddingTop: 0 }} data-testid="browse-loading">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} style={{ flex: 'none', width: 'var(--tile-poster-w)', height: 'var(--tile-poster-h)' }} />)}</div>) : <div className="page-pad" style={{ paddingTop: 0 }}>
+    </FocusGroup> : <div className="browse-shelves" data-testid="browse-loading"><SkeletonRow layout="poster" count={8} /><SkeletonRow layout="poster" count={8} /></div>) : <div className="page-pad browse-body">
       <BrowseGrid section={section} filters={gridFilters} filterKey={filterKey} enabled={saved.ready && !onShelves} onTotal={onTotal} empty={
-        <Empty title="No matching titles" hint="Try another genre, category or All languages. Titles without language metadata are listed as Unknown, not English."><Button focusKey="browse:reset" onEnter={reset}>Clear filters</Button><Button focusKey="browse:all" onEnter={() => { saved.update({ ...defaults, language: 'all' }); unlink() }}>All languages</Button><Button focusKey="browse:sources" onEnter={() => go('/sources')}>Manage sources</Button></Empty>} />
+        <Empty icon="filter" title="No matching titles" hint="Try another genre, category or All languages. Titles without language metadata are listed as Unknown, not English."><Button focusKey="browse:reset" primary onEnter={reset}>Clear filters</Button><Button focusKey="browse:all" onEnter={() => { saved.update({ ...defaults, language: 'all' }); unlink() }}>All languages</Button><Button focusKey="browse:sources" ghost icon="source" onEnter={() => go('/sources')}>Manage sources</Button></Empty>} />
     </div>}
 
     <Modal open={sheet !== null} onClose={() => setSheet(null)} title="Filter" firstFocusKey={sheet ?? 'browse:done'} variant="panel" testId="browse-filters">
-      <section className="flex flex-col gap-2"><h3 className="label">Sort by</h3>
-        <FocusGroup focusKey="browse:sorts" className="flex gap-2 flex-wrap" role="group" label="Sort titles">{SORTS.map((s) => <Chip key={s.id} focusKey={`browse:sort:${s.id}`} pressed={sort === s.id} onEnter={() => setSort(s.id)}>{s.label}</Chip>)}</FocusGroup>
-        <FocusGroup focusKey="browse:orders" className="flex gap-2 flex-wrap" role="group" label="Sort direction">{(['asc', 'desc'] as const).map((o) => <Chip key={o} focusKey={`browse:order:${o}`} pressed={order === o} testId={`browse-order-${o}`} onEnter={() => setOrder(o)}>{DIRECTION[sort][o]}</Chip>)}</FocusGroup>
+      <section className="lib-filter-group"><h3 className="lib-filter-head">Sort by</h3>
+        <FocusGroup focusKey="browse:sorts" className="lib-chips" role="group" label="Sort titles">{SORTS.map((s) => <Chip key={s.id} focusKey={`browse:sort:${s.id}`} pressed={sort === s.id} onEnter={() => setSort(s.id)}>{s.label}</Chip>)}</FocusGroup>
+        <FocusGroup focusKey="browse:orders" className="lib-chips" role="group" label="Sort direction">{(['asc', 'desc'] as const).map((o) => <Chip key={o} focusKey={`browse:order:${o}`} pressed={order === o} testId={`browse-order-${o}`} onEnter={() => setOrder(o)}>{DIRECTION[sort][o]}</Chip>)}</FocusGroup>
       </section>
-      <FocusGroup focusKey="browse:pickers" className="flex flex-col gap-2 items-start">
-        <CatalogPicker scope="browse:category" label="Category" value={category} selectedLabel={category || undefined} options={[{ id: '', label: 'All categories' }, ...(categories.data ?? []).map((c) => ({ id: c.name, label: c.name, count: c.count }))]} onChange={setCategory} />
-        <CatalogPicker scope="browse:genre" label="Genre" value={genre} selectedLabel={genre ? capital(genre) : undefined} options={[{ id: '', label: 'All genres' }, ...(genres.data ?? []).map((g) => ({ id: g.name, label: capital(g.name), count: g.count }))]} onChange={setGenre} />
-        {/* one source is not a choice */}
-        {libs.length > 1 && <CatalogPicker scope="browse:source" label="Source" value={source} options={[{ id: '', label: 'All sources' }, ...libs.map((s) => ({ id: s.id, label: s.name }))]} onChange={setSource} />}
-      </FocusGroup>
-      {genres.error && <p className="label" role="alert">Genres could not be loaded. Try refreshing the page.</p>}
-      {languageOffered && <section className="flex flex-col gap-2"><h3 className="label">Language</h3>
+      <section className="lib-filter-group"><h3 className="lib-filter-head">Narrow down</h3>
+        <FocusGroup focusKey="browse:pickers" className="lib-chips">
+          <CatalogPicker scope="browse:category" label="Category" value={category} selectedLabel={category || undefined} options={[{ id: '', label: 'All categories' }, ...(categories.data ?? []).map((c) => ({ id: c.name, label: c.name, count: c.count }))]} onChange={setCategory} />
+          <CatalogPicker scope="browse:genre" label="Genre" value={genre} selectedLabel={genre ? capital(genre) : undefined} options={[{ id: '', label: 'All genres' }, ...(genres.data ?? []).map((g) => ({ id: g.name, label: capital(g.name), count: g.count }))]} onChange={setGenre} />
+          {/* one source is not a choice */}
+          {libs.length > 1 && <CatalogPicker scope="browse:source" label="Source" value={source} options={[{ id: '', label: 'All sources' }, ...libs.map((s) => ({ id: s.id, label: s.name }))]} onChange={setSource} />}
+        </FocusGroup>
+        {genres.error && <p className="label" role="alert">Genres could not be loaded. Try refreshing the page.</p>}
+      </section>
+      {languageOffered && <section className="lib-filter-group"><h3 className="lib-filter-head">Language</h3>
         <LanguageFilter scope="browse" value={lang} onChange={setLang} languages={languages.data} />
       </section>}
       {/* only ever rendered for a holder of watch.adult */}
-      {adult.offered && <section className="flex flex-col gap-2" data-testid="adult-titles"><h3 className="label">Adult titles</h3>
+      {adult.offered && <section className="lib-filter-group" data-testid="adult-titles"><h3 className="lib-filter-head">Adult titles</h3>
         {adult.unlocked
           ? <><p className="label">Shown on this device until you lock them, four hours at most.</p><div><Button focusKey="browse:adult-relock" icon="lock" onEnter={adult.lock}>Lock adult titles</Button></div></>
           : <><p className="label">Hidden. Your PIN shows them on this device for four hours.</p><div><Button focusKey="browse:adult-unlock" icon="lock" onEnter={() => { setSheet(null); adult.ask() }} testId="adult-unlock">Unlock adult titles</Button></div></>}
       </section>}
-      <p className="label" role="status">{saved.error ?? (saved.saving ? 'Saving filters…' : 'Filters are saved for this profile.')}</p>
-      <FocusGroup focusKey="browse:sheet-actions" className="flex gap-2 flex-wrap">
+      <p className="label lib-filter-status" role="status">{saved.error ?? (saved.saving ? 'Saving filters…' : 'Filters are saved for this profile.')}</p>
+      <FocusGroup focusKey="browse:sheet-actions" className="lib-actions">
         <Button focusKey="browse:done" primary onEnter={() => setSheet(null)}>Done</Button>
         {filtered && <Button focusKey="browse:sheet-clear" ghost onEnter={() => { setSheet(null); reset() }}>Clear filters</Button>}
       </FocusGroup>

@@ -4,6 +4,8 @@ import { qk, useSettings } from '../api/hooks'
 import { FocusGroup } from '../nav/Focusable'
 import { useUi } from '../store/ui'
 import { Chip } from './ui'
+import { GlassPanel } from '../ds/States'
+import { SectionHeader } from '../ds/Section'
 
 /**
  * Settings (administrators): whether the household's own internet address counts as home. Needed
@@ -22,14 +24,14 @@ export function HomeNetworkSettings() {
   }
   const on = data.home_public_address
   return (
-    <section className="flex flex-col gap-2" data-testid="home-network">
-      <h2 className="heading">Home network</h2>
-      <p className="muted">Profiles kept to the home network work on devices at home. If your TVs open StreamHub by its web address rather than a home address, count your home's internet address as home too. Leave it off if your internet address is shared with neighbours.</p>
-      <FocusGroup focusKey="homenet:choice" className="flex gap-2 flex-wrap" role="group" label="Count our internet address as home">
+    <GlassPanel as="section" className="acct-group" testId="home-network">
+      <SectionHeader title="Home network" />
+      <p className="acct-note">Profiles kept to the home network work on devices at home. If your TVs open StreamHub by its web address rather than a home address, count your home's internet address as home too. Leave it off if your internet address is shared with neighbours.</p>
+      <FocusGroup focusKey="homenet:choice" className="acct-chips" role="group" label="Count our internet address as home">
         <Chip focusKey="homenet:on" pressed={on} onEnter={() => void set(true)} testId="home-public-on">Count our internet address as home</Chip>
         <Chip focusKey="homenet:off" pressed={!on} onEnter={() => void set(false)} testId="home-public-off">Home addresses only</Chip>
       </FocusGroup>
-      {on && <p className="label" role="status" data-testid="home-public-seen">{data.home_public_address_seen ? `Your internet address right now: ${data.home_public_address_seen}` : 'Looking up your internet address…'}</p>}
-    </section>
+      {on && <p className="acct-small" role="status" data-testid="home-public-seen">{data.home_public_address_seen ? `Your internet address right now: ${data.home_public_address_seen}` : 'Looking up your internet address…'}</p>}
+    </GlassPanel>
   )
 }
