@@ -5,6 +5,8 @@ import com.streamhub.tv.core.data.auth.normalizeServerUrl
 import com.streamhub.tv.core.data.model.PlaybackRequest
 import com.streamhub.tv.core.data.model.Profile
 import com.streamhub.tv.core.data.room.RoomCode
+import com.streamhub.tv.feature.player.MiniPlayerCommand
+import com.streamhub.tv.feature.player.MiniPlayerInfo
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -26,7 +28,9 @@ import java.time.OffsetDateTime
  *  - `signedOut(reason)` — the web app has no session any more; the shell returns to pairing.
  *  - `capabilities(): string` — JSON ([capabilitiesJson]).
  *  - `deliverToken(id, json)` — the answer to a token request (see WebTokenBroker).
- * TV → page, on `window.streamhubShell`: `back(): boolean`, `token(id, rejected)`, `playbackEnded()`.
+ *  - `miniPlayerCommand(json): boolean` — the mini player bar's buttons ([parseMiniPlayerCommand]); false when refused.
+ * TV → page, on `window.streamhubShell`: `back(): boolean`, `token(id, rejected)`, `playbackEnded()`,
+ *  `miniPlayer(json)` — the native player in picture-in-picture ([miniPlayerEventJson]), state null when it is not.
  */
 const val BRIDGE_VERSION = 1
 
@@ -183,12 +187,68 @@ fun mayLoad(serverUrl: String, url: String): Boolean {
 }
 
 /** `capabilities()`: what this shell is and can do, for the web app to adapt to. */
-fun capabilitiesJson(versionName: String, versionCode: Int, hdr: List<String>, videoCodecs: List<String>, audioPassthrough: List<String>): String = buildJsonObject {
+fun capabilitiesJson(versionName: String, versionCode: Int, hdr: List<String>, videoCodecs: List<String>, audioPassthrough: List<String>, miniPlayer: Boolean = false): String = buildJsonObject {
     put("bridge", BRIDGE_VERSION)
     put("shell", versionName)
     put("version_code", versionCode)
     put("native_playback", true)
+    // The native player can shrink into picture-in-picture and send `miniPlayer` events.
+    put("mini_player", miniPlayer)
     put("hdr", buildJsonArray { hdr.forEach { add(JsonPrimitive(it)) } })
     put("video_codecs", buildJsonArray { videoCodecs.forEach { add(JsonPrimitive(it)) } })
     put("audio_passthrough", buildJsonArray { audioPassthrough.forEach { add(JsonPrimitive(it)) } })
 }.toString()
+
+// ---- Mini player (the native player in picture-in-picture) ----------------------------------------
+
+/**
+ * The `mini_player` event the page's `window.streamhubShell.miniPlayer(json)` receives:
+ * `{"v":1,"kind":"mini_player","state":{id,title,subtitle,image,position_ms,duration_ms,playing,has_next,has_previous,live}}`,
+ * or `"state":null` when picture-in-picture ends or playback stops (the page then hides its bar).
+ */
+fun miniPlayerEventJson(info: MiniPlayerInfo?): String = buildJsonObject {
+    put("v", BRIDGE_VERSION)
+    put("kind", "mini_player")
+    if (info == null) put("state", JsonNull) else put("state", buildJsonObject {
+        put("id", info.id)
+        put("title", info.title)
+        put("subtitle", info.subtitle)
+        put("image", info.image)
+        put("position_ms", info.positionMs)
+        put("duration_ms", info.durationMs)
+        put("playing", info.playing)
+        put("has_next", info.hasNext)
+        put("has_previous", info.hasPrevious)
+        put("live", info.live)
+    })
+}.toString()
+
+/** Hands [eventJson] to the page as a string (the page parses it); a page without the function is left alone. */
+fun miniPlayerScript(eventJson: String): String =
+    "(function(){var s=window.streamhubShell;if(s&&typeof s.miniPlayer==='function')s.miniPlayer(${jsString(eventJson)})})()"
+
+private const val MAX_COMMAND_JSON = 1024
+/** Six hours either way: more than any seek the bar's buttons make. */
+private const val MAX_SEEK_MS = 6L * 3600 * 1000
+
+/**
+ * Reads `miniPlayerCommand(json)`: `{"v":1,"kind":"mini_player_command","command":…,"delta_ms":int|null}` with
+ * command `play_pause` | `seek_by` (needs a non-zero `delta_ms`) | `next` | `previous` | `expand` | `close`.
+ * Null for anything else; unknown fields are ignored, like `play(json)`.
+ */
+fun parseMiniPlayerCommand(json: String): MiniPlayerCommand? {
+    if (json.length > MAX_COMMAND_JSON) return null
+    val root = runCatching { StreamHubJson.parseToJsonElement(json) }.getOrNull() as? JsonObject ?: return null
+    return try {
+        if (root.optLong("v") != BRIDGE_VERSION.toLong() || root.optString("kind") != "mini_player_command") return null
+        when (root.optString("command")) {
+            "play_pause" -> MiniPlayerCommand.PlayPause
+            "seek_by" -> root.optLong("delta_ms")?.takeIf { it != 0L && it in -MAX_SEEK_MS..MAX_SEEK_MS }?.let(MiniPlayerCommand::SeekBy)
+            "next" -> MiniPlayerCommand.Next
+            "previous" -> MiniPlayerCommand.Previous
+            "expand" -> MiniPlayerCommand.Expand
+            "close" -> MiniPlayerCommand.Close
+            else -> null
+        }
+    } catch (_: Invalid) { null }
+}

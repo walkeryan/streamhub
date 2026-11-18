@@ -3,6 +3,9 @@ package com.streamhub.tv.shell
 import com.streamhub.tv.core.data.api.StreamHubJson
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.model.Profile
+import com.streamhub.tv.feature.player.MiniPlayerCommand
+import com.streamhub.tv.feature.player.MiniPlayerInfo
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -162,5 +165,78 @@ class ShellProtocolTest {
         assertEquals("true", c["native_playback"]!!.jsonPrimitive.content)
         assertEquals("hdr10", c["hdr"]!!.jsonArray.single().jsonPrimitive.content)
         assertEquals("eac3", c["audio_passthrough"]!!.jsonArray.single().jsonPrimitive.content)
+    }
+
+    // ---- Mini player ----------------------------------------------------------------------------
+
+    @Test fun capabilitiesSayWhetherThereIsAMiniPlayer() {
+        val without = StreamHubJson.parseToJsonElement(capabilitiesJson("1.3.0", 19, emptyList(), emptyList(), emptyList())) as JsonObject
+        assertEquals("false", without["mini_player"]!!.jsonPrimitive.content)
+        val with = StreamHubJson.parseToJsonElement(capabilitiesJson("1.3.0", 19, emptyList(), emptyList(), emptyList(), miniPlayer = true)) as JsonObject
+        assertEquals("true", with["mini_player"]!!.jsonPrimitive.content)
+    }
+
+    private val info = MiniPlayerInfo(
+        id = "lib:p:ep:3", title = "Garden Stories", subtitle = "S2 · E3 · Episode 3", image = "https://hub.invalid/i/3",
+        positionMs = 662_000, durationMs = 3_070_000, playing = true, hasNext = true, hasPrevious = false, live = false,
+    )
+
+    @Test fun theMiniPlayerEventCarriesExactlyTheContractFields() {
+        val e = StreamHubJson.parseToJsonElement(miniPlayerEventJson(info)).jsonObject
+        assertEquals(setOf("v", "kind", "state"), e.keys)
+        assertEquals("1", e["v"]!!.jsonPrimitive.content)
+        assertEquals("mini_player", e["kind"]!!.jsonPrimitive.content)
+        val st = e["state"]!!.jsonObject
+        assertEquals(setOf("id", "title", "subtitle", "image", "position_ms", "duration_ms", "playing", "has_next", "has_previous", "live"), st.keys)
+        assertEquals("lib:p:ep:3", st["id"]!!.jsonPrimitive.content)
+        assertEquals("S2 · E3 · Episode 3", st["subtitle"]!!.jsonPrimitive.content)
+        assertEquals(662_000L, st["position_ms"]!!.jsonPrimitive.content.toLong())
+        assertEquals(3_070_000L, st["duration_ms"]!!.jsonPrimitive.content.toLong())
+        assertEquals("true", st["playing"]!!.jsonPrimitive.content)
+        assertEquals("true", st["has_next"]!!.jsonPrimitive.content)
+        assertEquals("false", st["has_previous"]!!.jsonPrimitive.content)
+        assertEquals("false", st["live"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun missingValuesAreSentAsNullAndNoMiniPlayerIsAStateOfNull() {
+        val st = StreamHubJson.parseToJsonElement(miniPlayerEventJson(info.copy(subtitle = null, image = null, durationMs = null, live = true))).jsonObject["state"]!!.jsonObject
+        assertEquals(JsonNull, st["subtitle"])
+        assertEquals(JsonNull, st["image"])
+        assertEquals(JsonNull, st["duration_ms"])
+        val gone = StreamHubJson.parseToJsonElement(miniPlayerEventJson(null)).jsonObject
+        assertEquals(JsonNull, gone["state"])
+        assertEquals("mini_player", gone["kind"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun theEventReachesThePageAsAStringItParses() {
+        val script = miniPlayerScript(miniPlayerEventJson(info))
+        assertTrue(script.contains("s.miniPlayer(\"{"))
+        assertTrue("checks the page has the function", script.contains("typeof s.miniPlayer==='function'"))
+    }
+
+    private fun command(body: String) = parseMiniPlayerCommand("""{"v":1,"kind":"mini_player_command",$body}""")
+
+    @Test fun everyBarCommandIsRead() {
+        assertEquals(MiniPlayerCommand.PlayPause, command(""""command":"play_pause","delta_ms":null"""))
+        assertEquals(MiniPlayerCommand.SeekBy(-10_000), command(""""command":"seek_by","delta_ms":-10000"""))
+        assertEquals(MiniPlayerCommand.SeekBy(30_000), command(""""command":"seek_by","delta_ms":30000,"future":1"""))
+        assertEquals(MiniPlayerCommand.Next, command(""""command":"next""""))
+        assertEquals(MiniPlayerCommand.Previous, command(""""command":"previous""""))
+        assertEquals(MiniPlayerCommand.Expand, command(""""command":"expand""""))
+        assertEquals(MiniPlayerCommand.Close, command(""""command":"close","delta_ms":null"""))
+    }
+
+    @Test fun anythingElseIsRefused() {
+        assertNull(command(""""command":"seek_by""""))
+        assertNull(command(""""command":"seek_by","delta_ms":0"""))
+        assertNull(command(""""command":"seek_by","delta_ms":"10000""""))
+        assertNull(command(""""command":"seek_by","delta_ms":99999999999"""))
+        assertNull(command(""""command":"eject""""))
+        assertNull(command(""""command":7"""))
+        assertNull(parseMiniPlayerCommand("""{"v":2,"kind":"mini_player_command","command":"next"}"""))
+        assertNull(parseMiniPlayerCommand("""{"v":1,"kind":"title","command":"next"}"""))
+        assertNull(parseMiniPlayerCommand("not json"))
+        assertNull(parseMiniPlayerCommand("[]"))
+        assertNull(parseMiniPlayerCommand("""{"v":1,"kind":"mini_player_command","command":"next","pad":"${"x".repeat(2000)}"}"""))
     }
 }
