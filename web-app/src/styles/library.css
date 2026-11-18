@@ -1,57 +1,158 @@
-/* Movies & Shows, Discover, Search, My List, Requests and Recordings (phase 2: the library screens own this file). */
+/* Movies & Shows, Discover, Search, My List, Requests and Recordings (phase 2: the library screens own this file).
+   Built on the design system (ds.css): these rules only lay the shared pieces out for these screens. */
 
-/* Browse: the grid loads as it scrolls; beside it, a rail of jumps for the current sort (A-Z, years, …). */
-.browse-grid-wrap { display: flex; align-items: flex-start; gap: 0.5rem; }
+/* ---------- shared by the library screens ---------- */
+/* A library screen: its title line, then its blocks a section's gap apart. */
+.lib-page { display: flex; flex-direction: column; gap: var(--gap-lg); }
+.lib-page > .ds-page-head { margin-bottom: 0; }
+/* The title line: the screen's own tools (tabs, Filter) follow its name instead of sitting at the far
+   end, so remote focus moves a short way from the title to the content under it. They drop under the
+   name when the line is too narrow (a phone). */
+.lib-head { justify-content: flex-start; flex-wrap: wrap; column-gap: var(--gap-lg); }
+.lib-head > .ds-section-action { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.lib-head .ds-page-title small { font-variant-numeric: tabular-nums; }
+/* A row of chips (tabs, choices) that wraps; .chip-scroll is the one that scrolls sideways. */
+.lib-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-sm); min-width: 0; }
+/* A line of controls: pickers, a field, a glass button. */
+.lib-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-md); min-width: 0; }
+/* Buttons at the foot of a dialog or a card. */
+.lib-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-md); }
+.lib-intro { max-width: 46rem; font-size: var(--fs-meta); }
+.lib-note-line { max-width: 46rem; }
+.lib-alert { color: var(--t-text); padding: 0.6rem 0.9rem; border-radius: var(--r-md); background: color-mix(in srgb, var(--t-danger) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--t-danger) 40%, transparent); max-width: 46rem; }
+.lib-sections { display: flex; flex-direction: column; gap: var(--gap-section); }
+.lib-grid { padding-inline: 0; }
+.lib-search { width: min(26rem, 100%); }
+.lib-search .field, .search-page-field .field { border-radius: var(--r-pill); }
+/* Paging: two glass chevrons around where the page is. */
+.lib-pager { display: flex; align-items: center; gap: var(--gap-md); padding-block: var(--gap-sm) var(--gap-lg); }
+.lib-pager-text { font-variant-numeric: tabular-nums; }
+
+/* A list of rows (requests, recordings, rules): glass rows, a picture or mark, the words, the row's actions. */
+.lib-list { display: flex; flex-direction: column; gap: var(--gap-sm); max-width: 62rem; }
+.lib-row { display: flex; align-items: center; gap: var(--gap-md) 1rem; padding: 0.75rem 0.9rem; border-radius: var(--r-lg); min-width: 0; }
+.lib-row-copy { flex: 1 1 16rem; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.lib-row-title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lib-row-line { display: flex; align-items: center; gap: var(--gap-sm); min-width: 0; }
+.lib-row-actions { flex: none; display: flex; align-items: center; gap: var(--gap-md); }
+.lib-row-skel { height: 5.25rem; border-radius: var(--r-lg); }
+/* The row turns its edge to the accent while one of its controls has the remote's focus. */
+.lib-row:has(.fx[data-focused='true']) { border-color: color-mix(in srgb, var(--t-accent) 55%, transparent); background-color: var(--glass-tint-hi); }
+@media (max-width: 720px) {
+  /* The words keep the width; a row with more actions than fit beside them puts them under, at its end. */
+  .lib-row { flex-wrap: wrap; padding: 0.7rem 0.75rem; }
+  .lib-row-copy { flex-basis: 10rem; }
+  .lib-row-actions { margin-left: auto; }
+}
+
+/* A one-line notice under the title line (adult titles shown). */
+.lib-note { display: flex; align-items: center; gap: var(--gap-md); padding: 0.4rem 0.5rem 0.4rem 0.9rem; border-radius: var(--r-pill); align-self: flex-start; max-width: 100%; }
+.lib-note > svg { flex: none; color: var(--t-text-muted); }
+.lib-note-action { flex: none; display: flex; }
+
+/* ---------- Movies & Shows (Browse) ---------- */
+/* The title line and Filter on one band (on a phone the Movies/Shows switch, with Filter at the end of its
+   line), the filters in force under it, then the shelves or the grid. */
+.browse-head { display: flex; flex-direction: column; gap: var(--gap-md); padding-bottom: var(--gap-md); }
+.browse-head > .ds-page-head { margin-bottom: 0; }
+.browse-bar { display: flex; align-items: center; gap: var(--gap-md); min-width: 0; }
+.browse-switch { display: flex; gap: var(--gap-sm); }
+.browse-shelves { padding-bottom: 4rem; }
+.browse-body { padding-top: 0; }
+@media (max-width: 720px) {
+  /* The switch stands in for the title, which stays for assistive tech. */
+  .browse-title .ds-page-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .browse-title > .ds-section-action { flex: 1 1 auto; }
+  .browse-bar { flex: 1; }
+  .browse-switch { margin-right: auto; }
+}
+/* The Filter panel: groups a gap apart, each under a quiet label. */
+.lib-filter-group { display: flex; flex-direction: column; gap: var(--gap-sm); }
+.lib-filter-head { font-size: var(--fs-small); font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--t-text-muted); }
+.lib-filter-status { padding-top: var(--gap-xs); }
+
+/* The grid loads as it scrolls; beside it, a glass rail of jumps for the current sort (A-Z, years, …). */
+.browse-grid-wrap { display: flex; align-items: flex-start; gap: var(--gap-sm); }
 .browse-grid-main { flex: 1; min-width: 0; }
 .browse-sentinel { height: 1px; }
-.browse-jumps { position: sticky; top: calc(var(--bar-h) + 0.75rem); flex: none; display: flex; flex-direction: column; align-items: stretch;
-  max-height: calc(100dvh - var(--bar-h) - 1.5rem); overflow-y: auto; scrollbar-width: none; padding: 0.25rem 0; }
+.browse-more { padding-block: var(--gap-md); }
+.browse-more-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-md); }
+.browse-jumps { position: sticky; top: calc(var(--bar-h) + 0.75rem); flex: none; display: flex; flex-direction: column; align-items: stretch; gap: 0.1rem;
+  max-height: calc(100dvh - var(--bar-h) - 1.5rem); overflow-y: auto; scrollbar-width: none; padding: 0.35rem 0.25rem; margin-top: 1rem;
+  border-radius: var(--r-pill); background: var(--glass-tint); border: 1px solid var(--glass-line);
+  backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); }
 .browse-jumps::-webkit-scrollbar { display: none; }
-.browse-jump { min-width: 2.75rem; padding: 0.125rem 0.5rem; border-radius: 999px; text-align: center; font-size: 0.75rem; line-height: 1.35;
-  font-variant-numeric: tabular-nums; color: var(--t-text-muted); cursor: pointer; white-space: nowrap; }
-.browse-jump:hover { color: var(--t-text); }
-.browse-jump[aria-current='true'] { color: var(--t-accent-text); background: var(--t-accent); font-weight: 600; }
+.browse-jump { min-width: 2.4rem; padding: 0.15rem 0.45rem; border-radius: var(--r-pill); text-align: center; font-size: var(--fs-micro); line-height: 1.4;
+  font-weight: 600; font-variant-numeric: tabular-nums; color: var(--t-text-muted); cursor: pointer; white-space: nowrap; }
+@media (hover: hover) { .browse-jump:hover { color: var(--t-text); background: var(--glass-tint-hi); } }
+.browse-jump[aria-current='true'] { color: var(--t-accent-text); background: var(--t-accent); }
+/* A letter is small: its remote focus is the accent ring with a little lift, never the page's big scale. */
+.browse-jump.fx[data-focused='true'] { transform: scale(1.08); outline-color: var(--t-accent); box-shadow: var(--glow-accent); }
 @media (max-width: 720px) {
-  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - 6rem); }
-  .browse-jump { min-width: 2rem; padding-inline: 0.25rem; font-size: 0.6875rem; }
+  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - 6rem); padding-inline: 0.15rem; margin-top: 0.5rem; }
+  .browse-jump { min-width: 2rem; padding-inline: 0.2rem; font-size: 0.6875rem; line-height: 1.55; }
 }
-/* Search results: one page of up to three sections. Broadcasts and channels are short rows in as many
-   columns as fit, so a full section stays a few lines tall above the posters. */
-.search-page { display: flex; flex-direction: column; gap: 1rem; min-height: 20rem; }
+
+/* ---------- Discover ---------- */
+.discover-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-md) var(--gap-lg); }
+/* The year field sits in a line of pickers: it takes their height and shape (the field's own). */
+.discover-year { width: min(10rem, 100%); }
+
+/* ---------- Search ---------- */
+/* One page of up to three sections. Broadcasts and channels are short glass rows in as many columns as
+   fit, so a full section stays a few lines tall above the posters. */
+.search-page { display: flex; flex-direction: column; gap: var(--gap-lg); min-height: 20rem; }
 .search-page-field { max-width: 32rem; }
-.search-sections { display: flex; flex-direction: column; gap: 1.75rem; padding-bottom: 2rem; }
-.search-section { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.search-sections { display: flex; flex-direction: column; gap: var(--gap-section); padding-bottom: 2rem; }
+.search-section { display: flex; flex-direction: column; gap: var(--gap-sm); min-width: 0; }
+.search-section > .ds-section-head { margin-bottom: 0; }
 [data-testid='search-results'][data-stale] { opacity: 0.55; transition: opacity var(--dur-fast) var(--ease); }
-.search-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(22rem, 100%), 1fr)); gap: 0.5rem; }
+.search-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(22rem, 100%), 1fr)); gap: var(--gap-sm); padding-block: 0.25rem; }
 .search-row {
-  display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; min-height: 3.5rem; padding: 0.5rem 0.75rem;
-  border-radius: var(--radius-md); background: var(--t-surface); border: 1px solid var(--surface-edge);
+  display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) auto; align-items: center; gap: var(--gap-md); min-height: 3.6rem; padding: 0.5rem 0.75rem;
+  border-radius: var(--r-lg); background: var(--glass-tint); border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen);
 }
-.search-row[data-focused='true'] { background-color: color-mix(in srgb, var(--t-accent) 12%, var(--t-surface)); }
+@media (hover: hover) { .search-row:hover { background: var(--glass-tint-hi); } }
+.search-row[data-focused='true'] { background-color: color-mix(in srgb, var(--t-accent) 14%, transparent); border-color: color-mix(in srgb, var(--t-accent) 50%, transparent); }
+.search-row-skel { height: 3.6rem; border-radius: var(--r-lg); }
 .search-row-copy { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
-.search-row-title { font-weight: 600; }
-.search-row-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.search-row-title { font-weight: 650; }
+.search-row-line { display: flex; align-items: center; gap: var(--gap-sm); min-width: 0; }
 .search-row-line > :first-child { flex: none; }
 .search-row-when { color: var(--t-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.search-row-number { color: var(--t-text-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
-.search-grid { padding: 0; }
+.search-row-number { min-width: 2rem; text-align: center; padding: 0.15rem 0.5rem; border-radius: var(--r-pill); background: var(--glass-tint);
+  color: var(--t-text-muted); font-size: var(--fs-small); font-weight: 650; font-variant-numeric: tabular-nums; }
+.search-grid { padding: 0.25rem 0 0; }
 .search-tile { position: relative; min-width: 0; }
 .search-kind { position: absolute; left: 0.375rem; top: 0.375rem; z-index: 6; pointer-events: none; }
 .search-more { display: flex; }
-.search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; padding: 0.5rem 0; }
+.search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: var(--gap-lg); padding: 0.5rem 0; }
+.search-idle-lead { display: flex; align-items: center; gap: var(--gap-md); }
+.search-idle-block > .ds-section-head { margin-bottom: var(--gap-sm); }
 
-/* Movies and Shows: the title and Filter on one band (on a phone the Movies/Shows switch, with Filter at
-   the end of its line), then content. */
-.browse-head { display: flex; flex-direction: column; gap: 0.75rem; padding-bottom: 0.75rem; }
-.browse-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
-.browse-switch { display: flex; gap: 0.5rem; }
-@media (max-width: 720px) { .browse-bar { justify-content: space-between; } }
+/* ---------- My List ---------- */
+.fav-channels { display: flex; flex-wrap: wrap; gap: var(--gap-row); padding-block: 0.25rem; }
 
-/* ---------- recordings ---------- */
-.rec-row { display: flex; align-items: center; gap: 0.75rem 1rem; flex-wrap: wrap; }
-/* On a phone the text keeps the row and the actions go under it. */
-.rec-row > :first-child { flex-basis: 16rem; }
-/* A choice with a line of explanation under its name. */
+/* ---------- Requests ---------- */
+.req-poster { position: relative; flex: none; width: 3rem; aspect-ratio: 2 / 3; border-radius: var(--r-sm); overflow: hidden; background: var(--t-surface-alt);
+  box-shadow: 0 0 0 1px var(--glass-line); }
+.req-poster img { width: 100%; height: 100%; object-fit: cover; }
+.req-row .lib-row-copy { gap: 0.45rem; }
+
+/* ---------- Recordings ---------- */
+/* What a row is, at a glance: a glass disc with the record dot (red while it records), play, or a warning. */
+.rec-mark { flex: none; display: grid; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 50%; background: var(--glass-tint);
+  border: 1px solid var(--glass-line); color: var(--t-text-muted); }
+.rec-mark svg { width: 1.1rem; height: 1.1rem; }
+.rec-mark[data-state='recording'], .rec-mark[data-state='scheduled'] { color: var(--t-danger); }
+.rec-mark[data-state='recording'] svg { fill: currentColor; }
+.rec-mark[data-state='done'], .rec-mark[data-state='rule'] { color: var(--t-accent); }
+.rec-mark[data-state='failed'], .rec-mark[data-state='missed'] { color: var(--t-danger); }
+@media (max-width: 720px) { .rec-mark { display: none; } }
+.rec-off { display: flex; flex-direction: column; align-items: flex-start; gap: var(--gap-md); max-width: 46rem; }
+.rec-off > .ds-section-head { margin-bottom: 0; }
+/* A choice with a line of explanation under its name (also the sign-in kinds, and the Record dialog's). */
 .rec-choice { justify-content: flex-start; height: auto; padding-block: 0.5rem; text-align: left; white-space: normal; }
 /* A choice in the Record dialog that needs a word from the viewer. */
 .rec-option { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; border-radius: var(--radius-md); background: color-mix(in srgb, var(--t-text) 5%, transparent); }
