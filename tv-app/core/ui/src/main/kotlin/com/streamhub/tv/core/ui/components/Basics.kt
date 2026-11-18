@@ -1,6 +1,10 @@
 package com.streamhub.tv.core.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -15,6 +19,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.streamhub.tv.core.ui.theme.glass
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -22,23 +39,43 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
-import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import com.streamhub.tv.core.ui.focus.FocusSurface
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
 
 /** Safe-area padding (48/27 dp). Backgrounds go outside this; interactive content inside. */
 val SafeArea = PaddingValues(horizontal = Tokens.Canvas.SafeMarginX, vertical = Tokens.Canvas.SafeMarginY)
 
+/**
+ * A native screen's backdrop: the theme's page colour (the mockup's #090d1a on Midnight) lit by two
+ * soft glows, a warm one top-left in the accent and a cool one bottom-right, so the glass on top has
+ * something to be glass against.
+ */
 @Composable
 fun ScreenBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
-    Box(modifier.fillMaxSize().background(LocalThemeTokens.current.bg), content = content)
+    val t = LocalThemeTokens.current
+    val g = glass
+    val warm = t.accent.copy(alpha = if (t.isLight) 0.08f else 0.13f)
+    val cool = (if (t.isLight) Color(0xFF6E86D8) else Color(0xFF3A4C9C)).copy(alpha = if (t.isLight) 0.10f else 0.22f)
+    Box(
+        modifier.fillMaxSize().background(g.backdrop).drawBehind {
+            drawRect(Brush.radialGradient(listOf(warm, Color.Transparent), center = Offset(size.width * 0.12f, size.height * 0.05f), radius = size.width * 0.55f))
+            drawRect(Brush.radialGradient(listOf(cool, Color.Transparent), center = Offset(size.width * 0.95f, size.height * 1.0f), radius = size.width * 0.6f))
+        },
+        content = content,
+    )
 }
 
 enum class ButtonStyle { Primary, Secondary, Danger }
 
-/** Pill button with token focus treatment. Primary = accent fill. */
+private val ButtonShape = RoundedCornerShape(10.dp)
+
+/**
+ * The text button of the glass look (the player's "Continue watching" / "Back to the show"):
+ * Primary is the accent gradient, Secondary is glass, Danger is red. Focus turns any of them into a
+ * solid light fill with the accent ring round it and lifts it slightly, so where focus is reads from
+ * across the room on every style. Disabled buttons are dimmed and skipped by the D-pad.
+ */
 @Composable
 fun ShButton(
     text: String,
@@ -49,39 +86,51 @@ fun ShButton(
     enabled: Boolean = true,
 ) {
     val t = LocalThemeTokens.current
-    val (bg, fg) = when (style) {
-        ButtonStyle.Primary -> t.accent to t.accentText
-        ButtonStyle.Secondary -> t.surfaceAlt to t.text
-        ButtonStyle.Danger -> t.danger to Color.White
+    val g = glass
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val scale = focusLift(focused, 1.06f)
+    val fill = when {
+        focused -> SolidColor(g.focusFill)
+        style == ButtonStyle.Primary -> Brush.verticalGradient(listOf(g.accentTop, g.accentBottom))
+        style == ButtonStyle.Danger -> SolidColor(t.danger)
+        else -> Brush.verticalGradient(listOf(g.fillTop, g.fillBottom))
     }
-    FocusSurface(
-        onClick = onClick,
-        modifier = modifier.height(44.dp),
-        shape = RoundedCornerShape(Tokens.Radius.Pill),
-        containerColor = if (enabled) bg else bg.copy(alpha = 0.4f),
-        focusedContainerColor = if (style == ButtonStyle.Secondary && enabled) t.text else if (enabled) bg else bg.copy(alpha = 0.4f),
-        enabled = enabled,
-        glow = style == ButtonStyle.Primary,
-    ) { focused ->
-        val color = when {
-            !enabled -> fg.copy(alpha = 0.6f)
-            style == ButtonStyle.Secondary && focused -> t.bg
-            else -> fg
-        }
-        Row(
-            Modifier.align(Alignment.Center).padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (icon != null) Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-            Text(text, color = color, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+    val ink = when {
+        focused && style == ButtonStyle.Danger -> t.danger
+        focused -> g.focusInk
+        style == ButtonStyle.Primary -> t.accentText
+        style == ButtonStyle.Danger -> Color.White
+        else -> g.text
+    }
+    Box(
+        modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .alpha(if (enabled) 1f else 0.45f)
+            .height(46.dp)
+            .then(if (focused) Modifier.shadow(14.dp, ButtonShape, ambientColor = t.accent, spotColor = t.accent) else Modifier)
+            .clip(ButtonShape)
+            .background(fill)
+            .border(
+                if (focused) 3.dp else 1.dp,
+                when { focused -> t.accent; style == ButtonStyle.Secondary -> g.line; else -> Color.White.copy(alpha = 0.22f) },
+                ButtonShape,
+            )
+            .clickable(interactionSource = source, indication = null, enabled = enabled, onClick = onClick)
+            .padding(horizontal = 22.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (icon != null) Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+            Text(text, color = ink, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 /**
- * Selectable chip (language chips, groups, filters). Selected = filled + check-mark semantics, not colour only.
- * A disabled chip is shown dimmed and skipped by focus: it states that a choice exists but cannot be made.
+ * Selectable chip (sleep timer, filters). Selected = accent fill and a tick, not colour only; focus
+ * is the same light fill and accent ring as [ShButton]. A disabled chip is shown dimmed and skipped
+ * by focus: it states that a choice exists but cannot be made.
  */
 @Composable
 fun ShChip(
@@ -93,20 +142,33 @@ fun ShChip(
     enabled: Boolean = true,
 ) {
     val t = LocalThemeTokens.current
-    val container = if (selected) t.accent else t.surfaceAlt
-    val content = (if (selected) t.accentText else t.text).let { if (enabled) it else it.copy(alpha = 0.6f) }
-    FocusSurface(
-        onClick = onClick,
-        modifier = modifier.height(36.dp),
-        shape = RoundedCornerShape(Tokens.Radius.Pill),
-        containerColor = if (enabled) container else container.copy(alpha = 0.4f),
-        glow = false,
-        enabled = enabled,
+    val g = glass
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val scale = focusLift(focused, 1.06f)
+    val shape = RoundedCornerShape(Tokens.Radius.Pill)
+    val fill = when {
+        focused -> SolidColor(g.focusFill)
+        selected -> Brush.verticalGradient(listOf(g.accentTop, g.accentBottom))
+        else -> Brush.verticalGradient(listOf(g.fillTop, g.fillBottom))
+    }
+    val ink = when { focused -> g.focusInk; selected -> t.accentText; else -> g.text }
+    Box(
+        modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .alpha(if (enabled) 1f else 0.45f)
+            .height(40.dp)
+            .clip(shape)
+            .background(fill)
+            .border(if (focused) 3.dp else 1.dp, if (focused) t.accent else if (selected) Color.Transparent else g.line, shape)
+            .clickable(interactionSource = source, indication = null, enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Row(Modifier.align(Alignment.Center).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (selected) Text("✓ ", color = content, style = MaterialTheme.typography.labelMedium)
-            if (leading != null) Icon(leading, null, tint = content, modifier = Modifier.size(16.dp).padding(end = 4.dp))
-            Text(text, color = content, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (selected) Icon(GlassIcons.Check, null, tint = ink, modifier = Modifier.size(16.dp))
+            if (leading != null) Icon(leading, null, tint = ink, modifier = Modifier.size(16.dp))
+            Text(text, color = ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
     }
 }
@@ -121,27 +183,19 @@ fun ProgressLine(fraction: Float, modifier: Modifier = Modifier, height: android
 
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        modifier = modifier,
-        style = MaterialTheme.typography.titleMedium,
-        color = LocalThemeTokens.current.text,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+    Text(text, modifier = modifier, color = glass.text, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
 fun CenterMessage(title: String, body: String? = null, action: (@Composable () -> Unit)? = null) {
-    val t = LocalThemeTokens.current
     Column(
         Modifier.fillMaxSize().padding(SafeArea),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(title, style = MaterialTheme.typography.headlineSmall, color = t.text)
-        if (body != null) Text(body, style = MaterialTheme.typography.bodyLarge, color = t.textMuted, modifier = Modifier.padding(top = 8.dp).width(560.dp))
-        if (action != null) Box(Modifier.padding(top = 24.dp)) { action() }
+        DialogTitle(title)
+        if (body != null) ScreenLead(body, Modifier.padding(top = 10.dp).width(600.dp))
+        if (action != null) Box(Modifier.padding(top = 28.dp)) { action() }
     }
 }
 

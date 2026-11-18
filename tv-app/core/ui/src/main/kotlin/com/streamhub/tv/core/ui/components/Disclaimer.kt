@@ -1,9 +1,9 @@
 package com.streamhub.tv.core.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,10 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.MaterialTheme
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
-import com.streamhub.tv.core.ui.theme.LocalThemeTokens
-import com.streamhub.tv.core.ui.theme.Tokens
+import com.streamhub.tv.core.ui.theme.glass
 import kotlinx.coroutines.delay
 
 /** Built-in copy of docs/LEGAL.md v1.0 — shown if the server is unreachable or before pairing. */
@@ -72,27 +71,24 @@ fun DisclaimerGate(
     acceptLabel: String = "I accept",
     exitLabel: String = "Exit",
 ) {
-    val t = LocalThemeTokens.current
     var remaining by remember { mutableIntStateOf(3) }
     val acceptFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         runCatching { acceptFocus.requestFocus() }
         while (remaining > 0) { delay(1000); remaining-- }
     }
-    Box(Modifier.fillMaxSize().background(t.bg).padding(SafeArea), contentAlignment = Alignment.Center) {
-        Column(Modifier.width(760.dp)) {
-            Text("Legal notice & disclaimer", style = MaterialTheme.typography.headlineMedium, color = t.text)
-            Text("Version $version", style = MaterialTheme.typography.labelMedium, color = t.textMuted, modifier = Modifier.padding(bottom = 16.dp))
+    ScreenBackground {
+        Column(Modifier.align(Alignment.Center).padding(SafeArea).width(800.dp)) {
+            Wordmark(Modifier.padding(bottom = 14.dp), fontSize = 20.sp)
+            ScreenTitle("Legal notice & disclaimer")
+            GroupLabel("Version $version", Modifier.padding(top = 6.dp, bottom = 16.dp))
             val scroll = rememberScrollState()
-            Box(
-                Modifier.fillMaxWidth().heightIn(max = 300.dp)
-                    .background(t.surface, RoundedCornerShape(Tokens.Radius.Md))
-                    .verticalScroll(scroll)
-                    .padding(20.dp),
-            ) {
-                Text(text, style = MaterialTheme.typography.bodyLarge, color = t.text)
+            GlassPanel(Modifier.fillMaxWidth().heightIn(max = 262.dp), shape = RoundedCornerShape(16.dp), padding = PaddingValues(0.dp)) {
+                Box(Modifier.verticalScroll(scroll).padding(horizontal = 24.dp, vertical = 20.dp)) {
+                    Text(text, color = glass.text, fontSize = 16.sp, lineHeight = 24.sp)
+                }
             }
-            Row(Modifier.padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.padding(top = 22.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 // Accept keeps focus while disabled (focusable but inert) so it is the default focus.
                 ShButton(
                     if (remaining > 0) "$acceptLabel ($remaining)" else acceptLabel,
