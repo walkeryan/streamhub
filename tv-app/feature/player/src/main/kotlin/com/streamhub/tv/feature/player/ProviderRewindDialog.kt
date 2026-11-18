@@ -1,5 +1,8 @@
 package com.streamhub.tv.feature.player
 
+import com.streamhub.tv.core.ui.components.GlassPanel
+import com.streamhub.tv.core.ui.components.DialogTitle
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,8 +30,8 @@ internal fun ProviderRewindDialog(vm: PlayerViewModel, state: PlayerScreenState)
     val choices = remember(capability) { capability?.let(::archiveChoices).orEmpty() }
     val format = remember { DateTimeFormatter.ofPattern("HH:mm 'UTC'").withZone(ZoneOffset.UTC) }
     Dialog(onDismissRequest = vm::hideOverlay) {
-        Column(Modifier.width(600.dp).heightIn(max=560.dp).background(t.surface, RoundedCornerShape(20.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Provider archive", style=MaterialTheme.typography.titleLarge, color=t.text)
+        GlassPanel(Modifier.width(600.dp).heightIn(max = 486.dp), padding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            DialogTitle("Provider archive", maxLines = 1)
             Text("Advertised, not verified. No local recording buffer. Provider media may be unavailable.", color=t.textMuted)
             ShButton("Cancel · keep current stream", vm::hideOverlay, Modifier.focusRequester(close))
             ShButton("Go Live", vm::goLive, enabled=!state.rewindLoading)

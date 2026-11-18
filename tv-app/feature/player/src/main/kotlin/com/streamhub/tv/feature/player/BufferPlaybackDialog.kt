@@ -1,5 +1,8 @@
 package com.streamhub.tv.feature.player
 
+import com.streamhub.tv.core.ui.components.GlassPanel
+import com.streamhub.tv.core.ui.components.DialogTitle
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,8 +31,8 @@ internal fun BufferPlaybackDialog(vm: PlayerViewModel, state: PlayerScreenState,
     val choices=remember(window) { window?.let(::retainedBufferChoices).orEmpty() }
     val fmt=remember { DateTimeFormatter.ofPattern("HH:mm:ss 'UTC'").withZone(ZoneOffset.UTC) }
     Dialog(onDismissRequest=vm::hideOverlay) {
-        Column(Modifier.width(640.dp).heightIn(max=560.dp).background(t.surface,RoundedCornerShape(20.dp)).padding(24.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            Text("Buffered rewind",color=t.text,style=MaterialTheme.typography.titleLarge)
+        GlassPanel(Modifier.width(640.dp).heightIn(max = 486.dp), padding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            DialogTitle("Buffered rewind", maxLines = 1)
             Text(if(window==null) "No retained window is available." else "${window.bufferedSeconds.toInt()} seconds retained. History grows while watched; 60 minutes is a target, not available at startup.",color=t.textMuted)
             window?.let { Text("${it.start ?: "Waiting for first segment"} to ${it.end ?: "—"}",color=t.textMuted) }
             Text("Pause is limited to one hour. Leaving playback releases this viewer's buffer lease.",color=t.textMuted)
