@@ -39,8 +39,9 @@ export function PlayerHost() {
     setTrack(current)
   }
   const shell = inShell()
-  // On a /play address the player is full screen: whatever it was minimised as is over.
-  useEffect(() => { if (onPlay && mini && !shell) close() }, [onPlay, mini, close, shell])
+  // Arriving at a /play address, the player is full screen: whatever was minimised is over (expanded, or replaced).
+  // Only on arrival: minimising sets `mini` while the address is still /play, just before it goes back.
+  useEffect(() => { if (onPlay && !shell && useDock.getState().mini) close() }, [loc.key]) // eslint-disable-line react-hooks/exhaustive-deps
   useMiniPlayerSpace(!shell && !onPlay && !!mini)
   if (shell) return <ShellMiniPlayer />
   if (match) {
