@@ -450,6 +450,8 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   // Still watching: autoplays in a row with nobody pressing, clicking or touching anything.
   const streak = useRef(0)
   const [still, setStill] = useState(false)
+  // The prompt is a dialog: its buttons have the keys, not the player's shortcuts.
+  if (still) blockingRef.current = true
   useEffect(() => {
     const input = () => { streak.current = streakAfterInput() }
     window.addEventListener('keydown', input, true)

@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import { FocusGroup, Focusable } from '../nav/Focusable'
+import { setFocus } from '../nav/spatial'
 import { SafeImg } from '../components/SafeImg'
 import { PlayerIcon } from './PlayerIcon'
 import { COUNTDOWN_MS, countdownSeconds } from './upNext'
@@ -53,6 +55,8 @@ export function UpNextCard(p: {
 export function StillWatching({ title, image, onContinue, onLeave, leaveLabel }: {
   title: string; image: string | null | undefined; onContinue: () => void; onLeave: () => void; leaveLabel: string
 }) {
+  // A remote lands on Continue watching.
+  useEffect(() => { const t = window.setTimeout(() => void setFocus('px:still:go'), 30); return () => window.clearTimeout(t) }, [])
   return (
     <div className="pstill" role="dialog" aria-modal="true" aria-labelledby="pstill-h" data-testid="still-watching">
       {image && <SafeImg className="pstill-art" src={image} alt="" fallback={null} />}
