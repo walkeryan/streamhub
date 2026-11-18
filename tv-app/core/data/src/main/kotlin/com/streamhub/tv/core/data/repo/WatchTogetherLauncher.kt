@@ -46,23 +46,36 @@ data class WatchTogether(
 
 /**
  * "Watch together" wherever it is offered: a film's or an episode's page, a series (the next
- * episode) and a live channel. Each view model owns one, on its own scope. [open] creates the
- * room, [start] joins it and opens the player, [cancel] closes a room nobody was let into.
+ * episode), a live channel, and the player's own menu for whatever is playing. Each view model owns
+ * one, on its own scope. [open] creates the room, [start] joins it, [cancel] closes a room nobody
+ * was let into.
+ *
+ * By default Start takes a seat and opens the player on it. A player that is already open passes
+ * [join] instead: it moves its own playback into the room, and a failure it throws is shown in the
+ * dialog like a refused join, with the room and its code still on screen.
  */
-class WatchTogetherLauncher(private val rooms: RoomDirectory, private val scope: CoroutineScope) {
+class WatchTogetherLauncher(
+    private val rooms: RoomDirectory,
+    private val scope: CoroutineScope,
+    private val join: (suspend (room: Room, allowUnverifiedAudio: Boolean) -> Unit)? = null,
+) {
     private val _state = MutableStateFlow<WatchTogether?>(null)
     val state: StateFlow<WatchTogether?> = _state.asStateFlow()
-    private var titleId: String? = null
+    /** What the room is created on, kept for "Try again". */
+    private var target: Target? = null
+    private data class Target(val titleId: String, val variantId: String?, val audioTrack: Int?)
 
-    fun open(titleId: String, title: String, subject: RoomSubject) {
+    /** [variantId] and [audioTrack]: the source and audio track being played, when the room should open on them. */
+    fun open(titleId: String, title: String, subject: RoomSubject, variantId: String? = null, audioTrack: Int? = null) {
         val phase = _state.value?.phase
         if (phase is WatchTogether.Phase.Creating || phase is WatchTogether.Phase.Ready) return
-        this.titleId = titleId
+        val wanted = Target(titleId, variantId, audioTrack)
+        target = wanted
         val opening = WatchTogether(title, subject, WatchTogether.Phase.Creating)
         _state.value = opening
         scope.launch {
             val next = try {
-                val room = rooms.create(titleId)
+                val room = rooms.create(wanted.titleId, wanted.variantId, wanted.audioTrack)
                 WatchTogether.Phase.Ready(room, rooms.shareUrl(room))
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { WatchTogether.Phase.Failed(ApiErrors.describe(e)) }
@@ -75,9 +88,9 @@ class WatchTogetherLauncher(private val rooms: RoomDirectory, private val scope:
     /** "Try again" after the room could not be created. */
     fun retry() {
         val failed = _state.value?.takeIf { it.phase is WatchTogether.Phase.Failed } ?: return
-        val id = titleId ?: return
+        val wanted = target ?: return
         _state.value = null
-        open(id, failed.title, failed.subject)
+        open(wanted.titleId, failed.title, failed.subject, wanted.variantId, wanted.audioTrack)
     }
 
     fun start() {
@@ -87,9 +100,15 @@ class WatchTogetherLauncher(private val rooms: RoomDirectory, private val scope:
         _state.value = current.copy(phase = ready.copy(starting = true, error = null))
         scope.launch {
             try {
-                val key = rooms.join(ready.room.code, allowUnverifiedAudio = ready.needsAudioConsent)
-                _state.value = null
-                rooms.openPlayer(key)
+                val custom = join
+                if (custom != null) {
+                    custom(ready.room, ready.needsAudioConsent)
+                    _state.value = null
+                } else {
+                    val key = rooms.join(ready.room.code, allowUnverifiedAudio = ready.needsAudioConsent)
+                    _state.value = null
+                    rooms.openPlayer(key)
+                }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 val consent = (e as? ApiException)?.error?.code == "audio_selection_required" && !ready.needsAudioConsent

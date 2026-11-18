@@ -23,8 +23,8 @@ class WatchTogetherLauncherTest {
         var failJoin: Exception? = null
         /** When set, create() waits on it: the dialog can be cancelled while the room is being made. */
         var gate: CompletableDeferred<Unit>? = null
-        override suspend fun create(titleId: String): Room {
-            log += "create:$titleId"
+        override suspend fun create(titleId: String, variantId: String?, audioTrack: Int?): Room {
+            log += "create:$titleId" + (if (variantId != null || audioTrack != null) ":$variantId:$audioTrack" else "")
             gate?.await()
             failCreate?.let { throw it }
             return Room(code = "ABC234", id = titleId, live = titleId.startsWith("ch:"), isHost = true)
@@ -40,7 +40,8 @@ class WatchTogetherLauncherTest {
         override fun openPlayer(key: String) { log += "open:$key" }
     }
 
-    private fun TestScope.launcher(fake: Fake) = WatchTogetherLauncher(fake, TestScope(UnconfinedTestDispatcher(testScheduler)))
+    private fun TestScope.launcher(fake: Fake, join: (suspend (Room, Boolean) -> Unit)? = null) =
+        WatchTogetherLauncher(fake, TestScope(UnconfinedTestDispatcher(testScheduler)), join)
     private fun ready(l: WatchTogetherLauncher) = l.state.value?.phase as WatchTogether.Phase.Ready
 
     @Test fun aFilmsRoomIsCreatedShownThenJoinedOnStart() = runTest {
@@ -142,5 +143,47 @@ class WatchTogetherLauncherTest {
         l.open("tmdb:movie:604", "Another Film", RoomSubject.Title)
         assertEquals(listOf("create:tmdb:movie:603"), fake.log)
         assertEquals("The Long Film", l.state.value?.title)
+    }
+
+    @Test fun theRoomOpensOnTheSourceAndAudioTrackBeingPlayedAndKeepsThemOnTryAgain() = runTest {
+        val fake = Fake().apply { failCreate = IOException("down") }
+        val l = launcher(fake)
+        l.open("lib:s1:42", "The Long Film", RoomSubject.Title, variantId = "lib:s1:42", audioTrack = 2)
+        fake.failCreate = null
+        l.retry()
+        assertEquals("ABC234", ready(l).room.code)
+        assertEquals(listOf("create:lib:s1:42:lib:s1:42:2", "create:lib:s1:42:lib:s1:42:2"), fake.log)
+    }
+
+    @Test fun anOpenPlayerMovesItselfIntoTheRoomInsteadOfOpeningAnother() = runTest {
+        val fake = Fake()
+        val moved = mutableListOf<String>()
+        val l = launcher(fake) { room, consent -> moved += "${room.code}:$consent:${room.isHost}" }
+        l.open("ch:s1:7", "Channel Seven", RoomSubject.Channel)
+        l.start()
+        assertNull(l.state.value)
+        assertEquals(listOf("ABC234:false:true"), moved)
+        // No second seat is taken and no second player opened: the player took the seat itself.
+        assertEquals(listOf("create:ch:s1:7"), fake.log)
+    }
+
+    @Test fun aPlayerThatCouldNotMoveIntoTheRoomKeepsTheCodeOnScreenAndCanAskForAudioConsent() = runTest {
+        val fake = Fake()
+        var answer: Exception? = ApiException(409, ApiError("audio_selection_required", "x"), "x")
+        val tries = mutableListOf<Boolean>()
+        val l = launcher(fake) { _, consent -> tries += consent; answer?.let { throw it } }
+        l.open("lib:s1:42", "The Long Film", RoomSubject.Title)
+        l.start()
+        assertTrue(ready(l).needsAudioConsent)
+        answer = ApiException(409, ApiError("user_stream_limit", "x"), "x")
+        l.start()
+        assertEquals("Already watching", ready(l).error?.title)
+        assertEquals("ABC234", ready(l).room.code)
+        assertFalse(ready(l).starting)
+        answer = null
+        l.start()
+        assertNull(l.state.value)
+        assertEquals(listOf(false, true, true), tries)
+        assertFalse(fake.log.any { it.startsWith("close") || it.startsWith("join") })
     }
 }

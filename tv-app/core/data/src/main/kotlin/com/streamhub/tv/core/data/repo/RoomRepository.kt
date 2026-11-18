@@ -37,8 +37,12 @@ class RoomSeat internal constructor(
  * room"); an interface so their logic is tested against a fake.
  */
 interface RoomDirectory {
-    /** A room for a title, a series (it opens on the next episode the server resolves) or a channel (a live room). */
-    suspend fun create(titleId: String): Room
+    /**
+     * A room for a title, a series (it opens on the next episode the server resolves) or a channel (a
+     * live room). [variantId] and [audioTrack] open it on the source and audio track the creator is
+     * playing, when known; left out, the server chooses as it would for a press of Play.
+     */
+    suspend fun create(titleId: String, variantId: String? = null, audioTrack: Int? = null): Room
     suspend fun lookup(code: String): Room
     /** Host only: ends the room for everyone. */
     suspend fun close(code: String)
@@ -75,7 +79,7 @@ class RoomRepository internal constructor(
      */
     @Volatile private var lastSeat: Pair<String, String>? = null
 
-    override suspend fun create(titleId: String): Room = api.createRoom(titleId)
+    override suspend fun create(titleId: String, variantId: String?, audioTrack: Int?): Room = api.createRoom(titleId, variantId, audioTrack)
     override suspend fun lookup(code: String): Room = api.room(code)
     override suspend fun close(code: String) = api.deleteRoom(code)
     override suspend fun shareUrl(room: Room): String? = session.current().serverUrl?.let { roomShareUrl(it, room.code, room.joinPath) }
@@ -98,6 +102,14 @@ class RoomRepository internal constructor(
         seats[key] = seat
         return key
     }
+
+    /**
+     * Takes a seat for a player that is already open on something else (its "Watch together" made the
+     * room) and parks it under that player's own [key], so the player plays on in the room without a
+     * second player being opened. Released with the player, as every seat is.
+     */
+    suspend fun joinInto(key: String, code: String, allowUnverifiedAudio: Boolean): RoomSeat =
+        seatIn(code, allowUnverifiedAudio).also { seats[key] = it }
 
     /**
      * Joins again for a player that is already open, with the member token of the seat it holds: the
