@@ -7,7 +7,8 @@ import { useCreateRecordingRule, useDeleteRecording, useRecordings, useScheduleR
 import { useCan } from '../api/me'
 import type { components } from '../api/schema'
 import type { Recording } from '../api/types'
-import { Button, Chip, ErrorState, LogoBlock, Modal, Skeleton } from '../components/ui'
+import { Button, Chip, ErrorState, GlassIconButton, HRow, Icon, Modal, PageHeader, SectionHeader, SkeletonRow } from '../ds'
+import { LogoBlock } from '../components/ui'
 import { LanguageFilter } from '../components/LanguageFilter'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
@@ -182,20 +183,24 @@ function SportsScreen() {
     else if (event.feeds.length > 1) setPicker(event)
   }
 
-  if (!saved.ready) return <div className="page-pad sports" data-testid="sports"><h1 className="display">Sports</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="sports:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
+  if (!saved.ready) return <div className="page-pad sports" data-testid="sports">
+    <PageHeader title="Sports" className="sports-head" />
+    {saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="sports:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></>
+      : <><p role="status" className="label">Loading saved filters…</p><div className="sports-skel"><SkeletonRow layout="landscape" count={4} /></div></>}
+  </div>
   const counts = data?.sports ?? []
   const total = counts.reduce((sum, entry) => sum + entry.count, 0)
   const languageLabel = language === 'mine' ? null : language === 'all' ? 'All languages' : LANG_NAMES[language] ?? language
   return <div className="page-pad sports" data-testid="sports">
-    <div className="sports-head">
-      <h1 className="display">Sports</h1>
+    <PageHeader title="Sports" className="sports-head">
       <div className="sports-tools">
         {(search || languageLabel) && <p className="label truncate" data-testid="sports-filter-summary">{[search && `“${search}”`, languageLabel].filter(Boolean).join(' · ')}</p>}
-        <Button focusKey="sports:filters" ghost icon="search" onEnter={() => setFiltersOpen(true)} testId="sports-filters">Search and language</Button>
+        <GlassIconButton focusKey="sports:filters" icon="search" label="Search and language" className={search || languageLabel ? 'sports-changed' : undefined}
+          expanded={filtersOpen} popup="dialog" onEnter={() => setFiltersOpen(true)} testId="sports-filters" />
       </div>
-    </div>
+    </PageHeader>
     <div className="sports-bar">
-      <FocusGroup focusKey="sports:sports" className="sports-chips" role="group" label="Sport">
+      <FocusGroup focusKey="sports:sports" className="chip-scroll sports-chips" role="group" label="Sport">
         <Chip focusKey="sports:sport:all" pressed={!sport} onEnter={() => setSport('')} testId="sports-chip">All{data ? ` · ${total}` : ''}</Chip>
         {counts.map((entry) => <Chip key={entry.name} focusKey={`sports:sport:${entry.name}`} pressed={sport === entry.name} onEnter={() => setSport(entry.name)} testId="sports-chip">{entry.name} · {entry.count}</Chip>)}
         {sport && data && !counts.some((entry) => entry.name === sport) && <Chip focusKey="sports:sport:saved" pressed onEnter={() => setSport('')} testId="sports-chip">{sport} · 0</Chip>}
@@ -203,19 +208,19 @@ function SportsScreen() {
       <FocusGroup focusKey="sports:days" className="sports-days" role="group" label="Day">
         <Chip focusKey="sports:day:today" pressed={date === today} onEnter={() => setDate(today)}>Today</Chip>
         <Chip focusKey="sports:day:tomorrow" pressed={date === moveDay(today, 1)} onEnter={() => setDate(moveDay(today, 1))}>Tomorrow</Chip>
-        <Button focusKey="sports:day:prev" iconOnly icon="back" label="Previous day" disabled={date <= today} onEnter={() => setDate(moveDay(date, -1))} />
-        <Button focusKey="sports:day:next" iconOnly icon="chevR" label="Next day" onEnter={() => setDate(moveDay(date, 1))} />
+        <GlassIconButton focusKey="sports:day:prev" size="sm" icon="chevL" label="Previous day" disabled={date <= today} onEnter={() => setDate(moveDay(date, -1))} />
+        <GlassIconButton focusKey="sports:day:next" size="sm" icon="chevR" label="Next day" onEnter={() => setDate(moveDay(date, 1))} />
         {date > moveDay(today, 1) && <span className="label" data-testid="sports-date">{dayLabel(date, today)}</span>}
       </FocusGroup>
     </div>
     {saved.error && <p role="alert">{saved.error}</p>}
-    {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : q.isPending ? <Skeleton style={{ height: '16rem' }} /> : data && <>
+    {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : q.isPending ? <div className="sports-skel"><SkeletonRow layout="landscape" count={4} /><SkeletonRow layout="landscape" count={4} /></div> : data && <>
       {rowsView ? <>
         {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
-          <h2 className="heading">Live now</h2>
-          {liveTiles.length ? <FocusGroup focusKey="sports:live" className="row-scroll sports-tiles" label="Live games">
+          <SectionHeader title="Live now" />
+          {liveTiles.length ? <HRow focusKey="sports:live" className="sports-tiles" label="Live games">
             {liveTiles.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} />)}
-          </FocusGroup> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
+          </HRow> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
         </section>}
         {rowSports.map((name, i) => {
           const row = rows[i]?.data
@@ -223,14 +228,15 @@ function SportsScreen() {
           if (!games.length) return null
           const label = sportLabel(name)
           return <section key={name} className="sports-section" aria-label={label} data-testid="sports-row" data-sport={name}>
-            <h2 className="heading">{label}</h2>
-            <FocusGroup focusKey={`sports:row:${name}`} className="row-scroll sports-tiles" label={label}>
+            <SectionHeader title={label} />
+            <HRow focusKey={`sports:row:${name}`} className="sports-tiles" label={label}>
               {games.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} row={name} />)}
-              {(row?.total ?? 0) > games.length && <Focusable focusKey={`sports:more:${name}`} className="sports-tile sports-more fx-flat" data-testid="sports-see-all" label={`See all ${label}`} onEnter={() => setSport(name)}>
+              {(row?.total ?? 0) > games.length && <Focusable focusKey={`sports:more:${name}`} className="sports-tile sports-more tile-more fx-flat" data-testid="sports-see-all" label={`See all ${label}`} onEnter={() => setSport(name)}>
+                <Icon name="chevR" />
                 <span className="sports-more-text">See all</span>
                 <span className="label">{row!.total} {label.toLowerCase()} listings</span>
               </Focusable>}
-            </FocusGroup>
+            </HRow>
           </section>
         })}
         {!days.length && <section className="sports-section" aria-label="Coming up" data-testid="sports-upcoming">
@@ -238,10 +244,10 @@ function SportsScreen() {
         </section>}
       </> : <>
       {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
-        <h2 className="heading">Live now</h2>
+        <SectionHeader title="Live now" />
         {live.length ? <FocusGroup focusKey="sports:live" className={cn('sports-grid', live.some((event) => event.matchup) && 'sports-grid-wide')} label="Live games">
           {live.map((event) => {
-            const badge = <span className={event.live_evidence ? 'badge sports-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
+            const badge = <span className={event.live_evidence ? 'badge ds-pill-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
             const where = event.feeds.length === 1 ? `on ${event.feeds[0]!.channel_name}` : `${event.feeds.length} channels`
             const state = event.replay ? 'replay' : event.live_evidence ? 'live' : 'on now'
             // A football game with both sides known is a matchup card; the remote moves over it like any other card.
@@ -265,7 +271,7 @@ function SportsScreen() {
         </FocusGroup> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
       </section>}
       <section className="sports-section" aria-label="Coming up" data-testid="sports-upcoming">
-        <h2 className="heading">Coming up</h2>
+        <SectionHeader title="Coming up" />
         {!days.length && <p className="sports-quiet" role="status">{date === today ? 'Nothing more is listed for today or tomorrow.' : `No games are listed for ${dayLabel(date, today)}.`}{sport ? ' Try All sports.' : ''}</p>}
         {days.map((day) => <FocusGroup key={day} focusKey={`sports:day-list:${day}`} className="sports-list" role="group" label={dayLabel(day, today)}>
           <h3 className="label sports-day-head">{dayLabel(day, today)}</h3>
@@ -282,16 +288,16 @@ function SportsScreen() {
         </FocusGroup>)}
       </section>
       </>}
-      {data.total > PAGE && <FocusGroup focusKey="sports:pages" className="flex gap-3 items-center flex-wrap">
-        <Button focusKey="sports:prev" disabled={!page} onEnter={() => setPage(page - 1)}>Previous</Button>
+      {data.total > PAGE && <FocusGroup focusKey="sports:pages" className="sports-pages">
+        <GlassIconButton focusKey="sports:prev" size="sm" icon="chevL" label="Previous" tip="Previous page" disabled={!page} onEnter={() => setPage(page - 1)} />
         <span className="label">Page {page + 1} of {Math.ceil(data.total / PAGE)}</span>
-        <Button focusKey="sports:next" disabled={(page + 1) * PAGE >= data.total} onEnter={() => setPage(page + 1)}>Next</Button>
+        <GlassIconButton focusKey="sports:next" size="sm" icon="chevR" label="Next" tip="Next page" disabled={(page + 1) * PAGE >= data.total} onEnter={() => setPage(page + 1)} />
       </FocusGroup>}
       {data.truncated && <p className="label" role="status">This is a partial list. Pick a sport or search to narrow it.</p>}
     </>}
     {(gameChannels.length > 0 || !!networks.data?.channels.length) && <section className="sports-section" aria-label="Sports channels" data-testid="sports-channels">
-      <h2 className="heading">Sports channels</h2>
-      <FocusGroup focusKey="sports:channels" className="row-scroll sports-tiles sports-chan-row" label="Sports channels">
+      <SectionHeader title="Sports channels" />
+      <HRow focusKey="sports:channels" className="sports-tiles sports-chan-row" label="Sports channels">
         {gameChannels.map((event) => <Focusable key={event.id} focusKey={cardKey(event)} className="sports-chan fx-flat" data-testid="sports-channel" data={{ kind: 'game' }}
           label={`Watch ${event.title}, ${channelLine(event.feeds)}`} onEnter={() => open(event)}>
           <LogoBlock name={event.league ?? event.title} />
@@ -310,7 +316,7 @@ function SportsScreen() {
           </span>
           {channel.quality && <span className="badge">{channel.quality}</span>}
         </Focusable>)}
-      </FocusGroup>
+      </HRow>
       {(networks.data?.total ?? 0) > NETWORKS && <p className="label">Showing {NETWORKS} of {networks.data!.total.toLocaleString()} sports channels. Search to find another, or browse them in Live TV.</p>}
     </section>}
     <SportsLibrary language={languages} sport={sport} term={term} />
@@ -326,7 +332,7 @@ function SportsScreen() {
     </Modal>
     <Modal open={!!picker} onClose={() => setPicker(null)} title={picker?.title ?? ''} firstFocusKey={picker ? `sports:feed:${picker.feeds[0]?.channel_id}` : 'sports:feeds:close'} variant="sheet" testId="sports-picker">
       {picker && <>
-        <p className="muted">{picker.kind === 'channel' ? picker.sport : `${picker.sport} · Started ${fmtTime(picker.start)}`} · Choose a channel</p>
+        <p className="ds-meta">{picker.kind === 'channel' ? picker.sport : `${picker.sport} · Started ${fmtTime(picker.start)}`} · Choose a channel</p>
         <FocusGroup focusKey="sports:feeds" className="sports-list" role="group" label="Channels">
           {picker.feeds.map((feed) => <Focusable key={feed.channel_id} focusKey={`sports:feed:${feed.channel_id}`} className="sports-feed fx-flat" data-testid="sports-feed"
             label={`Watch on ${feed.channel_name}`} onEnter={() => void watch(feed.channel_id, picker)}>
@@ -353,7 +359,7 @@ function GameTile({ event, now, today, recordings, onOpen, row }: { event: Event
   const quality = event.feeds.find((feed) => feed.quality)?.quality
   const badge: ReactNode = <span className="sports-tile-badges">
     {on
-      ? <span className={event.live_evidence ? 'badge sports-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
+      ? <span className={event.live_evidence ? 'badge ds-pill-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
       : <span className="badge sports-when">{day}</span>}
     {quality && <span className="badge sports-when">{quality}</span>}
     <RecordingBadge state={recordingFor(recordings, event)?.state} short />
@@ -413,7 +419,7 @@ function EventSheet({ event, today, now, recordable, recordings, onClose, onWatc
       <MatchupCard event={event} matchup={event.matchup} badge={<span className="badge">{started ? 'On now' : dayLabel(dayOf(event.start), today)}</span>} channel={channelLine(event.feeds)} />
     </span>}
     <p className="sports-sheet-when">{started ? `Started ${fmtTime(event.start)}` : `${dayLabel(dayOf(event.start), today)} · ${fmtTime(event.start)}`}<RecordingBadge state={existing?.state} /></p>
-    <p className="muted truncate">{event.sport} · {channelLine(event.feeds)}</p>
+    <p className="ds-meta sports-sheet-meta"><span className="truncate">{event.sport} · {channelLine(event.feeds)}</span></p>
     {error && <p role="alert" data-testid="sports-sheet-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
     <FocusGroup focusKey="sports:sheet" className="flex flex-col gap-2">
       {started && <Button focusKey="sports:sheet:watch" className="fx-flat" primary icon="play" onEnter={onWatch}>Watch now</Button>}
@@ -448,22 +454,22 @@ function SportsLibrary({ language, sport, term }: { language: string; sport: str
   if (data && page > Math.max(0, Math.ceil(data.total / 40) - 1)) setPage(Math.max(0, Math.ceil(data.total / 40) - 1))
   if (!data?.items.length) return null
   return <section className="sports-section" data-testid="sports-recordings" aria-label="From your library">
-    <h2 className="heading">From your library</h2>
-    <FocusGroup focusKey="sports:recordings" className="row-scroll sports-tiles sports-chan-row" label="Sports videos in your library">
+    <SectionHeader title="From your library" />
+    <HRow focusKey="sports:recordings" className="sports-tiles sports-chan-row" label="Sports videos in your library">
       {data.items.map((item) => {
         // Only an item that names its own source can be opened: nothing is matched by title.
         const exact = !!item.source_id && item.title_id.startsWith(`lib:${item.source_id}:`) && item.title_id.length > item.source_id.length + 5
         const meta = [item.sport, item.source_name, item.originally_available_at ? `Released ${item.originally_available_at}` : null].filter(Boolean).join(' · ')
         const body = <span className="sports-row-main"><span className="sports-row-title truncate">{item.title}</span><span className="label truncate">{meta}</span></span>
         return exact
-          ? <Focusable key={item.title_id} focusKey={`sports:recording:${item.title_id}`} className="sports-chan fx-flat" data-testid="sports-recording" label={`Open ${item.title}`} onEnter={() => go(`/title/${encodeURIComponent(item.title_id)}?choose=1`)}>{body}<span className="badge">Library</span></Focusable>
-          : <div key={item.title_id} className="sports-chan" data-testid="sports-recording" aria-disabled="true">{body}<span className="badge">Not playable</span></div>
+          ? <Focusable key={item.title_id} focusKey={`sports:recording:${item.title_id}`} className="sports-chan fx-flat" data-testid="sports-recording" label={`Open ${item.title}`} onEnter={() => go(`/title/${encodeURIComponent(item.title_id)}?choose=1`)}>{body}<span className="badge badge-play">Library</span></Focusable>
+          : <div key={item.title_id} className="sports-chan" data-testid="sports-recording" aria-disabled="true">{body}<span className="badge badge-warn">Not playable</span></div>
       })}
-    </FocusGroup>
-    {data.total > 40 && <FocusGroup focusKey="sports:recordings:pages" className="flex flex-wrap gap-3 items-center">
-      <Button focusKey="sports:recordings:prev" disabled={!page} onEnter={() => setPage(page - 1)}>Previous</Button>
+    </HRow>
+    {data.total > 40 && <FocusGroup focusKey="sports:recordings:pages" className="sports-pages">
+      <GlassIconButton focusKey="sports:recordings:prev" size="sm" icon="chevL" label="Previous" tip="Previous page" disabled={!page} onEnter={() => setPage(page - 1)} />
       <span className="label">Page {page + 1} of {Math.ceil(data.total / 40)}</span>
-      <Button focusKey="sports:recordings:next" disabled={(page + 1) * 40 >= data.total} onEnter={() => setPage(page + 1)}>Next</Button>
+      <GlassIconButton focusKey="sports:recordings:next" size="sm" icon="chevR" label="Next" tip="Next page" disabled={(page + 1) * 40 >= data.total} onEnter={() => setPage(page + 1)} />
     </FocusGroup>}
   </section>
 }

@@ -178,8 +178,8 @@ for (const [width, height] of [[390, 844], [768, 1024], [1280, 720], [1920, 1080
     await expect(page.getByTestId('sports-listing')).toHaveCount(6)
     await expect(page.getByTestId('sports-channel')).toHaveCount(3)
     expect(await fits(page)).toBe(true)
-    // No card, row or badge is wider than the screen's own content box; a row of tiles scrolls inside its own box.
-    const widest = await page.evaluate(() => Math.max(...Array.from(document.querySelectorAll('[data-testid=sports] *')).filter((el) => !el.parentElement?.closest('.row-scroll')).map((el) => el.getBoundingClientRect().right)))
+    // No card, row or badge is wider than the screen's own content box; a row of tiles (HRow) and the sport chips scroll inside their own box.
+    const widest = await page.evaluate(() => Math.max(...Array.from(document.querySelectorAll('[data-testid=sports] *')).filter((el) => !el.parentElement?.closest('.ds-row, .chip-scroll')).map((el) => el.getBoundingClientRect().right)))
     expect(widest).toBeLessThanOrEqual(width)
     await page.getByTestId('sports-listing').nth(0).click()
     const picker = page.getByTestId('sports-picker')
