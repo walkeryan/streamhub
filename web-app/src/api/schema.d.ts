@@ -7576,6 +7576,47 @@ export interface components {
                 web_url?: string;
                 supports_title_link?: boolean;
             } | null;
+            /** @description Skippable stretches of a title (its intro, its end credits), in time order. Empty for live, recordings, watch rooms, sources that know none, and whenever looking them up failed: never a reason playback fails. */
+            markers?: components["schemas"]["PlaybackMarker"][];
+            /** @description Episodes: the series (id opens its title page). */
+            show?: components["schemas"]["ShowRef"] | null;
+            /** @description Episodes only. */
+            season_number?: number | null;
+            /** @description Episodes only. */
+            episode_number?: number | null;
+            /** @description Episodes: the following one (the next season's first after a season's last), preferring the playing library copy and counting seasons only another copy holds. Null when there is none or the viewer may not open it. */
+            next?: components["schemas"]["UpNext"] | null;
+            /** @description Episodes: the one before, by the same rules as next. */
+            previous?: components["schemas"]["UpNext"] | null;
+            /** @description Scrub previews when the library server generated them for this file; null otherwise. */
+            thumbnails?: components["schemas"]["Thumbnails"] | null;
+        };
+        PlaybackMarker: {
+            /** @enum {string} */
+            type: "intro" | "credits";
+            start_ms: number;
+            end_ms: number;
+        };
+        ShowRef: {
+            id: string;
+            title: string;
+        };
+        UpNext: {
+            /** @description A hub id /playback/resolve accepts. */
+            id: string;
+            /** @description The episode's own name, else "Episode N". */
+            title: string;
+            /** @description "S2 · E2". */
+            subtitle: string;
+            /** @description The episode's still. */
+            image?: string | null;
+            duration_ms?: number | null;
+        };
+        Thumbnails: {
+            /** @description A signed, viewer-independent grant like artwork. GET <url>?ms=<position> answers the frame nearest that position as image/jpeg (404 when the server has no preview index for it after all). */
+            url: string;
+            /** @description Spacing of the frames (2000 until the server has read the index). Round requested positions to it so they share caches. */
+            interval_ms: number;
         };
         /** @description Sent every 10 s while playing and on pause/stop (ordinary bearer-auth POST). state=stopped with position_ms >= duration_ms marks the item watched (resume resets to 0); position >= 95% of duration also counts as watched. */
         ProgressReport: {
@@ -7600,7 +7641,7 @@ export interface components {
             supports_title_link: boolean;
             tmdb_provider_ids: number[];
         };
-        /** @description Opaque client-owned preferences. Max 16 KB when serialized. */
+        /** @description Opaque client-owned preferences. Max 16 KB when serialized. Keys both clients read: autoplay_next (boolean, missing = true): the player plays an episode's next one by itself at its end. */
         ClientPrefs: {
             [key: string]: unknown;
         };

@@ -65,6 +65,7 @@ from app.services.streams import GrantGuard, StreamRegistry
 from app.services.sync import SyncScheduler, SyncService
 from app.services.themes import ThemeService
 from app.services.throttle import RateLimiter
+from app.services.thumbnails import ThumbnailService
 from app.services.user_state import (
     ClientPrefsService,
     FavoritesService,
@@ -124,6 +125,7 @@ class Container:
     playback: PlaybackResolver
     proxy: StreamProxy
     image_cache: ImageCache
+    thumbnails: ThumbnailService
     requests: RequestService
     notices: NoticeService
     rooms: RoomHub
@@ -237,6 +239,8 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     playback.probe_slot = proxy.probe_slot
     playback.pin = proxy.pin
     playback.recorder = recorder
+    thumbnails = ThumbnailService(crypto, sources, http_factory)
+    playback.thumbnails = thumbnails
     capture: Capture | None = None
     if settings.recordings_dir:
         # Recording is configured: captures run through the proxy's shared upstreams and admission.
@@ -325,6 +329,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         playback=playback,
         proxy=proxy,
         image_cache=ImageCache(settings.image_cache_dir, settings.image_cache_max_mb * 1024 * 1024),
+        thumbnails=thumbnails,
         requests=requests,
         notices=NoticeService(db),
         rooms=rooms,

@@ -103,6 +103,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   // What the viewer changed since this playback began: applied to every later resolve of the same request.
   const restart = useRef<{ audioTrack?: number; startMs?: number }>({})
   const lastPosition = useRef<{ desc: PlaybackDescriptor | null; ms: number }>({ desc: null, ms: 0 })
+  // The player moved on from this title at its credits (Up next, Skip credits): the last report says it was finished.
+  const completed = useRef<string | null>(null)
   /** Position in the title, which for a restart-at-offset stream is not the media element's time. */
   const titlePositionMs = useCallback(() => {
     const d = descRef.current
@@ -487,11 +489,14 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       if (!profileId || session.profile?.id !== profileId || session.generation !== sessionGeneration || owner?.key !== key || owner.profileId !== profileId || owner.generation !== sessionGeneration) return
       const d = descRef.current
       if (!d || d.mode === 'handoff') return
+      // The media element only knows the part of a restart-at-offset stream produced so far.
+      const duration = d.start_position_ms != null ? (d.duration_ms ?? null) : Number.isFinite(v.duration) && !d.live ? Math.floor(v.duration * 1000) : (d.duration_ms ?? null)
+      const finished = state === 'stopped' && completed.current === key && duration != null
       const progress = {
         id: req.id, source_id: req.sourceId ?? null, state, expected_profile_id: profileId,
-        position_ms: titlePositionMs(),
-        // The media element only knows the part of a restart-at-offset stream produced so far.
-        duration_ms: d.start_position_ms != null ? (d.duration_ms ?? null) : Number.isFinite(v.duration) && !d.live ? Math.floor(v.duration * 1000) : (d.duration_ms ?? null),
+        // Stopped at its length is watched to the end (the contract's ProgressReport).
+        position_ms: finished ? duration : titlePositionMs(),
+        duration_ms: duration,
       }
       reportProgress(progress, unloading)
     }
@@ -540,6 +545,8 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       // Every start of playback goes through checkAudio, which applies this; only a stream already playing needs telling.
       else if (!video.paused) checkAudio.current()
     },
+    /** This title counts as watched to the end when playback of it stops (moving on to the next episode, Skip credits). */
+    markCompleted: () => { completed.current = key },
     retryNow: () => { clearWaiting(); clearRetry(); terminal.current = false; pausedByViewer.current = false; intent.current = { key }; retry.current = 0; setAttempt((a) => a + 1) },
     /** Restart-at-offset streams: start a new stream at this position in the title. */
     seekTo: (ms: number) => {

@@ -65,6 +65,43 @@ const withProfile = (id: string) => {
 }
 const tokens = (id: string) => ({ access_token: `mock-access-${id}`, refresh_token: `mock-refresh-${id}`, profile: withProfile(id) })
 const currentProfileId = (req: Request) => req.headers.get('authorization')?.replace('Bearer mock-access-', '') ?? 'p1'
+/**
+ * An episode (tmdb:episode:<show>:<season>:<n>) as the server describes one for the player: its show,
+ * numbers, the episodes either side (season 2 follows season 1), intro and credits markers, previews.
+ * The sample clip is 30 s: the intro is at 1–6 s and the credits from 21 s, or from `mock.credits_at` (ms)
+ * when a spec sets it. `mock.no_markers` leaves them out (Up next then comes in the last third).
+ */
+function episodeDescriptor(id: string): PlaybackDescriptor | null {
+  const m = /^tmdb:episode:(\d+):(\d+):(\d+)$/.exec(id)
+  if (!m) return null
+  const [show, season, n] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const series = tileById(`tmdb:tv:${show}`)
+  const eps = (s: number) => episodesOf(show, s)
+  const here = eps(season)[n - 1]
+  if (!series || !here) return null
+  const name = (t: Tile) => t.title.replace(/^\d+\.\s*/, '')
+  const upNext = (s: number, e: number) => {
+    const t = eps(s)[e - 1]
+    return t ? { id: t.id, title: name(t), subtitle: `S${s} · E${e}`, image: t.backdrop ?? null, duration_ms: 30_000 } : null
+  }
+  const count = eps(season).length
+  const next = n < count ? upNext(season, n + 1) : season < 2 ? upNext(season + 1, 1) : null
+  const previous = n > 1 ? upNext(season, n - 1) : season > 1 ? upNext(season - 1, eps(season - 1).length) : null
+  const creditsAt = Number(sessionStorage.getItem('mock.credits_at') ?? 21_000)
+  const markers = sessionStorage.getItem('mock.no_markers') ? [] : [
+    { type: 'intro' as const, start_ms: 1_000, end_ms: 6_000 },
+    { type: 'credits' as const, start_ms: creditsAt, end_ms: 30_000 },
+  ]
+  return {
+    id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, headers: {}, buffer_available: false,
+    resume_position_ms: 0, duration_ms: 30_000, title: name(here), subtitle: `S${String(season).padStart(2, '0')}E${String(n).padStart(2, '0')} · ${series.title}`,
+    poster: here.backdrop ?? null, channel_context: null, handoff: null,
+    media_info: { source_name: 'Library', container: 'mov', bitrate_kbps: 9_400, video: { codec: 'h264', width: 1920, height: 1080 }, audio: { codec: 'aac', channels: 2 }, delivery: 'direct', output_width: 1920, output_height: 1080 },
+    markers, show: { id: series.id, title: series.title }, season_number: season, episode_number: n, next, previous,
+    thumbnails: { url: `${B}/thumbnails/mock-${show}-${season}-${n}`, interval_ms: 2000 },
+  }
+}
+
 const tileById = (id: string): Tile | undefined => {
   const seed = seedFor(id)
   if (seed) return tileOf(seed)
@@ -430,8 +467,17 @@ export const handlers = [
   }),
 
   http.get(`${B}/playback/generation`, () => HttpResponse.json({ generation: 'fixture-generation' })),
+  // Scrub previews: a made-up frame naming the position it was asked for.
+  http.get(`${B}/thumbnails/:token`, ({ request }) => {
+    const ms = Number(new URL(request.url).searchParams.get('ms') ?? 0)
+    const s = Math.floor(ms / 1000), hue = (s * 37) % 360
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${hue} 55% 38%)"/><stop offset="1" stop-color="hsl(${(hue + 70) % 360} 60% 14%)"/></linearGradient></defs><rect width="320" height="180" fill="url(#g)"/><circle cx="${40 + (s * 23) % 240}" cy="70" r="34" fill="#fff" opacity=".18"/><text x="18" y="160" font-family="Inter,Arial" font-size="22" font-weight="700" fill="#fff" opacity=".85">Frame ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}</text></svg>`
+    return new HttpResponse(svg, { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=3600' } })
+  }),
   http.post(`${B}/playback/resolve`, async ({ request }) => {
     const b = (await request.json()) as { id: string; source_id?: string | null; start_position_ms?: number | null; max_height?: number | null }
+    const ep = episodeDescriptor(b.id)
+    if (ep) return HttpResponse.json(ep)
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
@@ -470,6 +516,8 @@ export const handlers = [
       resume_position_ms: progress[b.id]?.pos ? Math.min(progress[b.id]!.pos, 20_000) : 0, duration_ms: chan ? null : 30_000,
       channel_context: chan ? { list_id: 'mock', index: channels.findIndex((c) => c.id === b.id), count: channels.length } : null,
       media_info: chan ? { source_name: 'IPTV', delivery: 'remux' } : { ...file, delivery: 'direct', output_width: 1920, output_height: 1080 },
+      // A film's credits, when a spec asks for them (Skip credits then ends the film).
+      markers: !chan && sessionStorage.getItem('mock.film_credits') ? [{ type: 'credits', start_ms: Number(sessionStorage.getItem('mock.film_credits')), end_ms: 30_000 }] : [],
     }
     return HttpResponse.json(d)
   }),

@@ -5,6 +5,7 @@ import android.os.Looper
 import android.util.Log
 import android.webkit.JavascriptInterface
 import com.streamhub.tv.core.data.auth.WebTokenBroker
+import com.streamhub.tv.feature.player.MiniPlayerCommand
 
 /**
  * `window.StreamHubTV`: added with addJavascriptInterface before the first page loads, so the web app
@@ -19,6 +20,8 @@ class ShellBridge(
     private val pageAllowed: () -> Boolean,
     private val onPlay: (ShellPlay) -> Unit,
     private val onSignedOut: (reason: String?) -> Unit,
+    /** Main thread. A mini player bar button; true when a player in picture-in-picture took it. */
+    private val onMiniPlayerCommand: (MiniPlayerCommand) -> Boolean = { false },
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -34,6 +37,18 @@ class ShellBridge(
     fun signedOut(reason: String?) {
         val said = reason?.trim()?.take(300)?.filter { it >= ' ' }?.takeIf { it.isNotEmpty() }
         main.post { if (pageAllowed()) onSignedOut(said) }
+    }
+
+    /**
+     * A `{"v":1,"kind":…}` message from the page. The one kind today is `mini_player_command`, the web
+     * app's mini player bar (see [parseMiniPlayerCommand]). False when refused or of an unknown kind.
+     */
+    @JavascriptInterface
+    fun message(json: String?): Boolean {
+        val command = json?.let(::parseMiniPlayerCommand)
+        if (command == null) { Log.w(TAG, "message() refused"); return false }
+        main.post { if (pageAllowed()) onMiniPlayerCommand(command) }
+        return true
     }
 
     @JavascriptInterface

@@ -22,6 +22,8 @@ from app.adapters.plex.guide import GuideSnapshot, read_guide
 from app.domain.entities import (
     CatalogItem,
     MediaKind,
+    PlaybackExtras,
+    PlaybackMarker,
     SourceDraft,
     SourceRef,
     SourceType,
@@ -87,6 +89,21 @@ def parse_guids(meta: dict[str, Any]) -> tuple[int | None, str | None]:
     if imdb is None and "imdb://" in legacy:
         imdb = legacy.split("imdb://", 1)[1].split("?")[0]
     return tmdb, imdb
+
+
+def plex_markers(meta: dict[str, Any]) -> list[PlaybackMarker]:
+    """Intro and credits ``Marker`` entries of one item, in time order. Anything malformed is left out."""
+    out: list[PlaybackMarker] = []
+    for m in meta.get("Marker") or []:
+        if not isinstance(m, dict) or m.get("type") not in ("intro", "credits"):
+            continue
+        start, end = m.get("startTimeOffset"), m.get("endTimeOffset")
+        if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int) or not isinstance(end, int):
+            continue
+        if 0 <= start < end:
+            out.append(PlaybackMarker(type=str(m["type"]), start_ms=start, end_ms=end))
+    out.sort(key=lambda m: m.start_ms)
+    return out
 
 
 def pick_connection(resource: dict[str, Any]) -> str | None:
@@ -384,6 +401,23 @@ class PlexSource:
             subtitle=item.extra.get("grandparent_title"),
             poster=item.poster,
         )
+
+    async def playback_extras(self, item: CatalogItem) -> PlaybackExtras:
+        """PlaybackExtrasProvider: the intro and credits markers Plex detected, and the file's scrub
+        preview index when Plex generated one (``Part.indexes == "sd"``). One metadata request."""
+        mc = await self._get(f"/library/metadata/{item.ext_id}", includeMarkers=1)
+        rows = mc.get("Metadata") or []
+        meta = rows[0] if rows and isinstance(rows[0], dict) else {}
+        return PlaybackExtras(markers=plex_markers(meta), preview_index_url=self._preview_index(meta))
+
+    def _preview_index(self, meta: dict[str, Any]) -> str | None:
+        # The part stream_for_item plays: the first one of the first media.
+        for media in meta.get("Media") or []:
+            for part in media.get("Part") or []:
+                if isinstance(part, dict) and part.get("indexes") == "sd" and str(part.get("id") or "").isdigit():
+                    return f"{self.server}/library/parts/{part['id']}/indexes/sd"
+                return None
+        return None
 
     def image_headers(self, url: str) -> dict[str, str] | None:
         """ImageAuthProvider: headers needed to fetch one of our image URLs (None = not ours)."""

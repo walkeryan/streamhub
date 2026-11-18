@@ -885,6 +885,44 @@ components:
             android_extras: { type: object, additionalProperties: {type: string} }
             web_url: {type: string}
             supports_title_link: {type: boolean}
+        markers:
+          type: array
+          items: {$ref: '#/components/schemas/PlaybackMarker'}
+          description: "Skippable stretches of a title (its intro, its end credits), in time order. Empty for live, recordings, watch rooms, sources that know none, and whenever looking them up failed: never a reason playback fails."
+        show: {allOf: [{$ref: '#/components/schemas/ShowRef'}], nullable: true, description: "Episodes: the series (id opens its title page)."}
+        season_number: {type: integer, nullable: true, description: "Episodes only."}
+        episode_number: {type: integer, nullable: true, description: "Episodes only."}
+        next: {allOf: [{$ref: '#/components/schemas/UpNext'}], nullable: true, description: "Episodes: the following one (the next season's first after a season's last), preferring the playing library copy and counting seasons only another copy holds. Null when there is none or the viewer may not open it."}
+        previous: {allOf: [{$ref: '#/components/schemas/UpNext'}], nullable: true, description: "Episodes: the one before, by the same rules as next."}
+        thumbnails: {allOf: [{$ref: '#/components/schemas/Thumbnails'}], nullable: true, description: "Scrub previews when the library server generated them for this file; null otherwise."}
+    PlaybackMarker:
+      type: object
+      required: [type, start_ms, end_ms]
+      properties:
+        type: {type: string, enum: [intro, credits]}
+        start_ms: {type: integer}
+        end_ms: {type: integer}
+    ShowRef:
+      type: object
+      required: [id, title]
+      properties:
+        id: {type: string}
+        title: {type: string}
+    UpNext:
+      type: object
+      required: [id, title, subtitle]
+      properties:
+        id: {type: string, description: "A hub id /playback/resolve accepts."}
+        title: {type: string, description: "The episode's own name, else \"Episode N\"."}
+        subtitle: {type: string, description: "\"S2 · E2\"."}
+        image: {type: string, nullable: true, description: "The episode's still."}
+        duration_ms: {type: integer, nullable: true}
+    Thumbnails:
+      type: object
+      required: [url, interval_ms]
+      properties:
+        url: {type: string, description: "A signed, viewer-independent grant like artwork. GET <url>?ms=<position> answers the frame nearest that position as image/jpeg (404 when the server has no preview index for it after all)."}
+        interval_ms: {type: integer, description: "Spacing of the frames (2000 until the server has read the index). Round requested positions to it so they share caches."}
     ProgressReport:
       type: object
       description: >
@@ -915,7 +953,7 @@ components:
     ClientPrefs:
       type: object
       additionalProperties: true
-      description: "Opaque client-owned preferences. Max 16 KB when serialized."
+      description: "Opaque client-owned preferences. Max 16 KB when serialized. Keys both clients read: autoplay_next (boolean, missing = true): the player plays an episode's next one by itself at its end."
     HomeLayout:
       type: object
       required: [rows]

@@ -685,6 +685,34 @@ class MediaInfo(_Known):
     max_height: Literal[480, 720, 1080] | None = None
 
 
+class PlaybackMarker(_M):
+    type: Literal["intro", "credits"]
+    start_ms: int
+    end_ms: int
+
+
+class ShowRef(_M):
+    id: str
+    title: str
+
+
+class UpNext(_M):
+    """An episode either side of the one playing: ``id`` is a hub id ``/playback/resolve`` accepts."""
+
+    id: str
+    title: str
+    subtitle: str
+    image: str | None = None
+    duration_ms: int | None = None
+
+
+class Thumbnails(_M):
+    """Scrub previews: ``GET <url>?ms=<position>`` answers the nearest frame as ``image/jpeg``."""
+
+    url: str
+    interval_ms: int
+
+
 class PlaybackDescriptor(_M):
     media_info: MediaInfo | None = None
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
@@ -714,6 +742,14 @@ class PlaybackDescriptor(_M):
     channel_context: ChannelContext | None = None
     handoff: Handoff | None = None
     drm: None = None
+    # The player's extras (titles only; empty or null elsewhere and in watch rooms).
+    markers: list[PlaybackMarker] = Field(default_factory=list)
+    show: ShowRef | None = None
+    season_number: int | None = None
+    episode_number: int | None = None
+    next: UpNext | None = None
+    previous: UpNext | None = None
+    thumbnails: Thumbnails | None = None
 
 
 class MultiviewDescriptor(_M):

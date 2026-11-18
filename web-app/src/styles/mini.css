@@ -1,0 +1,53 @@
+/* The mini player bar (player/MiniBar.tsx): a minimised web player, or the TV's player in
+   picture-in-picture (player/ShellMiniPlayer.tsx). Mockup 1's bar, in rem of its 20 px root. */
+:root { --mini-h: 4.8rem; --mini-thumb-w: 8.5rem; }
+@media (max-width: 720px) { :root { --mini-h: 4rem; --mini-thumb-w: 7.125rem; } }
+
+.mini-dock, .player[data-mini='true'] { position: fixed; left: 0; right: 0; bottom: 0; height: var(--mini-h); z-index: 45; }
+.mini-dock { color: #fff; }
+.mini-bar {
+  position: absolute; inset: 0; display: flex; align-items: center; gap: 1.1rem; padding-right: 1.4rem; color: #fff;
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: rgba(14,18,34,.94); border-top: 1px solid rgba(255,255,255,.18); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 -0.75rem 2rem rgba(0,0,0,.35);
+}
+/* Minimised, the web player's own <video> is under the bar's picture box: the bar's background stops where it starts. */
+.player[data-mini='true'] .mini-bar { left: var(--mini-thumb-w); padding-left: 1.1rem; }
+.player[data-mini='true'] .mini-thumb { display: none; }
+.player[data-mini='true'] .mini-progress { left: calc(-1 * var(--mini-thumb-w)); }
+.player[data-mini='true'] video { cursor: pointer; }
+.mini-progress { position: absolute; left: 0; right: 0; top: -3px; height: 3px; background: rgba(255,255,255,.15); }
+.mini-progress i { display: block; height: 100%; background: var(--t-accent); transition: width 0.4s linear; }
+.mini-bar[data-live='true'] .mini-progress i { background: var(--t-danger, #e5484d); }
+.mini-thumb { flex: none; align-self: stretch; width: var(--mini-thumb-w); background: #000; overflow: hidden; cursor: pointer; }
+.mini-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mini-titles { flex: 0 1 16.5rem; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; padding: 0.3rem 0.5rem; margin-left: -0.5rem; border-radius: 0.5rem; cursor: pointer; }
+.mini-titles b { font-size: 0.85rem; font-weight: 650; }
+.mini-titles small { color: #a7b0cf; font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+.mini-titles.fx[data-focused='true'] { outline: 0; box-shadow: 0 0 0 0.15rem var(--t-accent); }
+.mini-dot { margin: 0 0.4rem; }
+.mini-transport { flex: 1; display: flex; justify-content: center; align-items: center; gap: 1rem; }
+.mini-end, .mini-controls { display: flex; align-items: center; gap: 0.6rem; }
+.mini-controls { margin-left: auto; }
+.mini-bar .gbtn { width: max(2.3rem, 44px); height: max(2.3rem, 44px); }
+.mini-end .gbtn { width: max(2.1rem, 44px); height: max(2.1rem, 44px); }
+.mini-bar .gbtn svg { width: 1.1rem; height: 1.1rem; }
+.mini-bar .gbtn-big { width: max(2.8rem, 48px); height: max(2.8rem, 48px); }
+.mini-bar .gbtn-big svg { width: 1.25rem; height: 1.25rem; }
+.mini-video-slot { display: none; }
+
+/* The page keeps room for the bar, and toasts rise above it. */
+html[data-mini-player] .main { padding-bottom: calc(var(--mini-h) + 1rem); }
+html[data-mini-player] .toasts { bottom: calc(var(--mini-h) + 1rem); }
+@media (max-width: 720px) {
+  /* Above the bottom navigation bar. */
+  .mini-dock, .player[data-mini='true'] { bottom: calc(3.75rem + env(safe-area-inset-bottom)); }
+  .mini-bar { gap: 0.75rem; padding-right: 0.5rem; }
+  .player[data-mini='true'] .mini-bar { padding-left: 0.75rem; }
+  .mini-titles { flex: 1 1 auto; }
+  .mini-controls { gap: 0.25rem; }
+  .mini-controls .gbtn { background: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none; }
+  .mini-controls .gbtn-big { background: #fff; }
+  html[data-mini-player] .main { padding-bottom: calc(4rem + var(--mini-h) + env(safe-area-inset-bottom)); }
+  html[data-mini-player] .toasts { bottom: calc(4.5rem + var(--mini-h) + env(safe-area-inset-bottom)); }
+}

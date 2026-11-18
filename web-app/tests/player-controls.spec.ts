@@ -60,12 +60,12 @@ async function on(page: Page, fraction: number) {
   return { x: box.x + box.width * fraction, y: box.y + box.height / 2 }
 }
 
-test('the control bar is one row of named controls; the time readout can count down', async ({ page }) => {
+test('the control bar is one row of named controls; the time readout counts down or shows the length', async ({ page }) => {
   await enter(page)
   await play(page, CONVERTED)
   await page.mouse.move(600, 300)
   const bar = page.getByTestId('player-bar')
-  for (const name of ['Pause', 'Back 10 seconds', 'Forward 10 seconds', 'Mute', 'Subtitles', 'Audio', 'Settings', 'Stream information', 'Picture in picture', 'Full screen']) {
+  for (const name of ['Pause', 'Back 10 seconds', 'Forward 30 seconds', 'Mute', 'Subtitles', 'Audio', 'Settings', 'Full screen']) {
     await expect(bar.getByRole('button', { name, exact: true })).toBeVisible()
   }
   for (const size of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
@@ -74,12 +74,13 @@ test('the control bar is one row of named controls; the time readout can count d
     expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2)
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(size.width)
   }
-  // Position and length, or on a click what is left; the choice is this browser's.
+  // Position on the left; on the right what is left, or on a click the length. The choice is this browser's.
   const time = page.getByTestId('player-time')
-  await expect(time).toHaveText(/^0:0\d \/ 1:52:00$/)
+  await expect(page.getByTestId('player-elapsed')).toHaveText(/^0:0\d$/)
+  await expect(time).toHaveText(/^−1:5\d:\d\d$/)
   await time.click()
-  await expect(time).toHaveText(/^0:\d\d \/ −1:51:\d\d$/)
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.v1')!).remaining)).toBe(true)
+  await expect(time).toHaveText('1:52:00')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.v1')!).remaining)).toBe(false)
   // The volume slider comes out for a mouse, and muting is one click.
   await page.getByTestId('player-mute').hover()
   const slider = page.getByTestId('player-volume')
@@ -190,7 +191,7 @@ test('while a restart is on its way the bar already shows the target, with a spi
   await expect(track(page)).toHaveAttribute('data-busy', 'true')
   await expect(track(page)).toHaveAttribute('data-position', String(LENGTH_S - 10))
   await expect(page.getByTestId('scrub-thumb')).toHaveAttribute('data-busy', 'true')
-  await expect(page.getByTestId('player-time')).toHaveText(/^1:51:50 \//)
+  await expect(page.getByTestId('player-elapsed')).toHaveText('1:51:50')
   await expect(ui(page)).toHaveAttribute('data-show', 'true')
   // More presses while it is on its way carry on from the target, and replace it.
   await page.keyboard.press('Shift+ArrowLeft')
@@ -302,10 +303,12 @@ test('a remote: OK pauses onto the scrubber, the arrows reach every control, and
     if (seen.at(-1) === label) break
     seen.push(label)
   }
-  expect(seen.map((label) => label.replace(/^\d.*/, 'time'))).toEqual(['Back 10 seconds', 'Forward 10 seconds', 'Mute', 'time', 'Subtitles', 'Audio', 'Settings', 'Stream information', 'Picture in picture', 'Full screen'])
-  for (let i = 0; i < 6 && (await focusLabel(page)) !== 'Audio'; i++) await page.keyboard.press('ArrowLeft')
+  // Transport in the middle, then the volume, Watch together (where it may start rooms), full screen and settings.
+  expect(seen.slice(0, 2)).toEqual(['Forward 30 seconds', 'Mute'])
+  expect(seen.slice(-2)).toEqual(['Full screen', 'Settings'])
+  for (let i = 0; i < 12 && (await focusLabel(page)) !== 'Audio'; i++) await page.keyboard.press('ArrowLeft')
   await expect.poll(() => focusLabel(page)).toBe('Audio')
-  await page.keyboard.press('ArrowRight')
+  for (let i = 0; i < 12 && (await focusLabel(page)) !== 'Settings'; i++) await page.keyboard.press('ArrowRight')
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('player-menu')).toHaveAttribute('data-section', 'settings')
   await expect(page.getByTestId('player-menu').locator('.fx[data-focused="true"]')).toHaveText('0.5×')
@@ -331,9 +334,10 @@ test('a remote: OK pauses onto the scrubber, the arrows reach every control, and
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await expect.poll(() => inBar(page)).toBe(false)
   await expect(ui(page)).toHaveAttribute('data-show', 'false', { timeout: 6000 })
-  // Back: with the controls hidden it leaves.
+  // Back: with the controls hidden it keeps the film playing, minimised to the bar at the bottom.
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('player')).toHaveCount(0)
+  await expect(page.getByTestId('player')).toHaveAttribute('data-mini', 'true')
+  await expect(page.getByTestId('mini-player')).toBeVisible()
 })
 
 test('Media Session: title for the lock screen, and its play, pause and seek controls drive the player', async ({ page }) => {
@@ -386,14 +390,14 @@ test('stream information: what is playing, how it is delivered, and what the pla
   // It is a panel, not a dialog: playback and the keys carry on behind it, and the button says it is open.
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await page.mouse.move(600, 300)
-  await expect(page.getByTestId('player-info-btn')).toHaveAttribute('aria-pressed', 'true')
   await page.keyboard.press('k')
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'paused')
   // Back closes it before anything else; the player stays.
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
   await expect(page.getByTestId('player')).toBeVisible()
-  await page.getByTestId('player-info-btn').click()
+  // It is also in the settings menu (Stream information), and I opens it.
+  await page.keyboard.press('i')
   await expect(panel).toBeVisible()
   await panel.getByRole('button', { name: 'Close stream information' }).click()
   await expect(panel).toHaveCount(0)
@@ -428,7 +432,7 @@ test('quality: the choices below the source with what an hour costs; a change re
   expect(resolves.at(-1)!.start_position_ms).toBeLessThan(130_000)
   await expect(page.getByTestId('player')).toHaveAttribute('data-stream-start', '120000')
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
-  await expect(page.getByTestId('player-time')).toHaveText(/^2:0\d \//)
+  await expect(page.getByTestId('player-elapsed')).toHaveText(/^2:0\d$/)
   // The information panel says what is now sent.
   await page.keyboard.press('i')
   const delivery = page.getByTestId('player-info').locator('[data-section="Delivery"]')
@@ -444,8 +448,11 @@ test('quality: the choices below the source with what an hour costs; a change re
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.quality.v1')!))).toEqual({ normal: 720, saver: null })
 
   // The browser remembers: a 1080p film it would have played as the file it is now arrives capped...
+  // Back while it plays keeps the film going minimised; the mini player's close ends it.
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-mini', 'true')
+  await page.getByTestId('mini-close').click()
   await expect(page.getByTestId('player')).toHaveCount(0)
   await play(page, FILM)
   expect(resolves.at(-1)).toMatchObject({ id: FILM, max_height: 720 })
@@ -484,8 +491,11 @@ test('quality when the browser asks to save data is a choice of its own; a chann
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.quality.v1')!))).toEqual({ normal: 1080, saver: 480 })
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   // A channel is delivered as it is: its settings have no quality, and its resolve carries no cap.
+  // Back while it plays keeps the film going minimised; the mini player's close ends it.
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
+  await expect(page.getByTestId('player')).toHaveAttribute('data-mini', 'true')
+  await page.getByTestId('mini-close').click()
   await expect(page.getByTestId('player')).toHaveCount(0)
   await play(page, 'ch:s_xt:1001')
   expect(resolves.at(-1)!.max_height ?? null).toBeNull()
@@ -524,7 +534,7 @@ test.describe('on a phone', () => {
     const resolves = await enter(page)
     await play(page, CONVERTED)
     const bar = page.getByTestId('player-bar')
-    const boxes = await bar.locator('.pbar-row .fx').evaluateAll((all) => all.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), width: r.width, height: r.height, right: r.right } }))
+    const boxes = await bar.locator('.pbar-row .fx').evaluateAll((all) => all.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top + r.height / 2), width: r.width, height: r.height, right: r.right } }))
     expect(new Set(boxes.map((b) => b.top)).size).toBe(2)
     for (const box of boxes) {
       expect(box.width).toBeGreaterThanOrEqual(44)
@@ -590,7 +600,7 @@ test('a film the browser plays as it is has the same bar, and a click on the pic
   await play(page, FILM)
   await page.mouse.move(600, 300)
   await expect(ui(page)).toHaveAttribute('data-show', 'true')
-  await expect(page.getByTestId('player-time')).toHaveText(/\/ 0:30$/)
+  await expect(page.getByTestId('player-time')).toHaveText(/^−0:[0-3]\d$/)
   await expect(page.getByTestId('player-bar').getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByRole('slider', { name: /^Seek\. / })).toHaveAttribute('aria-valuemax', '30')
   // With the controls showing, the picture between the bars is still the picture: a click pauses, another plays.

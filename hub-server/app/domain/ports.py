@@ -18,6 +18,7 @@ from app.domain.entities import (
     EpgSourceSpec,
     LanguageGuess,
     MetaTitle,
+    PlaybackExtras,
     ProgrammeInfo,
     ProviderOffer,
     ServiceLink,
@@ -125,6 +126,13 @@ class ContinueWatchingProvider(Protocol):
 @runtime_checkable
 class LibrarySearchProvider(Protocol):
     async def search(self, query: str, limit: int = 20) -> list[CatalogItem]: ...
+
+
+@runtime_checkable
+class PlaybackExtrasProvider(Protocol):
+    """Adapter that knows a title's skippable markers and scrub previews (a library server)."""
+
+    async def playback_extras(self, item: CatalogItem) -> PlaybackExtras: ...
 
 
 @runtime_checkable

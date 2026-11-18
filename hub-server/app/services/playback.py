@@ -27,12 +27,19 @@ from urllib.parse import quote, quote_plus
 from app.adapters.language.inferrer import normalise_code
 from app.domain.entities import (
     LIBRARY_SOURCE_TYPES,
+    PlaybackExtras,
     PlaybackMode,
     ProgrammeInfo,
     SourceType,
     StreamTarget,
 )
-from app.domain.ports import DeeplinkProvider, LiveProvider, MetadataProvider, PlaybackProvider
+from app.domain.ports import (
+    DeeplinkProvider,
+    LiveProvider,
+    MetadataProvider,
+    PlaybackExtrasProvider,
+    PlaybackProvider,
+)
 from app.infra.crypto import Crypto
 from app.infra.models import Channel, Profile, Source, Title
 from app.services import ids
@@ -48,6 +55,7 @@ from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
+from app.services.episode_nav import EpisodeNavigator
 from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError
 from app.services.event_slots import display_name
 from app.services.media_info import capped_height, media_info
@@ -56,7 +64,7 @@ from app.services.rewind import archive_request, archive_window
 from app.services.settings_service import SettingsService
 from app.services.sources import SourceService
 from app.services.streams import requested_ref
-from app.services.tiles import row_to_channel, row_to_item
+from app.services.tiles import hub_id_for_title, row_to_channel, row_to_item
 from app.services.user_state import ProgressService
 
 log = logging.getLogger(__name__)
@@ -67,6 +75,11 @@ PROBE_RETRY_S = 60.0
 MAX_OPTION_PROBES = 3
 # Restart-at-offset sessions start on this grid, so a retry of the same position shares a session.
 VOD_START_STEP_S = 5
+# The player's extras (markers, previews, the episodes either side) are looked up beside playback
+# and given this long; whatever is not ready by then is left out, never waited for or failed on.
+EXTRAS_TIMEOUT_S = 4.0
+# What a library server said about a file's markers and previews is kept this long.
+EXTRAS_TTL_S = 600.0
 
 
 def play_key(source_id: str, url: str, profile_id: str, session_id: str | None) -> str:
@@ -376,6 +389,13 @@ class PlaybackResolver:
         self._probing: dict[str, asyncio.Future[dict[str, Any] | None]] = {}
         self._probe_retry: dict[str, float] = {}
         self._recording_probes: dict[str, tuple[tuple[str, int], dict[str, Any]]] = {}
+        self._extras: dict[tuple[str, str], tuple[float, PlaybackExtras]] = {}
+        self._navigator = EpisodeNavigator(
+            title_row=catalog.title_row,
+            stored_children=lambda row: catalog.children_rows(row, fetch=False),
+            fetch_children=catalog.children_rows,
+            copies=self._series_copies,
+        )
 
     content_policy: Any = None
     auth: Any = None
@@ -389,6 +409,8 @@ class PlaybackResolver:
     streams: Any = None
     # ``RecorderService``: finished recordings play as ``rec:<id>``.
     recorder: Any = None
+    # ``ThumbnailService``: signs scrub-preview URLs; without it no descriptor offers previews.
+    thumbnails: Any = None
 
     async def _require_slot(self) -> None:
         """409 ``user_stream_limit`` when the caller's other devices already use every stream they may play."""
@@ -1098,6 +1120,9 @@ class PlaybackResolver:
         )
 
         desc.update(await self._runtime_audio(profile_id, row.extra or {}))
+        if room is None:
+            # A watch room plays on together: no skipping or moving on by one member.
+            desc.update(await self._player_extras(profile_id, row, src, prov))
         if vod is not None and desc["audio_track"] is not None:
             # The server encodes exactly one track, so that track is the whole answer.
             track = vod.tracks[desc["audio_track"]]
@@ -1111,6 +1136,87 @@ class PlaybackResolver:
             if audio_track is not None:
                 desc["audio_language_required"] = False
         return desc
+
+    # ------------------------------------------------------------------ player extras
+    async def _player_extras(self, profile_id: str, row: Title, src: Source, prov: Any) -> dict[str, Any]:
+        """``markers``, ``thumbnails``, and for an episode ``show``, its numbers, ``next`` and ``previous``.
+
+        Looked up side by side within ``EXTRAS_TIMEOUT_S``; a part that fails or is late is simply
+        absent (empty markers, null previews and neighbours). Playback never waits longer or fails for it.
+        """
+        out: dict[str, Any] = {
+            "markers": [],
+            "thumbnails": None,
+            "show": None,
+            "season_number": row.season_number if row.kind == "episode" else None,
+            "episode_number": row.episode_number if row.kind == "episode" else None,
+            "next": None,
+            "previous": None,
+        }
+
+        async def extras() -> None:
+            if not isinstance(prov, PlaybackExtrasProvider):
+                return
+            found = await self._file_extras(src, prov, row)
+            out["markers"] = [{"type": m.type, "start_ms": m.start_ms, "end_ms": m.end_ms} for m in found.markers]
+            if found.preview_index_url and self.thumbnails is not None:
+                out["thumbnails"] = self.thumbnails.descriptor(src.id, found.preview_index_url, absolute)
+
+        async def neighbours() -> None:
+            if row.kind != "episode":
+                return
+            near = await self._navigator.neighbours(row)
+            srcs = await self._sources.rows_by_id()
+            image = self._catalog.image_fn(srcs)
+            if near.show is not None:
+                out["show"] = {"id": hub_id_for_title(near.show), "title": near.show.title}
+            for key, ep in (("next", near.next), ("previous", near.previous)):
+                if ep is not None and await self._may_offer(profile_id, ep, srcs):
+                    out[key] = up_next(ep, image(srcs.get(ep.source_id), ep.poster, None))
+
+        async def bounded(part: Any, name: str) -> None:
+            try:
+                await asyncio.wait_for(part(), EXTRAS_TIMEOUT_S)
+            except Exception as exc:
+                log.info("player extras left out", extra={"part": name, "err": type(exc).__name__})
+
+        await asyncio.gather(bounded(extras, "markers"), bounded(neighbours, "episodes"))
+        return out
+
+    async def _file_extras(self, src: Source, prov: PlaybackExtrasProvider, row: Title) -> PlaybackExtras:
+        key, now = (src.id, row.ext_id), time.monotonic()
+        hit = self._extras.get(key)
+        if hit is not None and now - hit[0] < EXTRAS_TTL_S:
+            return hit[1]
+        found = await prov.playback_extras(row_to_item(row))
+        if len(self._extras) > 1024:
+            self._extras.clear()
+        self._extras[key] = (now, found)
+        return found
+
+    async def _may_offer(self, profile_id: str, row: Title, srcs: dict[str, Source]) -> bool:
+        """Would a resolve of this episode be allowed? Its source, the adult unlock and the rating limits."""
+        src = srcs.get(row.source_id)
+        if src is None or not src.enabled:
+            return False
+        if row.adult:
+            from app.services.content_policy import active_principal
+
+            principal = active_principal.get()
+            permitted = principal is not None and "watch.adult" in getattr(principal, "permissions", ())
+            if not (permitted and getattr(principal, "adult_unlocked", False)):
+                return False
+        if self._governed():
+            ref = ids.lib_id(row.source_id, row.ext_id)
+            return ref in await self.content_policy.allowed_refs(profile_id, [ref])
+        return True
+
+    async def _series_copies(self, show: Title) -> list[Title]:
+        """Every library copy of ``show``'s series (the same TMDB id), the show itself first."""
+        if not show.tmdb_id:
+            return [show]
+        rows = await self._catalog.rows_for_tmdb("tv", show.tmdb_id)
+        return [show, *(r for r in rows if (r.source_id, r.ext_id) != (show.source_id, show.ext_id))]
 
     def _room_shares(self, src: Source, target: StreamTarget) -> bool:
         """Does a watch room play this from one upstream? A file this server may open, from a source
@@ -1552,6 +1658,33 @@ class PlaybackResolver:
             "handoff": None,
             "drm": None,
         }
+
+
+def episode_name(row: Title) -> str:
+    """An episode's own name for the player (``Pilot``), else ``Episode 4``: no ``E4 ·`` prefix."""
+    shown = ids.episode_display_title(row.title, row.episode_number)
+    prefix = f"E{row.episode_number} · "
+    return shown.removeprefix(prefix) if row.episode_number is not None else shown
+
+
+def episode_code(row: Title) -> str:
+    """``S2 · E3`` (or as much of it as is known)."""
+    parts = [
+        f"S{row.season_number}" if row.season_number is not None else "",
+        f"E{row.episode_number}" if row.episode_number is not None else "",
+    ]
+    return " · ".join(p for p in parts if p)
+
+
+def up_next(row: Title, image: str | None) -> dict[str, Any]:
+    """The ``UpNext`` shape of a descriptor's ``next``/``previous``: what the player shows of an episode."""
+    return {
+        "id": ids.lib_id(row.source_id, row.ext_id),
+        "title": episode_name(row),
+        "subtitle": episode_code(row),
+        "image": image,
+        "duration_ms": row.duration_ms,
+    }
 
 
 def is_library(src: Source) -> bool:

@@ -54,6 +54,9 @@ compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview"
 compose-foundation = { module = "androidx.compose.foundation:foundation" }
 compose-animation = { module = "androidx.compose.animation:animation" }
 compose-material-icons = { module = "androidx.compose.material:material-icons-extended" }
+# Screenshots of the player overlays in Robolectric (feature/player tests).
+compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 
 tv-material = { module = "androidx.tv:tv-material", version.ref = "tvMaterial" }
 tv-foundation = { module = "androidx.tv:tv-foundation", version.ref = "tvFoundation" }

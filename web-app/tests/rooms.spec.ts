@@ -563,7 +563,7 @@ test('on a phone the room player keeps back and title on one row; the members ar
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   await expect(page.getByTestId('room-members')).toHaveCount(0)
   // The control bar, with the room's own buttons in it, is still two rows of finger-sized targets inside the screen.
-  const buttons = await page.locator('[data-testid="player-bar"] .pbar-row .fx').evaluateAll((all) => all.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), width: r.width, height: r.height, right: r.right } }))
+  const buttons = await page.locator('[data-testid="player-bar"] .pbar-row .fx').evaluateAll((all) => all.map((el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top + r.height / 2), width: r.width, height: r.height, right: r.right } }))
   expect(new Set(buttons.map((b) => b.top)).size).toBe(2)
   expect(buttons.every((b) => b.width >= 44 && b.height >= 44 && b.right <= 390)).toBe(true)
   await expect(page.getByTestId('room-leave')).toHaveAttribute('aria-label', 'Leave room')

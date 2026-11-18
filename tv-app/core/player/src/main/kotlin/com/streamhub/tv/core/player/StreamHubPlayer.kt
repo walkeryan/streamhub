@@ -58,6 +58,8 @@ data class PlayerUiState(
     val buffering: Boolean = false,
     val seekable: Boolean = false,
     val positionMs: Long = 0,
+    /** How far ahead of the position the stream is loaded (the timeline's lighter part). */
+    val bufferedMs: Long = 0,
     val durationMs: Long = 0,
     val error: String? = null,
     val reconnectAttempt: Int = 0,
@@ -72,6 +74,8 @@ data class PlayerUiState(
      * ceiling or the user's stream limit. Never reconnected; the screen decides what to do about it.
      */
     val refusal: ApiException? = null,
+    /** A title (not a live stream) played to its very end. */
+    val ended: Boolean = false,
 )
 
 /**
@@ -157,7 +161,7 @@ class StreamHubPlayer(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            _state.value = _state.value.copy(buffering = playbackState == Player.STATE_BUFFERING)
+            _state.value = _state.value.copy(buffering = playbackState == Player.STATE_BUFFERING, ended = playbackState == Player.STATE_ENDED && current?.live == false)
             if (playbackState == Player.STATE_READY) {
                 reconnectJob?.cancel()
                 _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0)
@@ -219,6 +223,7 @@ class StreamHubPlayer(
                 _state.value = _state.value.copy(
                     seekable = exoPlayer.isCurrentMediaItemSeekable && exoPlayer.duration > 0,
                     positionMs = exoPlayer.currentPosition.coerceAtLeast(0),
+                    bufferedMs = exoPlayer.bufferedPosition.coerceAtLeast(0),
                     durationMs = exoPlayer.duration.takeIf { it != C.TIME_UNSET } ?: 0,
                 )
                 delay(500)
@@ -246,7 +251,7 @@ class StreamHubPlayer(
             .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
             .setPreferredAudioLanguages(*d.preferredAudioLanguages.toTypedArray()).build()
         reconnectJob?.cancel()
-        _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList())
+        _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList(),ended=false)
         httpFactory.setDefaultRequestProperties(d.headers.filterKeys { !it.equals("User-Agent", true) })
         httpFactory.setUserAgent(d.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: DEFAULT_UA)
         val item = MediaItemMapper.toMediaItem(d)
@@ -375,7 +380,7 @@ class StreamHubPlayer(
 
     private fun cancelReports() {reportJobs.cancelAll()}
 
-    private fun report(state: PlaybackState) {
+    private fun report(state: PlaybackState, completed: Boolean = false) {
         if(updatingMedia) return
         val owner=progressOwner ?: return
         val d = current ?: return
@@ -383,8 +388,9 @@ class StreamHubPlayer(
         // A room's shared stream starts part-way into the title and its own length is only what has been
         // produced so far: the report is in title time, against the title's length.
         val pinned = MediaItemMapper.pinsPosition(d)
-        val pos = exoPlayer.currentPosition.coerceAtLeast(0) + MediaItemMapper.timeZeroMs(d)
         val dur = if (pinned) d.durationMs else exoPlayer.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: d.durationMs
+        // Watched: "stopped" at the full length is the server's explicit completion signal.
+        val pos = if (completed && dur != null && dur > 0) dur else exoPlayer.currentPosition.coerceAtLeast(0) + MediaItemMapper.timeZeroMs(d)
         val job=scope.launch(start=CoroutineStart.LAZY) {
             runCatching {api.reportProgress(ProgressReport(id=d.id,expectedProfileId=owner.profile?.id,positionMs=pos,durationMs=dur,state=state),owner)}
         }
@@ -464,13 +470,17 @@ class StreamHubPlayer(
         }
     }
 
-    fun stop() {
+    /**
+     * Stops playback. [completed]: the title was watched to its end (its credits skipped, or the next
+     * episode taken), so the final report marks it watched instead of leaving a resume position.
+     */
+    fun stop(completed: Boolean = false) {
         cancelReports()
-        report(PlaybackState.STOPPED)
+        report(PlaybackState.STOPPED, completed)
         progressOwner=null
         current=null;wantsPlayback=false;waitingForAudio=false;audioApproval.clear();mediaEpoch++;trackRevision++
         exoPlayer.stop()
-        _state.value=_state.value.copy(audioBlocked=false,audioNotice=null,audioTracks=emptyList())
+        _state.value=_state.value.copy(audioBlocked=false,audioNotice=null,audioTracks=emptyList(),ended=false)
         progressJob?.cancel()
         reconnectJob?.cancel()
     }

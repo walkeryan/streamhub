@@ -8,7 +8,6 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,6 +38,11 @@ import com.streamhub.tv.shell.BACK_SCRIPT
 import com.streamhub.tv.shell.BackOutcome
 import com.streamhub.tv.shell.PLAYBACK_ENDED_SCRIPT
 import com.streamhub.tv.shell.ShellBridge
+import com.streamhub.tv.shell.NativePlayer
+import com.streamhub.tv.shell.PlayerLink
+import com.streamhub.tv.shell.miniPlayerEventJson
+import com.streamhub.tv.shell.miniPlayerScript
+import com.streamhub.tv.feature.player.MiniPlayerCommand
 import com.streamhub.tv.shell.ShellScreen
 import com.streamhub.tv.shell.ShellViewModel
 import com.streamhub.tv.shell.ShellWebController
@@ -75,16 +79,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var composeView: ComposeView
     private lateinit var controller: ShellWebController
     private val capabilities by lazy { DeviceCapabilities.json(this) }
-    /** The native player is in front: the page keeps running (it answers token requests) and is told when it closes. */
-    private var playerOpen = false
+    /**
+     * The native player is open, full screen or as the mini player (see [PlayerLink]): the page keeps
+     * running (it answers token requests) and is told when it closes.
+     */
+    private val playerOpen: Boolean get() = launching || PlayerLink.state.value != NativePlayer.None
+    /** A player was started and has not said it is up yet. */
+    private var launching = false
     private var backPending = false
-
-    private val playerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        playerOpen = false
-        // Progress shown on tiles and rows is read again; focus and screen are where they were.
-        if (controller.ready) webView.evaluateJavascript(PLAYBACK_ENDED_SCRIPT, null)
-        checkForUpdate() // a check that came due while the player was up
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,6 +108,7 @@ class MainActivity : ComponentActivity() {
                 pageAllowed = { val s = vm.session.value?.serverUrl; val url = webView.url; s != null && url != null && mayLoad(s, url) },
                 onPlay = vm::play,
                 onSignedOut = vm::signedOut,
+                onMiniPlayerCommand = PlayerLink::command,
             ),
             ShellBridge.NAME,
         )
@@ -124,9 +127,32 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.CREATED) {
                 launch { vm.session.collect { s -> if (s != null) controller.show(s) } }
                 launch { vm.screen.collect { showScreen(it); checkForUpdate() } }
+                launch { followPlayer() }
             }
         }
     }
+
+    /**
+     * The native player as [PlayerLink] reports it. While it is the mini player the web app gets a
+     * `mini_player` event with every change (about once a second) and draws its bar; when it stops
+     * being one the event says null. When the player closes, the page reads progress again.
+     */
+    private suspend fun followPlayer() {
+        var last: NativePlayer = NativePlayer.None
+        PlayerLink.state.collect { now ->
+            if (now != NativePlayer.None) launching = false
+            if (now is NativePlayer.Mini) sendToPage(miniPlayerScript(miniPlayerEventJson(now.info)))
+            else if (last is NativePlayer.Mini) sendToPage(miniPlayerScript(miniPlayerEventJson(null)))
+            if (now == NativePlayer.None && last != NativePlayer.None) {
+                // Progress shown on tiles and rows is read again; focus and screen are where they were.
+                sendToPage(PLAYBACK_ENDED_SCRIPT)
+                checkForUpdate() // a check that came due while the player was up
+            }
+            last = now
+        }
+    }
+
+    private fun sendToPage(script: String) { if (controller.ready) webView.evaluateJavascript(script, null) }
 
     /** The web app, or a native screen over it. Only one of them takes the remote's keys. */
     private fun showScreen(screen: ShellScreen) {
@@ -151,12 +177,19 @@ class MainActivity : ComponentActivity() {
             }
             return true
         }
+        // The remote's play/pause and seek keys drive the mini player while it is up.
+        if (PlayerLink.state.value is NativePlayer.Mini) miniPlayerKey(event.keyCode)?.let { c ->
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) PlayerLink.command(c)
+            return true
+        }
         if (vm.screen.value == ShellScreen.Web && !webView.hasFocus()) webView.requestFocus()
         return super.dispatchKeyEvent(event)
     }
 
     override fun onStart() {
         super.onStart()
+        // A player that was started but never came up (nothing to play) does not block the next one.
+        if (PlayerLink.state.value == NativePlayer.None) launching = false
         webView.onResume()
         webView.resumeTimers()
         checkForUpdate()
@@ -179,9 +212,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openPlayer(key: String) {
-        if (playerOpen) return
-        playerOpen = true
-        playerLauncher.launch(Intent(this, PlayerActivity::class.java).putExtra(PlayerActivity.EXTRA_KEY, key))
+        if (launching || PlayerLink.state.value == NativePlayer.FullScreen) return
+        // One mini player at a time: a new title replaces the one in picture-in-picture.
+        PlayerLink.closeOpenPlayer()
+        launching = true
+        startActivity(Intent(this, PlayerActivity::class.java).putExtra(PlayerActivity.EXTRA_KEY, key))
+    }
+
+    private fun miniPlayerKey(code: Int): MiniPlayerCommand? = when (code) {
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> MiniPlayerCommand.PlayPause
+        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> MiniPlayerCommand.SeekBy(30_000)
+        KeyEvent.KEYCODE_MEDIA_REWIND -> MiniPlayerCommand.SeekBy(-10_000)
+        KeyEvent.KEYCODE_MEDIA_NEXT -> MiniPlayerCommand.Next
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS -> MiniPlayerCommand.Previous
+        else -> null
     }
 
     @Composable
