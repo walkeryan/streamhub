@@ -29,11 +29,11 @@
 .mini-transport { flex: 1; display: flex; justify-content: center; align-items: center; gap: 1rem; }
 .mini-end, .mini-controls { display: flex; align-items: center; gap: 0.6rem; }
 .mini-controls { margin-left: auto; }
-.mini-bar .gbtn { width: max(2.3rem, 44px); height: max(2.3rem, 44px); }
-.mini-end .gbtn { width: max(2.1rem, 44px); height: max(2.1rem, 44px); }
-.mini-bar .gbtn svg { width: 1.1rem; height: 1.1rem; }
-.mini-bar .gbtn-big { width: max(2.8rem, 48px); height: max(2.8rem, 48px); }
-.mini-bar .gbtn-big svg { width: 1.25rem; height: 1.25rem; }
+.mini-bar .ds-glass { width: max(2.3rem, 44px); height: max(2.3rem, 44px); }
+.mini-end .ds-glass { width: max(2.1rem, 44px); height: max(2.1rem, 44px); }
+.mini-bar .ds-glass svg { width: 1.1rem; height: 1.1rem; }
+.mini-bar .ds-glass.ds-glass-lg { width: max(2.8rem, 48px); height: max(2.8rem, 48px); }
+.mini-bar .ds-glass.ds-glass-lg svg { width: 1.25rem; height: 1.25rem; }
 .mini-video-slot { display: none; }
 
 /* The page keeps room for the bar, and toasts rise above it. */
@@ -46,8 +46,8 @@ html[data-mini-player] .toasts { bottom: calc(var(--mini-h) + 1rem); }
   .player[data-mini='true'] .mini-bar { padding-left: 0.75rem; }
   .mini-titles { flex: 1 1 auto; }
   .mini-controls { gap: 0.25rem; }
-  .mini-controls .gbtn { background: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none; }
-  .mini-controls .gbtn-big { background: #fff; }
+  .mini-controls .ds-glass { background: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none; }
+  .mini-controls .ds-glass-lg { background: #fff; }
   html[data-mini-player] .main { padding-bottom: calc(4rem + var(--mini-h) + env(safe-area-inset-bottom)); }
   html[data-mini-player] .toasts { bottom: calc(4.5rem + var(--mini-h) + env(safe-area-inset-bottom)); }
 }

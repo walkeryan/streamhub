@@ -2,20 +2,22 @@ import type { ReactNode } from 'react'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { fmtDuration } from '../lib/util'
 import { usePhone } from '../lib/layout'
-import { PlayerIcon, type PlayerIconName } from './PlayerIcon'
 import { SafeImg } from '../components/SafeImg'
+import { GlassIconButton, type IconName } from '../ds'
 import '../styles/mini.css'
 
-/** A round glass button of the player and the mini player (mockup: `.gb`). */
+/**
+ * The design system's glass button as the player and the mini player use it: white glass over the
+ * picture, no tooltip (the keyboard hint is in `title`), never scrolled into view; `big` is the white
+ * play/pause disc.
+ */
 export function GlassButton(p: {
-  focusKey: string; icon: PlayerIconName; label: string; onEnter: () => void; big?: boolean; disabled?: boolean
+  focusKey: string; icon: IconName; label: string; onEnter: () => void; big?: boolean; disabled?: boolean
   pressed?: boolean; testId?: string; title?: string; className?: string
 }) {
   return (
-    <Focusable focusKey={p.focusKey} onEnter={p.onEnter} disabled={p.disabled} label={p.label} title={p.title ?? p.label}
-      aria-pressed={p.pressed} data-testid={p.testId} scroll={false} className={`gbtn${p.big ? ' gbtn-big' : ''}${p.className ? ` ${p.className}` : ''}`}>
-      <PlayerIcon name={p.icon} />
-    </Focusable>
+    <GlassIconButton focusKey={p.focusKey} icon={p.icon} label={p.label} title={p.title ?? p.label} onEnter={p.onEnter} disabled={p.disabled}
+      pressed={p.pressed} testId={p.testId} tip={false} scroll={false} size={p.big ? 'lg' : undefined} solid={p.big} className={p.className} />
   )
 }
 
