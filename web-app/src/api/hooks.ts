@@ -9,7 +9,7 @@ import { MIN_QUERY } from '../lib/searchQuery'
 import type { PlaybackDescriptor, Recording, RecordingList, RecordingRule, RecordingRuleList, Room, RoomDescriptorQuery, RoomJoin, RoomJoined, TvAppRelease } from './types'
 import type {
   PlaybackOptions, BrowseJumps, BrowsePage, ChannelGroup, ChannelsResult, Disclaimer, EpgData, HomeData, LanguageCount, Profile, Programme, SearchResult, SearchSectionName,
-  Settings, ShelfList, Source, SourceCreate, Theme, Tile, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
+  Settings, ShelfList, Source, SourceCreate, Theme, SimilarTitles, Tile, TitleActivity, TitleDetail, MediaKind, MediaRequest, Notice, RequestList, RequestManagerSettings,
 } from './types'
 
 const useProfileId = () => useSession((s) => s.profile?.id ?? null)
@@ -108,6 +108,24 @@ export const useTitle = (id: string | undefined) =>
       return request ? refetchMsFor([request.phase]) : false
     },
     queryFn: () => unwrap<TitleDetail>(api.GET('/titles/{id}', { params: { path: { id: id! } } })),
+  })
+
+/** What the household did with a title. Loaded after the title itself; never holds the page up. */
+export const useTitleActivity = (id: string | undefined) =>
+  useQuery({
+    queryKey: ['title-activity', useProfileId(), id],
+    enabled: !!id,
+    staleTime: 30_000,
+    queryFn: () => unwrap<TitleActivity>(api.GET('/titles/{id}/activity', { params: { path: { id: id! } } })),
+  })
+
+/** More like this: the metadata provider's recommendations, with what plays here ticked. */
+export const useSimilarTitles = (id: string | undefined) =>
+  useQuery({
+    queryKey: ['title-similar', useProfileId(), id],
+    enabled: !!id,
+    staleTime: 10 * 60_000,
+    queryFn: () => unwrap<SimilarTitles>(api.GET('/titles/{id}/similar', { params: { path: { id: id! } } })),
   })
 
 export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating'; order?: 'asc' | 'desc' }

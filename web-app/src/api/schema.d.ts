@@ -2728,6 +2728,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/titles/{id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the household's profiles did with a title (its series, for a season or an episode)
+         * @description Loaded after the title so the page never waits on it. The same permission, rating and adult gates as GET /titles/{id}.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TitleActivity"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/titles/{id}/similar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * More like this — metadata-provider recommendations for a title (its series, for a season or an episode)
+         * @description Cached like other metadata answers; empty without metadata or for an adult title. The rating ceiling applies as on every listing.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SimilarTitles"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/discover/{section}": {
         parameters: {
             query?: never;
@@ -6993,14 +7075,74 @@ export interface components {
                 character?: string;
                 photo?: string | null;
             }[];
-            seasons?: components["schemas"]["Tile"][];
-            episodes?: components["schemas"]["Tile"][];
+            seasons?: components["schemas"]["EpisodeTile"][];
+            episodes?: components["schemas"]["EpisodeTile"][];
             /** @description e.g. 'Availability data by JustWatch' */
             attribution?: string;
             /** @description Requestable series only: season numbers a request may pick from (empty = whole series only). With request_missing, the seasons the library is missing. */
             request_seasons?: number[];
             /** @description The library has part of this series; a request asks for the seasons in request_seasons that it is missing. */
             request_missing?: boolean;
+            /** @description Seasons and episodes: the show and season they belong to, read from stored rows. Null for everything else, and when nothing above the row is known. */
+            parent?: components["schemas"]["TitleParent"] | null;
+            /** @description The US classification the stored evidence settles on (PG-13, TV-14); an episode or season shows its series'. Null when unknown or conflicting. */
+            content_rating?: string | null;
+            /** @description ISO date: the episode's air date, a film's release or a series' first air date, where known. */
+            release_date?: string | null;
+        };
+        /** @description A season or an episode as a title page lists it: a Tile with the numbers it is ordered by. */
+        EpisodeTile: components["schemas"]["Tile"] & {
+            season_number?: number | null;
+            episode_number?: number | null;
+            runtime_min?: number | null;
+        };
+        TitleParent: {
+            show?: {
+                /** @description The series' hub id (tmdb:tv:... when identified) */
+                id: string;
+                title: string;
+                backdrop?: string | null;
+            } | null;
+            season?: {
+                id: string;
+                title: string;
+                number?: number | null;
+            } | null;
+            episode_number?: number | null;
+            /** @description Episodes stored for this episode's season ("Episode 3 of 8"). */
+            episode_count?: number | null;
+            /** @description The episode's own name, without the provider's release line. */
+            episode_title?: string | null;
+        };
+        TitleActivity: {
+            id: string;
+            /** @description Newest first, at most 6, one per profile. Only profiles the viewer sees on Who's watching, plus the viewer (me). Empty for an adult title; a kids profile sees kids profiles only. */
+            entries: components["schemas"]["TitleActivityEntry"][];
+        };
+        TitleActivityEntry: {
+            profile_id: string;
+            name: string;
+            avatar?: string | null;
+            picture?: string | null;
+            me: boolean;
+            /**
+             * @description watching: in progress; finished: watched to the end (an episode, with season_finished on a season's last one); listed: added to My List.
+             * @enum {string}
+             */
+            action: "watching" | "finished" | "listed";
+            /** Format: date-time */
+            at: string;
+            season_number?: number | null;
+            episode_number?: number | null;
+            progress_pct?: number | null;
+            minutes_left?: number | null;
+            /** @default false */
+            season_finished: boolean;
+        };
+        SimilarTitles: {
+            id: string;
+            /** @description Same media type as the title, at most 20; adult titles left out; a title that plays here carries its in-app badge. */
+            tiles: components["schemas"]["Tile"][];
         };
         BrowseJumps: {
             /** @enum {string} */
