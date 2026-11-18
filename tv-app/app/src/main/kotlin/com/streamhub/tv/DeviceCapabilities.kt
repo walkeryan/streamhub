@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.media.MediaCodecList
 import android.view.Display
 import android.view.WindowManager
+import com.streamhub.tv.shell.PlayerLink
 import com.streamhub.tv.shell.capabilitiesJson
 
 /** What `capabilities()` reports: read once from the platform, nothing that needs a stream to find out. */
@@ -17,6 +18,7 @@ object DeviceCapabilities {
         hdr = runCatching { hdr(context) }.getOrDefault(emptyList()),
         videoCodecs = runCatching { videoCodecs() }.getOrDefault(emptyList()),
         audioPassthrough = runCatching { passthrough(context) }.getOrDefault(emptyList()),
+        miniPlayer = PlayerLink.pipSupported(context),
     )
 
     @Suppress("DEPRECATION")
