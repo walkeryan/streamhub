@@ -1,0 +1,454 @@
+/* =====================================================================================================
+   StreamHub design system (docs/specs/2026-11-18-app-restyle.md): tokens and the shared components.
+   Drawn from the approved title page and player. Every screen builds on this file; screens do not
+   redefine its classes (ds-*, btn, chip, panel, badge, tile*, dialog, chip-menu, bar, skel).
+   Sizes are in rem: the root scales with the window (16 px at 1280, 20 px at the mockups' 1600, 24 px on
+   a 1920 TV, 15 px on a phone), so one layout serves TV, desktop and phone.
+   ===================================================================================================== */
+
+/* ---------- tokens ---------- */
+:root {
+  /* Glass is drawn from --glass-ink: the theme's text colour on pages (so a light theme gets dark glass),
+     white over a picture (.ds-on-media, the player, the mini player). */
+  --glass-ink: var(--t-text);
+  --glass-blur: 10px;
+  /* Menus, popovers, dialogs: near-opaque surface. */
+  --pop-bg: color-mix(in srgb, var(--t-surface) 96%, transparent);
+  --pop-line: color-mix(in srgb, var(--t-text) 18%, transparent);
+  /* Opaque cards (kept from the layered surfaces): an edge, a faint sheen, a soft drop. */
+  --surface-edge: color-mix(in srgb, var(--t-text) 12%, transparent);
+  --surface-sheen: color-mix(in srgb, var(--t-text) 5%, transparent);
+  --surface-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, .16);
+
+  /* radii: xs rating box · sm menu items, badges · md buttons · lg stills, cards · xl panels, dialogs */
+  --r-xs: 0.25rem; --r-sm: 0.45rem; --r-md: 0.6rem; --r-lg: 0.7rem; --r-xl: 0.9rem; --r-pill: 999px;
+  /* shadows */
+  --shadow-raise: 0 0.3rem 0.9rem rgba(0, 0, 0, .35);
+  --shadow-card: 0 0.5rem 1.4rem rgba(0, 0, 0, .38), 0 0 0 1px color-mix(in srgb, var(--t-text) 8%, transparent);
+  --shadow-hero: 0 1rem 2.5rem rgba(0, 0, 0, .55), 0 0 0 1px color-mix(in srgb, var(--t-text) 8%, transparent);
+  --shadow-pop: 0 1.2rem 3rem rgba(0, 0, 0, .6);
+  --shadow-accent: 0 0.5rem 1.5rem color-mix(in srgb, var(--t-accent) 35%, transparent);
+
+  /* type scale (the title page's): hero title · page title · subtitle · section heading · body · meta · small · micro */
+  --fs-hero: 2.2rem; --fs-page: 1.6rem; --fs-sub: 1.3rem; --fs-section: 1.2rem;
+  --fs-body: 0.9rem; --fs-meta: 0.8rem; --fs-small: 0.75rem; --fs-micro: 0.7rem;
+
+  /* spacing: the page's side and top padding (the TV safe area), and the rhythm between things */
+  --page-x: var(--safe-x); --page-y: var(--safe-y);
+  --gap-xs: 0.3rem; --gap-sm: 0.5rem; --gap-md: 0.7rem; --gap-row: 0.9rem; --gap-lg: 1.4rem; --gap-section: 2.2rem;
+
+  /* control heights */
+  --ctl-sm: 2.3rem; --ctl-md: 2.9rem; --ctl-lg: 3.6rem; --chip-h: 2.125rem;
+
+  /* focus: the ring every focusable shares (core.css .fx), and the accent glow of glass and stills */
+  --ring-w: var(--focus-border);
+  --ring-color: var(--t-focus-ring);
+  --glow-accent: 0 0 1rem color-mix(in srgb, var(--t-accent) 45%, transparent);
+
+  /* tiles: a landscape still's width in rows (posters keep --tile-poster-*) */
+  --still-w: 11.8rem;
+}
+@media (max-width: 720px) {
+  :root { --page-x: 1rem; --page-y: 1rem; --still-w: 13rem; --fs-body: 1rem; --fs-meta: 0.875rem; --fs-small: 0.8125rem; --fs-micro: 0.75rem; }
+}
+.ds-on-media, .player, .mini-bar { --glass-ink: #fff; }
+/* Derived from the ink where it is set, so each context computes its own glass. */
+:root, .ds-on-media, .player, .mini-bar {
+  --glass-tint: color-mix(in srgb, var(--glass-ink) 9%, transparent);
+  --glass-tint-hi: color-mix(in srgb, var(--glass-ink) 15%, transparent);
+  --glass-line: color-mix(in srgb, var(--glass-ink) 18%, transparent);
+  --glass-fill: linear-gradient(180deg, color-mix(in srgb, var(--glass-ink) 16%, transparent), color-mix(in srgb, var(--glass-ink) 5%, transparent));
+  --glass-fill-hi: linear-gradient(180deg, color-mix(in srgb, var(--glass-ink) 26%, transparent), color-mix(in srgb, var(--glass-ink) 9%, transparent));
+  --glass-sheen: inset 0 1px 0 color-mix(in srgb, var(--glass-ink) 25%, transparent);
+}
+@media (prefers-contrast: more) {
+  :root { --surface-edge: var(--t-text-muted); }
+  :root, .ds-on-media, .player, .mini-bar { --glass-line: color-mix(in srgb, var(--glass-ink) 55%, transparent); }
+  .fx[data-focused='true'] { outline-width: 0.25rem; }
+}
+
+/* ---------- type ---------- */
+/* Headings keep room under the baseline. Fonts with deep descenders (the system font on Windows among
+   them) draw g, j, p, y below a tight line box, and anything that clips or sits right under the heading
+   (a two-line clamp, a row of chips) cut them off. Clipping happens at the padding edge, so the padding
+   is what saves them. */
+.display { font-size: var(--text-display); line-height: 1.16; padding-bottom: 0.12em; font-weight: 800; letter-spacing: -0.02em; text-wrap: balance; }
+.title-xl { font-size: var(--text-title); line-height: 1.25; padding-bottom: 0.1em; font-weight: 700; letter-spacing: -0.01em; }
+.heading { font-size: var(--text-heading); font-weight: 650; line-height: 1.3; }
+@media (max-width: 720px) { .display { font-size: 2rem; } }
+.muted { color: var(--t-text-muted); }
+.label { font-size: var(--text-label); font-weight: 500; color: var(--t-text-muted); }
+
+/* ---------- buttons ---------- */
+/* Secondary text button: glass. Primary: the one orange button of a screen, with words. Ghost: quietest. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  min-height: 2.75rem; padding: 0 1.125rem; border-radius: var(--r-md);
+  background: var(--glass-fill); color: var(--t-text); border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen);
+  font-size: var(--text-body); font-weight: 600; white-space: nowrap; user-select: none;
+}
+.btn > svg { flex: none; }
+.btn.fx[data-focused='true'] { transform: scale(1.04); }
+@media (hover: hover) { .btn:not(.btn-primary):hover { background: var(--glass-fill-hi); } }
+.btn-primary {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--t-accent) 62%, #fff 38%), var(--t-accent)); color: var(--t-accent-text);
+  border-color: transparent; font-weight: 750; box-shadow: var(--shadow-accent);
+}
+.btn-primary.fx[data-focused='true'] { outline-color: var(--t-focus-ring); box-shadow: var(--shadow-accent), 0 0 var(--focus-glow-blur) color-mix(in srgb, var(--t-focus-glow) var(--focus-glow-alpha), transparent); }
+.btn-lg { min-height: var(--ctl-md); padding: 0 1.4rem; font-size: 0.95rem; }
+.btn-lg svg { width: 1.1rem; height: 1.1rem; }
+.btn-ghost { background: color-mix(in srgb, var(--t-text) 8%, transparent); border-color: transparent; box-shadow: none; }
+.btn-danger { background: color-mix(in srgb, var(--t-danger) 24%, transparent); border-color: color-mix(in srgb, var(--t-danger) 45%, transparent); color: var(--t-text); }
+.btn-icon { width: 2.75rem; padding: 0; }
+.btn[aria-pressed='true']:not(.btn-primary) { box-shadow: inset 0 0 0 0.125rem var(--t-accent); }
+/* A button among chips (Live TV's search and Options icons, the guide's Watch and Record) takes their height and shape. */
+.btn.btn-chip { min-height: var(--chip-h); padding: 0 0.875rem; border-radius: var(--r-pill); font-size: var(--text-label); gap: 0.375rem; }
+.btn.btn-chip.btn-icon { width: var(--chip-h); padding: 0; }
+.btn.btn-chip svg { width: 1rem; height: 1rem; }
+
+/* ---------- glass icon buttons (GlassIconButton) ---------- */
+.ds-glass {
+  display: grid; place-items: center; flex: none; width: max(var(--ctl-md), 44px); height: max(var(--ctl-md), 44px); border-radius: 50%;
+  color: var(--glass-ink); background: var(--glass-fill); border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-sheen), var(--shadow-raise);
+  backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+.ds-glass svg { width: 1.3rem; height: 1.3rem; }
+.ds-glass[aria-pressed='true'] { color: var(--t-accent); }
+.ds-glass.fx[data-focused='true'] { transform: scale(1.06); outline-color: var(--t-accent); box-shadow: var(--glow-accent); }
+@media (hover: hover) { .ds-glass:not([aria-disabled='true']):hover { background: var(--glass-fill-hi); } }
+.ds-glass[aria-disabled='true'] { opacity: 0.35; cursor: default; transform: none; box-shadow: none; }
+.ds-glass-sm { width: max(var(--ctl-sm), 40px); height: max(var(--ctl-sm), 40px); }
+.ds-glass-sm svg { width: 1.1rem; height: 1.1rem; }
+.ds-glass-lg { width: max(var(--ctl-lg), 52px); height: max(var(--ctl-lg), 52px); }
+.ds-glass-lg svg { width: 1.5rem; height: 1.5rem; }
+.ds-glass-solid, .ds-glass-solid:hover { background: #fff; color: #0a0e1c; border-color: #fff; }
+/* The words a glass button has instead of a label: shown under it while it has focus (TV, keyboard) or the pointer. */
+.ds-glass-wrap { position: relative; display: inline-grid; flex: none; }
+.ds-glass-tip {
+  position: absolute; top: calc(100% + 0.45rem); left: 50%; transform: translateX(-50%); z-index: 6; pointer-events: none;
+  padding: 0.2rem 0.55rem; border-radius: var(--r-sm); background: var(--pop-bg); color: var(--t-text);
+  font-size: var(--fs-micro); font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity var(--dur-fast) var(--ease);
+  border: 1px solid color-mix(in srgb, var(--t-text) 14%, transparent);
+}
+.ds-glass-wrap[data-tip='above'] .ds-glass-tip { top: auto; bottom: calc(100% + 0.45rem); }
+.ds-glass-wrap:has(> .fx[data-focused='true']) .ds-glass-tip { opacity: 1; }
+@media (hover: hover) { .ds-glass-wrap:hover .ds-glass-tip { opacity: 1; } }
+@media (max-width: 720px) { .ds-glass-tip { display: none; } }
+
+/* ---------- chips and pills ---------- */
+/* A chip is a choice (a season, a filter): glass until pressed, then accent. */
+.chip {
+  display: inline-flex; align-items: center; gap: 0.375rem; height: var(--chip-h); padding: 0 0.875rem;
+  border-radius: var(--r-pill); background: var(--glass-tint); color: color-mix(in srgb, var(--t-text) 88%, transparent); border: 1px solid var(--glass-line);
+  font-size: var(--text-label); font-weight: 550; white-space: nowrap;
+}
+.chip[aria-pressed='true'] { background: var(--t-accent); color: var(--t-accent-text); border-color: transparent; font-weight: 650; box-shadow: 0 0.125rem 0.375rem rgba(0, 0, 0, .2); }
+@media (hover: hover) { .chip:not([aria-pressed='true']):hover { background: var(--glass-tint-hi); } }
+/* A pill is a small glass label or link in a line of text ("Season 2" on an episode, "On now"). */
+.ds-pill {
+  display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.6rem; border-radius: var(--r-pill); color: var(--t-text);
+  background: var(--glass-tint); border: 1px solid var(--glass-line); white-space: nowrap;
+}
+.ds-pill.fx[data-focused='true'] { transform: scale(1.04); }
+.ds-pill-accent { background: color-mix(in srgb, var(--t-accent) 22%, transparent); border-color: color-mix(in srgb, var(--t-accent) 55%, transparent); }
+.ds-pill-live { background: var(--t-danger); border-color: transparent; color: #fff; font-weight: 700; letter-spacing: 0.04em; }
+/* The content rating in a meta line: an outlined box. */
+.ds-rating { border: 1.5px solid color-mix(in srgb, var(--t-text) 78%, transparent); color: var(--t-text); font-weight: 700; font-size: 0.65rem; padding: 0.05rem 0.35rem; border-radius: var(--r-xs); line-height: 1.4; }
+/* A meta line: date, runtime, rating, spaced, muted. */
+.ds-meta { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; align-items: center; font-size: var(--fs-meta); color: var(--t-text-muted); }
+.ds-star { color: var(--t-text); } .ds-star b { color: #ffcc33; font-weight: 400; }
+/* A chip that drops its choices down (ChipMenu) and names the one in force, shortened when it is long. */
+/* (The choice follows the name as one phrase: its own leading space, not the chip's gap, separates them.) */
+.chip-menu-choice { max-width: 12rem; margin-left: -0.375rem; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+/* chips that scroll sideways instead of wrapping into a wall */
+.chip-scroll { display: flex; gap: 0.5rem; align-items: center; overflow-x: auto; scrollbar-width: none; padding: 0.375rem; margin: -0.375rem; scroll-padding-inline: 0.375rem; }
+.chip-scroll::-webkit-scrollbar { display: none; }
+.chip-scroll > * { flex: none; }
+
+/* ---------- menus and popovers (Popover, ChipMenu, OverflowMenu) ---------- */
+/* The list is drawn over the page and placed from its button's box; the scrim under it only takes the click that closes it. */
+.chip-menu-scrim { position: fixed; inset: 0; z-index: 80; }
+.chip-menu {
+  position: fixed; max-width: calc(100vw - 1rem); max-height: 24rem; overflow-y: auto; overscroll-behavior: contain; padding: 0.4rem;
+  border-radius: var(--r-lg); background: var(--pop-bg); border: 1px solid var(--pop-line); box-shadow: var(--shadow-pop);
+  scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--t-text) 28%, transparent) transparent;
+}
+.chip-menu-list, .ds-menu-list { display: flex; flex-direction: column; gap: 0.1rem; }
+.chip-menu-item {
+  display: grid; grid-template-columns: 1rem minmax(0, 1fr) auto; align-items: center; gap: 0.625rem;
+  min-height: 2.5rem; padding: 0 0.75rem; border-radius: var(--r-sm); font-weight: 500; white-space: nowrap;
+}
+.chip-menu-item svg { visibility: hidden; color: var(--t-accent); }
+.chip-menu-item[aria-checked='true'] { font-weight: 650; }
+.chip-menu-item[aria-checked='true'] svg { visibility: visible; }
+/* The ⋯ menu: an icon and the action, grouped by rules. */
+.ds-menu { width: 15rem; }
+.ds-menu-item { display: flex; align-items: center; gap: 0.7rem; min-height: 2.4rem; padding: 0 0.7rem; border-radius: var(--r-sm); font-size: var(--fs-meta); font-weight: 500; color: var(--t-text); white-space: nowrap; }
+.ds-menu-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ds-menu-item svg { flex: none; width: 1rem; height: 1rem; color: var(--t-text-muted); }
+.ds-menu-item[aria-pressed='true'] svg { color: var(--t-accent); }
+.ds-menu-sep { border: 0; border-top: 1px solid var(--pop-line); margin: 0.3rem 0.4rem; }
+/* In a list the ring is drawn inside the entry (the list clips what leaves it), over an accent tint. */
+.chip-menu-item.fx[data-focused='true'], .ds-menu-item.fx[data-focused='true'] {
+  transform: none; outline-offset: calc(-1 * var(--focus-border)); outline-color: var(--t-accent); box-shadow: none;
+  background: color-mix(in srgb, var(--t-accent) 16%, transparent);
+}
+/* On a phone the same lists sit in a sheet: taller rows on the sheet's surface. */
+.dialog .chip-menu-item, .dialog .ds-menu-item { min-height: 3rem; font-size: var(--text-body); background: var(--t-surface-alt); border-radius: var(--r-md); }
+.dialog .chip-menu-list, .dialog .ds-menu-list { gap: 0.5rem; }
+.dialog .ds-menu-item svg { width: 1.25rem; height: 1.25rem; }
+
+/* ---------- fields ---------- */
+.field {
+  display: flex; align-items: center; min-height: 2.75rem; padding: 0 0.875rem; border-radius: var(--r-md);
+  background: var(--glass-tint); border: 1px solid var(--glass-line); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .12); cursor: text;
+}
+.field.fx[data-focused='true'] { transform: none; }
+.field:focus-within { outline: var(--focus-border) solid var(--t-focus-ring); outline-offset: 0.125rem; }
+.field input { background: transparent; border: 0; outline: 0; width: 100%; min-width: 0; padding: 0.5rem 0; }
+.field input::placeholder { color: var(--t-text-muted); opacity: 0.8; }
+
+/* ---------- surfaces: panels (GlassPanel), cards ---------- */
+.panel, .ds-panel {
+  border-radius: var(--r-xl); padding: 1.25rem;
+  background: color-mix(in srgb, var(--t-surface) 72%, transparent);
+  background-image: linear-gradient(145deg, var(--surface-sheen), transparent 65%);
+  border: 1px solid var(--glass-line); box-shadow: var(--surface-shadow);
+}
+.ds-panel { background-color: var(--glass-tint); background-image: none; box-shadow: none; }
+.ds-panel-accent { background-color: color-mix(in srgb, var(--t-accent) 12%, transparent); border-color: color-mix(in srgb, var(--t-accent) 40%, transparent); }
+.ds-panel-danger { background-color: color-mix(in srgb, var(--t-danger) 12%, transparent); border-color: color-mix(in srgb, var(--t-danger) 40%, transparent); }
+.logo-block { width: 3.25rem; height: 2.25rem; border-radius: var(--r-sm); display: grid; place-items: center; font-weight: 700; font-size: 0.75rem; overflow: hidden; color: #fff; }
+.logo-block img { width: 100%; height: 100%; object-fit: contain; background: rgba(0,0,0,.35); }
+
+/* ---------- progress, badges ---------- */
+.bar { height: 0.25rem; border-radius: 999px; background: color-mix(in srgb, var(--t-text) 24%, transparent); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--t-accent); border-radius: inherit; }
+/* On a picture the track is light whatever the theme. */
+.tile .bar, .ds-still-art .bar, .ds-on-media .bar { background: rgba(255, 255, 255, .3); }
+.badge {
+  display: inline-flex; align-items: center; height: 1.125rem; padding: 0 0.4rem; border-radius: var(--r-xs);
+  background: rgba(8, 10, 16, .78); color: #fff; font-size: 0.6875rem; font-weight: 650; letter-spacing: 0.01em;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+/* Plays here ("In your library", "Available · …"): the dark pill with a green dot, quieter than the accent. */
+.badge-play { gap: 0.3rem; }
+.badge-play::before { content: ''; flex: none; width: 0.4rem; height: 0.4rem; border-radius: 50%; background: #5fd47a; box-shadow: 0 0 0.35rem rgba(95, 212, 122, .7); }
+.badge-warn { background: color-mix(in srgb, var(--t-danger) 30%, var(--t-surface-alt)); color: var(--t-text); }
+.badge-ok { background: color-mix(in srgb, var(--t-success) 30%, var(--t-surface-alt)); color: var(--t-text); }
+/* Watched: a green tick in a dark disc. Plays here: the solid green tick. */
+.ds-tick { position: absolute; right: 0.4rem; top: 0.4rem; width: 1.2rem; height: 1.2rem; border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, .6); color: #7ee08a; }
+.ds-tick svg { width: 0.8rem; height: 0.8rem; stroke-width: 3; }
+.tile-check { position: absolute; right: 0.375rem; top: 0.375rem; width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: 50%; background: var(--t-success); color: #06210f; box-shadow: 0 0.0625rem 0.25rem rgba(0, 0, 0, .45); }
+.tile-check svg { stroke-width: 3; }
+/* Recording state (recordings/RecordingBadge.tsx), in the guide, on rows and in Recordings. */
+.rec-badge { gap: 0.25rem; flex: none; }
+.rec-badge i { width: 0.4375rem; height: 0.4375rem; border-radius: 999px; background: currentColor; }
+.rec-badge[data-state='recording'] { background: var(--t-danger); color: #fff; }
+.rec-badge[data-state='failed'], .rec-badge[data-state='missed'] { box-shadow: inset 0 0 0 1px var(--t-danger); }
+.rec-badge[data-state='scheduled'] i { background: var(--t-danger); }
+.epg-label .rec-badge { align-self: flex-start; }
+/* A request's status (components/RequestStatus.tsx): the phase chip, and while downloading a bar that fills. */
+.request-status { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.request-status-line { display: flex; align-items: center; gap: 0.25rem 0.5rem; flex-wrap: wrap; min-width: 0; }
+.request-chip { gap: 0.25rem; flex: none; }
+/* Tinted from the text colour, so the chip keeps its outline on a panel, on the page and over a backdrop alike. */
+.request-status .request-chip { height: 1.5rem; padding: 0 0.625rem; border-radius: var(--r-pill); font-size: 0.75rem; background: color-mix(in srgb, var(--t-text) 14%, transparent); color: var(--t-text); }
+.request-status .request-chip.badge-ok { background: color-mix(in srgb, var(--t-success) 30%, var(--t-surface-alt)); }
+.request-status .request-chip.badge-warn { background: color-mix(in srgb, var(--t-danger) 30%, var(--t-surface-alt)); }
+.request-progress { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.request-progress-text { flex: none; font-variant-numeric: tabular-nums; }
+.request-bar { flex: 1 1 8rem; min-width: 4rem; max-width: 24rem; height: 0.5rem; border-radius: var(--r-pill); background: color-mix(in srgb, var(--t-text) 22%, transparent); overflow: hidden; }
+.request-bar > i { display: block; height: 100%; min-width: 0.5rem; border-radius: inherit; background: var(--t-accent); transition: width var(--dur-slow) var(--ease); }
+/* No percentage to show: a third of the bar travels along it. */
+.request-bar[data-indeterminate] > i { width: 35%; animation: request-bar-travel 1.6s ease-in-out infinite; }
+@keyframes request-bar-travel { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
+@media (prefers-reduced-motion: reduce) {
+  /* Standing still, it must not read as a third done: the whole track, dimmed. */
+  .request-bar[data-indeterminate] > i { width: 100%; opacity: 0.45; animation: none; }
+}
+/* On a poster: along the bottom edge, clear of the rounded corners. */
+.request-tile-bar { position: absolute; left: 0.375rem; right: 0.375rem; bottom: 0.375rem; max-width: none; min-width: 0; height: 0.3125rem; background: color-mix(in srgb, var(--t-bg) 70%, transparent); }
+
+/* ---------- sections and rows (Section, SectionHeader, HRow, TileRow) ---------- */
+.ds-section { min-width: 0; }
+.ds-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem 1rem; min-width: 0; margin-bottom: 0.6rem; }
+.ds-section-title, .row-title { display: flex; align-items: baseline; gap: 0.6rem; min-width: 0; font-size: var(--fs-section); font-weight: 750; letter-spacing: -0.01em; line-height: 1.3; }
+.ds-section-title small, .ds-page-title small { color: var(--t-text-muted); font-weight: 500; font-size: var(--fs-small); letter-spacing: 0; }
+.ds-section-action { flex: none; display: flex; align-items: center; gap: 0.5rem; }
+.ds-page-head { align-items: center; margin-bottom: 1rem; }
+.ds-page-title { display: flex; align-items: baseline; gap: 0.75rem; min-width: 0; font-size: var(--fs-page); font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; padding-bottom: 0.08em; }
+/* A row scrolls sideways out to the window's edges: inside the page's side padding it bleeds by it. */
+.ds-row {
+  display: flex; gap: var(--gap-row); overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none;
+  margin-inline: calc(-1 * var(--page-x)); padding: 0.4rem var(--page-x) 0.6rem; scroll-padding-inline: var(--page-x);
+}
+.ds-row::-webkit-scrollbar { display: none; }
+/* The rows of Home and of Movies & Shows sit straight in the page: each pads itself. */
+.tile-row { padding-inline: var(--page-x); margin-bottom: 0.25rem; --still-w: 14rem; }
+.tile-row .tile-more.tile-landscape { width: var(--still-w); height: auto; aspect-ratio: 16 / 9; align-self: flex-start; }
+.tile-row > .ds-section-head { margin-bottom: 0; }
+/* A tile lifts by --focus-scale on focus: the row keeps room for that and the ring above and below. */
+.tile-row > .ds-row { padding-block: 0.875rem; gap: var(--tile-gap); }
+/* Where height is scarce (a phone, any landscape screen) rows use four fifths of the poster token and a
+   tighter band, so the first screen of Home, Movies and Shows carries three rows rather than two. */
+@media (max-width: 720px), (min-aspect-ratio: 4/3) {
+  .tile-row { --tile-poster-w: 7.5rem; --tile-poster-h: 11.25rem; }
+  .tile-row > .ds-row { padding-block: 0.7rem; }
+}
+@media (max-width: 720px) {
+  .tile-row { --still-w: 12rem; }
+}
+/* Older screens' own rows (Sports): the same look, padded by the page. */
+.row-scroll {
+  display: flex; gap: var(--tile-gap); overflow-x: auto; overflow-y: hidden;
+  padding: 1rem var(--safe-x); scroll-padding-inline: var(--safe-x); scrollbar-width: none;
+}
+.row-scroll::-webkit-scrollbar { display: none; }
+@media (max-width: 720px) { .row-scroll { padding-inline: 1rem; scroll-padding-inline: 1rem; } }
+
+/* ---------- tiles ---------- */
+.tile { flex: none; border-radius: var(--r-lg); overflow: hidden; background: var(--t-surface-alt); box-shadow: var(--shadow-card); }
+.tile-poster { width: var(--tile-poster-w); height: var(--tile-poster-h); }
+.tile-landscape { width: var(--tile-landscape-w); height: var(--tile-landscape-h); }
+.tile-channel { width: var(--tile-channel-w); height: var(--tile-channel-h); }
+.tile img.art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* Shown once whole: a poster still arriving leaves the tile's own surface, never a half-painted image.
+   Hidden at once (a tile given a new poster never fades the old one out), faded in when it is there. */
+.tile img.art[data-loaded="false"] { opacity: 0; }
+.tile img.art[data-loaded="true"] { transition: opacity 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .tile img.art[data-loaded="true"] { transition: none; } }
+/* The name over the foot of a poster: on focus, or always where the art carries no title. A dark floor
+   keeps it readable over bright artwork. */
+.tile .cap {
+  position: absolute; inset: auto 0 0 0; padding: 1.5rem 0.625rem 0.5rem;
+  background: linear-gradient(to top, rgba(5, 8, 14, .96), rgba(5, 8, 14, .64) 65%, transparent);
+  color: #fff; font-size: var(--text-label); font-weight: 650; line-height: 1.25;
+  opacity: 0; transition: opacity var(--dur-fast) var(--ease);
+}
+.tile[data-focused='true'] .cap, .tile[data-title='always'] .cap { opacity: 1; }
+.tile-badges { position: absolute; right: 0.375rem; top: 0.375rem; max-width: calc(100% - 0.75rem); display: flex; gap: 0.25rem; }
+.tile-badges .badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-fav { position: absolute; top: 0.375rem; left: 0.375rem; width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: 50%; background: rgba(0, 0, 0, .55); color: var(--t-accent); }
+.tile-fav svg { width: 0.9rem; height: 0.9rem; }
+.tile-progress { position: absolute; left: 0.5rem; right: 0.5rem; bottom: 0.45rem; }
+.tile.fx[data-focused='true'] { outline-offset: 0.15rem; }
+/* "See all" closes a row in the shape of its neighbours: a glass card with a chevron. */
+.tile-more {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.375rem; padding: 0.5rem;
+  background: var(--glass-tint); border: 1px solid var(--glass-line); box-shadow: none; color: var(--t-text); font-weight: 650; text-align: center;
+}
+.tile-more > svg { width: 2.2rem; height: 2.2rem; padding: 0.45rem; border-radius: 50%; background: var(--glass-fill); border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen); }
+/* A landscape still with its words under it (StillCard): season strips, Continue Watching. */
+.ds-still { flex: none; width: var(--still-w); border-radius: var(--r-md); }
+.ds-still-art { position: relative; aspect-ratio: 16 / 9; border-radius: var(--r-md); overflow: hidden; background: var(--t-surface-alt); box-shadow: 0 0 0 1px color-mix(in srgb, var(--t-text) 8%, transparent), var(--shadow-raise); }
+.ds-still-art .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.ds-still[aria-current='page'] .ds-still-art { box-shadow: 0 0 0 0.15rem var(--t-accent); }
+.ds-still-bar { position: absolute; left: 0.4rem; right: 0.4rem; bottom: 0.35rem; }
+.ds-still-badge { position: absolute; left: 0.4rem; top: 0.4rem; display: flex; gap: 0.25rem; }
+.ds-still-cap { margin-top: 0.4rem; font-size: var(--fs-small); color: color-mix(in srgb, var(--t-text) 88%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-still-cap small { color: var(--t-text-muted); font-size: inherit; }
+.ds-still-cap small::before { content: ' · '; }
+.ds-still.fx[data-focused='true'] { transform: scale(1.04); outline-offset: 0.15rem; }
+.ds-art-fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 0.5rem; text-align: center; font-weight: 700; font-size: var(--fs-meta); color: #fff; }
+/* A tile with its name under it (Captioned). */
+.ds-captioned { flex: none; display: flex; flex-direction: column; min-width: 0; width: min-content; }
+.ds-cap-below { margin-top: 0.4rem; font-size: var(--fs-small); color: color-mix(in srgb, var(--t-text) 88%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 720px) {
+  .ds-still-cap, .ds-cap-below { font-size: 0.875rem; }
+}
+/* Channel tile (On now): the logo keeps to its box, the words to theirs, on a frosted block tinted from the channel's name. */
+.channel-card { position: absolute; inset: 0; display: grid; grid-template-columns: 34% minmax(0, 1fr); align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem 0.625rem 0.5rem; }
+.channel-logo { position: relative; align-self: stretch; min-width: 0; border-radius: var(--r-sm); overflow: hidden; background: rgba(0,0,0,.35); font-size: var(--text-heading); }
+.channel-logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 0.375rem; }
+.channel-copy { min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; color: #fff; }
+.channel-name { font-size: var(--text-label); font-weight: 700; }
+.channel-now { font-size: var(--text-label); font-weight: 500; line-height: 1.3; }
+.channel-card::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 0 0 1px rgba(255, 255, 255, .1); pointer-events: none; }
+.channel-card .bar { position: absolute; left: 0.5rem; right: 0.5rem; bottom: 0.35rem; }
+/* Feature cards: wide art, words beneath, one remote target per card. */
+.feature-card { display: block; min-width: 0; border-radius: var(--r-xl); background: var(--t-surface); overflow: hidden; border: 1px solid var(--surface-edge); }
+.feature-row .feature-card { flex: 0 0 clamp(17rem, 27vw, 24rem); }
+.feature-art { aspect-ratio: 16 / 9; position: relative; overflow: hidden; background: var(--t-surface-alt); }
+.feature-image { width: 100%; height: 100%; object-fit: cover; }
+.feature-logo { width: 100%; height: 100%; object-fit: contain; padding: 1.5rem; }
+.feature-art [data-testid='img-fallback'] { font-size: 3rem; background: linear-gradient(145deg, var(--t-surface-alt), var(--t-surface)); }
+.feature-status { position: absolute; left: .625rem; bottom: .625rem; border-radius: .3rem; background: rgba(8, 10, 16, .9); color: #fff; padding: .125rem .5rem; font-size: var(--text-label); font-weight: 700; }
+.feature-progress { position: absolute; inset: auto 0 0; }
+.feature-copy { padding: .75rem .875rem 1rem; display: flex; flex-direction: column; gap: .35rem; min-height: 6.5rem; }
+.feature-copy .heading { overflow-wrap: anywhere; }
+.feature-copy > .badge { align-self: flex-start; }
+.feature-card[data-focused='true'] { outline-offset: .2rem; outline-width: .2rem; }
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); gap: 1.25rem; padding: .5rem .25rem; }
+.feature-grid article { min-width: 0; }
+.feature-grid .feature-card { height: 100%; }
+@media (max-width: 720px) {
+  .feature-row .feature-card { flex-basis: min(19rem, 82vw); }
+  .feature-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) { .feature-card[data-focused='true'] { transform: none; } }
+/* A grid of posters (Browse, Discover, My List, Search). */
+.grid-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-poster-w), 1fr)); gap: 1.25rem var(--tile-gap); padding: 1rem 0.5rem; }
+.grid-tiles .tile { width: auto; aspect-ratio: 2/3; height: auto; }
+
+/* ---------- billboard art (Crossfade): Home's hero, the title page's backdrop, a room's join screen ---------- */
+.hero { position: relative; height: min(62dvh, 40rem); min-height: 22rem; overflow: hidden; }
+/* no usable art: shorter hero over a token gradient (see FALLBACK_BACKDROP) instead of a ~600 px empty band */
+.hero[data-art='none'] { height: min(44dvh, 26rem); min-height: 18rem; }
+.hero-layer { position: absolute; inset: 0; background-size: cover; background-position: center 25%; opacity: 0; transition: opacity var(--dur-hero-crossfade) var(--ease); }
+.hero-layer[data-on='true'] { opacity: 1; }
+.hero::before { /* scrim: bottom + left */
+  content: ''; position: absolute; inset: 0; z-index: 1;
+  background:
+    linear-gradient(to top, var(--t-bg) 2%, var(--t-scrim-top) 55%),
+    linear-gradient(to right, color-mix(in srgb, var(--t-bg) 92%, transparent) 8%, transparent 62%);
+}
+.hero-body { position: absolute; z-index: 2; left: var(--safe-x); bottom: 2rem; max-width: min(38rem, 80%); display: flex; flex-direction: column; gap: 0.75rem; }
+@media (max-width: 720px) { .hero-body { left: 1rem; right: 1rem; max-width: none; } .hero { height: 52dvh; } }
+
+/* ---------- dialogs and sheets (Modal) ---------- */
+.scrim { position: fixed; inset: 0; z-index: 80; background: var(--t-overlay); display: grid; place-items: center; padding: 1rem; }
+.dialog {
+  background-color: var(--pop-bg); background-image: linear-gradient(145deg, var(--surface-sheen), transparent 65%);
+  border: 1px solid var(--pop-line); border-radius: var(--r-xl); padding: 1.5rem; width: min(34rem, 100%); max-height: 88dvh;
+  overflow: auto; overflow-x: hidden; box-shadow: var(--shadow-pop); display: flex; flex-direction: column; gap: 1rem;
+}
+.dialog > .title-xl:first-child { font-size: var(--fs-section); font-weight: 750; }
+/* A dialog scrolls down, never sideways: content that is too wide is the content's bug to truncate. */
+.dialog .btn { max-width: 100%; }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dialog { -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+}
+/* Remote/TV surfaces remain solid: no moving-video backdrop sampling. */
+@media (hover: none) and (pointer: coarse), (min-width: 1800px), (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .dialog { background-color: var(--t-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+/* Sheets: on a phone a menu or filter rises from the bottom edge (with a grab handle); on wide screens a panel docks right. */
+@media (max-width: 720px) {
+  .scrim-sheet, .scrim-panel { place-items: end stretch; padding: 0; }
+  .dialog-sheet, .dialog-panel { width: 100%; max-height: 86dvh; border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 0; padding: 1.5rem 1rem calc(1.25rem + env(safe-area-inset-bottom)); }
+  .dialog-sheet::before, .dialog-panel::before { content: ''; position: absolute; left: 50%; top: 0.5rem; width: 2.5rem; height: 0.25rem; margin-left: -1.25rem; border-radius: 999px; background: color-mix(in srgb, var(--t-text) 28%, transparent); }
+  .dialog-sheet, .dialog-panel { position: relative; }
+}
+@media (min-width: 721px) {
+  .scrim-panel { place-items: stretch end; padding: 0; }
+  .dialog-panel { width: min(28rem, 100%); max-height: none; border-radius: var(--r-xl) 0 0 var(--r-xl); padding: var(--safe-y) var(--safe-x) var(--safe-y) 1.5rem; }
+}
+
+/* ---------- empty, error and loading states ---------- */
+.ds-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 0.75rem; padding: 3rem 0.25rem; }
+.ds-empty-compact { padding-block: 1.5rem; }
+.ds-empty-icon { display: grid; place-items: center; width: 3.25rem; height: 3.25rem; border-radius: 50%; color: var(--t-text-muted); background: var(--glass-fill); border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen); }
+.ds-empty-icon svg { width: 1.5rem; height: 1.5rem; }
+.ds-empty-icon-alert { color: var(--t-danger); }
+.ds-empty-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.skel { background: linear-gradient(90deg, var(--t-surface) 25%, var(--t-surface-alt) 50%, var(--t-surface) 75%); background-size: 200% 100%; animation: skel 1.4s linear infinite; border-radius: var(--r-md); }
+@keyframes skel { to { background-position: -200% 0; } }
+.ds-skel-row { padding-inline: var(--page-x); }
+.ds-skel-title { width: 12rem; height: 1.3rem; margin-bottom: 0.6rem; }
+.ds-skel-tile { flex: none; border-radius: var(--r-lg); }
+.ds-skel-poster { width: var(--tile-poster-w); height: var(--tile-poster-h); }
+.ds-skel-landscape { width: var(--still-w); aspect-ratio: 16 / 9; }
+.ds-skel-channel { width: var(--tile-channel-w); height: var(--tile-channel-h); }
+@media (max-width: 720px), (min-aspect-ratio: 4/3) { .ds-skel-row { --tile-poster-w: 7.5rem; --tile-poster-h: 11.25rem; } }
