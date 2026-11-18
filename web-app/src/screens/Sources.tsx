@@ -7,6 +7,7 @@ import { qk, useCreateSource, useDeleteSource, useDisclaimer, useServiceRegistry
 import type { PlexPin, Source, SourceCreate } from '../api/types'
 import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { Icon } from '../components/Icon'
+import { GlassIconButton, PageHeader, Section } from '../ds'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useRestoreFocus } from '../nav/back'
 import { useSession } from '../store/session'
@@ -92,54 +93,56 @@ export function Sources() {
   }
 
   return (
-    <div className="page-pad flex flex-col gap-8" data-testid="sources">
-      <h1 className="display">Sources</h1>
-      <section aria-label="Connected sources" className="flex flex-col gap-3">
-        <h2 className="heading">Connected</h2>
+    <div className="page-pad acct-page" data-testid="sources">
+      <PageHeader title="Sources" meta={libs.length ? libs.length : undefined} />
+      <div className="acct-body acct-body-wide">
+      <Section title="Connected" label="Connected sources" className="acct-group">
         {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : isLoading ? <Skeleton style={{ height: '5rem' }} /> : libs.length === 0 ? (
-          <Empty title="No sources connected" hint="Add Plex, Jellyfin, an IPTV provider or a playlist below. StreamHub only plays what you connect." />
+          <Empty compact icon="source" title="No sources connected" hint="Add Plex, Jellyfin, an IPTV provider or a playlist below. StreamHub only plays what you connect." />
         ) : (
-          <FocusGroup focusKey="src:list" className="flex flex-col gap-3">
+          <FocusGroup focusKey="src:list" className="acct-list">
             {libs.map((s) => (
-              <FocusGroup key={s.id} focusKey={`src:${s.id}`} className="panel flex items-center gap-4 flex-wrap" data-testid="source-card">
-                <div className="flex-1 min-w-0">
-                  <div className="heading truncate">{s.name}</div>
-                  <div className="label">{s.type} · <span data-status={s.status}>{s.status === 'ok' ? 'Connected' : s.status === 'syncing' ? 'Syncing' : s.status === 'unauthenticated' ? 'Sign in again' : 'Error'}</span>
+              <FocusGroup key={s.id} focusKey={`src:${s.id}`} className="acct-row" data-testid="source-card">
+                <span className="src-add-icon" aria-hidden="true"><Icon name={s.type === 'm3u' ? 'list' : 'source'} /></span>
+                <div className="acct-row-main">
+                  <div className="acct-row-title"><strong>{s.name}</strong>
+                    <span className="ds-pill acct-pill" data-tone={s.status === 'ok' ? 'ok' : s.status === 'syncing' ? undefined : 'warn'} data-status={s.status}>{s.status === 'ok' ? 'Connected' : s.status === 'syncing' ? 'Syncing' : s.status === 'unauthenticated' ? 'Sign in again' : 'Error'}</span></div>
+                  <div className="acct-row-meta">{s.type}
                     {s.counts && Object.keys(s.counts).length > 0 && ` · ${Object.entries(s.counts).map(([k, v]) => `${v} ${k}`).join(', ')}`}
                     {typeof s.config_summary?.server_url === 'string' && ` · ${redactUrl(s.config_summary.server_url)}`}
                   </div>
                 </div>
-                <Button focusKey={`src:${s.id}:sync`} icon="refresh" onEnter={() => void sync(s)}>Sync</Button>
-                <Button focusKey={`src:${s.id}:test`} icon="check" onEnter={() => void test(s)}>Test</Button>
-                <Button focusKey={`src:${s.id}:rm`} danger icon="trash" onEnter={() => setRemoving(s)}>Remove</Button>
+                <span className="row-actions">
+                  <GlassIconButton focusKey={`src:${s.id}:sync`} icon="refresh" size="sm" label="Sync" tip={`Sync ${s.name}`} onEnter={() => void sync(s)} />
+                  <GlassIconButton focusKey={`src:${s.id}:test`} icon="check" size="sm" label="Test" tip="Test the connection" onEnter={() => void test(s)} />
+                  <GlassIconButton focusKey={`src:${s.id}:rm`} icon="trash" size="sm" className="acct-danger" label="Remove" tip={`Remove ${s.name}`} onEnter={() => setRemoving(s)} />
+                </span>
               </FocusGroup>
             ))}
           </FocusGroup>
         )}
-      </section>
+      </Section>
 
-      <section aria-label="Add a source" className="flex flex-col gap-3">
-        <h2 className="heading">Add a source</h2>
-        <FocusGroup focusKey="src:add" className="flex gap-4 flex-wrap">
+      <Section title="Add a source" className="acct-group">
+        <FocusGroup focusKey="src:add" className="src-add">
           {([['plex', 'Plex', 'Link with a PIN or QR code'], ['jellyfin', 'Jellyfin', 'Server address and sign-in'], ['xtream', 'Xtream Codes', 'IPTV provider login'], ['m3u', 'M3U playlist', 'Playlist address or file']] as const).map(([k, name, hint]) => (
-            <Focusable key={k} focusKey={`add:${k}`} className="panel flex flex-col gap-1" style={{ width: '14rem' }} data-testid={`add-${k}`} onEnter={() => openAdd(k)} label={`Add ${name}`}>
-              <Icon name={k === 'm3u' ? 'list' : k === 'plex' ? 'link' : 'source'} />
-              <span className="heading">{name}</span><span className="label">{hint}</span>
+            <Focusable key={k} focusKey={`add:${k}`} className="src-add-card" data-testid={`add-${k}`} onEnter={() => openAdd(k)} label={`Add ${name}`}>
+              <span className="src-add-icon" aria-hidden="true"><Icon name={k === 'm3u' ? 'list' : k === 'plex' ? 'link' : 'source'} /></span>
+              <b>{name}</b><span className="acct-small">{hint}</span>
             </Focusable>
           ))}
         </FocusGroup>
-      </section>
+      </Section>
 
-      <section aria-label="Streaming services" className="flex flex-col gap-3">
-        <h2 className="heading">Streaming services</h2>
-        <p className="muted" style={{ maxWidth: '44rem' }}>Turn on the services you subscribe to. Titles you can watch there are labelled “Open in app” and open the service for you.</p>
-        <FocusGroup focusKey="src:svc" className="flex gap-3 flex-wrap">
+      <Section title="Streaming services" meta={svcSources.length ? `${svcSources.length} on` : undefined} className="acct-group">
+        <p className="acct-note">Turn on the services you subscribe to. Titles you can watch there are labelled “Open in app” and open the service for you.</p>
+        <FocusGroup focusKey="src:svc" className="svc-grid">
           {SERVICES.map((svc) => {
             const on = svcSources.some((s) => s.service_key === svc.key)
             return (
-              <FocusGroup key={svc.key} focusKey={`svc:${svc.key}`} className="panel flex flex-col gap-2" style={{ width: '13rem', padding: '0.75rem' }}>
-                <span className="heading">{svc.name}</span>
-                <div className="flex gap-2 flex-wrap">
+              <FocusGroup key={svc.key} focusKey={`svc:${svc.key}`} className="svc-card">
+                <b>{svc.name}</b>
+                <div className="acct-chips">
                   <Focusable focusKey={`svc:${svc.key}:toggle`} className="chip fx-flat" aria-pressed={on} role="switch" data-testid={`svc-${svc.key}`} label={`${svc.name} ${on ? 'on' : 'off'}`} onEnter={() => toggleService(svc)}>{on ? 'On' : 'Off'}</Focusable>
                   <Focusable focusKey={`svc:${svc.key}:test`} className="chip fx-flat" label={`Test link for ${svc.name}`} onEnter={() => { const u = webUrl(svc.key); if (u) window.open(u, '_blank', 'noopener') }}>Test link</Focusable>
                 </div>
@@ -147,18 +150,19 @@ export function Sources() {
             )
           })}
         </FocusGroup>
-      </section>
+      </Section>
+      </div>
 
-      <Modal open={adding === 'plex'} onClose={() => setAdding(null)} title="Link Plex" firstFocusKey="plex:close"><PlexLink onDone={() => setAdding(null)} /></Modal>
-      <Modal open={adding === 'jellyfin' || adding === 'xtream' || adding === 'm3u'} onClose={() => setAdding(null)} title={adding === 'jellyfin' ? 'Add Jellyfin' : adding === 'xtream' ? 'Add Xtream Codes' : 'Add M3U playlist'} firstFocusKey="f:name" wide>
+      <Modal open={adding === 'plex'} onClose={() => setAdding(null)} title="Link Plex" firstFocusKey="plex:close" variant="sheet"><PlexLink onDone={() => setAdding(null)} /></Modal>
+      <Modal open={adding === 'jellyfin' || adding === 'xtream' || adding === 'm3u'} onClose={() => setAdding(null)} title={adding === 'jellyfin' ? 'Add Jellyfin' : adding === 'xtream' ? 'Add Xtream Codes' : 'Add M3U playlist'} firstFocusKey="f:name" wide variant="sheet">
         {(adding === 'jellyfin' || adding === 'xtream' || adding === 'm3u') && (
           <SourceForm key={adding} kind={adding} onClose={() => setAdding(null)} onNeedGate={() => setGate(() => () => setAdding(adding))}
             submit={async (body) => { await create.mutateAsync(body) }} />
         )}
       </Modal>
-      <Modal open={!!removing} onClose={() => setRemoving(null)} title="Remove this source?" firstFocusKey="rm:cancel">
+      <Modal open={!!removing} onClose={() => setRemoving(null)} title="Remove this source?" firstFocusKey="rm:cancel" variant="sheet">
         <p>{removing?.name} and its synced library will be removed from StreamHub. Your files and accounts are not touched.</p>
-        <div className="flex gap-3">
+        <div className="acct-actions">
           <Button focusKey="rm:cancel" onEnter={() => setRemoving(null)}>Keep source</Button>
           <Button focusKey="rm:ok" danger icon="trash" onEnter={() => { if (removing) del.mutate(removing.id, { onSuccess: () => toast(`Removed ${removing.name}.`, 'success'), onError: (e) => toast(e.message, 'error') }); setRemoving(null) }}>Remove</Button>
         </div>
@@ -198,17 +202,18 @@ function PlexLink({ onDone }: { onDone: () => void }) {
   }, [qc, toast, onDone])
   return (
     <div className="flex flex-col gap-4 items-start">
-      {err ? <p role="alert" style={{ color: 'var(--t-danger)' }}>{err}</p> : !pin ? <p className="muted">Requesting a code…</p> : (
-        <div className="flex gap-6 flex-wrap items-center">
-          {qr && <img src={qr} alt="QR code to link Plex" width={160} height={160} style={{ borderRadius: 8, background: '#fff', padding: 4 }} />}
-          <div className="flex flex-col gap-2">
+      {err ? <p role="alert" className="acct-error">{err}</p> : !pin ? <p className="acct-note">Requesting a code…</p> : (
+        <div className="room-share">
+          {qr && <img src={qr} alt="QR code to link Plex" width={160} height={160} className="src-qr" />}
+          <div className="flex flex-col gap-2 min-w-0">
             <p>Go to <strong>plex.tv/link</strong> (or scan the QR code to open it) and enter this code.</p>
-            <p className="display" style={{ letterSpacing: '0.2em' }} data-testid="plex-code">{pin.code}</p>
-            <p className="label" aria-live="polite">Waiting for you to approve it in Plex…</p>
+            <span className="acct-kicker" aria-hidden="true">Your code</span>
+            <p className="auth-code" data-testid="plex-code">{pin.code}</p>
+            <p className="auth-status" aria-live="polite">Waiting for you to approve it in Plex…</p>
           </div>
         </div>
       )}
-      <Button focusKey="plex:close" onEnter={onDone}>Cancel</Button>
+      <Button focusKey="plex:close" ghost onEnter={onDone}>Cancel</Button>
     </div>
   )
 }
@@ -243,9 +248,9 @@ function SourceForm({ kind, onClose, submit, onNeedGate }: { kind: 'jellyfin' | 
   }
   const field = (k: string, label: string, opts: { type?: string; placeholder?: string; first?: boolean } = {}) => (
     <div className="flex flex-col gap-1">
-      <label className="label" htmlFor={`f-${k}`}>{label}</label>
+      <label className="acct-kicker" htmlFor={`f-${k}`}>{label}</label>
       <FocusableInput focusKey={opts.first ? 'f:name' : `f:${k}`} label={label} type={opts.type} placeholder={opts.placeholder} value={v[k] ?? ''} onChange={set(k)} onSubmit={() => void go()} />
-      {errs[k] && <span role="alert" className="label" style={{ color: 'var(--t-danger)' }}>{errs[k]}</span>}
+      {errs[k] && <span role="alert" className="acct-small acct-error">{errs[k]}</span>}
     </div>
   )
   const onFile = async (f: File | undefined) => {
@@ -261,7 +266,7 @@ function SourceForm({ kind, onClose, submit, onNeedGate }: { kind: 'jellyfin' | 
       {kind !== 'm3u' && field('username', 'Username')}
       {kind !== 'm3u' && field('password', 'Password', { type: 'password' })}
       {kind === 'xtream' && (
-        <div className="flex flex-col gap-1"><span className="label">Stream format</span>
+        <div className="flex flex-col gap-1"><span className="acct-kicker">Stream format</span>
           <div className="flex gap-2"><Chip focusKey="f:out:ts" pressed={v.output === 'ts'} onEnter={() => set('output')('ts')}>MPEG-TS</Chip><Chip focusKey="f:out:m3u8" pressed={v.output === 'm3u8'} onEnter={() => set('output')('m3u8')}>HLS (m3u8)</Chip></div>
         </div>
       )}
@@ -270,15 +275,15 @@ function SourceForm({ kind, onClose, submit, onNeedGate }: { kind: 'jellyfin' | 
           {field('url', 'Playlist address', { placeholder: 'https://example.com/playlist.m3u' })}
           <div className="flex items-center gap-3">
             <Button focusKey="f:file" icon="upload" onEnter={() => fileInput.current?.click()}>Choose a file</Button>
-            <span className="label">{v.fileName || 'or upload a .m3u / .m3u8 file'}</span>
+            <span className="acct-small">{v.fileName || 'or upload a .m3u / .m3u8 file'}</span>
             <input ref={fileInput} type="file" accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,text/plain" hidden onChange={(e) => void onFile(e.target.files?.[0])} data-testid="m3u-file" />
           </div>
           {field('epg_url', 'Guide (XMLTV) address, optional')}
           {field('refresh_hours', 'Refresh every (hours, 0 = never)')}
         </>
       )}
-      {formErr && <p role="alert" style={{ color: 'var(--t-danger)' }}>{formErr}</p>}
-      <div className="flex gap-3 mt-1">
+      {formErr && <p role="alert" className="acct-error">{formErr}</p>}
+      <div className="acct-actions mt-1">
         <Button focusKey="f:save" primary disabled={busy} onEnter={() => void go()}>{busy ? 'Adding…' : 'Add source'}</Button>
         <Button focusKey="f:cancel" onEnter={onClose}>Cancel</Button>
       </div>

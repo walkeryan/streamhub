@@ -7,6 +7,7 @@ import { useUi } from '../store/ui'
 import { ArrowPinAskDialog, ArrowPinDialog } from './ArrowPin'
 import { PinDialog, explain } from './PinPad'
 import { Button, Modal } from './ui'
+import { GlassIconButton } from '../ds/GlassIconButton'
 
 /**
  * The one secret a person signs in with on shared devices, and opens the adult category with: a
@@ -80,18 +81,26 @@ export function PasswordDialog(p: {
   }
   return (
     <Modal open={p.open} onClose={p.onClose} title={p.title} firstFocusKey="pw:input" testId="password-dialog">
-      {p.hint && <p className="muted">{p.hint}</p>}
-      <FocusableInput focusKey="pw:input" label="Password" type="password" autoComplete={p.confirm ? 'new-password' : 'current-password'} maxLength={PASSWORD_MAX}
-        placeholder={p.confirm ? `${PASSWORD_MIN} to ${PASSWORD_MAX} characters` : 'Password'} readOnly={busy || locked} value={value} onChange={setValue}
-        onSubmit={() => (p.confirm && !again ? void setFocus('pw:again') : void submit())} />
-      {p.confirm && <FocusableInput focusKey="pw:again" label="Password again" type="password" autoComplete="new-password" maxLength={PASSWORD_MAX}
-        placeholder="Once more" readOnly={busy} value={again} onChange={setAgain} onSubmit={() => void submit()} />}
-      {locked
-        ? <p role="alert" data-testid="password-locked" style={{ color: 'var(--t-danger)' }}>Too many wrong passwords. Try again in {clock(left)}.</p>
-        : error && <p role="alert" data-testid="password-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
-      <div className="flex gap-3 flex-wrap">
-        <Button focusKey="pw:ok" primary disabled={busy || locked || !value} onEnter={() => void submit()} testId="password-ok">{p.submitLabel ?? 'OK'}</Button>
-        <Button focusKey="pw:cancel" onEnter={p.onClose}>Cancel</Button>
+      <div className="secret-form">
+        {p.hint && <p className="acct-note">{p.hint}</p>}
+        <div className="acct-field">
+          <span className="acct-kicker" aria-hidden="true">Password</span>
+          <FocusableInput focusKey="pw:input" label="Password" type="password" autoComplete={p.confirm ? 'new-password' : 'current-password'} maxLength={PASSWORD_MAX}
+            placeholder={p.confirm ? `${PASSWORD_MIN} to ${PASSWORD_MAX} characters` : 'Password'} readOnly={busy || locked} value={value} onChange={setValue}
+            onSubmit={() => (p.confirm && !again ? void setFocus('pw:again') : void submit())} />
+        </div>
+        {p.confirm && <div className="acct-field">
+          <span className="acct-kicker" aria-hidden="true">Password again</span>
+          <FocusableInput focusKey="pw:again" label="Password again" type="password" autoComplete="new-password" maxLength={PASSWORD_MAX}
+            placeholder="Once more" readOnly={busy} value={again} onChange={setAgain} onSubmit={() => void submit()} />
+        </div>}
+        {locked
+          ? <p role="alert" data-testid="password-locked" className="acct-error">Too many wrong passwords. Try again in {clock(left)}.</p>
+          : error && <p role="alert" data-testid="password-error" className="acct-error">{error}</p>}
+        <div className="acct-actions">
+          <Button focusKey="pw:ok" primary disabled={busy || locked || !value} onEnter={() => void submit()} testId="password-ok">{p.submitLabel ?? 'OK'}</Button>
+          <Button focusKey="pw:cancel" onEnter={p.onClose}>Cancel</Button>
+        </div>
       </div>
     </Modal>
   )
@@ -113,6 +122,7 @@ export function AskSecretDialog(p: {
   return <PinDialog {...common} title={p.title[p.kind]} hint={p.hint[p.kind]} submitLabel={p.submitLabel} />
 }
 
+const KIND_ICON: Record<PinKind, string> = { pin: 'dots', password: 'lock', arrows: 'up' }
 const CHOICES: { kind: PinKind; name: string; detail: string }[] = [
   { kind: 'pin', name: 'Number PIN', detail: '4 to 8 digits, on a keypad.' },
   { kind: 'password', name: 'Password', detail: `${PASSWORD_MIN} to ${PASSWORD_MAX} characters, typed. A TV shows its keyboard.` },
@@ -134,16 +144,16 @@ export function ChooseSecretDialog(p: {
   const save = (k: PinKind) => (secret: string) => p.onSave(secret, k)
   return <>
     <Modal open={p.open && !kind} onClose={p.onClose} title={`How should ${p.name} sign in?`} firstFocusKey={`${p.scope}:kind:${p.current ?? 'pin'}`} testId="secret-choice">
-      <p className="muted">Pick one. It is asked for when a shared device switches to {p.name}, and to show adult titles.</p>
-      {p.note && <p className="muted">{p.note}</p>}
-      <FocusGroup focusKey={`${p.scope}:kinds`} className="flex flex-col gap-2" role="group" label="Sign in with">
+      <p className="acct-note">Pick one. It is asked for when a shared device switches to {p.name}, and to show adult titles.</p>
+      {p.note && <p className="acct-note">{p.note}</p>}
+      <FocusGroup focusKey={`${p.scope}:kinds`} className="acct-list" role="group" label="Sign in with">
         {CHOICES.map((c) => (
-          <Button key={c.kind} focusKey={`${p.scope}:kind:${c.kind}`} className="rec-choice" pressed={p.current === c.kind} onEnter={() => setKind(c.kind)} testId={`secret-kind-${c.kind}`}>
-            <span className="flex flex-col"><strong>{c.name}{p.current === c.kind ? ' (now)' : ''}</strong><span className="label">{c.detail}</span></span>
+          <Button key={c.kind} focusKey={`${p.scope}:kind:${c.kind}`} className="secret-choice" icon={KIND_ICON[c.kind]} pressed={p.current === c.kind} onEnter={() => setKind(c.kind)} testId={`secret-kind-${c.kind}`}>
+            <span className="flex flex-col"><strong>{c.name}{p.current === c.kind ? ' (now)' : ''}</strong><span className="acct-small">{c.detail}</span></span>
           </Button>
         ))}
       </FocusGroup>
-      <div><Button focusKey={`${p.scope}:kind-cancel`} onEnter={p.onClose}>Cancel</Button></div>
+      <div><Button focusKey={`${p.scope}:kind-cancel`} ghost onEnter={p.onClose}>Cancel</Button></div>
     </Modal>
     <PinDialog open={p.open && kind === 'pin'} onClose={p.onClose} title={`New PIN for ${p.name}`} hint="Four to eight digits." confirm submitLabel="Save PIN"
       onSubmit={save('pin')} explain={p.explain} />
@@ -185,11 +195,13 @@ export function SecretControls(p: {
   const remove = () => { attempt(null, null).catch((e: unknown) => toast(e instanceof Error ? e.message : 'Could not remove the PIN.', 'error')) }
   const noun = kind ? NOUN[kind] : 'PIN'
   return (
-    <div className="person-row device-row" data-testid={p.testId} data-kind={kind ?? ''}>
+    <div className="acct-row person-row device-row" data-testid={p.testId} data-kind={kind ?? ''}>
       <span className="who"><strong data-testid={`${p.testId}-kind`}>{signsInWith(p.who)}</strong>
-        <span className="label">{kind ? p.setHint : p.noneHint}</span></span>
-      <Button focusKey={`${p.scope}:pin`} icon="lock" onEnter={() => setChoosing(true)} testId={`${p.testId}-set`}>{kind ? 'Change sign-in' : 'Choose sign-in'}</Button>
-      {kind && <Button focusKey={`${p.scope}:pin-clear`} danger onEnter={remove} testId={`${p.testId}-clear`}>Remove {noun}</Button>}
+        <span className="acct-row-meta">{kind ? p.setHint : p.noneHint}</span></span>
+      <span className="row-actions">
+        <Button focusKey={`${p.scope}:pin`} icon="lock" onEnter={() => setChoosing(true)} testId={`${p.testId}-set`}>{kind ? 'Change sign-in' : 'Choose sign-in'}</Button>
+        {kind && <GlassIconButton focusKey={`${p.scope}:pin-clear`} icon="trash" label={`Remove ${noun}`} className="acct-danger" onEnter={remove} testId={`${p.testId}-clear`} />}
+      </span>
       <ChooseSecretDialog open={choosing} name={p.name} scope={p.scope} current={kind} onClose={() => { setChoosing(false); void setFocus(`${p.scope}:pin`) }}
         onSave={(secret, k) => attempt(secret, k)} />
       {kind && <AskSecretDialog open={!!proving} kind={kind} arrows={p.who.pin_arrows} submitLabel="Continue"

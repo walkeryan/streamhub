@@ -147,23 +147,31 @@ export function PinDialog(p: {
   }, [p.open])
 
   const prompt = p.confirm && first !== null ? 'Enter it once more to confirm.' : p.hint
+  // Laid out as the TV draws it: what is asked and the digit boxes on one side, the keypad on the other
+  // (stacked on a phone). The boxes go up to the most a PIN can have; the entered ones hold a dot.
   return (
     <Modal open={p.open} onClose={p.onClose} title={p.title} firstFocusKey={HOME} testId="pin-dialog">
-      {prompt && <p className="muted">{prompt}</p>}
-      <div className="pin-dots" role="status" aria-live="polite" aria-label={pin.length ? `${pin.length} digits entered` : 'No digits entered'} data-testid="pin-dots">
-        {pin.length ? Array.from(pin, (_, i) => <i key={i} />) : <span className="label">{MIN} to {MAX} digits</span>}
+      <div className="pin-side">
+        {prompt && <p className="acct-note">{prompt}</p>}
+        <div className="pin-dots" role="status" aria-live="polite" aria-label={pin.length ? `${pin.length} digits entered` : 'No digits entered'} data-testid="pin-dots">
+          {Array.from(pin, (_, i) => <i key={i} />)}
+          {Array.from({ length: MAX - pin.length }, (_, i) => <span key={`slot${i}`} className="pin-slot" aria-hidden="true" />)}
+        </div>
+        {locked
+          ? <p role="alert" data-testid="pin-locked" className="acct-error">Too many wrong PINs. Try again in {clock(left)}.</p>
+          : error ? <p role="alert" data-testid="pin-error" className="acct-error">{error}</p>
+          : <p className="acct-small">{MIN} to {MAX} digits. The number keys work too.</p>}
       </div>
-      {locked
-        ? <p role="alert" data-testid="pin-locked" style={{ color: 'var(--t-danger)' }}>Too many wrong PINs. Try again in {clock(left)}.</p>
-        : error && <p role="alert" data-testid="pin-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
-      {/* A boundary, and no memory: arrows never leave the keypad, and coming back into it lands on 5. */}
-      <FocusGroup focusKey="pin:pad" className="pin-pad" role="group" label="Keypad" boundary remember={false} preferred={HOME}>
-        {GRID.slice(0, 3).flat().map((k) => <PinKey key={k} k={k} label={k} locked={locked} onEnter={() => add(k)}>{k}</PinKey>)}
-        <PinKey k="erase" icon="delete" label="Erase last digit" locked={locked} inactive={!pin} onEnter={erase} />
-        <PinKey k="0" label="0" locked={locked} onEnter={() => add('0')}>0</PinKey>
-        <PinKey k="ok" primary icon="check" label={p.submitLabel ?? 'OK'} locked={locked} inactive={!ready} onEnter={() => { void setFocus(HOME); void submit() }} testId="pin-ok" />
-      </FocusGroup>
-      <div><Button focusKey="pin:cancel" onEnter={p.onClose}>Cancel</Button></div>
+      <div className="pin-keys">
+        {/* A boundary, and no memory: arrows never leave the keypad, and coming back into it lands on 5. */}
+        <FocusGroup focusKey="pin:pad" className="pin-pad" role="group" label="Keypad" boundary remember={false} preferred={HOME}>
+          {GRID.slice(0, 3).flat().map((k) => <PinKey key={k} k={k} label={k} locked={locked} onEnter={() => add(k)}>{k}</PinKey>)}
+          <PinKey k="erase" icon="delete" label="Erase last digit" locked={locked} inactive={!pin} onEnter={erase} />
+          <PinKey k="0" label="0" locked={locked} onEnter={() => add('0')}>0</PinKey>
+          <PinKey k="ok" primary icon="check" label={p.submitLabel ?? 'OK'} locked={locked} inactive={!ready} onEnter={() => { void setFocus(HOME); void submit() }} testId="pin-ok" />
+        </FocusGroup>
+        <div><Button focusKey="pin:cancel" onEnter={p.onClose}>Cancel</Button></div>
+      </div>
     </Modal>
   )
 }

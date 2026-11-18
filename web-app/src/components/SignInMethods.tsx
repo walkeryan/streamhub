@@ -7,6 +7,9 @@ import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
 import { useUi } from '../store/ui'
 import { Button, Modal } from './ui'
+import { GlassIconButton } from '../ds/GlassIconButton'
+import { GlassPanel } from '../ds/States'
+import { SectionHeader } from '../ds/Section'
 
 const ORDER: SignInMethod[] = ['google', 'plex', 'password']
 // What linking came back with, read once per page load however often React mounts this.
@@ -74,23 +77,25 @@ export function SignInMethods() {
   const shown = ORDER.filter(offered)
   if (!shown.length) return null
   return (
-    <section className="flex flex-col gap-3" data-testid="signin-methods">
-      <h2 className="heading">Sign-in methods</h2>
-      <p className="muted">How you prove who you are from anywhere. Link more than one and any of them signs you in. The last one cannot be removed.</p>
-      <FocusGroup focusKey="signin:list" className="flex flex-col gap-2">
+    <GlassPanel as="section" className="acct-group" testId="signin-methods">
+      <SectionHeader title="Sign-in methods" />
+      <p className="acct-note">How you prove who you are from anywhere. Link more than one and any of them signs you in. The last one cannot be removed.</p>
+      <FocusGroup focusKey="signin:list" className="acct-list">
         {shown.map((m) => {
           const linked = held.includes(m)
           const only = linked && held.length === 1
           return (
-            <div key={m} className="panel person-row" data-testid={`signin-method-${m}`} data-linked={linked}>
+            <div key={m} className="acct-row person-row" data-testid={`signin-method-${m}`} data-linked={linked}>
               <span className="who">
-                <span className="flex items-center gap-2 flex-wrap"><strong>{METHOD_NAME[m]}</strong><span className={`badge ${linked ? 'badge-ok' : ''}`}>{linked ? 'Linked' : 'Not linked'}</span></span>
-                <span className="label truncate">{linked ? [label(m), only ? 'Your only way to sign in' : null].filter(Boolean).join(' · ') || 'Linked' : m === 'password' ? 'Choose a username and a password' : `Sign in with your ${METHOD_NAME[m]} account`}</span>
+                <span className="acct-row-title"><strong>{METHOD_NAME[m]}</strong><span className="ds-pill acct-pill" data-tone={linked ? 'ok' : undefined}>{linked ? 'Linked' : 'Not linked'}</span></span>
+                <span className="acct-row-meta truncate">{linked ? [label(m), only ? 'Your only way to sign in' : null].filter(Boolean).join(' · ') || 'Linked' : m === 'password' ? 'Choose a username and a password' : `Sign in with your ${METHOD_NAME[m]} account`}</span>
               </span>
-              {linked && m === 'password' && <Button focusKey="signin:password:change" disabled={busy !== null} onEnter={() => setEditing(true)} testId="signin-change-password">Change password</Button>}
-              {linked
-                ? <Button key="unlink" focusKey={`signin:${m}:unlink`} danger disabled={busy !== null || only} label={`Remove ${METHOD_NAME[m]} sign-in`} onEnter={() => setRemoving(m)} testId={`signin-unlink-${m}`}>Remove</Button>
-                : <Button key="link" focusKey={`signin:${m}:link`} disabled={busy !== null} label={`Link ${METHOD_NAME[m]}`} onEnter={() => link(m)} testId={`signin-link-${m}`}>{busy === m ? 'Opening…' : m === 'password' ? 'Set a password' : 'Link'}</Button>}
+              <span className="row-actions">
+                {linked && m === 'password' && <GlassIconButton focusKey="signin:password:change" icon="lock" label="Change password" disabled={busy !== null} onEnter={() => setEditing(true)} testId="signin-change-password" />}
+                {linked
+                  ? <GlassIconButton key="unlink" focusKey={`signin:${m}:unlink`} icon="trash" className="acct-danger" disabled={busy !== null || only} label={`Remove ${METHOD_NAME[m]} sign-in`} tip="Remove" onEnter={() => setRemoving(m)} testId={`signin-unlink-${m}`} />
+                  : <Button key="link" focusKey={`signin:${m}:link`} icon={m === 'password' ? 'lock' : 'link'} disabled={busy !== null} label={`Link ${METHOD_NAME[m]}`} onEnter={() => link(m)} testId={`signin-link-${m}`}>{busy === m ? 'Opening…' : m === 'password' ? 'Set a password' : 'Link'}</Button>}
+              </span>
             </div>
           )
         })}
@@ -99,12 +104,12 @@ export function SignInMethods() {
         onSaved={(changed) => { setEditing(false); toast(changed ? 'Password changed. Your other devices were signed out.' : 'Password set. You can sign in with it from now on.', 'success'); refreshMe() }} />}
       <Modal open={!!removing} onClose={() => setRemoving(null)} title={removing ? `Remove ${METHOD_NAME[removing]} sign-in?` : ''} firstFocusKey="signin:keep">
         <p>You will no longer be able to sign in that way. Your other sign-in methods keep working, and this device stays signed in.</p>
-        <div className="flex gap-3 flex-wrap">
+        <div className="acct-actions">
           <Button focusKey="signin:keep" onEnter={() => setRemoving(null)}>Keep it</Button>
           <Button focusKey="signin:remove-ok" danger disabled={busy !== null} onEnter={() => { if (removing) void remove(removing) }} testId="signin-unlink-ok">Remove</Button>
         </div>
       </Modal>
-    </section>
+    </GlassPanel>
   )
 }
 
@@ -134,9 +139,9 @@ function PasswordDialog({ has, username, onClose, onSaved }: { has: boolean; use
       {has && <FocusableInput focusKey="pw:current" label="Current password" placeholder="Current password" type="password" maxLength={256} autoComplete="current-password" value={current} onChange={setCurrent} onSubmit={() => void setFocus('pw:new')} />}
       <FocusableInput focusKey="pw:new" label="New password" placeholder="At least 10 characters" type="password" maxLength={256} autoComplete="new-password" value={password} onChange={setPassword} onSubmit={() => void setFocus('pw:again')} />
       <FocusableInput focusKey="pw:again" label="New password again" placeholder="The same password again" type="password" maxLength={256} autoComplete="new-password" value={again} onChange={setAgain} onSubmit={() => void submit()} />
-      <p className="label">{has ? 'Changing it signs your other devices out.' : 'At least 10 characters, not containing the username.'}</p>
-      {error && <p role="alert" style={{ color: 'var(--t-danger)' }} data-testid="password-dialog-error">{error}</p>}
-      <div className="flex gap-3 flex-wrap">
+      <p className="acct-small">{has ? 'Changing it signs your other devices out.' : 'At least 10 characters, not containing the username.'}</p>
+      {error && <p role="alert" className="acct-error" data-testid="password-dialog-error">{error}</p>}
+      <div className="acct-actions">
         <Button focusKey="pw:save" primary disabled={busy} onEnter={() => void submit()} testId="password-save">{busy ? 'Saving…' : 'Save password'}</Button>
         <Button focusKey="pw:cancel" onEnter={onClose}>Cancel</Button>
       </div>

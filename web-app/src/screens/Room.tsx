@@ -5,6 +5,7 @@ import { joinRoom, useRoomInfo } from '../api/hooks'
 import type { Room } from '../api/types'
 import { Button, Crossfade, Meta, Skeleton } from '../components/ui'
 import { Icon } from '../components/Icon'
+import { GlassIconButton, GlassPanel, nameGradient } from '../ds'
 import { SafeImg } from '../components/SafeImg'
 import { FocusGroup } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -108,46 +109,55 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
   const shown = failed ?? refusal
   const full = !!room && room.members.length >= room.max_members
   const at = room ? positionAt(room.state, room.server_ms + (Date.now() - info.dataUpdatedAt)) : null
+  const pic = room?.title.backdrop ?? room?.title.poster
   return (
-    <div className="room-join" data-testid="room-join" role="main">
-      <div className="room-join-art" aria-hidden="true">
-        <Crossfade src={room?.title.backdrop ?? room?.title.poster} />
-        <div style={{ position: 'absolute', inset: 0, zIndex: 1, background: 'linear-gradient(to top, var(--t-bg) 6%, transparent 70%), linear-gradient(to right, var(--t-bg) 4%, transparent 70%)' }} />
+    // The title page's look (title.css): the backdrop under a veil, the picture on the left, the title, then
+    // Join as the one orange button and the rest as round glass buttons.
+    <div className="room-join tp" data-testid="room-join" role="main">
+      <div className="tp-bg" aria-hidden="true">
+        <Crossfade src={pic} />
+        <div className="tp-veil" />
       </div>
-      <div className="page-pad title-page" style={{ position: 'relative', zIndex: 2 }}>
-        {!room && !failed ? <div className="flex gap-8"><Skeleton style={{ width: '12rem', height: '18rem' }} /><div className="flex-1 flex flex-col gap-3"><Skeleton style={{ height: '3rem', width: '60%' }} /><Skeleton style={{ height: '6rem' }} /></div></div> : (
-          <div className="title-top">
-            {room && <div className="tile tile-poster title-poster">
-              <SafeImg className="art" src={room.title.poster} alt="" fallback={<div className="grid place-items-center h-full p-4 text-center heading">{room.title.title}</div>} />
+      <div className="tp-page">
+        {!room && !failed ? <div className="tp-hero"><Skeleton className="room-skel-pic" /><div className="tp-info flex flex-col gap-3"><Skeleton style={{ height: '3rem', width: '60%' }} /><Skeleton style={{ height: '6rem' }} /></div></div> : (
+          <div className="tp-hero">
+            {room && <div className="tp-pic">
+              <div className="tp-pic-art" data-shape={room.title.backdrop ? undefined : 'poster'}>
+                <SafeImg className="art" src={pic} alt="" fallback={<span className="ds-art-fallback" style={{ background: nameGradient(room.title.title) }}>{room.title.title}</span>} />
+              </div>
             </div>}
-            <div className="title-head flex flex-col gap-3 min-w-0">
-              <p className="label flex items-center gap-2"><Icon name="people" size={18} />Watch together · room {code}</p>
-              <h1 className="display" data-testid="room-title">{room ? room.title.title : failed?.title}</h1>
-              {room && <Meta items={[KIND_LABEL[room.title.kind], room.title.year, room.title.subtitle, room.live ? 'Live' : room.state.playing ? `Playing · ${fmtDuration((at ?? 0) / 1000)}` : at ? `Paused at ${fmtDuration(at / 1000)}` : 'Not started yet']} />}
-            </div>
-            <div className="title-body flex flex-col gap-4 min-w-0">
+            <div className="tp-info">
+              <p className="room-kicker"><Icon name="people" size={18} />Watch together · room {code}</p>
+              <h1 className="tp-show" data-testid="room-title"><span>{room ? room.title.title : failed?.title}</span></h1>
+              {room && <div className="tp-meta"><Meta items={[KIND_LABEL[room.title.kind], room.title.year, room.title.subtitle, room.live ? 'Live' : room.state.playing ? `Playing · ${fmtDuration((at ?? 0) / 1000)}` : at ? `Paused at ${fmtDuration(at / 1000)}` : 'Not started yet']} /></div>}
               {room && <>
-                <p data-testid="room-host">{room.is_host ? 'You started this room.' : `${room.host_name} started this room.`}{room.controls_locked && !room.is_host ? ' Only the host controls playback.' : ''}</p>
-                <div className="flex flex-col gap-2">
-                  <span className="label">In the room · {room.members.length} of {room.max_members}</span>
-                  <div className="flex gap-2 flex-wrap" data-testid="room-join-members">
-                    {room.members.length ? room.members.map((m) => <span key={m.id} className="room-member" data-buffering={m.buffering}>{m.name}{m.host ? ' (host)' : ''}</span>) : <span className="muted">Nobody yet. The first one in starts it.</span>}
+                <p className="room-host" data-testid="room-host">{room.is_host ? 'You started this room.' : `${room.host_name} started this room.`}{room.controls_locked && !room.is_host ? ' Only the host controls playback.' : ''}</p>
+                <div className="room-members">
+                  <span className="acct-kicker">In the room · {room.members.length} of {room.max_members}</span>
+                  <div className="acct-chips" data-testid="room-join-members">
+                    {room.members.length ? room.members.map((m) => <span key={m.id} className="room-member" data-host={m.host} data-buffering={m.buffering}>{m.name}{m.host ? ' (host)' : ''}</span>) : <span className="acct-note">Nobody yet. The first one in starts it.</span>}
                   </div>
                 </div>
               </>}
               {shown && (
-                <div className="panel flex flex-col gap-2" role="alert" data-testid="room-refusal">
-                  {room && <h2 className="heading">{shown.title}</h2>}
-                  {shown.lines.filter(Boolean).map((line, i) => <p key={i} className={room || i ? 'muted' : undefined}>{line}</p>)}
-                </div>
+                <GlassPanel className="room-refusal" tone={room ? (shown.consent ? 'accent' : 'danger') : undefined}>
+                  <div role="alert" data-testid="room-refusal" className="flex flex-col gap-2">
+                    {room && <h2 className="ds-section-title">{shown.title}</h2>}
+                    {shown.lines.filter(Boolean).map((line, i) => <p key={i} className={room || i ? 'acct-note' : undefined}>{line}</p>)}
+                  </div>
+                </GlassPanel>
               )}
-              <FocusGroup focusKey="room:actions" className="flex gap-3 flex-wrap items-center" preferred="room:join">
-                {room && !shown?.gone && <Button focusKey="room:join" primary icon="play" disabled={joining || (full && !refusal)} onEnter={() => void join(room, !!refusal?.consent)} testId="room-join-go">
+              <FocusGroup focusKey="room:actions" className="tp-actions" preferred="room:join">
+                {room && !shown?.gone && <Button focusKey="room:join" primary lg icon="play" className="tp-play" disabled={joining || (full && !refusal)} onEnter={() => void join(room, !!refusal?.consent)} testId="room-join-go">
                   {joining ? 'Joining…' : refusal?.consent ? "Join with the room's audio" : full ? 'Room is full' : refusal ? 'Try again' : 'Join room'}
                 </Button>}
-                {room && !shown && <Button focusKey="room:invite" icon="people" onEnter={() => setSharing(true)} testId="room-join-invite">Invite</Button>}
-                {!barred && <Button focusKey="room:other" icon="search" onEnter={() => setOther(true)} testId="room-other">{room ? 'Another room' : 'Enter a code'}</Button>}
-                <Button focusKey="room:home" ghost onEnter={() => go('/')}>{room ? 'Not now' : 'Home'}</Button>
+                {room && !shown && <GlassIconButton focusKey="room:invite" icon="people" label="Invite" onEnter={() => setSharing(true)} testId="room-join-invite" />}
+                {/* Without a room there is no main action: the ways out keep their words. */}
+                {room
+                  ? <>{!barred && <GlassIconButton focusKey="room:other" icon="search" label="Another room" onEnter={() => setOther(true)} testId="room-other" />}
+                    <GlassIconButton focusKey="room:home" icon="x" label="Not now" onEnter={() => go('/')} /></>
+                  : <>{!barred && <Button focusKey="room:other" icon="search" onEnter={() => setOther(true)} testId="room-other">Enter a code</Button>}
+                    <Button focusKey="room:home" ghost onEnter={() => go('/')}>Home</Button></>}
               </FocusGroup>
             </div>
           </div>
