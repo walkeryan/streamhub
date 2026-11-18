@@ -126,3 +126,33 @@ mappings and the gamepad mapping keep working.
   the existing shell bridge (play/pause, ±seek, next/previous, expand = leave PiP / bring the player
   back full screen, close = stop). The bar shows only while the native player is in PiP. Use the
   existing Media3 session where it helps.
+
+### Implementation notes (`feat/player-revamp`)
+
+- Server: the extras are looked up beside the resolve and given 4 s; anything late or failing is left
+  out (`markers: []`, nulls). They are empty/null for live channels, recordings, trailers and **watch
+  rooms** (a room plays on together, so its descriptors carry none). `season_number`/`episode_number`
+  are set for every episode even when the rest is missing.
+- `thumbnails.interval_ms` is the index's real frame spacing once the server has read the BIF (it
+  prefetches it when it hands out the URL), else 2000 (Plex's default). The server always answers the
+  frame at or nearest before `ms`, so the interval only serves rounding for cache sharing.
+- Frames are served from `GET /api/v1/thumbnails/{token}?ms=<position>` (`image/jpeg`, cacheable until
+  the grant's week ends, 404 when the index cannot be fetched or parsed).
+
+### TV mini-player bridge (web half in this branch, native half in `feat/player-revamp-tv`)
+
+Same envelope conventions as `play()`: version 1, a `kind`, JSON text through the existing objects.
+Unknown kinds and malformed messages are ignored by the receiver.
+
+- TV → page: `window.streamhubShell.message(json)` (returns `true` when understood) with
+  `{"v":1,"kind":"mini_player","state": null | {"id":str,"title":str,"subtitle":str|null,
+  "image":str|null,"position_ms":int,"duration_ms":int|null,"playing":bool,"has_next":bool,
+  "has_previous":bool,"live":bool}}`. `null` hides the bar. The TV sends it on entering PiP, on every
+  change, at least every ~5 s while playing, and `null` on leaving PiP or stopping. The page also hides
+  the bar when `playbackEnded()` is called. Between reports the page runs the clock on by itself.
+  `image` must be an absolute http(s) URL or a same-origin path; anything else is not shown.
+- Page → TV: `window.StreamHubTV.message(json): boolean` with
+  `{"v":1,"kind":"mini_player_command","command":"play_pause"|"seek_by"|"next"|"previous"|"expand"|"close",
+  "delta_ms":int|null}` (`delta_ms` only for `seek_by`, negative is back: the bar sends −10000 and
+  +30000). `expand` leaves PiP / brings the player back full screen; `close` stops playback. `message`
+  is optional on the bridge: without it the page never shows the bar.
