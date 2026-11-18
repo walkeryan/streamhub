@@ -735,8 +735,12 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const miniTitle = current?.show?.title ?? (live ? channel?.name ?? title : title)
   const miniLine = episodic ? [episodeCode(current?.season_number, current?.episode_number), title].filter(Boolean).join(' · ') : live ? channel?.now?.title ?? null : null
   const mayTogether = mayStartRoom && !room && !catchup && !rewindAt && !isRecording
-  // Back to full screen: the controls show, as on opening.
-  useEffect(() => { if (!mini) poke() }, [mini, poke])
+  // Back to full screen from the mini player: the controls show, as on opening a film.
+  const wasMini = useRef(mini)
+  useEffect(() => {
+    if (wasMini.current && !mini) poke()
+    wasMini.current = mini
+  }, [mini, poke])
 
   useEffect(() => { if (pb.audioBlocked) openMenu('audio') }, [pb.audioBlocked, openMenu])
 
@@ -913,7 +917,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
             </div>
           )}
 
-          <FocusGroup focusKey="pb" className="pbar" data-testid="player-bar">
+          <FocusGroup focusKey="pb" className="pbar" data-testid="player-bar" preferred="pb:play">
             <div className="pbar-row">
               <div className="pbar-group pbar-start">
                 <GlassButton focusKey="pb:audio" icon="audio" label="Audio" title="Audio (A)" onEnter={() => openMenu('audio')} testId="player-audio-btn" />

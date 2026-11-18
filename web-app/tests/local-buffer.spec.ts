@@ -37,7 +37,7 @@ test('local window scrubs with arrows and Select, Go Live retains lease, exit re
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('buffer.calls') ?? '[]').filter((x: {path: string}) => x.path.endsWith('/seek')).at(-1)?.body.at)).toBe('2026-11-01T10:00:49.000Z')
   await page.getByRole('button', { name: 'Go Live', exact: true }).click()
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('buffer.calls') ?? '[]').filter((x: {path: string}) => x.path.endsWith('/seek')).at(-1)?.body.at)).toBeNull()
-  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await page.getByRole('button', { name: 'Close player', exact: true }).click()
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('buffer.calls') ?? '[]').filter((x: {path: string}) => x.path.endsWith('/release')).length)).toBe(1)
   const leases = await page.evaluate(() => JSON.parse(sessionStorage.getItem('buffer.calls') ?? '[]').filter((x: {path: string}) => x.path.endsWith('/lease')).length)
   expect(leases).toBe(1)

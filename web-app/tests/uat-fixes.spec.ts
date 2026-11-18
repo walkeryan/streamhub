@@ -6,8 +6,9 @@ const focusedKeyIn = (page: Page, testId: string) =>
 
 const barFocus = (page: Page) => page.locator('[data-testid="player-bar"] .fx[data-focused="true"]')
 /** Right along the control bar until the Audio button has focus: the buttons are icons, named by their labels. */
+/** Audio is the first control of the bar, left of the transport. */
 async function walkToAudio(page: Page) {
-  for (let i = 0; i < 10 && (await barFocus(page).getAttribute('aria-label')) !== 'Audio'; i++) await page.keyboard.press('ArrowRight')
+  for (let i = 0; i < 10 && (await barFocus(page).getAttribute('aria-label')) !== 'Audio'; i++) await page.keyboard.press('ArrowLeft')
 }
 
 async function openLiveChannel(page: Page) {
