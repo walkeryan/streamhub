@@ -79,7 +79,7 @@ function episodeDescriptor(id: string): PlaybackDescriptor | null {
   const eps = (s: number) => episodesOf(show, s)
   const here = eps(season)[n - 1]
   if (!series || !here) return null
-  const name = (t: Tile) => t.title.replace(/^\d+\.\s*/, '')
+  const name = (t: Tile) => t.title.replace(/^(?:\d+\.|E\d+ ·)\s*/, '')
   const upNext = (s: number, e: number) => {
     const t = eps(s)[e - 1]
     return t ? { id: t.id, title: name(t), subtitle: `S${s} · E${e}`, image: t.backdrop ?? null, duration_ms: 30_000 } : null
