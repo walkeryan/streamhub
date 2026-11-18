@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import kotlinx.coroutines.CancellationException
 import com.streamhub.tv.core.data.repo.boundProgressRequest
 import com.streamhub.tv.core.data.repo.bindProgressSession
+import com.streamhub.tv.core.data.repo.PlaybackReports
 import com.streamhub.tv.core.data.auth.AccessTokenSource
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.model.*
@@ -49,6 +50,8 @@ class StreamHubApi @Inject constructor(
     private val client: HttpClient,
     private val session: SessionStore,
     private val webTokens: AccessTokenSource,
+    /** Resolves and accepted progress reports, for whatever follows playback (the TV home screen). */
+    private val reports: PlaybackReports,
 ) {
     private suspend fun url(path: String): String {
         val base = session.current().apiBase ?: throw ApiException(0, null, "Server URL not set")
@@ -305,7 +308,7 @@ class StreamHubApi @Inject constructor(
     }
 
     suspend fun resolve(req: PlaybackRequest): PlaybackDescriptor =
-        client.post(url("/playback/resolve")) { setBody(req) }.ok()
+        client.post(url("/playback/resolve")) { setBody(req) }.ok<PlaybackDescriptor>().also(reports::resolved)
 
     suspend fun playbackGeneration():PlaybackGeneration=get("/playback/generation")
     suspend fun reserveMultiview(request:MultiviewRequest,owner:Session):MultiviewDescriptor {
@@ -342,9 +345,11 @@ class StreamHubApi @Inject constructor(
             webTokens.currentAccessToken(request.accessToken) ?: response.unit()
             val again=boundProgressRequest(owner,session.current(),report) ?: return false
             client.post(again.url) { bindProgressSession(again) }.unit()
+            reports.reported(report)
             return true
         }
         response.unit()
+        reports.reported(report)
         return true
     }
 
@@ -420,6 +425,16 @@ class StreamHubApi @Inject constructor(
     suspend fun removeFromWatchlist(itemId: String) =
         client.delete(url("/watchlist")) { parameter("id", itemId) }.unit()
     suspend fun history(): List<Tile> = get("/history")
+
+    // ---- The TV home screen (Watch Next, preview channel) ---------------------------------------
+    // Asked with include_adult=false spelled out: these lists end up on the TV's home screen, where
+    // an adult title must never appear, whatever this session has unlocked. The server also filters
+    // them by the profile's rating limit (content policy), as every listing.
+
+    /** Recently watched with progress, newest first: where "Continue watching" comes from. */
+    suspend fun generalHistory(): List<Tile> = get("/history") { parameter("include_adult", false) }
+    suspend fun generalWatchlist(): List<Tile> = get("/watchlist") { parameter("include_adult", false) }
+    suspend fun generalHome(): HomeResponse = get("/home") { parameter("include_adult", false) }
 
     // ---- Themes / settings ---------------------------------------------------------------------
 

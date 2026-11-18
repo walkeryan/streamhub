@@ -268,6 +268,8 @@ data class TitleDetail(
     /** Requestable series only: season numbers a request may pick from (empty = whole series only). */
     @SerialName("request_seasons") val requestSeasons: List<Int> = emptyList(),
     @SerialName("request_progress") val requestProgress: TileRequestProgress? = null,
+    /** The title's age rating (e.g. "PG-13", "TV-MA"); null when the server has none. */
+    @SerialName("content_rating") val contentRating: String? = null,
 ) {
     fun asTile() = Tile(id, kind, title, subtitle, year, poster, backdrop, logo, rating, progressPct, isFavorite, sources, nowPlaying, requestState, requestable, requestProgress)
 }
