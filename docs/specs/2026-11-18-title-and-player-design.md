@@ -139,6 +139,19 @@ mappings and the gamepad mapping keep working.
 - Frames are served from `GET /api/v1/thumbnails/{token}?ms=<position>` (`image/jpeg`, cacheable until
   the grant's week ends, 404 when the index cannot be fetched or parsed).
 
+- Web player: Minimise sits beside Close in the top right (and Back while a film or episode plays,
+  with the controls already hidden, minimises). Stream information and Picture in picture moved from
+  the bar into the settings menu (keys I and P unchanged); the bar keeps a volume button (slider on
+  hover) and Full screen on the right, beside Watch together and Settings. Forward is +30 s as in the
+  mockup; the arrow keys still step 10 s. The time on the right counts down by default (a click shows
+  the length). The mockup's list/queue icon has no defined function and is left out.
+- Up next ticks only while the picture plays over the credits; after the end it runs regardless. If
+  the picture ends while the card is still counting (credits shorter than 10 s), the next episode
+  starts at once. A seek back before the card's start brings the card back at its start. Minimised,
+  the countdown and autoplay continue without the card.
+- Moving on reports the finished episode as `state=stopped` with `position_ms = duration_ms`. The
+  audio language of the finished episode is chosen again in the next one when its file has it.
+
 ### TV mini-player bridge (web half in this branch, native half in `feat/player-revamp-tv`)
 
 Same envelope conventions as `play()`: version 1, a `kind`, JSON text through the existing objects.
