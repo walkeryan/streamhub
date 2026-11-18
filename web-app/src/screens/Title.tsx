@@ -401,6 +401,7 @@ function TitleDetails({ id }: { id: string }) {
                 </RequestStatus>
               </div>
             )}
+            {!canPlay && !handoff.length && t.kind !== 'channel' && <p className="tp-note" data-testid="title-unavailable">Not available from your sources.</p>}
             {t.overview && <p className="tp-overview">{t.overview}</p>}
             {spec.length > 0 && <dl className="tp-spec" data-testid="title-spec">{spec.map(([k, v]) => <div key={k} style={{ display: 'contents' }}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>}
           </div>
