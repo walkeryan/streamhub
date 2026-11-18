@@ -4,11 +4,9 @@ import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
 import { useChannelGroups, useLanguages, useSources } from '../api/hooks'
 import type { ChannelGroup } from '../api/types'
-import { Button, Chip, Empty, Modal, Skeleton } from '../components/ui'
+import { Button, Chip, ChipMenu, Empty, GlassIconButton, Modal, PageHeader, Skeleton } from '../ds'
 import { CatalogPicker } from '../components/CatalogPicker'
-import { ChipMenu } from '../components/ChipMenu'
 import { LanguageFilter, languageScope } from '../components/LanguageFilter'
-import { Icon } from '../components/Icon'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
 import { doesFocusableExist, setFocus } from '../nav/spatial'
 import { useHistoryState } from '../nav/historyState'
@@ -118,27 +116,32 @@ export function LiveTV() {
   const counted = total === null ? '' : `${total.toLocaleString()} channels`
   const listed = { ...filters, group: group || undefined }
 
-  if (!saved.ready) return <div className="live-screen" data-testid="live"><h1 className="heading">Live TV</h1>{saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="live:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></> : <p role="status">Loading saved filters…</p>}</div>
+  if (!saved.ready) return <div className="live-screen" data-testid="live">
+    <PageHeader title="Live TV" className="live-bar" />
+    {saved.error ? <><p role="alert">{saved.error}</p><Button focusKey="live:retry-prefs" onEnter={() => void saved.retry()}>Retry</Button></>
+      : <><p role="status" className="label">Loading saved filters…</p><div className="live-skel" aria-hidden="true">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} />)}</div></>}
+  </div>
   return <div className="live-screen" data-testid="live" data-view={view}>
     <div className="live-head" data-testid="live-head">
       {/* Up from the channels or the guide arrives on the groups, at the one in force; the line above them is one more Up. */}
       <FocusGroup focusKey="live:filters" className="live-head-main" preferred="live:groups">
-        <div className="live-bar">
-          <h1 className="heading">Live TV</h1>
-          <FocusGroup focusKey="live:views" className="flex gap-2" role="group" label="Live TV view">
+        {/* The title, the view switch, then search and Options as glass icons: the tools the header leads with. */}
+        <PageHeader title="Live TV" className="live-bar">
+          <FocusGroup focusKey="live:views" className="live-views" role="group" label="Live TV view">
             <Chip focusKey="live:view:guide" pressed={view === 'guide'} onEnter={() => setView('guide')}>Guide</Chip>
             <Chip focusKey="live:view:channels" pressed={view === 'channels'} onEnter={() => setView('channels')}>Channels</Chip>
           </FocusGroup>
           <div className="live-tools" onBlur={(e) => { if (!search && !e.currentTarget.contains(e.relatedTarget)) setSearchOpen(false) }}>
             {searching
               ? <div className="live-search"><FocusableInput focusKey="live:search" label="Search channels or number" placeholder="Channel name or number" value={search} onChange={setSearch} inputMode="search" /></div>
-              : <Button focusKey="live:search-open" className="btn-chip" iconOnly icon="search" label="Search channels" onEnter={() => setSearchOpen(true)} testId="live-search-open" />}
+              : <GlassIconButton focusKey="live:search-open" size="sm" icon="search" label="Search channels" tip="Search" onEnter={() => setSearchOpen(true)} testId="live-search-open" />}
             {/* The one ×: it clears the search. A group or Favorites is left by choosing All. */}
-            {search !== '' && <Chip focusKey="live:search-clear" label="Clear search" onEnter={clearSearch}><Icon name="x" size={14} /></Chip>}
-            <Button focusKey="live:options" className={notes.length ? 'btn-chip live-changed' : 'btn-chip'} iconOnly icon="filter" label="Options" onEnter={() => setOptionsOpen(true)} testId="live-options" />
+            {search !== '' && <GlassIconButton focusKey="live:search-clear" size="sm" icon="x" label="Clear search" onEnter={clearSearch} />}
+            <GlassIconButton focusKey="live:options" size="sm" icon="filter" label="Options" className={notes.length ? 'live-changed' : undefined} expanded={optionsOpen} popup="dialog"
+              onEnter={() => setOptionsOpen(true)} testId="live-options" />
           </div>
           <p className="label live-note" aria-live="polite" data-testid="live-note"><span>{counted}</span>{notes.map((n) => <span key={n} data-testid="live-choice">{n}</span>)}</p>
-        </div>
+        </PageHeader>
         <FocusGroup focusKey="live:groups" className="chip-scroll" role="group" label="Channel groups" preferred={favOnly ? 'live:fav' : `live:group:${chipInRow ? chip!.id : 'all'}`}>
           <Chip focusKey="live:group:all" pressed={!group && !favOnly} onEnter={() => pick('')}>All</Chip>
           <Chip focusKey="live:fav" pressed={favOnly} onEnter={() => pick('', !favOnly)} testId="live-fav-filter">Favorites</Chip>
@@ -157,15 +160,15 @@ export function LiveTV() {
       {view === 'guide' && wide && <div ref={setSide} className="live-head-side" />}
     </div>
     <Modal open={optionsOpen} onClose={() => setOptionsOpen(false)} title="Options" firstFocusKey="guide:scheduled" variant="sheet" testId="live-options-sheet">
-      <section className="flex flex-col gap-2"><h3 className="label">The guide lists</h3>
+      <section className="live-option"><h3 className="label">The guide lists</h3>
         <FocusGroup focusKey="live:schedules" className="flex gap-2 flex-wrap" role="group" label="Guide channels">
           <Chip focusKey="guide:scheduled" pressed={scheduledOnly} onEnter={() => setScheduledOnly(true)}>With schedules</Chip>
           <Chip focusKey="guide:all-channels" pressed={!scheduledOnly} onEnter={() => setScheduledOnly(false)}>All channels</Chip>
         </FocusGroup>
       </section>
       {/* a row with a single choice is not shown */}
-      {languageOffered && <section className="flex flex-col gap-2"><h3 className="label">Language</h3><LanguageFilter scope="live" value={lang} onChange={setLang} /></section>}
-      {regionOffered && <section className="flex flex-col gap-2"><h3 className="label">Region</h3>
+      {languageOffered && <section className="live-option"><h3 className="label">Language</h3><LanguageFilter scope="live" value={lang} onChange={setLang} /></section>}
+      {regionOffered && <section className="live-option"><h3 className="label">Region</h3>
         <FocusGroup focusKey="live:regions" className="flex gap-2 flex-wrap" role="group" label="Region">
           <Chip focusKey="live:country:US" pressed={country === 'US'} onEnter={() => setCountry('US')}>United States</Chip>
           <Chip focusKey="live:country:all" pressed={country === 'all'} onEnter={() => setCountry('all')}>All regions</Chip>
@@ -181,6 +184,6 @@ export function LiveTV() {
       <Guide filters={listed} scheduledOnly={scheduledOnly} onShowAll={() => setScheduledOnly(false)} selectedChannelId={focusedId} onSelectChannel={setFocusedId}
         wide={wide} detailsSlot={side} upKey="live:groups" onTotal={setTotal} />
     </Suspense> : <Channels filters={listed} selectedChannelId={focusedId} onSelectChannel={setFocusedId} upKey="live:groups" emptyKey={search ? 'live:search' : 'live:group:all'} onTotal={setTotal} phone={phone}
-      empty={<Empty title="No channels match" hint={languageOffered ? 'Clear the group or search, or choose All languages to include other and unknown languages.' : 'Clear the group or search to see every channel.'}><Button focusKey="live:empty-reset" onEnter={reset}>Clear filters</Button>{languageOffered && <Button focusKey="live:empty-all" onEnter={() => { reset(); setLang('all') }}>All languages</Button>}</Empty>} />}
+      empty={<Empty icon="tv" title="No channels match" hint={languageOffered ? 'Clear the group or search, or choose All languages to include other and unknown languages.' : 'Clear the group or search to see every channel.'}><Button focusKey="live:empty-reset" onEnter={reset}>Clear filters</Button>{languageOffered && <Button focusKey="live:empty-all" onEnter={() => { reset(); setLang('all') }}>All languages</Button>}</Empty>} />}
   </div>
 }
