@@ -292,12 +292,30 @@ function AutoplaySetting() {
   )
 }
 
+/** Whether Back shrinks a playing film or episode to the mini player (`back_minimises`, missing = off); read by both players. */
+function BackMinimisesSetting() {
+  const pref = useProfilePreference<boolean>('back_minimises', false, (raw) => (typeof raw === 'boolean' ? raw : null))
+  return (
+    <section className="acct-field" data-testid="back-minimises-setting">
+      <h3 className="acct-kicker">Back shrinks to mini player</h3>
+      <FocusGroup focusKey="pb:backmini" className="acct-chips">
+        <Chip focusKey="pbo:backmini:on" pressed={pref.value} onEnter={() => pref.update(true)} testId="back-minimises-on">On</Chip>
+        <Chip focusKey="pbo:backmini:off" pressed={!pref.value} onEnter={() => pref.update(false)} testId="back-minimises-off">Off</Chip>
+      </FocusGroup>
+      <p className="acct-small">{pref.error && pref.ready ? 'Could not save. Try again.' : pref.value
+        ? 'Back keeps a playing film or episode going in the mini player while you browse.'
+        : 'Back closes the player. The minimise button still shrinks it to the mini player.'}</p>
+    </section>
+  )
+}
+
 function PlaybackTab() {
   return (
     <>
       <GlassPanel as="section" className="acct-group">
         <SectionHeader title="Player" />
         <AutoplaySetting />
+        <BackMinimisesSetting />
       </GlassPanel>
       <ServerPlaybackSettings />
     </>

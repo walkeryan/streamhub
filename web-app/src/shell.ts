@@ -4,7 +4,7 @@ import { hasAudioConsent } from './player/audioConsent'
 import { useSession } from './store/session'
 import { useUi } from './store/ui'
 import { useDock } from './player/dock'
-import { bridgeOf, miniPlayerCommand, parseShellMessage, shellViewport, titlePlay, type MiniPlayerCommandName, type ShellPlay, type StreamHubTVBridge } from './shellProtocol'
+import { bridgeOf, keepClearMessage, miniPlayerCommand, parseShellMessage, shellViewport, titlePlay, type CssRect, type MiniPlayerCommandName, type ShellPlay, type StreamHubTVBridge } from './shellProtocol'
 
 /*
  * Shell mode: this web app inside the Android TV app (see shellProtocol.ts for the bridge). Every
@@ -37,6 +37,13 @@ export function handOffUrl(to: string): boolean {
 }
 
 /** Drives the TV's player while it is in picture-in-picture (the mini player bar). False when the TV did not take it. */
+/** Tell the TV what its picture-in-picture window should stay off (see keepClearMessage). */
+export function sendKeepClear(rects: readonly CssRect[], viewportWidth: number): boolean {
+  const bridge = shellBridge()
+  if (!bridge || typeof bridge.message !== 'function') return false
+  try { return bridge.message(keepClearMessage(rects, viewportWidth)) !== false } catch { return false }
+}
+
 export function sendMiniPlayerCommand(command: MiniPlayerCommandName, deltaMs?: number): boolean {
   const bridge = shellBridge()
   if (!bridge || typeof bridge.message !== 'function') return false
