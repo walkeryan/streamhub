@@ -114,9 +114,44 @@
 
 /* ---------- menu and shortcut sheet ---------- */
 .pmenu-note { flex-basis: 100%; }
-/* What an hour of a quality costs, beside its name. */
-.pmenu-rate { opacity: 0.75; font-weight: 500; }
-.pmenu-rate::before { content: '·'; margin-right: 0.375rem; }
+.scrim.pm-scrim { place-items: end; padding: clamp(.75rem, 2vw, 2rem); background: rgba(0,0,0,.36); }
+.pm-drawer {
+  display: flex; flex-direction: column; width: min(23rem, 100%); max-height: 100%; min-height: 0;
+  background: var(--t-surface); color: var(--t-text); border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--t-text) 18%, transparent); overflow: hidden;
+}
+.pm-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .65rem .85rem .35rem 1.15rem; }
+.pm-header h2 { margin: 0; font-size: 1.25rem; font-weight: 700; }
+.pm-close { display: grid; place-items: center; width: max(44px, 2.5rem); height: max(44px, 2.5rem); border-radius: .5rem; }
+.pm-body { overflow-y: auto; overscroll-behavior: contain; padding: .25rem .6rem .65rem; }
+.pm-body > section { padding: .35rem .55rem .65rem; }
+.pm-row, .pm-action, .pm-choice {
+  display: flex; align-items: center; gap: .6rem; min-height: max(44px, 2.75rem); padding: .4rem .55rem;
+  border-radius: .4rem; font-size: 1rem; line-height: 1.3;
+}
+.pm-value { margin-inline-start: auto; text-align: end; color: var(--t-text-muted); font-size: .93rem; }
+.pm-row > svg, .pm-action > svg { flex: none; color: var(--t-text-muted); }
+.pm-switch { display: flex; align-items: center; width: 2rem; height: 1.15rem; padding: .15rem; border-radius: 1rem; background: var(--t-text-muted); }
+.pm-switch::after { content: ''; width: .85rem; height: .85rem; border-radius: 50%; background: var(--t-surface); }
+.pm-row[aria-checked='true'] .pm-switch { background: var(--t-accent); justify-content: flex-end; }
+.pm-row[aria-checked='true'] .pm-switch::after { background: var(--t-accent-text); }
+.pm-choices { margin: .15rem 0 .45rem; padding: .2rem .35rem; background: var(--t-surface-alt); border-radius: .55rem; }
+.pm-choice { min-height: max(44px, 2.5rem); font-variant-numeric: tabular-nums; }
+.pm-choice > small, .pm-note { font-size: .85rem; line-height: 1.4; color: var(--t-text-muted); }
+.pm-choice svg { margin-inline-start: auto; flex: none; color: var(--t-accent); }
+.pm-choice[aria-pressed='true'] .pm-choice-label { font-weight: 700; }
+.pm-note { margin: .4rem .55rem; }
+.pm-actions { border-block-start: 1px solid color-mix(in srgb, var(--t-text) 16%, transparent); margin-top: .45rem; padding-top: .45rem; }
+.pm-action { gap: .8rem; }
+.pm-drawer :is(.pm-row,.pm-choice,.pm-action,.pm-close)[data-focused='true'] {
+  transform: none; box-shadow: none; outline: 2px solid var(--t-focus-ring); outline-offset: -2px;
+  background: color-mix(in srgb, var(--t-text) 8%, var(--t-surface));
+}
+@media (max-width: 600px) {
+  .scrim.pm-scrim { padding: 0; place-items: end stretch; }
+  .pm-drawer { width: 100%; max-height: 90dvh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+  .pm-body { padding-bottom: max(.65rem, env(safe-area-inset-bottom)); }
+}
 .keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem 2rem; }
 .keys section { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
 .keys section:first-child { grid-row: span 2; }
@@ -314,4 +349,4 @@
 
 /* ---------- minimised: the bar along the bottom of the app (mockup 1); styles/mini.css lays it out ---------- */
 .player[data-mini='true'] { top: auto; overflow: visible; background: transparent; }
-.player[data-mini='true'] video { inset: 0 auto 0 0; width: var(--mini-thumb-w); height: var(--mini-h); background: #000; }
+.player[data-mini='true'] :is(video, .canvas-picture) { inset: 0 auto 0 0; width: var(--mini-thumb-w); height: var(--mini-h); background: #000; }

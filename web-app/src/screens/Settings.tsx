@@ -10,6 +10,7 @@ import { ProfileSwitch } from '../components/ProfileSwitch'
 import { ContentPolicySettings } from '../components/ContentPolicySettings'
 import { AndroidDownload } from '../components/AndroidDownload'
 import { SecretControls } from '../components/SignInSecret'
+import { CanvasPlaybackOptions } from '../player/CanvasPlaybackOptions'
 import { inShell } from '../shell'
 import { StreamRecovery } from '../components/StreamRecovery'
 import { RequestManagerSettings } from '../components/RequestManagerSettings'
@@ -309,11 +310,24 @@ function BackMinimisesSetting() {
   )
 }
 
+function CanvasPlaybackSetting() {
+  return (
+    <section className="acct-field" aria-label="Canvas streaming">
+      <h3 className="acct-kicker">Canvas streaming</h3>
+      <FocusGroup focusKey="pb:canvas" className="acct-chips">
+        <CanvasPlaybackOptions scope="pbo:canvas" />
+      </FocusGroup>
+      <p className="acct-small">Draw video frames on a canvas in this browser. Subtitles use the standard video display.</p>
+    </section>
+  )
+}
+
 function PlaybackTab() {
   return (
     <>
       <GlassPanel as="section" className="acct-group">
         <SectionHeader title="Player" />
+        {!inShell() && <CanvasPlaybackSetting />}
         <AutoplaySetting />
         <BackMinimisesSetting />
       </GlassPanel>
