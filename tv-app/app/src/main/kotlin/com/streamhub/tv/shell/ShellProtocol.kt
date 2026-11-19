@@ -28,8 +28,9 @@ import java.time.OffsetDateTime
  *  - `signedOut(reason)` — the web app has no session any more; the shell returns to pairing.
  *  - `capabilities(): string` — JSON ([capabilitiesJson]).
  *  - `deliverToken(id, json)` — the answer to a token request (see WebTokenBroker).
- *  - `message(json): boolean` — a `{"v":1,"kind":…}` envelope; today kind `mini_player_command`, the mini
- *    player bar's buttons ([parseMiniPlayerCommand]). False when refused or of a kind this TV does not know.
+ *  - `message(json): boolean` — a `{"v":1,"kind":…}` envelope: kind `mini_player_command`, the mini
+ *    player bar's buttons ([parseMiniPlayerCommand]), and kind `keep_clear`, what the page wants the
+ *    picture-in-picture window to stay off ([parseKeepClear]). False when refused or of a kind this TV does not know.
  * TV → page, on `window.streamhubShell`: `back(): boolean`, `token(id, rejected)`, `playbackEnded()`,
  *  `message(json)` — the same envelope the other way; today kind `mini_player`, the native player in
  *  picture-in-picture ([miniPlayerEventJson]), state null when it is not. (Web half: web-app/src/shellProtocol.ts.)
@@ -205,10 +206,12 @@ fun capabilitiesJson(versionName: String, versionCode: Int, hdr: List<String>, v
 
 /**
  * The `mini_player` message the page's `window.streamhubShell.message(json)` receives:
- * `{"v":1,"kind":"mini_player","state":{id,title,subtitle,image,position_ms,duration_ms,playing,has_next,has_previous,live}}`,
+ * `{"v":1,"kind":"mini_player","state":{id,title,subtitle,image,position_ms,duration_ms,playing,has_next,has_previous,live,keep_clear,pip_rect}}`,
  * or `"state":null` when picture-in-picture ends or playback stops (the page then hides its bar).
+ * `keep_clear`: this TV takes the page's keep-clear areas (`keep_clear` messages, Android 13+);
+ * `pip_rect`: where the picture-in-picture window is, in the page's CSS px, or null when unknown (see PipLayout.kt).
  */
-fun miniPlayerEventJson(info: MiniPlayerInfo?): String = buildJsonObject {
+fun miniPlayerEventJson(info: MiniPlayerInfo?, pip: CssRect? = null, keepClear: Boolean = false): String = buildJsonObject {
     put("v", BRIDGE_VERSION)
     put("kind", "mini_player")
     if (info == null) put("state", JsonNull) else put("state", buildJsonObject {
@@ -222,6 +225,10 @@ fun miniPlayerEventJson(info: MiniPlayerInfo?): String = buildJsonObject {
         put("has_next", info.hasNext)
         put("has_previous", info.hasPrevious)
         put("live", info.live)
+        put("keep_clear", keepClear)
+        if (pip == null) put("pip_rect", JsonNull) else put("pip_rect", buildJsonObject {
+            put("x", pip.x); put("y", pip.y); put("w", pip.w); put("h", pip.h)
+        })
     })
 }.toString()
 

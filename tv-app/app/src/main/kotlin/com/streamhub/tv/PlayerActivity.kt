@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -27,8 +28,13 @@ import com.streamhub.tv.feature.player.PlayerViewModel
 import com.streamhub.tv.feature.player.miniPlayerInfo
 import com.streamhub.tv.shell.NativePlayer
 import com.streamhub.tv.shell.PlayerLink
+import com.streamhub.tv.shell.PxRect
+import com.streamhub.tv.shell.pipAspect
+import com.streamhub.tv.shell.pipSourceRect
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -40,8 +46,11 @@ import javax.inject.Inject
  * playback surface. It finds what to play under [EXTRA_KEY], parked by PlaybackCoordinator after the
  * TV resolved the web app's request itself. Close leaves it and the web app is where it was.
  *
- * Mini player: the minimise button, or Back while a title plays, puts this activity into
- * picture-in-picture (16:9). The system then moves it into a task of its own and the shell's web app
+ * Mini player: the minimise button puts this activity into picture-in-picture, and so does Back while
+ * a title plays when the profile turned on "Back shrinks to mini player" (`back_minimises`; by default
+ * Back closes the player). The window takes the picture's own aspect ratio (16:9 until the video size
+ * is known) and the picture's place on screen as its source rect hint (see PipLayout.kt for what Android
+ * does and does not promise). The system then moves it into a task of its own and the shell's web app
  * shows full screen underneath, drawing its mini player bar from the `mini_player` events the shell
  * forwards; the bar's buttons come back as commands. Both travel through [PlayerLink] (a process-wide
  * object: the two activities share the process, and an activity result cannot follow the player into
@@ -57,6 +66,10 @@ class PlayerActivity : ComponentActivity() {
 
     private val vm: PlayerViewModel by viewModels()
     private val pip = MutableStateFlow(false)
+    /** Where the picture-in-picture window is on screen, read about once a second while in it (best effort). */
+    private val pipBounds = MutableStateFlow<PxRect?>(null)
+    /** The aspect ratio the window was last given, so a new one is set only when the video's changes. */
+    private var pipAspectSet: Pair<Int, Int>? = null
     private val pipSupported by lazy { PlayerLink.pipSupported(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,9 +89,18 @@ class PlayerActivity : ComponentActivity() {
         lifecycleScope.launch { sessions.session.first { shellEntry(it) == ShellEntry.Pair }; close() }
         // How this player is shown, for the shell: about once a second (positions are whole seconds) and on every change.
         lifecycleScope.launch {
-            combine(vm.state, vm.player.state, pip) { s, ps, mini ->
-                if (mini) NativePlayer.Mini(miniPlayerInfo(s, ps, vm.player.wantsToPlay)) else NativePlayer.FullScreen
+            combine(vm.state, vm.player.state, pip, pipBounds) { s, ps, mini, bounds ->
+                if (mini) NativePlayer.Mini(miniPlayerInfo(s, ps, vm.player.wantsToPlay), bounds) else NativePlayer.FullScreen
             }.distinctUntilChanged().collect { PlayerLink.publish(this@PlayerActivity, it) }
+        }
+        // The window's shape follows the picture: a new video size (another title, another stream) updates it.
+        lifecycleScope.launch { vm.player.state.collect { updatePipParams() } }
+        // The system may move the window (keep-clear areas, its own placement) without telling the activity.
+        lifecycleScope.launch {
+            pip.collectLatest { on ->
+                if (!on) { pipBounds.value = null; return@collectLatest }
+                while (true) { pipBounds.value = readPipBounds(); delay(PIP_BOUNDS_EVERY_MS) }
+            }
         }
         lifecycleScope.launch { PlayerLink.commands.collect(::onCommand) }
     }
@@ -99,9 +121,39 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    /** The picture's aspect ratio (clamped to what Android takes), or null before the video size is known. */
+    private fun videoAspect(): Pair<Int, Int>? = vm.player.stats().let { pipAspect(it.width, it.height) }
+
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun pipParams(): PictureInPictureParams =
-        PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()
+    private fun pipParams(): PictureInPictureParams {
+        val aspect = videoAspect() ?: (16 to 9)
+        pipAspectSet = aspect
+        val builder = PictureInPictureParams.Builder().setAspectRatio(Rational(aspect.first, aspect.second))
+        // The fitted picture on screen: the enter animation starts from it, not from the letterboxed frame.
+        val root = window.decorView
+        pipSourceRect(root.width, root.height, aspect)?.let { builder.setSourceRectHint(Rect(it.left, it.top, it.right, it.bottom)) }
+        return builder.build()
+    }
+
+    /** Hands the system new params when the video's aspect ratio changed (also while in picture-in-picture). */
+    private fun updatePipParams() {
+        if (!pipSupported || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val aspect = videoAspect() ?: return
+        if (aspect == pipAspectSet) return
+        runCatching { setPictureInPictureParams(pipParams()) }.onFailure { Log.w(TAG, "Picture-in-picture params refused: ${it.message}") }
+    }
+
+    /** The picture-in-picture window on screen: the activity's own window bounds while it is in that mode. */
+    private fun readPipBounds(): PxRect? {
+        if (!isInPictureInPictureMode) return null
+        val r = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) windowManager.currentWindowMetrics.bounds
+        else {
+            val root = window.decorView
+            val at = IntArray(2).also(root::getLocationOnScreen)
+            Rect(at[0], at[1], at[0] + root.width, at[1] + root.height)
+        }
+        return PxRect(r.left, r.top, r.right, r.bottom).takeIf { !it.isEmpty }
+    }
 
     /** Into picture-in-picture: overlays close first, the picture keeps playing. */
     private fun minimise() {
@@ -137,6 +189,7 @@ class PlayerActivity : ComponentActivity() {
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         pip.value = isInPictureInPictureMode
+        if (isInPictureInPictureMode) pipBounds.value = readPipBounds()
         when {
             isInPictureInPictureMode -> Unit
             // Left picture-in-picture without coming back to the front: its window was closed.
@@ -167,5 +220,6 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_KEY = "key"
         private const val EXTRA_EXPAND = "expand"
         private const val TAG = "StreamHubPlayer"
+        private const val PIP_BOUNDS_EVERY_MS = 1_000L
     }
 }

@@ -161,15 +161,27 @@ test('minimised, the same playback carries on as a bar while browsing; expand an
   await expect(page).toHaveURL(/\/play\/tmdb%3Aepisode%3A204%3A1%3A2/)
   await expect(page.getByTestId('player')).not.toHaveAttribute('data-mini', 'true')
   expect(await position(page)).toBeGreaterThanOrEqual(before)
-  // Back while it plays minimises again; Close ends it.
-  // (The first Back hides the controls if they show; a later one minimises.)
+  // Back closes the player by default (the first Back may only hide the controls).
+  await expect.poll(async () => {
+    await page.keyboard.press('Escape')
+    return page.getByTestId('player').count()
+  }, { intervals: [300] }).toBe(0)
+  await expect(mini).toHaveCount(0)
+})
+
+test('with "Back shrinks to mini player" on, Back keeps a playing episode going in the bar', async ({ page }) => {
+  await signIn(page)
+  await page.goto('/settings?tab=playback')
+  await page.getByTestId('back-minimises-on').click()
+  await expect(page.getByTestId('back-minimises-on')).toHaveAttribute('aria-pressed', 'true')
+  await page.goto(playUrl(EP(1, 2)))
+  await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await expect.poll(async () => {
     await page.keyboard.press('Escape')
     return page.getByTestId('player').getAttribute('data-mini')
   }, { intervals: [300] }).toBe('true')
   await page.getByTestId('mini-close').click()
   await expect(page.getByTestId('player')).toHaveCount(0)
-  await expect(mini).toHaveCount(0)
 })
 
 test('starting another title replaces the mini player', async ({ page }) => {

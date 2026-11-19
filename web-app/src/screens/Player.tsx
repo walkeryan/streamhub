@@ -411,6 +411,10 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const autoplay = autoplayPref.value
   const autoplayRef = useRef(autoplay)
   autoplayRef.current = autoplay
+  // Back closes the player unless this profile chose to have it shrink to the mini player (`back_minimises`, missing = off).
+  const backMinimisesPref = useProfilePreference<boolean>('back_minimises', false, (raw) => (typeof raw === 'boolean' ? raw : null))
+  const backMinimisesRef = useRef(backMinimisesPref.value)
+  backMinimisesRef.current = backMinimisesPref.value
   const current = desc?.id === id ? desc : null
   // Only a title this player resolves itself: never in a room, on a channel, in catch-up or a recording.
   const extras = !!current && !room && !current.live && !isChannel && !isRecording && !catchup && !rewindAt
@@ -708,8 +712,8 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     if (chromeRef.current && !pausedRef.current) { hideChrome(); return true }
     // Back out of a room asks first: leaving gives the seat up.
     if (roomCtl) { roomCtl.askLeave(); return true }
-    // Back while a film or an episode plays keeps it playing, minimised; paused, it leaves.
-    if (!live && canMinimise && !pausedRef.current && state === 'playing') { minimise(); return true }
+    // Back while a film or an episode plays keeps it playing, minimised, when the profile asked for that; else it leaves.
+    if (backMinimisesRef.current && !live && canMinimise && !pausedRef.current && state === 'playing') { minimise(); return true }
     const last = useUi.getState().lastChannelId
     if (!live || !last || last === activeId.current) return false
     if (backTimer.current) {

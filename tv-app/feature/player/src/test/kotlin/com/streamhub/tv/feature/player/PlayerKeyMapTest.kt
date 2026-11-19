@@ -16,6 +16,35 @@ class PlayerKeyMapTest {
         }
     }
 
+    // ---- Back (PlayerKeyMap.back) ----
+
+    private val playingTitle = BackContext(canMinimise = true, titlePlaying = true)
+
+    @Test fun backClosesAPlayingTitleByDefault() {
+        assertEquals(BackAction.Exit, PlayerKeyMap.back(playingTitle))
+        assertEquals("the preference off is the default", BackAction.Exit, PlayerKeyMap.back(playingTitle.copy(backMinimises = false)))
+    }
+
+    @Test fun withThePreferenceBackMinimisesAPlayingTitle() {
+        assertEquals(BackAction.Minimise, PlayerKeyMap.back(playingTitle.copy(backMinimises = true)))
+        // Only a title that plays, on a TV that has picture-in-picture.
+        assertEquals("paused, or live", BackAction.Exit, PlayerKeyMap.back(playingTitle.copy(backMinimises = true, titlePlaying = false)))
+        assertEquals("no picture-in-picture", BackAction.Exit, PlayerKeyMap.back(playingTitle.copy(backMinimises = true, canMinimise = false)))
+    }
+
+    @Test fun whatIsOpenGoesFirstWhateverThePreference() {
+        for (pref in listOf(true, false)) {
+            val c = playingTitle.copy(backMinimises = pref)
+            assertEquals(BackAction.DismissUpNext, PlayerKeyMap.back(c.copy(upNextCard = true, controlsVisible = true)))
+            assertEquals(BackAction.HideOverlay, PlayerKeyMap.back(c.copy(menuOpen = true)))
+            assertEquals(BackAction.HideOverlay, PlayerKeyMap.back(c.copy(controlsVisible = true)))
+            assertEquals(BackAction.AskLeaveRoom, PlayerKeyMap.back(c.copy(inRoom = true)))
+            assertEquals(BackAction.CommitNumber, PlayerKeyMap.back(c.copy(typingNumber = true, titlePlaying = false)))
+            assertEquals(BackAction.LastChannelWindow, PlayerKeyMap.back(c.copy(liveWithLastChannel = true, titlePlaying = false)))
+        }
+        assertEquals("live without a last channel closes", BackAction.Exit, PlayerKeyMap.back(BackContext(canMinimise = true, backMinimises = true)))
+    }
+
     @Test fun liveZapsWithDpadAndChannelKeys() {
         assertEquals(PlayerCommand.Zap(+1), live(KeyEvent.KEYCODE_DPAD_UP))
         assertEquals(PlayerCommand.Zap(-1), live(KeyEvent.KEYCODE_DPAD_DOWN))

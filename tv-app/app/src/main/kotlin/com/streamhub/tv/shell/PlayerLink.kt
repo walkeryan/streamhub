@@ -16,8 +16,11 @@ import kotlinx.coroutines.flow.asStateFlow
 sealed interface NativePlayer {
     data object None : NativePlayer
     data object FullScreen : NativePlayer
-    /** In picture-in-picture over the web app; [info] is what the web app's bar shows (null until known). */
-    data class Mini(val info: MiniPlayerInfo?) : NativePlayer
+    /**
+     * In picture-in-picture over the web app; [info] is what the web app's bar shows (null until known),
+     * [bounds] where the picture-in-picture window is on screen, when the player can tell (best effort).
+     */
+    data class Mini(val info: MiniPlayerInfo?, val bounds: PxRect? = null) : NativePlayer
 }
 
 /**
