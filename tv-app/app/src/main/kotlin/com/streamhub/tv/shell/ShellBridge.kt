@@ -22,6 +22,8 @@ class ShellBridge(
     private val onSignedOut: (reason: String?) -> Unit,
     /** Main thread. A mini player bar button; true when a player in picture-in-picture took it. */
     private val onMiniPlayerCommand: (MiniPlayerCommand) -> Boolean = { false },
+    /** Main thread. The page's microphone button: start or stop listening. */
+    private val onVoiceCommand: (VoiceCommand) -> Unit = {},
     /** Main thread. What the page wants the picture-in-picture window to stay off (see PipLayout.kt). */
     private val onKeepClear: (KeepClearReport) -> Unit = {},
 ) {
@@ -43,14 +45,19 @@ class ShellBridge(
 
     /**
      * A `{"v":1,"kind":…}` message from the page: `mini_player_command`, the web app's mini player bar
-     * (see [parseMiniPlayerCommand]), or `keep_clear`, the page's rects for the picture-in-picture window
-     * to avoid (see [parseKeepClear]). False when refused or of an unknown kind.
+     * (see [parseMiniPlayerCommand]), `voice_command`, its microphone button (see [parseVoiceCommand]), or
+     * `keep_clear`, the page's rects for the picture-in-picture window to avoid (see [parseKeepClear]).
+     * False when refused or of an unknown kind.
      */
     @JavascriptInterface
     fun message(json: String?): Boolean {
         if (json == null) { Log.w(TAG, "message() refused"); return false }
         parseMiniPlayerCommand(json)?.let { command ->
             main.post { if (pageAllowed()) onMiniPlayerCommand(command) }
+            return true
+        }
+        parseVoiceCommand(json)?.let { command ->
+            main.post { if (pageAllowed()) onVoiceCommand(command) }
             return true
         }
         parseKeepClear(json)?.let { report ->

@@ -18,6 +18,8 @@
       must be listed, otherwise getLeanbackLaunchIntentForPackage()/resolveActivity() return null.
     -->
     <queries>
+        <!-- Voice search: the TV's speech recogniser (VoiceSearch.kt). -->
+        <intent><action android:name="android.speech.action.RECOGNIZE_SPEECH" /></intent>
         <package android:name="com.netflix.ninja" />
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.hulu.livingroomplus" />

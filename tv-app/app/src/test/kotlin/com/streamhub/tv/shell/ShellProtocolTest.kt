@@ -250,4 +250,37 @@ class ShellProtocolTest {
         assertNull(parseMiniPlayerCommand("[]"))
         assertNull(parseMiniPlayerCommand("""{"v":1,"kind":"mini_player_command","command":"next","pad":"${"x".repeat(2000)}"}"""))
     }
+
+    @Test fun thePageStartsAndStopsVoiceSearchAndNothingElseIsAVoiceCommand() {
+        assertEquals(VoiceCommand.Start, parseVoiceCommand("""{"v":1,"kind":"voice_command","command":"start"}"""))
+        assertEquals(VoiceCommand.Stop, parseVoiceCommand("""{"v":1,"kind":"voice_command","command":"stop"}"""))
+        for (bad in listOf("", "nope", """{"v":2,"kind":"voice_command","command":"start"}""", """{"v":1,"kind":"voice_command","command":"shout"}""",
+            """{"v":1,"kind":"mini_player_command","command":"start"}""", "{" + " ".repeat(2000) + "}")) {
+            assertNull(bad, parseVoiceCommand(bad))
+        }
+        // A voice command is not a mini player command either.
+        assertNull(parseMiniPlayerCommand("""{"v":1,"kind":"voice_command","command":"start"}"""))
+    }
+
+    @Test fun voiceEventsCarryWordsOnlyWhenThereAreSomeAndTheKeyboardSaysWhenItCloses() {
+        val final = StreamHubJson.parseToJsonElement(voiceEventJson("final", "  the long\u0007 ebb ")) as JsonObject
+        assertEquals("voice", final["kind"]!!.jsonPrimitive.content)
+        assertEquals("final", final["state"]!!.jsonPrimitive.content)
+        assertEquals("the long ebb", final["text"]!!.jsonPrimitive.content)
+        assertEquals(JsonNull, final["error"])
+        val error = StreamHubJson.parseToJsonElement(voiceEventJson("error", error = "unavailable")) as JsonObject
+        assertEquals(JsonNull, error["text"])
+        assertEquals("unavailable", error["error"]!!.jsonPrimitive.content)
+        assertEquals(MAX_VOICE_TEXT, (StreamHubJson.parseToJsonElement(voiceEventJson("final", "x".repeat(500))) as JsonObject)["text"]!!.jsonPrimitive.content.length)
+        val ime = StreamHubJson.parseToJsonElement(imeEventJson(false)) as JsonObject
+        assertEquals("ime", ime["kind"]!!.jsonPrimitive.content)
+        assertEquals(false, ime["visible"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test fun capabilitiesSayWhetherThisTvCanListen() {
+        val off = StreamHubJson.parseToJsonElement(capabilitiesJson("1.4.1", 22, emptyList(), emptyList(), emptyList())) as JsonObject
+        assertEquals(false, off["voice_search"]!!.jsonPrimitive.content.toBoolean())
+        val on = StreamHubJson.parseToJsonElement(capabilitiesJson("1.4.1", 22, emptyList(), emptyList(), emptyList(), voiceSearch = true)) as JsonObject
+        assertEquals(true, on["voice_search"]!!.jsonPrimitive.content.toBoolean())
+    }
 }

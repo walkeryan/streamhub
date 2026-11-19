@@ -9,7 +9,12 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.FrameLayout
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +51,9 @@ import com.streamhub.tv.shell.PlayerLink
 import com.streamhub.tv.shell.PxRect
 import com.streamhub.tv.shell.miniPlayerEventJson
 import com.streamhub.tv.shell.miniPlayerScript
+import com.streamhub.tv.shell.VoiceCommand
+import com.streamhub.tv.shell.imeEventJson
+import com.streamhub.tv.shell.voiceEventJson
 import com.streamhub.tv.feature.player.MiniPlayerCommand
 import com.streamhub.tv.shell.ShellScreen
 import com.streamhub.tv.shell.ShellViewModel
@@ -85,6 +93,28 @@ class MainActivity : ComponentActivity() {
     private lateinit var composeView: ComposeView
     private lateinit var controller: ShellWebController
     private val capabilities by lazy { DeviceCapabilities.json(this) }
+
+    /** Voice search: the TV's recogniser answers here; what was said goes to the page, which searches for it. */
+    private val listen = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        listening = false
+        val heard = if (result.resultCode == Activity.RESULT_OK) VoiceSearch.heard(result.data) else null
+        sendToPage(miniPlayerScript(if (heard != null) voiceEventJson("final", heard) else voiceEventJson("idle")))
+    }
+    private var listening = false
+    private var imeVisible = false
+
+    private fun voice(command: VoiceCommand) {
+        if (command == VoiceCommand.Stop) return // the recogniser's own screen is dismissed with Back
+        if (listening) return
+        try {
+            listening = true
+            sendToPage(miniPlayerScript(voiceEventJson("listening")))
+            listen.launch(VoiceSearch.intent())
+        } catch (_: ActivityNotFoundException) {
+            listening = false
+            sendToPage(miniPlayerScript(voiceEventJson("error", error = "unavailable")))
+        }
+    }
     /**
      * The native player is open, full screen or as the mini player (see [PlayerLink]): the page keeps
      * running (it answers token requests) and is told when it closes.
@@ -117,6 +147,7 @@ class MainActivity : ComponentActivity() {
                 onPlay = vm::play,
                 onSignedOut = vm::signedOut,
                 onMiniPlayerCommand = PlayerLink::command,
+                onVoiceCommand = ::voice,
                 onKeepClear = { report -> keepClear = report; applyKeepClear() },
             ),
             ShellBridge.NAME,
@@ -124,6 +155,14 @@ class MainActivity : ComponentActivity() {
         tokenBroker.attach { id, rejected ->
             if (!controller.ready) false
             else { webView.post { webView.evaluateJavascript(tokenRequestScript(id, rejected), null) }; true }
+        }
+
+        // The page edits a field only after OK (it never takes the caret as focus passes over it); when the
+        // on-screen keyboard closes, by its Done key or Back, the page is told so editing ends there too.
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
+            val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
+            if (visible != imeVisible) { imeVisible = visible; sendToPage(miniPlayerScript(imeEventJson(visible))) }
+            ViewCompat.onApplyWindowInsets(view, insets)
         }
 
         composeView = ComposeView(this).apply { setContent { ShellContent() } }
@@ -194,6 +233,13 @@ class MainActivity : ComponentActivity() {
         if (web) webView.requestFocus()
     }
 
+    /** The system's search request (some remotes' search key): StreamHub's own voice search. */
+    override fun onSearchRequested(): Boolean {
+        if (vm.screen.value != ShellScreen.Web || !controller.ready) return false
+        voice(VoiceCommand.Start)
+        return true
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_BACK && vm.screen.value == ShellScreen.Web) {
             // Back is the web app's: it closes a dialog or goes back, and on its home screen says no,
@@ -206,6 +252,11 @@ class MainActivity : ComponentActivity() {
                     if (backOutcome(answer) == BackOutcome.Exit) finish()
                 }
             }
+            return true
+        }
+        // The remote's search keys, when the system passes them on: StreamHub's own voice search.
+        if (VoiceSearch.isSearchKey(event.keyCode) && vm.screen.value == ShellScreen.Web && controller.ready) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) voice(VoiceCommand.Start)
             return true
         }
         // The remote's play/pause and seek keys drive the mini player while it is up.

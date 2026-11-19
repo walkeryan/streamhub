@@ -6,14 +6,16 @@
  * Surface, version 1. The TV adds window.StreamHubTV before any script runs:
  *   play(json): boolean          start native playback of a ShellPlay; false when the TV refused it
  *   signedOut(reason): void      this web app has no session any more; the TV returns to its pairing screen
- *   capabilities(): string       JSON: { bridge, shell, version_code, native_playback, hdr, video_codecs, audio_passthrough }
+ *   capabilities(): string       JSON: { bridge, shell, version_code, native_playback, hdr, video_codecs, audio_passthrough, mini_player, voice_search }
  *   deliverToken(id, json): void the answer to window.streamhubShell.token(id, rejected)
  * and calls window.streamhubShell.{ back(), token(id, rejected), playbackEnded() } in the page.
  *
- * Messages (the mini player, more to come), one JSON envelope `{"v":1,"kind":…}` each way:
- *   TV → page:  window.streamhubShell.message(json)        kind "mini_player" (parseShellMessage)
- *   page → TV:  window.StreamHubTV.message(json): boolean  kind "mini_player_command" (miniPlayerCommand)
- * `message` is optional on the TV side: a TV app without it simply never shows the bar.
+ * Messages, one JSON envelope `{"v":1,"kind":…}` each way:
+ *   TV → page:  window.streamhubShell.message(json)        kinds "mini_player", "voice", "ime" (parseShellMessage)
+ *   page → TV:  window.StreamHubTV.message(json): boolean  kinds "mini_player_command" (miniPlayerCommand),
+ *                                                          "voice_command" (voiceCommand)
+ * `message` is optional on the TV side: a TV app without it simply never shows the bar, nor a microphone.
+ * Voice search is offered only when capabilities() says `voice_search: true`.
  */
 
 export const SHELL_BRIDGE_VERSION = 1
@@ -129,7 +131,19 @@ export interface MiniPlayerState {
 }
 export interface CssRect { x: number; y: number; w: number; h: number }
 export type MiniPlayerCommandName = 'play_pause' | 'seek_by' | 'next' | 'previous' | 'expand' | 'close'
-export type ShellMessage = { kind: 'mini_player'; state: MiniPlayerState | null }
+/**
+ * Voice search on the TV (its speech recogniser, started by `voice_command` or by the remote's search
+ * key): `listening` when it starts, `partial` with the words so far, `final` with what was said (the page
+ * searches for it), `error` with a reason, `idle` when it stopped without words.
+ */
+export type VoiceState = 'listening' | 'partial' | 'final' | 'error' | 'idle'
+export type VoiceError = 'no_match' | 'unavailable' | 'permission' | 'busy' | 'network' | 'other'
+export interface VoiceEvent { state: VoiceState; text: string | null; error: VoiceError | null }
+export type ShellMessage =
+  | { kind: 'mini_player'; state: MiniPlayerState | null }
+  | ({ kind: 'voice' } & VoiceEvent)
+  /** The TV's on-screen keyboard opened or closed (closed: whatever was being typed stops being edited). */
+  | { kind: 'ime'; visible: boolean }
 
 const MAX_MESSAGE_JSON = 16 * 1024
 const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.length <= max ? v : null)
@@ -148,7 +162,10 @@ export function parseShellMessage(input: unknown): ShellMessage | null {
   }
   if (!root || typeof root !== 'object') return null
   const m = root as Record<string, unknown>
-  if (m.v !== SHELL_BRIDGE_VERSION || m.kind !== 'mini_player') return null
+  if (m.v !== SHELL_BRIDGE_VERSION) return null
+  if (m.kind === 'voice') return parseVoice(m)
+  if (m.kind === 'ime') return typeof m.visible === 'boolean' ? { kind: 'ime', visible: m.visible } : null
+  if (m.kind !== 'mini_player') return null
   if (m.state === null) return { kind: 'mini_player', state: null }
   const s = m.state as Record<string, unknown> | undefined
   if (!s || typeof s !== 'object') return null
@@ -181,6 +198,36 @@ export function parseShellMessage(input: unknown): ShellMessage | null {
 /** A page → TV command for the player in picture-in-picture. `deltaMs` only for seek_by (negative is back). */
 export function miniPlayerCommand(command: MiniPlayerCommandName, deltaMs?: number): string {
   return JSON.stringify({ v: SHELL_BRIDGE_VERSION, kind: 'mini_player_command', command, delta_ms: command === 'seek_by' ? Math.trunc(deltaMs ?? 0) : null })
+}
+
+const VOICE_STATES: readonly VoiceState[] = ['listening', 'partial', 'final', 'error', 'idle']
+const VOICE_ERRORS: readonly VoiceError[] = ['no_match', 'unavailable', 'permission', 'busy', 'network', 'other']
+/** Longer than anything a person says into a search box. */
+export const MAX_VOICE_TEXT = 200
+
+function parseVoice(m: Record<string, unknown>): ShellMessage | null {
+  const state = VOICE_STATES.find((s) => s === m.state)
+  if (!state) return null
+  const text = m.text === null || m.text === undefined ? null : typeof m.text === 'string' ? [...m.text].map((ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('').trim().slice(0, MAX_VOICE_TEXT) : undefined
+  if (text === undefined) return null
+  // Words are what partial and final are about: without them there is nothing to show or search for.
+  if ((state === 'partial' || state === 'final') && !text) return null
+  const error = state === 'error' ? (VOICE_ERRORS.find((e) => e === m.error) ?? 'other') : null
+  return { kind: 'voice', state, text: state === 'partial' || state === 'final' ? text : null, error }
+}
+
+/** shell.ts dispatches this on window when the TV says its on-screen keyboard closed (nav/textEntry.ts listens). */
+export const IME_HIDDEN_EVENT = 'streamhub:ime-hidden'
+
+/** A page → TV command for voice search: start listening, or stop (nothing is searched for). */
+export function voiceCommand(command: 'start' | 'stop'): string {
+  return JSON.stringify({ v: SHELL_BRIDGE_VERSION, kind: 'voice_command', command })
+}
+
+/** Whether the TV's capabilities() JSON offers voice search. Anything unreadable says no. */
+export function offersVoice(capabilities: unknown): boolean {
+  if (typeof capabilities !== 'string') return false
+  try { return (JSON.parse(capabilities) as { voice_search?: unknown } | null)?.voice_search === true } catch { return false }
 }
 
 /** At most this many keep-clear rects go to the TV (it refuses more). */
