@@ -38,7 +38,7 @@ import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
 import { usePhone } from '../lib/layout'
 import { CanvasPicture } from '../player/CanvasPicture'
-import { CanvasPlaybackOptions } from '../player/CanvasPlaybackOptions'
+import { PlayerSettingPicker, type PlayerSetting } from '../player/PlayerSettingPicker'
 import { inShell } from '../shell'
 import { useProfilePreference } from '../api/profilePreferences'
 import { EXPAND_STATE, useDock } from '../player/dock'
@@ -135,6 +135,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const fullDuration = restartable && desc.duration_ms ? desc.duration_ms / 1000 : 0
 
   const canvas = useUi(s => s.canvasPlayback)
+  const setCanvas = useUi(s => s.setCanvasPlayback)
   const toast = useUi((s) => s.toast)
   const stored = useUi((s) => s.channelList)
   const setChannelList = useUi((s) => s.setChannelList)
@@ -177,6 +178,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   useEffect(() => { setTime((t) => ({ ...t, cur: videoRef.current?.currentTime ?? 0 })) }, [desc])
   const [aspect, setAspect] = useState<Aspect>('contain')
   // The menu opens on what its button named: audio, subtitles, settings, or everything (the remote's Menu key).
+  const [openSetting, setOpenSetting] = useState<PlayerSetting | null>(null)
   const [menuSection, setMenuSection] = useState<MenuSection>('all')
   const [help, setHelp] = useState(false)
   // Stream information: a panel beside the picture, not a dialog. Playback and the keys carry on.
@@ -310,7 +312,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     togglePlay()
     if (resuming && overlayRef.current === 'bar') { closeOverlay(); poke() }
   }
-  const openMenu = useCallback((section: MenuSection) => { setMenuSection(section); setOverlay('menu') }, [setOverlay])
+  const openMenu = useCallback((section: MenuSection) => { setOpenSetting(null); setMenuSection(section); setOverlay('menu') }, [setOverlay])
   // Offered for a film this player resolves itself: a room's stream is the room's, a channel comes as it is.
   const qualities = !live && !room && desc?.id === id ? qualityOptions(desc.media_info) : []
   const chooseQuality = (height: QualityHeight | null, label: string) => {
@@ -709,6 +711,11 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     if (cardShown && overlayRef.current !== 'menu' && overlayRef.current !== 'list') { dispatchCard({ type: 'dismiss' }); return true }
     // Then whatever is open, topmost first: a menu, the information panel, the control bar.
     const o = overlayRef.current
+    if (o === 'menu' && openSetting) {
+      void setFocus(`pm:${openSetting}`)
+      setOpenSetting(null)
+      return true
+    }
     if (o === 'menu' || o === 'list') { closeOverlay(); return true }
     if (infoRef.current) { setInfo(false); return true }
     if (o) { closeOverlay(); hideChrome(); return true }
@@ -733,7 +740,8 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   // The server encoded one track of the file: the others are a new stream away, not a player switch.
   const fileTracks = desc?.id === id && desc.audio_track != null ? desc.audio_tracks ?? [] : []
   // The audio menu of a stream that names no tracks has nothing to choose: focus starts on what it does have.
-  const menuFirst = menuSection === 'audio' && !fileTracks.length && !tr.audio.length ? (pb.audioBlocked ? 'pm:consent' : 'pm:close') : 'pm:first'
+  const menuFirst = menuSection === 'settings' ? (!live && !room ? 'pm:speed' : 'pm:aspect')
+    : menuSection === 'audio' && !fileTracks.length && !tr.audio.length ? (pb.audioBlocked ? 'pm:consent' : 'pm:close') : 'pm:first'
   useOverlayFocus(overlay === 'menu' || overlay === 'list', overlay === 'list' ? 'pl:current' : menuFirst)
   const title = desc?.title ?? channel?.name ?? 'Loading…'
   // What the bar's audio and subtitle buttons say, and the lines of the top bar and the mini player.
@@ -1006,9 +1014,12 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
         let given = false
         const first = (key: string) => { if (given) return key; given = true; return 'pm:first' }
         return (
-          <div className="scrim" style={{ justifyItems: 'end', alignItems: 'stretch', padding: 0, background: 'rgba(0,0,0,.45)' }} onMouseDown={(e) => e.target === e.currentTarget && closeOverlay()}>
-            <FocusGroup focusKey="pm" boundary className="dialog" role="dialog" label={MENU_TITLE[menuSection]} data-testid="player-menu" data={{ section: menuSection }} style={{ borderRadius: 0, width: 'min(26rem, 100%)', maxHeight: '100dvh', background: 'var(--t-surface)', color: 'var(--t-text)' }}>
-              <div className="flex items-center justify-between"><h2 className="title-xl">{MENU_TITLE[menuSection]}</h2><Button focusKey="pm:close" ghost iconOnly icon="x" label="Close" onEnter={closeOverlay} /></div>
+          <div className="scrim pm-scrim" onMouseDown={(e) => e.target === e.currentTarget && closeOverlay()}>
+            <FocusGroup focusKey="pm" boundary className="pm-drawer" role="dialog" label={MENU_TITLE[menuSection]} data-testid="player-menu" data={{ section: menuSection }}>
+              <header className="pm-header"><h2>{MENU_TITLE[menuSection]}</h2>
+                <Focusable focusKey="pm:close" className="pm-close" label="Close" onEnter={closeOverlay}><Icon name="x" size={20} /></Focusable>
+              </header>
+              <div className="pm-body">
               {shows('audio') && (
                 <MenuSection title="Audio">
                   {pb.audioBlocked && <p role="alert" data-testid="runtime-audio-blocked">Playback paused: the selected audio language is unknown or does not match your preferences. Choose an audio track, or explicitly continue with the current audio.</p>}
@@ -1027,48 +1038,40 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
                   {tr.subs.length === 0 && <span className="muted label pmenu-note">No subtitle tracks in this stream.</span>}
                 </MenuSection>
               )}
-              {shows('settings') && !live && !room && (
-                <MenuSection title="Speed">
-                  {SPEEDS.map((value) => <Chip key={value} focusKey={first(`pm:sp:${value}`)} pressed={prefs.speed === value} onEnter={() => changeSpeed(value)} testId="player-speed">{speedLabel(value)}</Chip>)}
-                </MenuSection>
-              )}
-              {shows('settings') && qualities.length > 1 && (
-                <MenuSection title="Quality">
-                  {qualities.map((option) => (
-                    <Chip key={option.height ?? 'original'} focusKey={first(`pm:q:${option.height ?? 'original'}`)} pressed={chosenQuality(qualities, quality) === option.height}
-                      onEnter={() => chooseQuality(option.height, option.label)} testId="player-quality">{option.label}{option.rate && <span className="pmenu-rate">{option.rate}</span>}</Chip>
-                  ))}
-                  <span className="muted label pmenu-note">{dataSaver ? 'Your browser asks to save data: this choice is kept apart from the one for other connections.' : 'A lower quality uses less data. The film carries on from where it is.'}</span>
-                </MenuSection>
-              )}
-              {shows('settings') && (
-                <MenuSection title="Aspect ratio">
-                  {ASPECTS.map((a) => <Chip key={a.id} focusKey={first(`pm:asp:${a.id}`)} pressed={aspect === a.id} onEnter={() => setAspect(a.id)}>{a.label}</Chip>)}
-                </MenuSection>
-              )}
-              {shows('settings') && !tv && (
-                <MenuSection title="Canvas streaming">
-                  <CanvasPlaybackOptions scope="pm:canvas" />
-                </MenuSection>
-              )}
-              {shows('settings') && mayTogether && (
-                <MenuSection title="Watch together">
-                  <Button focusKey="pm:together" icon="people" disabled={startingRoom} onEnter={() => void startTogether()} testId="player-together">{startingRoom ? 'Starting a room…' : 'Watch together'}</Button>
-                  <span className="muted label pmenu-note">Start a room for this {isChannel ? 'channel' : 'title'} and invite others with a link or code.</span>
-                </MenuSection>
-              )}
-              {shows('settings') && (
-                <MenuSection title="Sleep timer">
-                  {SLEEP.map((m) => <Chip key={m ?? 'off'} focusKey={`pm:sl:${m ?? 'off'}`} pressed={sleepMinutes === m} onEnter={() => { setSleep(m); if (m) toast(`Sleep timer set for ${m} minutes.`) }}>{m ? `${m} min` : 'Off'}</Chip>)}
-                </MenuSection>
-              )}
-              {shows('settings') && (
-                <MenuSection title="More">
-                  <Button focusKey="pm:info" icon="info" onEnter={() => { closeOverlay(); setInfo(true) }} testId="player-info-btn">Stream information</Button>
-                  {!tv && <Button focusKey="pm:pip" icon="pip" onEnter={() => { closeOverlay(); void pip() }} testId="player-pip">Picture in picture</Button>}
-                  <Button focusKey="pm:keys" icon="list" onEnter={() => { closeOverlay(); setHelp(true) }} testId="player-keys-btn">{helpTitle()}</Button>
-                </MenuSection>
-              )}
+              {shows('settings') && <>
+                <div className="pm-settings">
+                  {!live && !room && <PlayerSettingPicker id="speed" title="Speed" value={prefs.speed}
+                    choices={SPEEDS.map(value => ({ value, label: speedLabel(value) }))} open={openSetting} onOpen={setOpenSetting} onChange={changeSpeed} />}
+                  {qualities.length > 1 && <PlayerSettingPicker id="quality" title="Quality" value={chosenQuality(qualities, quality)}
+                    choices={qualities.map(q => ({ value: q.height, label: q.label, detail: q.rate }))} open={openSetting} onOpen={setOpenSetting}
+                    onChange={chooseQuality} note={dataSaver ? 'Your browser asks to save data. This quality is saved separately.' : undefined} />}
+                  <PlayerSettingPicker id="aspect" title="Aspect ratio" value={aspect} choices={ASPECTS.map(a => ({ value: a.id, label: a.label }))}
+                    open={openSetting} onOpen={setOpenSetting} onChange={setAspect} />
+                  {!tv && <Focusable focusKey="pm:canvas" className="pm-row" role="switch" aria={{ checked: canvas }} label="Canvas streaming"
+                    onEnter={() => setCanvas(!canvas)}>
+                    <span>Canvas streaming</span><span className="pm-value">{canvas ? 'On' : 'Off'}</span>
+                    <span className="pm-switch" aria-hidden="true" />
+                  </Focusable>}
+                  <PlayerSettingPicker id="sleep" title="Sleep timer" value={sleepMinutes}
+                    choices={SLEEP.map(value => ({ value, label: value ? `${value} min` : 'Off' }))} open={openSetting} onOpen={setOpenSetting}
+                    onChange={m => { setSleep(m); if (m) toast(`Sleep timer set for ${m} minutes.`) }} />
+                </div>
+                <div className="pm-actions">
+                  {mayTogether && <Focusable focusKey="pm:together" className="pm-action" disabled={startingRoom} onEnter={() => void startTogether()} data-testid="player-together">
+                    <Icon name="people" size={18} />Watch together
+                  </Focusable>}
+                  <Focusable focusKey="pm:info" className="pm-action" onEnter={() => { closeOverlay(); setInfo(true) }} data-testid="player-info-btn">
+                    <Icon name="info" size={18} />Stream information
+                  </Focusable>
+                  {!tv && <Focusable focusKey="pm:pip" className="pm-action" onEnter={() => { closeOverlay(); void pip() }} data-testid="player-pip">
+                    <Icon name="pip" size={18} />Picture in picture
+                  </Focusable>}
+                  <Focusable focusKey="pm:keys" className="pm-action" onEnter={() => { closeOverlay(); setHelp(true) }} data-testid="player-keys-btn">
+                    <Icon name="list" size={18} />{helpTitle()}
+                  </Focusable>
+                </div>
+              </>}
+              </div>
             </FocusGroup>
           </div>
         )

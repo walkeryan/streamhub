@@ -398,8 +398,8 @@ test('a channel is watched together from the player menu: play and pause, no see
   // A room plays at one speed for everyone: its settings offer none.
   await page.keyboard.press('s')
   await expect(page.getByTestId('player-menu')).toHaveAttribute('data-section', 'settings')
-  await expect(page.getByTestId('player-speed')).toHaveCount(0)
-  await expect(page.getByTestId('player-quality')).toHaveCount(0)
+  await expect(page.getByTestId('setting-speed')).toHaveCount(0)
+  await expect(page.getByTestId('setting-quality')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('player-menu')).toHaveCount(0)
   // The control bar has focus on Pause: the room pauses, and with it this player.
@@ -573,8 +573,8 @@ test('on a phone the room player keeps back and title on one row; the members ar
   const settings = page.getByTestId('player-menu')
   await expect(settings.getByRole('button', { name: 'Stream information' })).toBeVisible()
   await expect(settings.getByRole('button', { name: 'Picture in picture' })).toBeVisible()
-  await expect(settings.getByTestId('player-speed')).toHaveCount(0)
-  await expect(settings.getByTestId('player-quality')).toHaveCount(0)
+  await expect(settings.getByTestId('setting-speed')).toHaveCount(0)
+  await expect(settings.getByTestId('setting-quality')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(settings).toHaveCount(0)
 
