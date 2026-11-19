@@ -314,4 +314,4 @@
 
 /* ---------- minimised: the bar along the bottom of the app (mockup 1); styles/mini.css lays it out ---------- */
 .player[data-mini='true'] { top: auto; overflow: visible; background: transparent; }
-.player[data-mini='true'] video { inset: 0 auto 0 0; width: var(--mini-thumb-w); height: var(--mini-h); background: #000; }
+.player[data-mini='true'] :is(video, .canvas-picture) { inset: 0 auto 0 0; width: var(--mini-thumb-w); height: var(--mini-h); background: #000; }

@@ -1,6 +1,9 @@
 import { useMemo, useRef } from 'react'
 import { usePlayback } from './usePlayback'
 import { useChannelAudio } from './channelAudio'
+import { useUi } from '../store/ui'
+import { inShell } from '../shell'
+import { CanvasPicture } from './CanvasPicture'
 import { NO_POSTER } from './poster'
 
 /**
@@ -15,6 +18,7 @@ export function Preview({ channelId, off, onTurnOn }: {
   onTurnOn?: () => void
 }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const canvas = useUi(s => s.canvasPlayback)
   const audio = useChannelAudio({ id: channelId ?? '' }, false)
   // A preview is muted, so which language a feed speaks cannot matter here: where full-screen playback
   // would stop to ask about audio, the preview shows the first source and stays silent.
@@ -28,6 +32,7 @@ export function Preview({ channelId, off, onTurnOn }: {
   return (
     <div style={{ position: 'relative', aspectRatio: '16/9', width: 'min(100%, calc((100dvh - var(--bar-h, 0px) - 19rem) * 16 / 9))', minWidth: 'min(100%, 20rem)', background: '#000', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }} data-testid="live-preview" data-state={state}>
       <video ref={ref} muted playsInline poster={NO_POSTER} loop aria-label="Channel preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+      {canvas && !inShell() && channelId && <CanvasPicture key={channelId} videoRef={ref} fit="contain" />}
       {(state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && channelId && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.45)', color: '#fff' }} role="status">
           {state === 'reconnecting' ? 'Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Tuning…'}

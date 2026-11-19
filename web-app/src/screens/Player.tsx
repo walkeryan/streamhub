@@ -37,6 +37,8 @@ import { useCan } from '../api/me'
 import { useUi } from '../store/ui'
 import { fmtDuration, fmtTime, progressOf, useNow } from '../lib/util'
 import { usePhone } from '../lib/layout'
+import { CanvasPicture } from '../player/CanvasPicture'
+import { CanvasPlaybackOptions } from '../player/CanvasPlaybackOptions'
 import { inShell } from '../shell'
 import { useProfilePreference } from '../api/profilePreferences'
 import { EXPAND_STATE, useDock } from '../player/dock'
@@ -132,6 +134,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const offset = restartable ? (desc.start_position_ms ?? 0) / 1000 : 0
   const fullDuration = restartable && desc.duration_ms ? desc.duration_ms / 1000 : 0
 
+  const canvas = useUi(s => s.canvasPlayback)
   const toast = useUi((s) => s.toast)
   const stored = useUi((s) => s.channelList)
   const setChannelList = useUi((s) => s.setChannelList)
@@ -828,6 +831,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
       <video ref={videoRef} playsInline poster={NO_POSTER} loop={live && desc?.mime === 'video/webm'} style={{ objectFit: mini ? 'cover' : aspect }} data-testid="video" aria-label={title}
         onPointerDown={(e) => { pointer.current = { kind: e.pointerType, shown: chromeRef.current } }}
         onDoubleClick={() => { if (pointer.current.kind !== 'touch' && !mini) fullscreen() }} onClick={(e) => { if (mini) expand(); else onPictureClick(e) }} />
+      {canvas && !tv && !tr.subs.some(t => t.active) && <CanvasPicture key={id} videoRef={videoRef} fit={mini ? 'cover' : aspect} />}
       {mini && (
         <MiniBar title={miniTitle} line={miniLine} positionMs={position * 1000} durationMs={live ? null : duration > 0 ? duration * 1000 : null}
           playing={!paused} live={live} hasPrevious={!!prevEp} hasNext={!!nextEp} thumb={<span className="mini-video-slot" />}
@@ -1040,6 +1044,11 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
               {shows('settings') && (
                 <MenuSection title="Aspect ratio">
                   {ASPECTS.map((a) => <Chip key={a.id} focusKey={first(`pm:asp:${a.id}`)} pressed={aspect === a.id} onEnter={() => setAspect(a.id)}>{a.label}</Chip>)}
+                </MenuSection>
+              )}
+              {shows('settings') && !tv && (
+                <MenuSection title="Canvas streaming">
+                  <CanvasPlaybackOptions scope="pm:canvas" />
                 </MenuSection>
               )}
               {shows('settings') && mayTogether && (
