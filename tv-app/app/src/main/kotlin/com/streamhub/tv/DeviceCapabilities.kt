@@ -19,6 +19,7 @@ object DeviceCapabilities {
         videoCodecs = runCatching { videoCodecs() }.getOrDefault(emptyList()),
         audioPassthrough = runCatching { passthrough(context) }.getOrDefault(emptyList()),
         miniPlayer = PlayerLink.pipSupported(context),
+        voiceSearch = runCatching { VoiceSearch.available(context) }.getOrDefault(false),
     )
 
     @Suppress("DEPRECATION")

@@ -103,7 +103,8 @@
 /* One page of up to three sections. Broadcasts and channels are short glass rows in as many columns as
    fit, so a full section stays a few lines tall above the posters. */
 .search-page { display: flex; flex-direction: column; gap: var(--gap-lg); min-height: 20rem; }
-.search-page-field { max-width: 32rem; }
+.search-page-field { max-width: 32rem; display: flex; gap: 0.5rem; align-items: center; }
+.search-page-field > .fx.field { flex: 1; min-width: 0; }
 .search-sections { display: flex; flex-direction: column; gap: var(--gap-section); padding-bottom: 2rem; }
 .search-section { display: flex; flex-direction: column; gap: var(--gap-sm); min-width: 0; }
 .search-section > .ds-section-head { margin-bottom: 0; }

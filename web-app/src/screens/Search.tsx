@@ -4,7 +4,7 @@ import { searchView, useRecordings, useSearch } from '../api/hooks'
 import { useCan } from '../api/me'
 import type { Channel, SearchProgramme, SearchResult, SearchSectionName, Tile } from '../api/types'
 import { Attribution, LogoBlock } from '../components/ui'
-import { Button, Chip, Empty, ErrorState, Icon, SectionHeader, Skeleton } from '../ds'
+import { Button, Chip, Empty, ErrorState, GlassIconButton, Icon, SectionHeader, Skeleton } from '../ds'
 import { MediaTile, openPath } from '../components/Tile'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -14,6 +14,7 @@ import { usePhone } from '../lib/layout'
 import { MIN_QUERY, SEARCH_BOX, SEARCH_PATH, searchPath, useSearchQuery, useSlashToSearch } from '../lib/searchQuery'
 import { fmtTime, useNow } from '../lib/util'
 import { RecordDialog } from '../recordings/RecordDialog'
+import { useVoice, voiceSource } from '../lib/voiceSearch'
 import { RecordingBadge } from '../recordings/RecordingBadge'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
@@ -240,9 +241,20 @@ function PageSearchField() {
   useSlashToSearch(() => { void setFocus(SEARCH_BOX.page) })
   // Escape clears first; with nothing typed it is Back, which leaves search.
   const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape' && box.text) { e.preventDefault(); box.clear() } }
+  const voice = useVoice()
+  const canVoice = voiceSource() !== null
+  const listening = voice.status === 'listening'
+  const seen = useRef(voice.final?.seq ?? 0)
+  useEffect(() => {
+    if (voice.final && voice.final.seq !== seen.current) { seen.current = voice.final.seq; box.setText(voice.final.text); box.submit(voice.final.text) }
+  }, [voice.final, box])
   return (
     <div className="search-page-field" role="search" onKeyDown={onKeyDown}>
-      <FocusableInput focusKey={SEARCH_BOX.page} label="Search" placeholder="Search" value={box.text} onChange={box.setText} inputMode="search" onSubmit={box.submit} />
+      <FocusableInput focusKey={SEARCH_BOX.page} label="Search" placeholder={listening ? 'Listening…' : 'Search'} value={listening && voice.heard ? voice.heard : box.text}
+        onChange={box.setText} inputMode="search" onSubmit={() => box.submit()} />
+      {box.text && <GlassIconButton focusKey="search:page:clear" icon="x" size="sm" label="Clear search" tip={false} onEnter={() => { box.clear(); void setFocus(SEARCH_BOX.page) }} testId="search-page-clear" />}
+      {canVoice && <GlassIconButton focusKey="search:page:voice" icon="mic" size="sm" label={listening ? 'Stop listening' : 'Search by voice'} tip={false}
+        pressed={listening} onEnter={() => (listening ? voice.stop() : voice.start())} testId="search-page-voice" />}
     </div>
   )
 }
@@ -251,6 +263,7 @@ function PageSearchField() {
 function SearchIdle() {
   const go = useGo()
   const recents = useUi((s) => s.recentSearches)
+  const clearSearches = useUi((s) => s.clearSearches)
   return (
     <FocusGroup focusKey="search:idle" className="search-idle" data-testid="search-idle">
       <div className="search-idle-lead">
@@ -258,7 +271,7 @@ function SearchIdle() {
         <p className="muted">Movies, shows, channels and what is on TV.</p>
       </div>
       {recents.length > 0 && <div className="search-idle-block">
-        <SectionHeader title="Recent searches" />
+        <SectionHeader title="Recent searches" action={<Button focusKey="search:recent:clear" ghost icon="x" onEnter={clearSearches} testId="search-recent-clear">Clear</Button>} />
         <FocusGroup focusKey="search:recent" className="lib-chips" role="group" label="Recent searches">
           {recents.map((r) => <Chip key={r} focusKey={`search:recent:${r}`} onEnter={() => go(searchPath(r), { replace: true })}>{r}</Chip>)}
         </FocusGroup>

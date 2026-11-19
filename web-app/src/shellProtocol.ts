@@ -196,7 +196,7 @@ export const MAX_VOICE_TEXT = 200
 function parseVoice(m: Record<string, unknown>): ShellMessage | null {
   const state = VOICE_STATES.find((s) => s === m.state)
   if (!state) return null
-  const text = m.text === null || m.text === undefined ? null : typeof m.text === 'string' ? m.text.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, MAX_VOICE_TEXT) : undefined
+  const text = m.text === null || m.text === undefined ? null : typeof m.text === 'string' ? [...m.text].map((ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('').trim().slice(0, MAX_VOICE_TEXT) : undefined
   if (text === undefined) return null
   // Words are what partial and final are about: without them there is nothing to show or search for.
   if ((state === 'partial' || state === 'final') && !text) return null

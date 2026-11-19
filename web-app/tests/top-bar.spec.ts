@@ -78,7 +78,9 @@ for (const [width, height] of [[1920, 1080], [1024, 768]] as const) {
       await page.keyboard.press('ArrowUp')
       await page.keyboard.press('ArrowLeft')
       await expect(home).toHaveAttribute('data-focused', 'true')
-      const order = ['nav-live-tv', 'nav-sports', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-search', 'nav-more', 'nav-profile']
+      // A browser with speech recognition also has the microphone beside the search box.
+      const voice = (await page.getByTestId('nav-search-voice').count()) ? ['nav-search-voice'] : []
+      const order = ['nav-live-tv', 'nav-sports', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-search', ...voice, 'nav-more', 'nav-profile']
       for (const next of order) {
         await page.keyboard.press('ArrowRight')
         await expect(page.getByTestId(next)).toHaveAttribute('data-focused', 'true')

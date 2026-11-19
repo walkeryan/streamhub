@@ -189,13 +189,15 @@ fun mayLoad(serverUrl: String, url: String): Boolean {
 }
 
 /** `capabilities()`: what this shell is and can do, for the web app to adapt to. */
-fun capabilitiesJson(versionName: String, versionCode: Int, hdr: List<String>, videoCodecs: List<String>, audioPassthrough: List<String>, miniPlayer: Boolean = false): String = buildJsonObject {
+fun capabilitiesJson(versionName: String, versionCode: Int, hdr: List<String>, videoCodecs: List<String>, audioPassthrough: List<String>, miniPlayer: Boolean = false, voiceSearch: Boolean = false): String = buildJsonObject {
     put("bridge", BRIDGE_VERSION)
     put("shell", versionName)
     put("version_code", versionCode)
     put("native_playback", true)
     // The native player can shrink into picture-in-picture and send `miniPlayer` events.
     put("mini_player", miniPlayer)
+    // The TV can listen through the remote's microphone (`voice_command` / `voice` messages).
+    put("voice_search", voiceSearch)
     put("hdr", buildJsonArray { hdr.forEach { add(JsonPrimitive(it)) } })
     put("video_codecs", buildJsonArray { videoCodecs.forEach { add(JsonPrimitive(it)) } })
     put("audio_passthrough", buildJsonArray { audioPassthrough.forEach { add(JsonPrimitive(it)) } })
@@ -254,3 +256,40 @@ fun parseMiniPlayerCommand(json: String): MiniPlayerCommand? {
         }
     } catch (_: Invalid) { null }
 }
+
+// ---- Voice search and the on-screen keyboard ------------------------------------------------------
+
+/** What the page asks of voice search: start listening, or stop (nothing is searched for). */
+enum class VoiceCommand { Start, Stop }
+
+/** Reads a page → TV `message(json)` of kind `voice_command`: `{"v":1,"kind":"voice_command","command":"start"|"stop"}`. */
+fun parseVoiceCommand(json: String): VoiceCommand? {
+    if (json.length > MAX_COMMAND_JSON) return null
+    val root = runCatching { StreamHubJson.parseToJsonElement(json) }.getOrNull() as? JsonObject ?: return null
+    return try {
+        if (root.optLong("v") != BRIDGE_VERSION.toLong() || root.optString("kind") != "voice_command") return null
+        when (root.optString("command")) { "start" -> VoiceCommand.Start; "stop" -> VoiceCommand.Stop; else -> null }
+    } catch (_: Invalid) { null }
+}
+
+/** Longer than anything a person says into a search box (the page trims to the same). */
+const val MAX_VOICE_TEXT = 200
+
+/**
+ * The `voice` message: `{"v":1,"kind":"voice","state":"listening"|"partial"|"final"|"error"|"idle","text":…,"error":…}`.
+ * `text` only with partial and final; `error` (no_match, unavailable, permission, busy, network, other) only with error.
+ */
+fun voiceEventJson(state: String, text: String? = null, error: String? = null): String = buildJsonObject {
+    put("v", BRIDGE_VERSION)
+    put("kind", "voice")
+    put("state", state)
+    put("text", text?.filter { it >= ' ' }?.trim()?.take(MAX_VOICE_TEXT))
+    put("error", error)
+}.toString()
+
+/** The `ime` message: the on-screen keyboard opened or closed (closed: the page stops editing the field). */
+fun imeEventJson(visible: Boolean): String = buildJsonObject {
+    put("v", BRIDGE_VERSION)
+    put("kind", "ime")
+    put("visible", visible)
+}.toString()

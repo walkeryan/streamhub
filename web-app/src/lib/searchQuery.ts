@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router'
 
 export const SEARCH_PATH = '/search'
 /** The one search control: the field in the top bar, or the field on the results page of a phone. */
-export const SEARCH_BOX = { bar: 'rail:/search', page: 'search:input' } as const
+export const SEARCH_BOX = { bar: 'rail:/search', page: 'search:input', clear: 'rail:/search:clear', voice: 'rail:/search:voice' } as const
 /** Typing waits this long before it asks; Enter asks at once. */
 const DEBOUNCE_MS = 250
 /** Shorter than this the server looks nothing up, so neither does the page. */
@@ -43,8 +43,8 @@ export function useSearchQuery() {
   const atRoot = loc.key === 'default'
   return {
     text, setText, onSearch,
-    /** Enter: ask now; with nothing typed, open the search page. */
-    submit: () => ask(text, true),
+    /** Enter: ask now; with nothing typed, open the search page. `value` asks for words not yet in the box (voice). */
+    submit: (value?: string) => ask(value ?? text, true),
     clear: () => { setText(''); ask('') },
     /** Back out of search to where the viewer was. */
     leave: () => { if (!onSearch) return; if (atRoot) navigate('/', { replace: true }); else navigate(-1) },

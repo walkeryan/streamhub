@@ -101,7 +101,7 @@ export const useVoice = create<VoiceStore>((set, get) => ({
     const { receive } = get()
     if (source === 'shell') {
       const bridge = bridgeOf(window)
-      let taken = false
+      let taken: boolean
       try { taken = bridge?.message?.(voiceCommand('start')) === true } catch { taken = false }
       if (taken) receive({ state: 'listening', text: null, error: null })
       else receive({ state: 'error', text: null, error: 'unavailable' })
