@@ -31,11 +31,14 @@ interface UiState {
   setChannelList: (listId: string | null, channels: Channel[]) => void
   lastChannelId: string | null
   setLastChannelId: (id: string | null) => void
+  canvasPlayback: boolean
+  setCanvasPlayback: (enabled: boolean) => void
   sleepMinutes: number | null
   setSleepMinutes: (m: number | null) => void
 }
 
 let toastSeq = 0
+const CANVAS_KEY = 'sh.canvasPlayback.v1'
 const HOME_KEY = 'sh.homePrefs.v1'
 const SEARCH_KEY = 'sh.recentSearches.v1'
 const QUERY_KEY = 'sh.searchQuery.v1'
@@ -64,6 +67,11 @@ function migratePreferences() {
 migratePreferences()
 
 export const useUi = create<UiState>((set, get) => ({
+  canvasPlayback: lsGet(CANVAS_KEY) === 'true',
+  setCanvasPlayback: (enabled) => {
+    lsSet(CANVAS_KEY, String(enabled))
+    set({ canvasPlayback: enabled })
+  },
   toasts: [],
   toast: (text, tone = 'info') => {
     const id = ++toastSeq
