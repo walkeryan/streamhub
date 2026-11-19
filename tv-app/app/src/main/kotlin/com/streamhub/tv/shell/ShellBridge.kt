@@ -24,6 +24,8 @@ class ShellBridge(
     private val onMiniPlayerCommand: (MiniPlayerCommand) -> Boolean = { false },
     /** Main thread. The page's microphone button: start or stop listening. */
     private val onVoiceCommand: (VoiceCommand) -> Unit = {},
+    /** Main thread. What the page wants the picture-in-picture window to stay off (see PipLayout.kt). */
+    private val onKeepClear: (KeepClearReport) -> Unit = {},
 ) {
     private val main = Handler(Looper.getMainLooper())
 
@@ -43,7 +45,9 @@ class ShellBridge(
 
     /**
      * A `{"v":1,"kind":…}` message from the page: `mini_player_command`, the web app's mini player bar
-     * (see [parseMiniPlayerCommand]), or `voice_command`, its microphone button (see [parseVoiceCommand]). False when refused or of an unknown kind.
+     * (see [parseMiniPlayerCommand]), `voice_command`, its microphone button (see [parseVoiceCommand]), or
+     * `keep_clear`, the page's rects for the picture-in-picture window to avoid (see [parseKeepClear]).
+     * False when refused or of an unknown kind.
      */
     @JavascriptInterface
     fun message(json: String?): Boolean {
@@ -54,6 +58,10 @@ class ShellBridge(
         }
         parseVoiceCommand(json)?.let { command ->
             main.post { if (pageAllowed()) onVoiceCommand(command) }
+            return true
+        }
+        parseKeepClear(json)?.let { report ->
+            main.post { if (pageAllowed()) onKeepClear(report) }
             return true
         }
         Log.w(TAG, "message() refused")

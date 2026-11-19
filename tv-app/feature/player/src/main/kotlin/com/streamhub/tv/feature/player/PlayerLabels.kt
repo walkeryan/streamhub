@@ -7,7 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
 /*
- * The small pure pieces of the revamped player: what its title block says, the profile preference it
+ * The small pure pieces of the revamped player: what its title block says, the profile preferences it
  * reads, and the address of a scrub thumbnail. Unit-tested.
  */
 
@@ -16,6 +16,12 @@ const val AUTOPLAY_NEXT_PREF = "autoplay_next"
 
 /** `autoplay_next` as stored: anything but an explicit `false` (missing, null, garbage) means on. */
 fun autoplayNextPref(value: JsonElement?): Boolean = (value as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: true
+
+/** The profile preference that makes Back shrink a playing title into the mini player instead of closing it. */
+const val BACK_MINIMISES_PREF = "back_minimises"
+
+/** `back_minimises` as stored: only an explicit `true` turns it on (missing = Back closes the player). */
+fun backMinimisesPref(value: JsonElement?): Boolean = (value as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false
 
 /** "S2 · E1" for an episode that knows its numbers; null otherwise. */
 fun episodeCode(d: PlaybackDescriptor): String? {

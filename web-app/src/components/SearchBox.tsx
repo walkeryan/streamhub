@@ -8,6 +8,7 @@ import { SEARCH_BOX, useSearchQuery, useSlashToSearch } from '../lib/searchQuery
 import { useVoice, voiceSource } from '../lib/voiceSearch'
 import { useUi } from '../store/ui'
 
+const VOICE_STOPPED = 'Voice search stopped. Try again.'
 const VOICE_ERRORS: Record<string, string> = {
   no_match: "Didn't catch that. Try again.",
   permission: 'Voice search needs the microphone. Allow it and try again.',
@@ -56,7 +57,7 @@ export function SearchBox({ label }: { label: string }) {
   useEffect(() => {
     if (voice.error && voice.error.seq !== seenError.current) {
       seenError.current = voice.error.seq
-      toast(VOICE_ERRORS[voice.error.code] ?? VOICE_ERRORS.other, 'error')
+      toast(VOICE_ERRORS[voice.error.code] ?? VOICE_STOPPED, 'error')
     }
   }, [voice.error, toast])
   const listening = voice.status === 'listening'

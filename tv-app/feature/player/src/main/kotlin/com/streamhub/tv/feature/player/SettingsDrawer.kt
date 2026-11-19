@@ -59,6 +59,8 @@ internal data class SettingsModel(
     val subtitlesOff: Boolean = true,
     /** The profile's "Autoplay next episode"; null hides it (nothing comes next). */
     val autoplay: Boolean? = null,
+    /** The profile's "Back shrinks to mini player"; null hides it (this player cannot minimise). */
+    val backMinimises: Boolean? = null,
     val aspectLabel: String = "",
     val sleepOptions: List<Int?> = emptyList(),
     val sleepMinutes: Int? = null,
@@ -77,6 +79,7 @@ internal class SettingsActions(
     val onSubtitlesOff: () -> Unit = {},
     val onSubtitle: (TrackOption) -> Unit = {},
     val onToggleAutoplay: () -> Unit = {},
+    val onToggleBackMinimises: () -> Unit = {},
     val onAspect: () -> Unit = {},
     val onSleep: (Int?) -> Unit = {},
     val onWatchTogether: () -> Unit = {},
@@ -173,10 +176,13 @@ internal fun SettingsDrawer(
             m.textTracks.forEach { tr ->
                 GlassRow(tr.label + if (tr.supported) "" else UNSUPPORTED_TRACK, { a.onSubtitle(tr) }, row, checkable = true, checked = !m.subtitlesOff && tr.selected, enabled = tr.supported)
             }
-            // The profile's "Autoplay next episode" (the web settings have the same switch).
+            // The profile's "Autoplay next episode" and "Back shrinks to mini player" (the web settings have the same switches).
+            if (m.autoplay != null || m.backMinimises != null) Section("Playback")
             m.autoplay?.let { on ->
-                Section("Playback")
                 GlassRow("Autoplay next episode", a.onToggleAutoplay, row, icon = GlassIcons.Next, trailing = { OnOffPill(on) })
+            }
+            m.backMinimises?.let { on ->
+                GlassRow("Back shrinks to mini player", a.onToggleBackMinimises, row, icon = GlassIcons.Minimise, trailing = { OnOffPill(on) })
             }
             Section("Picture")
             GlassRow("Aspect", a.onAspect, row, icon = GlassIcons.Picture, detail = m.aspectLabel)

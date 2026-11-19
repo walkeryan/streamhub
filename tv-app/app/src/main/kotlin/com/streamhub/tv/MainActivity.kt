@@ -1,6 +1,8 @@
 package com.streamhub.tv
 
 import android.content.Intent
+import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
@@ -41,10 +43,12 @@ import com.streamhub.tv.core.ui.theme.ThemeRepository
 import com.streamhub.tv.feature.onboarding.OnboardingScreen
 import com.streamhub.tv.shell.BACK_SCRIPT
 import com.streamhub.tv.shell.BackOutcome
+import com.streamhub.tv.shell.KeepClearReport
 import com.streamhub.tv.shell.PLAYBACK_ENDED_SCRIPT
 import com.streamhub.tv.shell.ShellBridge
 import com.streamhub.tv.shell.NativePlayer
 import com.streamhub.tv.shell.PlayerLink
+import com.streamhub.tv.shell.PxRect
 import com.streamhub.tv.shell.miniPlayerEventJson
 import com.streamhub.tv.shell.miniPlayerScript
 import com.streamhub.tv.shell.VoiceCommand
@@ -60,7 +64,9 @@ import com.streamhub.tv.shell.UpdatePromptViewModel
 import com.streamhub.tv.shell.UnreachableScreen
 import com.streamhub.tv.shell.backOutcome
 import com.streamhub.tv.shell.createShellWebView
+import com.streamhub.tv.shell.keepClearPx
 import com.streamhub.tv.shell.mayLoad
+import com.streamhub.tv.shell.pipInCss
 import com.streamhub.tv.shell.tokenRequestScript
 import com.streamhub.tv.shell.webSessionJson
 import dagger.hilt.android.AndroidEntryPoint
@@ -117,6 +123,8 @@ class MainActivity : ComponentActivity() {
     /** A player was started and has not said it is up yet. */
     private var launching = false
     private var backPending = false
+    /** What the page last asked the picture-in-picture window to stay off (its `keep_clear` message). */
+    private var keepClear: KeepClearReport? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -140,6 +148,7 @@ class MainActivity : ComponentActivity() {
                 onSignedOut = vm::signedOut,
                 onMiniPlayerCommand = PlayerLink::command,
                 onVoiceCommand = ::voice,
+                onKeepClear = { report -> keepClear = report; applyKeepClear() },
             ),
             ShellBridge.NAME,
         )
@@ -180,8 +189,10 @@ class MainActivity : ComponentActivity() {
         var last: NativePlayer = NativePlayer.None
         PlayerLink.state.collect { now ->
             if (now != NativePlayer.None) launching = false
-            if (now is NativePlayer.Mini) sendToPage(miniPlayerScript(miniPlayerEventJson(now.info)))
+            if (now is NativePlayer.Mini) sendToPage(miniPlayerScript(miniPlayerEventJson(now.info, now.bounds?.let(::pipForPage), KEEP_CLEAR_SUPPORTED)))
             else if (last is NativePlayer.Mini) sendToPage(miniPlayerScript(miniPlayerEventJson(null)))
+            // Keep-clear areas only mean something while the picture-in-picture window is up.
+            if ((now is NativePlayer.Mini) != (last is NativePlayer.Mini)) applyKeepClear()
             if (now == NativePlayer.None && last != NativePlayer.None) {
                 // Progress shown on tiles and rows is read again; focus and screen are where they were.
                 sendToPage(PLAYBACK_ENDED_SCRIPT)
@@ -192,6 +203,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendToPage(script: String) { if (controller.ready) webView.evaluateJavascript(script, null) }
+
+    /**
+     * While the native player is in picture-in-picture, the WebView declares the page's keep-clear rects
+     * (the focused element, the mini player bar) so the system's PiP placement tries to stay off them
+     * (Android 13+; best effort, see PipLayout.kt). Otherwise it declares none.
+     */
+    private fun applyKeepClear() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val report = keepClear.takeIf { PlayerLink.state.value is NativePlayer.Mini && webView.visibility == View.VISIBLE }
+        @Suppress("DEPRECATION") // getScale(): only the fallback when the page did not give its viewport width
+        val rects = report?.let { keepClearPx(it, webView.width, webView.height, webView.scale) }.orEmpty()
+        webView.setPreferKeepClearRects(rects.map { Rect(it.left, it.top, it.right, it.bottom) })
+    }
+
+    /** The picture-in-picture window in the page's CSS px, for the page's own fallback (web-app/src/player/pipAvoid.ts). */
+    private fun pipForPage(bounds: PxRect) = IntArray(2).let { at ->
+        webView.getLocationOnScreen(at)
+        @Suppress("DEPRECATION")
+        pipInCss(bounds, at[0], at[1], webView.width, webView.height, keepClear?.viewportWidth, webView.scale)
+    }
 
     /** The web app, or a native screen over it. Only one of them takes the remote's keys. */
     private fun showScreen(screen: ShellScreen) {
@@ -268,6 +299,11 @@ class MainActivity : ComponentActivity() {
         PlayerLink.closeOpenPlayer()
         launching = true
         startActivity(Intent(this, PlayerActivity::class.java).putExtra(PlayerActivity.EXTRA_KEY, key))
+    }
+
+    private companion object {
+        /** View.setPreferKeepClearRects exists from Android 13 (API 33). */
+        val KEEP_CLEAR_SUPPORTED = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
     }
 
     private fun miniPlayerKey(code: Int): MiniPlayerCommand? = when (code) {

@@ -26,6 +26,15 @@ class PlayerLabelsTest {
         assertTrue("a string is not a stored false", autoplayNextPref(JsonPrimitive("false")))
     }
 
+    @Test fun backMinimisesOnlyWhenThePreferenceSaysTrue() {
+        assertFalse("missing: Back closes the player", backMinimisesPref(null))
+        assertFalse(backMinimisesPref(JsonNull))
+        assertFalse(backMinimisesPref(JsonPrimitive(false)))
+        assertTrue(backMinimisesPref(JsonPrimitive(true)))
+        assertFalse("a string is not a stored true", backMinimisesPref(JsonPrimitive("true")))
+        assertFalse("a number is not a stored true", backMinimisesPref(JsonPrimitive(1)))
+    }
+
     @Test fun anEpisodeReadsShowSeasonEpisodeOverItsName() {
         assertEquals("Garden Stories · Season 2 · Episode 1" to "Episode 1", titleBlock(ep))
         assertEquals("S2 · E1", episodeCode(ep))

@@ -143,8 +143,9 @@ private class OkPress {
  *         OK plays/pauses; Back asks "Leave the room?" before leaving
  *  Skip:  while the controls are hidden OK activates the visible Skip intro / Skip credits (or the Up next
  *         card's Play next); Back dismisses the Up next card ("Keep watching")
- *  Mini:  Back while a title plays (and the minimise button) shrinks the player into picture-in-picture
- *         when [onMinimise] is given; [inPip] shows the picture alone
+ *  Mini:  the minimise button shrinks the player into picture-in-picture when [onMinimise] is given;
+ *         Back does too while a title plays, but only with the profile's "Back shrinks to mini player"
+ *         (`back_minimises`, off by default: Back closes the player). [inPip] shows the picture alone
  */
 @Composable
 fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMinimise: (() -> Unit)? = null, inPip: Boolean = false) {
@@ -213,14 +214,23 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
                 fun resolve(longPress: Boolean = false) = PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress, inRoom)
                 if (resolve() == PlayerCommand.Back) {
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
-                    when {
-                        // "Keep watching": the card goes until the very end.
-                        s.upNextCard != null -> { vm.dismissUpNext(); if (controls) vm.hideOverlay() }
-                        menuOpen || controls -> vm.hideOverlay()
-                        // Leaving a room is leaving other people: ask first.
-                        inRoom -> vm.askLeaveRoom()
-                        s.numberEntry.isNotEmpty() -> vm.commitNumber()
-                        s.live && vm.hasLastChannel -> {
+                    val action = PlayerKeyMap.back(BackContext(
+                        upNextCard = s.upNextCard != null,
+                        menuOpen = menuOpen,
+                        controlsVisible = controls,
+                        inRoom = inRoom,
+                        typingNumber = s.numberEntry.isNotEmpty(),
+                        liveWithLastChannel = s.live && vm.hasLastChannel,
+                        canMinimise = onMinimise != null,
+                        titlePlaying = !s.live && s.descriptor != null && vm.player.wantsToPlay,
+                        backMinimises = s.backMinimises,
+                    ))
+                    when (action) {
+                        BackAction.DismissUpNext -> { vm.dismissUpNext(); if (controls) vm.hideOverlay() }
+                        BackAction.HideOverlay -> vm.hideOverlay()
+                        BackAction.AskLeaveRoom -> vm.askLeaveRoom()
+                        BackAction.CommitNumber -> vm.commitNumber()
+                        BackAction.LastChannelWindow -> {
                             val now = System.currentTimeMillis()
                             if (now - lastBackAt < PlayerViewModel.BACK_DOUBLE_MS) {
                                 pendingExit?.cancel(); lastBackAt = 0; backHint = false; vm.lastChannel()
@@ -231,9 +241,9 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
                                 pendingExit = scope.launch { delay(PlayerViewModel.BACK_DOUBLE_MS); backHint = false; onExit() }
                             }
                         }
-                        // A title that is playing shrinks into the mini player; the web app shows underneath.
-                        onMinimise != null && !s.live && !inRoom && s.descriptor != null && vm.player.wantsToPlay -> onMinimise()
-                        else -> onExit()
+                        // Only with "Back shrinks to mini player" on: the web app shows underneath.
+                        BackAction.Minimise -> onMinimise?.invoke()
+                        BackAction.Exit -> onExit()
                     }
                     return@onPreviewKeyEvent true
                 }
@@ -354,7 +364,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
             exit = slideOutHorizontally { it } + fadeOut(),
             modifier = Modifier.align(Alignment.CenterEnd),
         ) {
-            PlayerMenu(vm, s, ps)
+            PlayerMenu(vm, s, ps, canMinimise = onMinimise != null)
         }
     }
 }
@@ -654,7 +664,7 @@ internal fun StreamInfoCard(lines: List<StreamInfoLine>, noDetails: Boolean, onD
 
 /** Menu: audio track · subtitles · aspect ratio · sleep timer · stream info. Every track is listed; undecodable ones are disabled. */
 @Composable
-private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiState) {
+private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiState, canMinimise: Boolean) {
     val t = LocalThemeTokens.current
     val first = remember { FocusRequester() }
     val menuScope=rememberCoroutineScope()
@@ -692,6 +702,8 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             textTracks = ps.textTracks,
             subtitlesOff = ps.subtitlesOff,
             autoplay = s.autoplayNext.takeIf { s.upNext.kind != UpNextFlow.Kind.None },
+            // Only where Back could minimise at all: a title outside a room, on a TV with picture-in-picture.
+            backMinimises = s.backMinimises.takeIf { canMinimise && !inRoom && !s.live },
             aspectLabel = s.aspect.label,
             sleepOptions = PlayerViewModel.SLEEP_OPTIONS,
             sleepMinutes = s.sleepMinutes,
@@ -712,6 +724,7 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             onSubtitlesOff = { vm.player.disableSubtitles() },
             onSubtitle = { tr -> vm.player.selectTrack(tr, C.TRACK_TYPE_TEXT) },
             onToggleAutoplay = { vm.setAutoplayNext(!s.autoplayNext) },
+            onToggleBackMinimises = { vm.setBackMinimises(!s.backMinimises) },
             onAspect = vm::cycleAspect,
             onSleep = vm::setSleep,
             onWatchTogether = vm::startWatchTogether,

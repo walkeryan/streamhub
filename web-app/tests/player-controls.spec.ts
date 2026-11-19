@@ -334,10 +334,9 @@ test('a remote: OK pauses onto the scrubber, the arrows reach every control, and
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   await expect.poll(() => inBar(page)).toBe(false)
   await expect(ui(page)).toHaveAttribute('data-show', 'false', { timeout: 6000 })
-  // Back: with the controls hidden it keeps the film playing, minimised to the bar at the bottom.
+  // Back: with the controls hidden it closes the player (shrinking to the bar is a profile setting).
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('player')).toHaveAttribute('data-mini', 'true')
-  await expect(page.getByTestId('mini-player')).toBeVisible()
+  await expect(page.getByTestId('player')).toHaveCount(0)
 })
 
 test('Media Session: title for the lock screen, and its play, pause and seek controls drive the player', async ({ page }) => {
@@ -448,12 +447,11 @@ test('quality: the choices below the source with what an hour costs; a change re
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.quality.v1')!))).toEqual({ normal: 720, saver: null })
 
   // The browser remembers: a 1080p film it would have played as the file it is now arrives capped...
-  // Back while it plays keeps the film going minimised; the mini player's close ends it.
-  await page.keyboard.press('Escape')
-  await page.keyboard.press('Escape')
-  await expect(page.getByTestId('player')).toHaveAttribute('data-mini', 'true')
-  await page.getByTestId('mini-close').click()
-  await expect(page.getByTestId('player')).toHaveCount(0)
+  // Back closes the film (the first Back may only put the settings away).
+  await expect.poll(async () => {
+    await page.keyboard.press('Escape')
+    return page.getByTestId('player').count()
+  }, { intervals: [300] }).toBe(0)
   await play(page, FILM)
   expect(resolves.at(-1)).toMatchObject({ id: FILM, max_height: 720 })
   await expect(page.getByTestId('player')).toHaveAttribute('data-stream-start', '0')
@@ -491,12 +489,11 @@ test('quality when the browser asks to save data is a choice of its own; a chann
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.player.quality.v1')!))).toEqual({ normal: 1080, saver: 480 })
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
   // A channel is delivered as it is: its settings have no quality, and its resolve carries no cap.
-  // Back while it plays keeps the film going minimised; the mini player's close ends it.
-  await page.keyboard.press('Escape')
-  await page.keyboard.press('Escape')
-  await expect(page.getByTestId('player')).toHaveAttribute('data-mini', 'true')
-  await page.getByTestId('mini-close').click()
-  await expect(page.getByTestId('player')).toHaveCount(0)
+  // Back closes the film (the first Back may only put the settings away).
+  await expect.poll(async () => {
+    await page.keyboard.press('Escape')
+    return page.getByTestId('player').count()
+  }, { intervals: [300] }).toBe(0)
   await play(page, 'ch:s_xt:1001')
   expect(resolves.at(-1)!.max_height ?? null).toBeNull()
   await page.keyboard.press('s')

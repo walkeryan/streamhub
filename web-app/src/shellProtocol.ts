@@ -124,7 +124,12 @@ export interface MiniPlayerState {
   has_next: boolean
   has_previous: boolean
   live: boolean
+  /** The TV takes this page's keep-clear areas (`keep_clear` messages; Android 13 and later). */
+  keep_clear: boolean
+  /** Where the picture-in-picture window is, in this page's CSS px; null when the TV cannot tell. */
+  pip_rect: CssRect | null
 }
+export interface CssRect { x: number; y: number; w: number; h: number }
 export type MiniPlayerCommandName = 'play_pause' | 'seek_by' | 'next' | 'previous' | 'expand' | 'close'
 /**
  * Voice search on the TV (its speech recogniser, started by `voice_command` or by the remote's search
@@ -174,11 +179,18 @@ export function parseShellMessage(input: unknown): ShellMessage | null {
   if ((s.duration_ms != null && duration === null) || (s.subtitle != null && subtitle === null) || (s.image != null && image === null)) return null
   // Artwork is shown in an <img>: only web addresses, never script or data the TV did not mean.
   const safeImage = image && (/^https?:\/\//i.test(image) || (image.startsWith('/') && !image.startsWith('//'))) ? image : null
+  // Newer TVs add these two; an older TV leaves them out, which reads as "no keep-clear, window unknown".
+  const r = s.pip_rect as Record<string, unknown> | null | undefined
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 100_000 ? v : null)
+  const pip = r && typeof r === 'object' ? [num(r.x), num(r.y), num(r.w), num(r.h)] : null
+  const pipRect = pip && pip.every((n) => n !== null) && (pip[2] as number) > 0 && (pip[3] as number) > 0
+    ? { x: pip[0] as number, y: pip[1] as number, w: pip[2] as number, h: pip[3] as number } : null
   return {
     kind: 'mini_player',
     state: {
       id, title, subtitle, image: safeImage, position_ms: position, duration_ms: duration,
       playing: s.playing as boolean, has_next: s.has_next as boolean, has_previous: s.has_previous as boolean, live: s.live as boolean,
+      keep_clear: s.keep_clear === true, pip_rect: pipRect,
     },
   }
 }
@@ -216,4 +228,34 @@ export function voiceCommand(command: 'start' | 'stop'): string {
 export function offersVoice(capabilities: unknown): boolean {
   if (typeof capabilities !== 'string') return false
   try { return (JSON.parse(capabilities) as { voice_search?: unknown } | null)?.voice_search === true } catch { return false }
+}
+
+/** At most this many keep-clear rects go to the TV (it refuses more). */
+export const MAX_KEEP_CLEAR_RECTS = 8
+
+/**
+ * A page → TV report of what the picture-in-picture window should stay off, in CSS px of a page
+ * `viewportWidth` wide (the TV scales to its own pixels). Rects are rounded and clipped to sane sizes.
+ */
+export function keepClearMessage(rects: readonly CssRect[], viewportWidth: number): string {
+  const list = rects.slice(0, MAX_KEEP_CLEAR_RECTS).map((r) => ({
+    x: Math.round(r.x), y: Math.round(r.y), w: Math.max(0, Math.round(r.w)), h: Math.max(0, Math.round(r.h)),
+  }))
+  return JSON.stringify({ v: SHELL_BRIDGE_VERSION, kind: 'keep_clear', rects: list, viewport_width: Math.round(viewportWidth) })
+}
+
+/** Do two rects overlap (touching edges do not)? */
+export function overlaps(a: CssRect, b: CssRect): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
+/**
+ * How far to scroll (CSS px, positive is down) so `item` is no longer under the picture-in-picture
+ * window, when the TV cannot move the window itself. Zero when they do not overlap. A window in the
+ * top half pushes the item below it; one in the bottom half pulls the item above it.
+ */
+export function scrollClearOf(item: CssRect, pip: CssRect, viewportHeight: number, gap = 16): number {
+  if (!overlaps(item, pip)) return 0
+  const pipInTop = pip.y + pip.h / 2 < viewportHeight / 2
+  return pipInTop ? -(pip.y + pip.h + gap - item.y) : item.y + item.h - (pip.y - gap)
 }
