@@ -601,7 +601,8 @@ async def test_canvas_opt_in_uses_signed_distinct_hls_with_selected_track(api: A
     segment = next(line for line in playlist.text.splitlines() if line.startswith("/"))
     assert segment.endswith("seg_00000.aac")
     args, first = spawned[0]
-    assert args[args.index("-ss") + 1] == "60" and "0:a:1?" in args and "mjpeg" in args
+    assert args[args.index("-ss") + 1] == "60" and "0:a:1" in args and "mjpeg" in args
+    assert "anullsrc=r=48000:cl=stereo" not in args
     assert (await api.client.get(segment.removesuffix(".aac") + ".ts")).status_code == 404
     off = (await api.post("/playback/resolve", json={**body, "prefer_canvas": False, "replaces": body["id"]})).json()
     assert not off["canvas"] and not grant_of(api, off).canvas and first.stopped

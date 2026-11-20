@@ -22,7 +22,11 @@ def test_real_canvas_segments(tmp_path: Path, live: bool, with_audio: bool) -> N
     if with_audio:
         inputs += ["-f", "lavfi", "-i", "sine=frequency=440"]
     subprocess.run([ffmpeg, "-loglevel", "error", *inputs, "-t", "4.3", "-c:v", "ffv1", str(source)], check=True)
-    subprocess.run(canvas_args(ffmpeg, str(source), {}, tmp_path, live=live, vod=None), check=True, timeout=20)
+    subprocess.run(
+        canvas_args(ffmpeg, str(source), {}, tmp_path, live=live, vod=None, silent=not with_audio),
+        check=True,
+        timeout=20,
+    )
     segments = sorted(tmp_path.glob("seg_*.ts"))
     assert len(segments) >= 2
     for path in segments:

@@ -344,6 +344,7 @@ class HlsSession:
     label: str = ""
     fallbacks: list[tuple[str, list[str]]] = field(default_factory=list)
     upstream_status: str | None = None
+    missing_audio: bool = False
     pin_key: str | None = None  # the pinned upstream session this one uses, if any (``StreamProxy.pin``)
     # profile id -> (viewer, when it last asked for the playlist); a live channel can have several.
     viewers: dict[str, tuple[Viewer, float]] = field(default_factory=dict)
@@ -422,7 +423,14 @@ def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
 
 
 def canvas_args(
-    ffmpeg: str, url: str, headers: dict[str, str], outdir: Path, *, live: bool, vod: VodPlan | None
+    ffmpeg: str,
+    url: str,
+    headers: dict[str, str],
+    outdir: Path,
+    *,
+    live: bool,
+    vod: VodPlan | None,
+    silent: bool = False,
 ) -> list[str]:
     from app.proxy.canvas import COLUMNS, FPS, ROWS
 
@@ -435,24 +443,20 @@ def canvas_args(
         args += ["-reconnect_at_eof", "1"]
     # Apply the input display aspect ratio before packing square-pixel tiles.
     scale = "scale=w='max(2,trunc(min(854,min(ih,480)*dar)/2)*2)':h='max(2,trunc(min(min(ih,480),854/dar)/2)*2)'"
-    # One clock and one upstream. The second audio map supplies PID 257 only when the source has
-    # no audio. The packager ignores it when a real track was mapped first.
+    # A second, unbounded audio input can block the HLS muxer while the real audio
+    # is playing. Generate silence only on the retry for a missing audio stream.
+    audio = f"0:a:{vod.audio_track or 0}" if vod else "0:a:0"
     return [
         *args,
         "-fflags",
         "+genpts",
         "-i",
         url,
-        "-f",
-        "lavfi",
-        "-i",
-        "anullsrc=r=48000:cl=stereo",
+        *(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"] if silent else []),
         "-map",
         "0:V:0",
         "-map",
-        f"0:a:{vod.audio_track or 0}?" if vod else "0:a:0?",
-        "-map",
-        "1:a:0",
+        "1:a:0" if silent else audio,
         "-vf",
         f"fps={FPS},{scale},setsar=1,tile={COLUMNS}x{ROWS}",
         "-c:v",
@@ -471,7 +475,7 @@ def canvas_args(
         "2",
         "-b:a",
         "128k",
-        "-shortest",
+        *(["-shortest"] if silent else []),
         "-f",
         "hls",
         "-hls_segment_options",
@@ -1367,16 +1371,18 @@ class StreamProxy:
 
     async def _drain_hls_stderr(self, sess: HlsSession) -> None:
         # Never retain/log raw ffmpeg stderr: it may contain upstream credentials.
-        # The one thing kept is the HTTP status of a refused upstream request, three characters.
+        # Keep only the upstream HTTP status and whether a required stream was absent.
         tail = b""
         if sess.proc.stderr is not None:
             while chunk := await sess.proc.stderr.read(4096):
                 sess.stderr_bytes = min(1_000_000, sess.stderr_bytes + len(chunk))
+                if sess.label == "canvas" and b"matches no streams" in tail + chunk:
+                    sess.missing_audio = True
                 if sess.upstream_status is None:
                     found = UPSTREAM_STATUS.search(tail + chunk)
                     if found is not None:
                         sess.upstream_status = found.group(1).decode()
-                    tail = chunk[-32:]
+                tail = (tail + chunk)[-64:]
 
     async def _spawn_hls(
         self,
@@ -1463,7 +1469,13 @@ class StreamProxy:
 
         def attempts_for(target: str, outdir: Path) -> list[tuple[str, list[str]]]:
             if transcode == "canvas" or (vod is not None and vod.video == "canvas"):
-                return [("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=vod))]
+                return [
+                    ("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=vod)),
+                    (
+                        "canvas-silent",
+                        canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=vod, silent=True),
+                    ),
+                ]
             if vod is not None:
                 return vod_ffmpeg_attempts(self.ffmpeg, target, headers, outdir, vod, vaapi_device=self.vaapi_device)
             legacy = ffmpeg_args(
@@ -1596,6 +1608,8 @@ class StreamProxy:
                     retry = code != 0 and bool(sess.fallbacks) and sess.upstream_status is None
                     retry = retry and self._hls.get(key) is sess
                     await self._stop_hls(key, expected=sess)
+                    if retry and sess.fallbacks[0][0] == "canvas-silent":
+                        retry = sess.missing_audio
                     if retry:
                         self.ensure_running(generation)
                         log.warning(
