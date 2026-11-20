@@ -128,7 +128,7 @@ export const useSimilarTitles = (id: string | undefined) =>
     queryFn: () => unwrap<SimilarTitles>(api.GET('/titles/{id}/similar', { params: { path: { id: id! } } })),
   })
 
-export interface BrowseFilters { source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating'; order?: 'asc' | 'desc' }
+export interface BrowseFilters { include_adult?: boolean; source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating'; order?: 'asc' | 'desc' }
 /**
  * A browse grid that loads as it scrolls, both ways: it starts at `start` (page 1, or wherever a jump on the
  * side rail landed) and grows down with the next pages and up with the earlier ones.
@@ -153,7 +153,7 @@ export const useBrowseJumps = (section: string, f: BrowseFilters, enabled = true
   })
 
 /** Every shelf of a section with its first titles: what Movies and Shows open on. */
-export const useBrowseShelves = (section: string, f: { language?: string; limit_rows?: number; limit_items?: number; include_adult?: boolean }, enabled = true) =>
+export const useBrowseShelves = (section: string, f: Pick<BrowseFilters, 'source_id' | 'language' | 'include_adult'> & { limit_rows?: number; limit_items?: number }, enabled = true) =>
   useQuery({
     queryKey: ['browse-shelves', useProfileId(), section, f],
     enabled,
@@ -162,8 +162,8 @@ export const useBrowseShelves = (section: string, f: { language?: string; limit_
 
 export const useBrowseCategories = (section: string, f: BrowseFilters) =>
   useQuery({ queryKey: ['browse-categories', useProfileId(), section, f], queryFn: () => unwrap<Array<{ name: string; count: number }>>(api.GET('/browse/{section}/categories', { params: { path: { section }, query: f } })) })
-export const useBrowseLanguages = (section: string, source_id?: string) =>
-  useQuery({ queryKey: ['browse-languages', useProfileId(), section, source_id], queryFn: () => unwrap<LanguageCount[]>(api.GET('/browse/{section}/languages', { params: { path: { section }, query: { source_id } } })) })
+export const useBrowseLanguages = (section: string, scope: Pick<BrowseFilters, 'source_id' | 'include_adult'>) =>
+  useQuery({ queryKey: ['browse-languages', useProfileId(), section, scope], queryFn: () => unwrap<LanguageCount[]>(api.GET('/browse/{section}/languages', { params: { path: { section }, query: scope } })) })
 
 export interface ChannelFilters { country?: string; group?: string; language?: string; favorites?: boolean; q?: string; source_id?: string; limit?: number; offset?: number; has_epg?: boolean; include_hidden?: boolean }
 export const useChannels = (f: ChannelFilters, enabled = true) => {

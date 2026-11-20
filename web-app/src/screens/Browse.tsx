@@ -69,17 +69,18 @@ export function Browse() {
   // restarts if that key changes, which a change of sort would otherwise cause.
   const [sheet, setSheet] = useState<string | null>(null)
   const sources = useSources()
-  const languages = useBrowseLanguages(section, source || undefined)
+  // A shelf and its full listing share the same server-checked session scope.
+  const adult = useAdultUnlock()
+  const scope = { source_id: source || undefined, ...(adult.unlocked ? { include_adult: true } : {}) }
+  const languages = useBrowseLanguages(section, scope)
   const { offered: languageOffered, language } = languageScope(languages.data, lang, preferred)
-  const filterKey = `${section}|${source}|${sort}|${order}|${language}|${category}|${genre}`
+  const filterKey = `${section}|${source}|${sort}|${order}|${language}|${category}|${genre}|${adult.unlocked}`
   // Shelves are the way in. Asking for anything narrower (a filter, one shelf) shows the grid. Finding a
   // title by name is the search box's job, in the top bar.
   const filtered = !!(source || category || genre || sort !== defaults.sort || savedOrder || lang !== defaults.language)
-  // Adult titles are asked for only on a session their holder has unlocked; the server ignores the flag otherwise.
-  const adult = useAdultUnlock()
-  const shelves = useBrowseShelves(section, { language, ...SHELVES, ...(adult.unlocked ? { include_adult: true } : {}) }, saved.ready && !filtered)
+  const shelves = useBrowseShelves(section, { ...scope, language, ...SHELVES }, saved.ready && !filtered)
   const onShelves = !filtered && !shelves.error && (!shelves.data || shelves.data.shelves.length > 0)
-  const filters = { source_id: source || undefined, language }
+  const filters = { ...scope, language }
   const categories = useBrowseCategories(section, filters)
   const genres = useBrowseGenres(section, { ...filters, category: category || undefined })
   const gridFilters: BrowseFilters = { ...filters, sort, order: savedOrder || undefined, category: category || undefined, genre: genre || undefined }

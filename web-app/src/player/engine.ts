@@ -1,5 +1,6 @@
 import type { PlaybackDescriptor } from '../api/types'
 import type shakaNs from 'shaka-player'
+import { startCanvasTimeline } from './serverCanvas'
 import { liveCushion } from './liveCushion'
 
 export type EngineKind = 'hls' | 'mpegts' | 'dash' | 'native'
@@ -45,7 +46,7 @@ const isSafari = () => /^((?!chrome|android|crios|fxios).)*safari/i.test(navigat
 
 const noTracks = { audioTracks: () => [], setAudio: () => undefined, subtitleTracks: () => [], setSubtitle: () => undefined }
 
-function nativeTextTracks(video: HTMLVideoElement) {
+function nativeTextTracks(video: HTMLMediaElement) {
   return {
     subtitleTracks: (): TrackInfo[] =>
       Array.from(video.textTracks)
@@ -58,7 +59,7 @@ function nativeTextTracks(video: HTMLVideoElement) {
   }
 }
 
-export async function attachSource(video: HTMLVideoElement, d: PlaybackDescriptor, opt: AttachOptions): Promise<PlayerHandle> {
+export async function attachSource(video: HTMLMediaElement, d: PlaybackDescriptor, opt: AttachOptions): Promise<PlayerHandle> {
   const url = d.url
   if (!url) throw new Error('No stream URL in playback descriptor')
   const kind = pickEngine(d)
@@ -67,11 +68,18 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
   if (kind === 'hls') {
     const { default: Hls } = await import('hls.js')
     opt.signal?.throwIfAborted()
-    if (isSafari() && video.canPlayType('application/vnd.apple.mpegurl') || !Hls.isSupported()) {
+    if (!d.canvas && isSafari() && video.canPlayType('application/vnd.apple.mpegurl') || !Hls.isSupported()) {
       video.src = url
       return { kind: 'native', destroy: () => { video.removeAttribute('src'); video.load() }, ...noTracks, ...nativeTextTracks(video) }
     }
-    const hls = new Hls({ lowLatencyMode: live, enableWorker: true, backBufferLength: live ? 30 : 90 })
+    const hls = new Hls({ lowLatencyMode: live, enableWorker: true, backBufferLength: d.canvas ? 8 : live ? 30 : 90, ...(d.canvas ? { enableID3MetadataCues: false, maxBufferLength: 12, maxMaxBufferLength: 24 } : {}) })
+    const pictures = d.canvas ? startCanvasTimeline(video) : null
+    if (pictures) {
+      hls.on(Hls.Events.FRAG_PARSING_METADATA, (_e, { samples }) => {
+        for (const sample of samples) pictures.add(sample.pts, sample.data)
+      })
+      hls.on(Hls.Events.BUFFER_FLUSHING, (_e, range) => pictures.flush(range.startOffset, range.endOffset))
+    }
     let netRetries = 0
     let confirmedAudio = -1
     let audioReady = false
@@ -100,7 +108,7 @@ export async function attachSource(video: HTMLVideoElement, d: PlaybackDescripto
     return {
       kind: 'hls',
       audioReady: () => audioReady,
-      destroy: () => hls.destroy(),
+      destroy: () => { pictures?.stop(); hls.destroy() },
       audioTracks: () => hls.audioTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Audio ${i + 1}`, language: t.lang, active: confirmedAudio === i })),
       setAudio: (id) => { hls.audioTrack = id },
       subtitleTracks: () => hls.subtitleTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Subtitles ${i + 1}`, active: hls.subtitleTrack === i })),

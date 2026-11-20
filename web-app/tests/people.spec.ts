@@ -1079,11 +1079,24 @@ test.describe('adult titles', () => {
     expect(await sent('/auth/adult-unlock')).toEqual([['POST', '/auth/adult-unlock', { pin: '2468' }]])
     expect((await sent('/browse/movies/shelves')).at(-1)![1]).toContain('include_adult=true')
 
+    // Follow the shelf on the same unlocked device. Listing pages and jump counts need the same scope.
+    await page.setViewportSize({ width: 390, height: 844 })
+    await shelf(page).getByRole('link', { name: 'See all After Dark' }).click()
+    await expect(page).toHaveURL(/category=After(%20|\+)Dark/)
+    await expect(shelf(page)).toHaveCount(0)
+    await expect(page.locator('p[aria-live=polite]')).toHaveText('3 titles')
+    await expect(page.getByRole('link', { name: /Velvet Hours/ }).first()).toBeVisible()
+    expect((await sent('/browse/movies')).at(-1)![1]).toContain('include_adult=true')
+    expect((await sent('/browse/movies/jumps')).at(-1)![1]).toContain('include_adult=true')
+
     // Lock is always in reach while they show.
     await expect(page.getByTestId('adult-unlocked')).toContainText('Adult titles are shown on this device.')
     await page.getByTestId('adult-lock').click()
     await expect(shelf(page)).toHaveCount(0)
     await expect(page.getByTestId('adult-unlocked')).toHaveCount(0)
+    await expect(page.getByText('No matching titles', { exact: true })).toBeVisible()
+    await expect(page.getByRole('link', { name: /Velvet Hours/ })).toHaveCount(0)
+    await page.goBack()
 
     // Now there is a PIN: it is asked for, a wrong one is refused, the right one unlocks.
     await filters(page)

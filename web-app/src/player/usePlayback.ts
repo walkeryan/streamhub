@@ -18,6 +18,7 @@ export interface PlaybackReq {
   /** The viewer's quality cap (480, 720 or 1080); the server applies it to films taller than that. */
   maxHeight?: number | null
   /** The live channel this one replaces after it stalled (feed failover): the server frees its stream first. */
+  preferCanvas?: boolean
   replaces?: string | null
 }
 
@@ -33,7 +34,7 @@ export async function resolve(req: PlaybackReq, generation?: string): Promise<Pl
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null, replaces: req.replaces ?? null },
+      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), prefer_canvas: req.preferCanvas ?? false, rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null, replaces: req.replaces ?? null },
     }),
   )
 }
@@ -48,13 +49,18 @@ const MAX_RETRIES = 6
  * browser): its media time zero is that position in the title and duration_ms is the title's length. Seeking
  * outside what the stream has produced, and switching the audio track, resolve again at the wanted position.
  */
-export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: {
+export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req: PlaybackReq | null, opts: {
+  canvasAudio?: RefObject<HTMLAudioElement | null>
   muted?: boolean; report?: boolean; buffer?: boolean
   /** A watch room supplies its member's descriptor (the room decides variant and position) instead of /playback/resolve. */
   descriptor?: (generation: string | undefined) => Promise<PlaybackDescriptor>
   /** The quality cap playback starts with (the browser's remembered choice); setMaxHeight changes it. */
   maxHeight?: number | null
 } = {}) {
+  const switchingRenderer = useRef<string | null>(null)
+  const carryPositionMs = useRef<number | null>(null)
+  const requestedCanvas = useRef(opts.canvasAudio)
+  requestedCanvas.current = opts.canvasAudio
   const descriptorSource = useRef(opts.descriptor)
   descriptorSource.current = opts.descriptor
   const profile = useSession((s) => s.profile)
@@ -81,6 +87,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   const pendingRelease = useRef<Promise<void>>(Promise.resolve())
   const seekBufferRef = useRef<((at: string | null) => Promise<void>) | null>(null)
   const [desc, setDesc] = useState<PlaybackDescriptor | null>(null)
+  const videoRef: RefObject<HTMLMediaElement | null> = (desc?.canvas && opts.canvasAudio) || pictureRef
   const [state, setState] = useState<PlayState>('resolving')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<SourceBusy | null>(null)
@@ -224,6 +231,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       intent.current = { key }
       terminal.current = false
       restart.current = {}
+      carryPositionMs.current = null
       pausedByViewer.current = false
     }
     consent.current = null
@@ -243,7 +251,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     let pauseHeartbeat: (() => void) | null = null
     setBufferWindow(null)
     setBufferIssue(null)
-    const video = videoRef.current
+    let attachedMedia: HTMLMediaElement | null = null
     const releaseOnHide = () => { if (lease) pendingRelease.current = lease.release() }
     window.addEventListener('pagehide', releaseOnHide)
     setState((s) => (s === 'reconnecting' ? s : 'resolving'))
@@ -260,15 +268,19 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
           if (cancelled) return
           intent.current.generation = generation
         }
+        const replaces = switchingRenderer.current === req.id ? req.id : req.replaces
+        switchingRenderer.current = null
         const d = descriptorSource.current
           ? await descriptorSource.current(intent.current.generation)
-          : await resolve({ ...req, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs, maxHeight: req.id.startsWith('ch:') ? null : maxHeight.current }, intent.current.generation)
+          : await resolve({ ...req, replaces, preferCanvas: !!opts.canvasAudio, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs, maxHeight: req.id.startsWith('ch:') ? null : maxHeight.current }, intent.current.generation)
         if (cancelled || !ownsSession()) return
         setDesc(d)
         descRef.current = d
         descriptorOwner.current = { key, profileId, generation: sessionGeneration }
         if (d.mode === 'handoff') { setState('handoff'); return }
+        const video = d.canvas ? opts.canvasAudio?.current : pictureRef.current
         if (!video) return
+        attachedMedia = video
         const attach = async (descriptor: PlaybackDescriptor) => {
           const sequence = ++attachSequence
           attachController.abort()
@@ -379,14 +391,14 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
         // transient network/server failures on the bounded reconnect path.
         // A recording that cannot be played is refused for a reason only the server knows: say it, do not knock again.
         const recording = req.id.startsWith('rec:')
-        if (e instanceof ApiError && ([400, 401, 403, 404, 410, 422].includes(e.status) || e.code === 'audio_selection_required' || (recording && e.status >= 400 && e.status < 500))) {
+        if (e instanceof ApiError && ([400, 401, 403, 404, 410, 422].includes(e.status) || e.code === 'canvas_unavailable' || e.code === 'audio_selection_required' || (recording && e.status >= 400 && e.status < 500))) {
           terminal.current = true
           clearWaiting()
           clearRetry()
           setRefused(e.status === 401 || e.status === 403 || e.code === 'audio_selection_required' || e.code === 'playback_reload_required')
           setState('error')
           // A room's refusals (the room ended, it is full) are the server's own words.
-          setError((descriptorSource.current && e.code?.startsWith('room_')) || (recording && e.message) ? e.message : e.code === 'audio_selection_required' ? 'Choose an audio language and source from title details before playing.' : e.code === 'playback_paused' || e.code === 'playback_stopped'
+          setError((descriptorSource.current && e.code?.startsWith('room_')) || (recording && e.message) ? e.message : e.code === 'canvas_unavailable' ? e.message : e.code === 'audio_selection_required' ? 'Choose an audio language and source from title details before playing.' : e.code === 'playback_paused' || e.code === 'playback_stopped'
             ? 'Playback was stopped by an administrator. Once playback is resumed, choose Try again to start a new stream.'
             : e.code === 'playback_reload_required'
             ? 'Playback controls have been updated. Reload Streamhub before trying again.'
@@ -401,7 +413,16 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     return () => {
       cancelled = true
       checkAudio.current = () => false
-      if (video) { video.muted = true; video.pause() }
+      if (attachedMedia && requestedCanvas.current !== opts.canvasAudio) switchingRenderer.current = req.id
+      const video = attachedMedia
+      if (video) {
+        if (requestedCanvas.current !== opts.canvasAudio && video.readyState && descRef.current && !descRef.current.live) {
+          carryPositionMs.current = (descRef.current.start_position_ms ?? 0) + Math.floor(video.currentTime * 1000)
+          restart.current.startMs = carryPositionMs.current
+        }
+        video.muted = true
+        video.pause()
+      }
       controller.abort()
       window.removeEventListener('pagehide', releaseOnHide)
       attachController.abort()
@@ -415,7 +436,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
       if (handle.current === owned) handle.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, attempt])
+  }, [key, attempt, opts.canvasAudio])
 
   useEffect(() => { retry.current = 0 }, [key])
 
@@ -426,7 +447,14 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
     if (!v) return
     const onMeta = () => {
       const d = descRef.current
-      if (!d || d.live || d.start_position_ms != null) return // a restart-at-offset stream already begins where it should
+      if (!d || d.live) return
+      const carry = carryPositionMs.current
+      carryPositionMs.current = null
+      if (d.start_position_ms != null) {
+        // The producer starts on a five-second grid. Keep the exact frame when changing renderers.
+        if (carry != null && carry > d.start_position_ms) v.currentTime = (carry - d.start_position_ms) / 1000
+        return
+      }
       // Back from a capped quality to a file the browser plays as it is: carry on where the viewer was, once.
       const carried = restart.current.startMs
       if (carried != null) restart.current = { ...restart.current, startMs: undefined }
@@ -521,6 +549,7 @@ export function usePlayback(videoRef: RefObject<HTMLVideoElement | null>, req: P
   }, [tracksVersion])
 
   return {
+    mediaRef: videoRef,
     desc, state, error, busy, refused, timeshifted, tracks, audioBlocked,
     pause: () => { wantsPlayback.current = false; pausedByViewer.current = true; videoRef.current?.pause() },
     resume: () => { wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },

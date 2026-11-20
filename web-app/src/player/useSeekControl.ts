@@ -26,7 +26,7 @@ export interface SeekTarget {
  * element already holds costs nothing, so the picture follows it straight away; anything else waits
  * for the commit and is then shown as `heading` until the new stream says where it began.
  */
-export function useSeekControl(videoRef: RefObject<HTMLVideoElement | null>, target: SeekTarget, streamKey: unknown, failed: boolean) {
+export function useSeekControl(videoRef: RefObject<HTMLMediaElement | null>, target: SeekTarget, streamKey: unknown, failed: boolean) {
   const [pending, setPendingState] = useState<PendingSeek | null>(null)
   const pendingRef = useRef<PendingSeek | null>(null)
   const setPending = (next: PendingSeek | null) => { pendingRef.current = next; setPendingState(next) }

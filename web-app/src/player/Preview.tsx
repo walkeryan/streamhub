@@ -18,6 +18,7 @@ export function Preview({ channelId, off, onTurnOn }: {
   onTurnOn?: () => void
 }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const canvasAudioRef = useRef<HTMLAudioElement>(null)
   const canvas = useUi(s => s.canvasPlayback)
   const audio = useChannelAudio({ id: channelId ?? '' }, false)
   // A preview is muted, so which language a feed speaks cannot matter here: where full-screen playback
@@ -28,11 +29,12 @@ export function Preview({ channelId, off, onTurnOn }: {
     [channelId, audio.request, first],
   )
   const unavailable = !!channelId && audio.blocked && !audio.query.isPending && !first
-  const { state, error } = usePlayback(ref, req, { muted: true, report: false })
+  const { state, error, desc } = usePlayback(ref, req, { muted: true, report: false, canvasAudio: canvas && !inShell() ? canvasAudioRef : undefined })
   return (
     <div style={{ position: 'relative', aspectRatio: '16/9', width: 'min(100%, calc((100dvh - var(--bar-h, 0px) - 19rem) * 16 / 9))', minWidth: 'min(100%, 20rem)', background: '#000', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }} data-testid="live-preview" data-state={state}>
+      <audio ref={canvasAudioRef} muted hidden />
       <video ref={ref} muted playsInline poster={NO_POSTER} loop aria-label="Channel preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-      {canvas && !inShell() && channelId && <CanvasPicture key={channelId} videoRef={ref} fit="contain" />}
+      {canvas && !inShell() && channelId && <CanvasPicture key={channelId} videoRef={ref} audioRef={desc?.canvas ? canvasAudioRef : undefined} fit="contain" />}
       {(state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && channelId && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.45)', color: '#fff' }} role="status">
           {state === 'reconnecting' ? 'Reconnecting…' : state === 'buffering' ? 'Buffering…' : 'Tuning…'}

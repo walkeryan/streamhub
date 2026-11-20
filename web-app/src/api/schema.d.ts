@@ -7413,6 +7413,11 @@ export interface components {
              */
             client: "android_tv" | "web";
             /**
+             * @description Request server-decoded pictures for browser playback.
+             * @default false
+             */
+            prefer_canvas: boolean;
+            /**
              * @description Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.
              * @default false
              */
@@ -7434,7 +7439,7 @@ export interface components {
             rewind_at?: string | null;
             /** @description Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients. */
             recovery_generation?: string | null;
-            /** @description The live channel (ch:…) this device is switching away from to another feed of the same game. Its stream on this server is stopped before the new one is resolved, instead of keeping the source's connection through its linger, when nobody else uses it (another viewer or device, a recording, a watch room, a multiview pair, a buffered session). Ignored unless both ids are channels and the request is live (no catch-up or rewind). */
+            /** @description The live channel (ch:…) this device is switching away from to another feed of the same game. Its stream on this server is stopped before the new one is resolved, instead of keeping the source's connection through its linger, when nobody else uses it (another viewer or device, a recording, a watch room, a multiview pair, a buffered session). For a browser explicitly switching canvas playback, the same id releases that device’s previous stream, including VOD. Otherwise both ids must be different live channels. */
             replaces?: string | null;
         };
         AlternateFeed: {
@@ -7512,6 +7517,8 @@ export interface components {
             reason: string;
         };
         PlaybackDescriptor: {
+            /** @description HLS packed audio carrying timed JPEG pictures. */
+            canvas?: boolean;
             /** @description Profile preferences retained even after exact-variant consent. */
             preferred_audio_languages?: string[];
             /** @description False only for All Languages or current server-validated exact-variant consent; exposed contradictory runtime tracks still require a current track choice. */

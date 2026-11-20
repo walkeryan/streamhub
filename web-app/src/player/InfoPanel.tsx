@@ -9,7 +9,7 @@ import { bufferedAhead, infoSections, type LiveNumbers, type MediaInfo } from '.
  */
 export function InfoPanel(p: {
   info: MediaInfo | null | undefined
-  videoRef: RefObject<HTMLVideoElement | null>
+  videoRef: RefObject<HTMLMediaElement | null>
   /** Seconds into the title at which the media element's time zero lies; null when the stream is the whole title. */
   streamStartS: number | null
   downloadKbps: () => number | null
@@ -22,7 +22,8 @@ export function InfoPanel(p: {
       const v = videoRef.current
       if (!v) return
       const ranges = Array.from({ length: v.buffered.length }, (_, i) => [v.buffered.start(i), v.buffered.end(i)] as const)
-      const quality = v.getVideoPlaybackQuality?.()
+      const picture = v instanceof HTMLVideoElement ? v : null
+      const quality = picture?.getVideoPlaybackQuality?.()
       setLive({
         bufferedAheadS: v.readyState > 0 ? bufferedAhead(ranges, v.currentTime) : null,
         droppedFrames: quality ? quality.droppedVideoFrames : null,
@@ -30,8 +31,8 @@ export function InfoPanel(p: {
         downloadKbps: downloadKbps(),
         positionS: (streamStartS ?? 0) + v.currentTime,
         streamStartS,
-        decodedWidth: v.videoWidth,
-        decodedHeight: v.videoHeight,
+        decodedWidth: picture?.videoWidth ?? 0,
+        decodedHeight: picture?.videoHeight ?? 0,
         speed: v.playbackRate,
       })
     }

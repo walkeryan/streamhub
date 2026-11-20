@@ -130,6 +130,7 @@ class StreamGrant:
     # A watch room's member on a source that limits connections: the stream is the room's one
     # session (``RoomPlayback``), whatever the fields above say about start and audio.
     room: str | None = None
+    canvas: bool = False
 
 
 @dataclass(slots=True)
@@ -205,6 +206,7 @@ class StreamTokens:
                 "c": grant.channel_key,
                 "t": grant.transcode,
                 "vv": grant.vod_video,
+                "canvas": grant.canvas,
                 "vc": grant.vod_codec,
                 "vw": grant.vod_width,
                 "vh": grant.vod_height,
@@ -245,6 +247,7 @@ class StreamTokens:
             channel_key=d.get("c"),
             transcode=bool(d.get("t")),
             vod_video=d.get("vv"),
+            canvas=bool(d.get("canvas")),
             vod_codec=d.get("vc"),
             vod_width=d.get("vw"),
             vod_height=d.get("vh"),
@@ -481,7 +484,7 @@ class PlaybackResolver:
             and self.content_policy.is_restricted(await self.content_policy.profile(profile_id))
         ):
             raise Forbidden("External trailers require owner access", code="content_restricted")
-        client = client if client in ("web", "web_hls", "android_tv") else "web"
+        client = client if client in ("web", "web_hls", "web_canvas", "android_tv") else "web"
         web = client != "android_tv"
         if not web or room is not None:
             max_height = None
@@ -1096,7 +1099,7 @@ class PlaybackResolver:
             room.max_connections = self._sources.max_connections(src)
             room.variant_id, room.vod = lib, vod
             room.title, room.kind = None if row.adult else row.title, row.kind
-        elif client != "android_tv" and self._probe_applies(src, target):
+        elif client == "web_canvas" or (client != "android_tv" and self._probe_applies(src, target)):
             vod = await self._web_vod(
                 profile_id, row, src, target, audio_track, start_position_ms, max_height=max_height
             )
@@ -1329,6 +1332,9 @@ class PlaybackResolver:
         if client != "android_tv":
             probe = await self._probe_recording(row.id, path)
             vod = await self._plan_vod(profile_id, probe, None, resume, audio_track, start_position_ms, max_height)
+        canvas = client == "web_canvas"
+        if canvas and vod is not None:
+            vod.video = "canvas"
         plan = vod if vod is not None and vod.video is not None else None
         mode = PlaybackMode.HLS if plan is not None else PlaybackMode.PROXY
         device = client if client == "android_tv" else "web"
@@ -1347,6 +1353,7 @@ class PlaybackResolver:
                 live=False,
                 channel_key=None,
                 transcode=False,
+                canvas=canvas,
                 vod_video=plan.video if plan else None,
                 vod_codec=plan.codec if plan else None,
                 vod_width=plan.width if plan else None,
@@ -1365,6 +1372,7 @@ class PlaybackResolver:
         desc: dict[str, Any] = {
             "id": hub_id,
             "mode": mode.value,
+            "canvas": canvas,
             "url": absolute(f"/api/v1/stream/{token}/index.m3u8" if hls else f"/api/v1/stream/{token}"),
             "mime": "application/x-mpegURL" if hls else "video/x-matroska",
             "headers": {},
@@ -1379,7 +1387,7 @@ class PlaybackResolver:
                 probe=probe,
                 audio_track=vod.audio_track if vod is not None else None,
                 mode=mode.value,
-                video_plan=plan.video if plan else None,
+                video_plan="canvas" if canvas else plan.video if plan else None,
                 hw=str(self._settings.get("transcode_hw") or "none"),
                 max_height=plan.max_height if plan else None,
             ),
@@ -1549,6 +1557,14 @@ class PlaybackResolver:
         room: str | None = None,
         probe: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if client == "web_canvas" and "never" in (
+            self._sources.proxy_policy(src).lower(),
+            str(self._settings.get("proxy_mode") or "").lower(),
+        ):
+            raise Conflict(
+                "This source does not allow server playback. Turn off Canvas streaming to play it.",
+                code="canvas_unavailable",
+            )
         mode = decide_mode(
             client=client,
             url=target.url,
@@ -1579,8 +1595,11 @@ class PlaybackResolver:
             raw_live = target.live and (target.mime or "").lower() == "video/mp2t"
             mode = PlaybackMode.HLS if raw_live else PlaybackMode.PROXY
         # A file the browser cannot decode is served as HLS whatever the routing above chose.
+        canvas = client == "web_canvas"
+        if canvas and vod is not None:
+            vod.video = "canvas"
         plan = vod if vod is not None and vod.video is not None else None
-        if plan is not None:
+        if canvas or plan is not None:
             mode = PlaybackMode.HLS
         transcode = str(self._settings.get("transcode_hw") or "none") != "none" and bool(
             self._sources.decrypt_config(src).get("transcode")
@@ -1608,6 +1627,7 @@ class PlaybackResolver:
                     live=target.live,
                     channel_key=channel_key if mode == PlaybackMode.PROXY else None,
                     transcode=transcode,
+                    canvas=canvas,
                     vod_video=plan.video if plan else None,
                     vod_codec=plan.codec if plan else None,
                     vod_width=plan.width if plan else None,
@@ -1634,6 +1654,7 @@ class PlaybackResolver:
             "mode": mode.value,
             "url": url,
             "mime": mime,
+            "canvas": canvas,
             "headers": headers,
             "live": target.live,
             "resume_position_ms": int(target.resume_position_ms or 0),
@@ -1646,7 +1667,7 @@ class PlaybackResolver:
                 probe=probe,
                 audio_track=vod.audio_track if vod is not None else None,
                 mode=mode.value,
-                video_plan=plan.video if plan else None,
+                video_plan="canvas" if canvas else plan.video if plan else None,
                 hw=str(self._settings.get("transcode_hw") or "none"),
                 live_transcode=transcode and plan is None,
                 max_height=plan.max_height if plan else None,
