@@ -421,6 +421,74 @@ def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
     return args
 
 
+def canvas_args(
+    ffmpeg: str, url: str, headers: dict[str, str], outdir: Path, *, live: bool, vod: VodPlan | None
+) -> list[str]:
+    from app.proxy.canvas import COLUMNS, FPS, ROWS
+
+    args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *_upstream_args(url, headers)]
+    if vod and vod.start_s:
+        args += ["-ss", str(vod.start_s)]
+    if not live:
+        args += ["-readrate", VOD_READRATE, "-readrate_initial_burst", VOD_BURST_S]
+    if live and url.startswith("http"):
+        args += ["-reconnect_at_eof", "1"]
+    # Apply the input display aspect ratio before packing square-pixel tiles.
+    scale = "scale=w='max(2,trunc(min(854,min(ih,480)*dar)/2)*2)':h='max(2,trunc(min(min(ih,480),854/dar)/2)*2)'"
+    # One clock and one upstream. The second audio map supplies PID 257 only when the source has
+    # no audio. The packager ignores it when a real track was mapped first.
+    return [
+        *args,
+        "-fflags",
+        "+genpts",
+        "-i",
+        url,
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=48000:cl=stereo",
+        "-map",
+        "0:V:0",
+        "-map",
+        f"0:a:{vod.audio_track or 0}?" if vod else "0:a:0?",
+        "-map",
+        "1:a:0",
+        "-vf",
+        f"fps={FPS},{scale},setsar=1,tile={COLUMNS}x{ROWS}",
+        "-c:v",
+        "mjpeg",
+        "-pix_fmt",
+        "yuvj420p",
+        "-q:v",
+        "6",
+        "-threads:v",
+        "2",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "128k",
+        "-shortest",
+        "-f",
+        "hls",
+        "-hls_segment_options",
+        "mpegts_start_pid=256",
+        "-hls_time",
+        "2",
+        "-hls_list_size",
+        "6" if live else "0",
+        *([] if live else ["-hls_playlist_type", "event"]),
+        "-hls_flags",
+        "temp_file+program_date_time" + ("+delete_segments" if live else ""),
+        "-hls_segment_filename",
+        str(outdir / "seg_%05d.ts"),
+        str(outdir / "index.m3u8"),
+    ]
+
+
 def ffmpeg_args(
     ffmpeg: str,
     url: str,
@@ -881,8 +949,10 @@ class StreamProxy:
             found += up.viewers.values()
         return [viewer for viewer in found if viewer.user_id == user_id]
 
-    async def release_replaced(self, profile_id: str, session_id: str | None, ref: str) -> int:
-        """Stop, at once, the live streams of ``ref`` that one signed-in device is leaving; how many stopped.
+    async def release_replaced(
+        self, profile_id: str, session_id: str | None, ref: str, *, include_vod: bool = False
+    ) -> int:
+        """Stop, at once, the streams of ``ref`` that one signed-in device is leaving; how many stopped.
 
         A player whose channel stalled switches to another feed of the same game. The channel it left
         would otherwise keep its source connection: a shared upstream through its linger, an HLS
@@ -914,7 +984,12 @@ class StreamProxy:
             now = self._clock()
             reserved = {key for lease in self._pairs.values() for key in lease.members}
             for key, sess in list(self._hls.items()):
-                if sess.family is not None or key in self._kept or key in reserved or self.dvr.key == key:
+                if (
+                    (sess.family is not None and not include_vod)
+                    or key in self._kept
+                    or key in reserved
+                    or self.dvr.key == key
+                ):
                     continue
                 entry = sess.watchers.get(me)
                 if entry is None or entry[0] != ref:
@@ -1387,6 +1462,8 @@ class StreamProxy:
             url = await self.pin(pin_key, source_url, headers)
 
         def attempts_for(target: str, outdir: Path) -> list[tuple[str, list[str]]]:
+            if transcode == "canvas" or (vod is not None and vod.video == "canvas"):
+                return [("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=vod))]
             if vod is not None:
                 return vod_ffmpeg_attempts(self.ffmpeg, target, headers, outdir, vod, vaapi_device=self.vaapi_device)
             legacy = ffmpeg_args(

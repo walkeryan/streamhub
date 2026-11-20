@@ -100,13 +100,15 @@ def media_info(
     tracks = [t for t in raw_audio if isinstance(t, dict)] if isinstance(raw_audio, list) else []
     index = audio_track if audio_track is not None else next((i for i, t in enumerate(tracks) if t.get("default")), 0)
     track = tracks[index] if 0 <= index < len(tracks) else {}
-    if video_plan == "transcode" or (mode == "hls" and live_transcode):
+    if video_plan in ("transcode", "canvas") or (mode == "hls" and live_transcode):
         delivery = "transcode"
     else:
         # HLS made by this server without encoding the video is a remux; anything else is the file or feed itself.
         delivery = "remux" if mode == "hls" else "direct"
     width, height = _positive(video.get("width")), _positive(video.get("height"))
-    if video_plan == "transcode":
+    if video_plan == "canvas":
+        size = None  # Output is a scaled JPEG tile. The source pixel aspect is not always known.
+    elif video_plan == "transcode":
         size = output_size(width, height, max_height)
     else:
         size = (width, height) if width and height else None
@@ -135,7 +137,7 @@ def media_info(
         if track
         else None,
         "delivery": delivery,
-        "encoder": encoder_kind(delivery, hw),
+        "encoder": encoder_kind(delivery, "none" if video_plan == "canvas" else hw),
         "output_width": size[0] if size else None,
         "output_height": size[1] if size else None,
         "max_height": max_height if video_plan == "transcode" else None,

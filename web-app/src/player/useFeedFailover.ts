@@ -14,7 +14,7 @@ const MAX_STEP_S = 3
  * (see feedFailover.ts for the rules). `onSwitch` tunes to the feed; the hook carries the failover
  * run across that change when the channel it is next given is the feed it asked for.
  */
-export function useFeedFailover(videoRef: RefObject<HTMLVideoElement | null>, opts: {
+export function useFeedFailover(videoRef: RefObject<HTMLMediaElement | null>, opts: {
   /** A live channel at its live edge, outside a watch room. */
   enabled: boolean
   channel: string

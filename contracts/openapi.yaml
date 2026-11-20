@@ -746,6 +746,7 @@ components:
         multiview: {type: boolean, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
         companion_id: {type: string, nullable: true, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
         client: {type: string, enum: [android_tv, web], default: web}
+        prefer_canvas: {type: boolean, default: false, description: Request server-decoded pictures for browser playback.}
         prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
         audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255, description: "Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself."}
         start_position_ms: {type: integer, nullable: true, minimum: 0, description: "Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced)."}
@@ -753,7 +754,7 @@ components:
         catchup_programme_id: {type: string, nullable: true}
         rewind_at: {type: string, format: date-time, nullable: true, description: "Timezone-aware archive seek on a channel; mutually exclusive with catchup_programme_id."}
         recovery_generation: {type: string, nullable: true, description: "Web playback intent generation, captured once per deliberate Play or Retry and retained across automatic reconnects. Required for web clients."}
-        replaces: {type: string, nullable: true, maxLength: 512, description: "The live channel (ch:…) this device is switching away from to another feed of the same game. Its stream on this server is stopped before the new one is resolved, instead of keeping the source's connection through its linger, when nobody else uses it (another viewer or device, a recording, a watch room, a multiview pair, a buffered session). Ignored unless both ids are channels and the request is live (no catch-up or rewind)."}
+        replaces: {type: string, nullable: true, maxLength: 512, description: "The live channel (ch:…) this device is switching away from to another feed of the same game. Its stream on this server is stopped before the new one is resolved, instead of keeping the source's connection through its linger, when nobody else uses it (another viewer or device, a recording, a watch room, a multiview pair, a buffered session). For a browser explicitly switching canvas playback, the same id releases that device’s previous stream, including VOD. Otherwise both ids must be different live channels."}
     AlternateFeed:
       type: object
       required: [channel_id, channel_name, programme_id]
@@ -844,6 +845,7 @@ components:
       type: object
       required: [mode, id]
       properties:
+        canvas: {type: boolean, description: HLS packed audio carrying timed JPEG pictures.}
         preferred_audio_languages: {type: array, items: {type: string}, description: Profile preferences retained even after exact-variant consent.}
         audio_language_required: {type: boolean, description: False only for All Languages or current server-validated exact-variant consent; exposed contradictory runtime tracks still require a current track choice.}
         audio_languages: {type: array, items: {type: string}, description: Verified selected-variant track languages; provider title prefixes are never evidence.}

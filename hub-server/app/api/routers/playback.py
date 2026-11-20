@@ -19,6 +19,7 @@ from app.api.deps import Admin, C, P, require_reachable
 from app.api.streaming import OwnedStreamingResponse, byte_range, file_range
 from app.domain.ports import ImageAuthProvider
 from app.infra.image_fit import LIGHT_BYTES, fit
+from app.proxy.canvas import packed_audio
 from app.proxy.stream_proxy import HlsSourceBusy, Viewer, VodPlan
 from app.services import ids
 from app.services.context import absolute, is_https
@@ -43,7 +44,11 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
             raise Forbidden(
                 "This playback attempt was stopped. Start playback again manually.", code="playback_stopped"
             )
-    if (
+    if body.client == "web" and body.replaces == body.id and "prefer_canvas" in body.model_fields_set:
+        # The same viewer is switching renderers. Release its old source connection before
+        # the new producer starts, including a VOD encode when returning to direct play.
+        await c.proxy.release_replaced(p.profile_id, p.session_id, body.id, include_vod=True)
+    elif (
         body.replaces
         and body.replaces != body.id
         and body.replaces.startswith("ch:")
@@ -60,7 +65,9 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         source_id=body.source_id,
         variant_id=body.variant_id,
         allow_unverified_audio=body.allow_unverified_audio,
-        client="web_hls" if body.client == "web" and body.prefer_hls else body.client,
+        client=("web_canvas" if body.prefer_canvas else "web_hls" if body.prefer_hls else "web")
+        if body.client == "web"
+        else body.client,
         catchup_programme_id=body.catchup_programme_id,
         rewind_at=body.rewind_at,
         https_site=is_https.get(),
@@ -70,7 +77,13 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
     )
     c.proxy.ensure_running(generation)
     result["buffer_available"] = False
-    if c.proxy.dvr.enabled and result.get("mode") == "hls" and result.get("live") and body.id.startswith("ch:"):
+    if (
+        not result.get("canvas")
+        and c.proxy.dvr.enabled
+        and result.get("mode") == "hls"
+        and result.get("live")
+        and body.id.startswith("ch:")
+    ):
         capability = await c.playback.rewind_capability(p.profile_id, body.id)
         result["buffer_available"] = capability["mode"] == "unavailable"
     return result
@@ -535,6 +548,8 @@ def _hls_session_key(c: C, g: StreamGrant) -> tuple[str, str, VodPlan | None]:
         # The cap is part of the key: output encoded for one quality is never served as another.
         key = f"{family}:vod:{plan.video}:{plan.hw}:{plan.audio_track}:{plan.start_s}:{plan.max_height or 0}"
         return key, "none", plan
+    if g.canvas:
+        return f"{g.source_id}:{g.url}:canvas", "canvas", None
     transcode = hw if g.transcode else "none"
     if g.transcode and transcode == "none":
         transcode = "software"
@@ -609,7 +624,11 @@ async def stream_hls(
             raise NotFound("Buffered session expired.")
         text = (sess.workdir / "index.m3u8").read_text(errors="ignore")
     base = f"/api/v1/stream/{token}/hls/{sess.sid}/"
-    lines = [base + ln if ln and not ln.startswith("#") else ln for ln in text.splitlines()]
+    lines = []
+    for line in text.splitlines():
+        if line and not line.startswith("#"):
+            line = base + (line.removesuffix(".ts") + ".aac" if g.canvas else line)
+        lines.append(line)
     if (vod is not None or g.room) and lines and lines[0].startswith("#EXTM3U"):
         # The playlist grows while ffmpeg runs, which players treat as live and join at its end.
         # It is a film from this session's start offset: begin at its first segment.
@@ -631,6 +650,10 @@ async def stream_hls_segment(token: str, sid: str, name: str, request: Request, 
                 "The room's stream has restarted. Ask for the room's descriptor again.", code="stream_epoch_stale"
             )
         raise Forbidden("Segment does not belong to this playback grant.")
+    if g.canvas:
+        if not name.endswith(".aac"):
+            raise NotFound("segment not found")
+        name = name.removesuffix(".aac") + ".ts"
     sess = c.proxy.hls_by_sid(sid)
     if sess is None or "/" in name or ".." in name or not name.endswith((".ts", ".m4s", ".mp4", ".m3u8")):
         raise NotFound("segment not found")
@@ -640,6 +663,14 @@ async def stream_hls_segment(token: str, sid: str, name: str, request: Request, 
     viewer = await c.guard.require_segment(g, path, sess.workdir / "index.m3u8")
     # What the content policy let through for this viewer is not for a cache to hand to the next one.
     private = c.content_policy.enabled or viewer.rated
+    if g.canvas:
+        try:
+            data = await asyncio.to_thread(packed_audio, path)
+        except FileNotFoundError as exc:
+            raise NotFound("segment expired") from exc
+        except ValueError as exc:
+            raise BadGateway("Incomplete canvas media segment") from exc
+        return Response(data, media_type="audio/aac", headers={"Cache-Control": "private, no-store"})
     return FileResponse(
         path,
         media_type="video/mp2t" if name.endswith(".ts") else "application/octet-stream",

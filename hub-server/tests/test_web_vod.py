@@ -586,3 +586,77 @@ async def test_upstream_refusal_is_not_retried_with_another_encoder(
         await proxy.hls_session("film", FILM_URL, {}, live=False, transcode="none", vod=plan)
     assert len(runs) == 1 and "s3cret" not in str(failure.value)
     await proxy.shutdown()
+
+
+async def test_canvas_opt_in_uses_signed_distinct_hls_with_selected_track(api: Api, spawned: list) -> None:
+    await add_film(api, max_connections=1)
+    api.c.playback.probe = FakeProbe(probe())
+    body = {"id": "lib:iptv:7", "audio_track": 1, "start_position_ms": 60_000}
+    canvas = (await api.post("/playback/resolve", json={**body, "prefer_canvas": True})).json()
+    grant = grant_of(api, canvas)
+    assert canvas["canvas"] and grant.canvas and grant.vod_video == "canvas"
+    assert canvas["media_info"]["delivery"] == "transcode" and canvas["audio_track"] == 1
+    playlist = await api.client.get(local(canvas["url"]))
+    assert playlist.status_code == 200
+    segment = next(line for line in playlist.text.splitlines() if line.startswith("/"))
+    assert segment.endswith("seg_00000.aac")
+    args, first = spawned[0]
+    assert args[args.index("-ss") + 1] == "60" and "0:a:1?" in args and "mjpeg" in args
+    assert (await api.client.get(segment.removesuffix(".aac") + ".ts")).status_code == 404
+    off = (await api.post("/playback/resolve", json={**body, "prefer_canvas": False, "replaces": body["id"]})).json()
+    assert not off["canvas"] and not grant_of(api, off).canvas and first.stopped
+    foreign = local(off["url"]).removesuffix("index.m3u8") + "hls/" + segment.split("/hls/", 1)[1]
+    assert (await api.client.get(foreign)).status_code == 403
+    await api.c.proxy.shutdown()
+
+
+async def test_canvas_honors_source_proxy_policy(api: Api) -> None:
+    await add_film(api, proxy="never")
+    fake = api.c.playback.probe = FakeProbe(probe())
+    response = await api.post("/playback/resolve", json={"id": "lib:iptv:7", "prefer_canvas": True})
+    assert response.status_code == 409 and response.json()["code"] == "canvas_unavailable"
+    assert not fake.calls
+
+
+async def test_canvas_http_segment_uses_the_viewers_grant(
+    api: Api, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+    from unittest.mock import AsyncMock
+
+    from app.services.errors import Forbidden
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("ffmpeg is not installed")
+    source = tmp_path / "test.mp4"
+    fixture = await asyncio.create_subprocess_exec(
+        ffmpeg,
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=160x90:rate=12",
+        "-t",
+        "3",
+        "-c:v",
+        "mpeg4",
+        str(source),
+    )
+    assert await fixture.wait() == 0
+    await add_film(api)
+    api.c.playback.probe = FakeProbe(probe())
+    monkeypatch.setattr(api.c.proxy, "pin", AsyncMock(return_value=str(source)))
+    d = (await api.post("/playback/resolve", json={"id": "lib:iptv:7", "prefer_canvas": True})).json()
+    playlist = await api.client.get(local(d["url"]))
+    assert playlist.status_code == 200, playlist.text
+    segment = next(line for line in playlist.text.splitlines() if line.startswith("/"))
+    first = await api.client.get(segment)
+    assert first.status_code == 200 and first.headers["content-type"] == "audio/aac"
+    assert first.content.startswith(b"ID3") and b"streamhub.canvas.v1\0" in first.content
+    assert first.headers["cache-control"] == "private, no-store"
+    monkeypatch.setattr(api.c.guard, "require_segment", AsyncMock(side_effect=Forbidden("Playback revoked")))
+    revoked = await api.client.get(segment)
+    assert revoked.status_code == 403 and b"streamhub.canvas.v1" not in revoked.content
+    await api.c.proxy.shutdown()

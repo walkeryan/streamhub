@@ -549,6 +549,7 @@ class PlaybackRequest(_M):
     multiview: bool = False
     companion_id: str | None = None
     prefer_hls: bool = False
+    prefer_canvas: bool = False
     recovery_generation: str | None = Field(default=None, max_length=64)
     catchup_programme_id: str | None = None
     rewind_at: AwareDatetime | None = None
@@ -714,6 +715,7 @@ class Thumbnails(_M):
 
 
 class PlaybackDescriptor(_M):
+    canvas: bool = False
     media_info: MediaInfo | None = None
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
     audio_track: int | None = None

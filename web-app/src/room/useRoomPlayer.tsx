@@ -55,7 +55,7 @@ const CLOSED: Record<string, { text: string; rejoin?: boolean }> = {
  * the room state comes back and steers the element (roomSync.decide). Also the room's own chrome:
  * who is in it, the wait for a buffering member, the host's lock, leaving, and the room ending.
  */
-export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject<HTMLVideoElement | null>, player: RoomPlayerLink, onRejoin?: () => void) {
+export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject<HTMLMediaElement | null>, player: RoomPlayerLink, onRejoin?: () => void) {
   const navigate = useNavigate()
   const toast = useUi((s) => s.toast)
   const subscribe = useCallback((notify: () => void) => (room ? room.socket.subscribe(notify) : noRoom()), [room])

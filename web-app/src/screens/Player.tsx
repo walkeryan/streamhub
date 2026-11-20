@@ -104,7 +104,8 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     else if (activeId.current === id && hasPlaybackEntry(location.state, location.pathname + location.search)) navigate(-1)
     else navigate('/live', {replace:true})
   }
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const pictureRef = useRef<HTMLVideoElement>(null)
+  const canvasAudioRef = useRef<HTMLAudioElement>(null)
   // The Android TV app plays with its own player; should this one ever show there, it has no window to leave.
   const tv = inShell()
   const isChannel = id.startsWith('ch:')
@@ -125,7 +126,9 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   // Quality: this browser's choice, with one of its own for when the browser says data is short.
   const dataSaver = useMemo(() => savingData((navigator as Navigator & { connection?: Parameters<typeof savingData>[0] }).connection), [])
   const [quality, setQualityState] = useState<QualityHeight | null>(() => loadQuality(dataSaver))
-  const pb = usePlayback(videoRef, audio.request, { buffer: !room, descriptor: room?.descriptor, maxHeight: quality })
+  const canvas = useUi(s => s.canvasPlayback)
+  const pb = usePlayback(pictureRef, audio.request, { canvasAudio: canvas && !tv && !room ? canvasAudioRef : undefined, buffer: !room, descriptor: room?.descriptor, maxHeight: quality })
+  const videoRef = pb.mediaRef
   const { desc, state } = pb
   const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
   // A restart-at-offset stream: the media element starts at `offset` seconds into the title and only
@@ -134,7 +137,6 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const offset = restartable ? (desc.start_position_ms ?? 0) / 1000 : 0
   const fullDuration = restartable && desc.duration_ms ? desc.duration_ms / 1000 : 0
 
-  const canvas = useUi(s => s.canvasPlayback)
   const setCanvas = useUi(s => s.setCanvasPlayback)
   const toast = useUi((s) => s.toast)
   const stored = useUi((s) => s.channelList)
@@ -175,7 +177,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const [paused, setPaused] = useState(true)
   // `produced` is what a restart-at-offset stream can seek in without a new stream; `buffered` what is downloaded.
   const [time, setTime] = useState<{ cur: number; dur: number; seekable: boolean; buffered: Range[]; produced: Range[] }>({ cur: 0, dur: 0, seekable: false, buffered: [], produced: [] })
-  useEffect(() => { setTime((t) => ({ ...t, cur: videoRef.current?.currentTime ?? 0 })) }, [desc])
+  useEffect(() => { setTime((t) => ({ ...t, cur: videoRef.current?.currentTime ?? 0 })) }, [desc, videoRef])
   const [aspect, setAspect] = useState<Aspect>('contain')
   // The menu opens on what its button named: audio, subtitles, settings, or everything (the remote's Menu key).
   const [openSetting, setOpenSetting] = useState<PlayerSetting | null>(null)
@@ -267,13 +269,13 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     for (const name of moved) v.addEventListener(name, t)
     v.addEventListener('pause', p); v.addEventListener('play', p)
     return () => { for (const name of moved) v.removeEventListener(name, t); v.removeEventListener('pause', p); v.removeEventListener('play', p) }
-  }, [])
+  }, [videoRef])
 
   // ---- volume, mute, speed ----
   const setSilenced = pb.setSilenced
   const silencedRef = useRef(setSilenced)
   silencedRef.current = setSilenced
-  useEffect(() => { const v = videoRef.current; if (v) v.volume = prefs.volume }, [prefs.volume])
+  useEffect(() => { const v = videoRef.current; if (v) v.volume = prefs.volume }, [prefs.volume, videoRef])
   useEffect(() => { silencedRef.current(prefs.muted) }, [prefs.muted])
   // A room plays at one speed for everyone, and live has no faster.
   const speed = live || room ? 1 : prefs.speed
@@ -285,7 +287,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     apply()
     v.addEventListener('loadedmetadata', apply)
     return () => v.removeEventListener('loadedmetadata', apply)
-  }, [speed])
+  }, [speed, videoRef])
   const changeVolume = useCallback((volume: number) => {
     setPrefs({ volume, muted: volume === 0 })
     showFlash(volume === 0 ? 'Muted' : `Volume ${Math.round(volume * 100)}%`)
@@ -352,10 +354,10 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     if (!v) return
     try {
       if (document.pictureInPictureElement) await document.exitPictureInPicture()
-      else if (document.pictureInPictureEnabled) await v.requestPictureInPicture()
+      else if (v instanceof HTMLVideoElement && document.pictureInPictureEnabled) await v.requestPictureInPicture()
       else toast('Picture-in-picture is not supported in this browser.', 'error')
     } catch { toast('Picture-in-picture could not start.', 'error') }
-  }, [toast])
+  }, [toast, videoRef])
   const fullscreen = useCallback(() => {
     if (document.fullscreenElement) void document.exitFullscreen()
     else void document.documentElement.requestFullscreen?.().catch(() => undefined)
@@ -438,7 +440,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     if (!cardShown) return
     const tick = window.setInterval(() => dispatchCard({ type: 'tick', ms: 250, playing: videoRef.current ? !videoRef.current.paused : false, autoplay: autoplayRef.current }), 250)
     return () => window.clearInterval(tick)
-  }, [cardShown])
+  }, [cardShown, videoRef])
   // The card's own clock follows the picture's end and every seek.
   const hasNext = !!nextEp
   const offsetRef = useRef(offset)
@@ -453,7 +455,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     v.addEventListener('ended', ended)
     v.addEventListener('seeking', seeking)
     return () => { v.removeEventListener('ended', ended); v.removeEventListener('seeking', seeking) }
-  }, [hasNext])
+  }, [hasNext, videoRef])
   // A restart-at-offset seek starts a new stream instead of seeking the element.
   useEffect(() => { if (seek.heading !== null) dispatchCard({ type: 'seek', toMs: seek.heading * 1000, startMs: upStartRef.current }) }, [seek.heading])
   // Still watching: autoplays in a row with nobody pressing, clicking or touching anything.
@@ -671,7 +673,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     }
     window.addEventListener('keydown', onKey, true)
     return () => { window.removeEventListener('keydown', onKey, true); window.clearTimeout(timer) }
-  }, [setOverlay])
+  }, [setOverlay, videoRef])
 
   // ---- media keys and the lock screen (Media Session) ----
   useEffect(() => {
@@ -770,7 +772,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
       videoRef.current?.pause(); setSleep(null); toast('Sleep timer ended. Playback stopped.'); exit()
     }, Math.max(0, sleepAt - Date.now()))
     return () => window.clearTimeout(id2)
-  }, [sleepAt, setSleep, toast, exit])
+  }, [sleepAt, setSleep, toast, exit, videoRef])
 
   const pct = live && channel?.now ? progressOf(channel.now.start, channel.now.stop, now) : 0
   const loaded = (restartable ? time.produced : time.buffered).map(([from, to]): Range => [offset + from, offset + to])
@@ -836,10 +838,11 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
       {/* focus target for "the video itself": Up from the control bar lands here, so no hidden button keeps focus */}
       {!mini && <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>}
       {/* The same element full screen and minimised (it keeps its place among the children): the stream never restarts. */}
-      <video ref={videoRef} playsInline poster={NO_POSTER} loop={live && desc?.mime === 'video/webm'} style={{ objectFit: mini ? 'cover' : aspect }} data-testid="video" aria-label={title}
+      <audio ref={canvasAudioRef} hidden />
+      <video ref={pictureRef} playsInline poster={NO_POSTER} loop={live && desc?.mime === 'video/webm'} style={{ objectFit: mini ? 'cover' : aspect }} data-testid="video" aria-label={title}
         onPointerDown={(e) => { pointer.current = { kind: e.pointerType, shown: chromeRef.current } }}
         onDoubleClick={() => { if (pointer.current.kind !== 'touch' && !mini) fullscreen() }} onClick={(e) => { if (mini) expand(); else onPictureClick(e) }} />
-      {canvas && !tv && !tr.subs.some(t => t.active) && <CanvasPicture key={id} videoRef={videoRef} fit={mini ? 'cover' : aspect} />}
+      {canvas && !tv && !tr.subs.some(t => t.active) && <CanvasPicture key={id} videoRef={pictureRef} audioRef={desc?.canvas ? canvasAudioRef : undefined} fit={mini ? 'cover' : aspect} />}
       {mini && (
         <MiniBar title={miniTitle} line={miniLine} positionMs={position * 1000} durationMs={live ? null : duration > 0 ? duration * 1000 : null}
           playing={!paused} live={live} hasPrevious={!!prevEp} hasNext={!!nextEp} thumb={<span className="mini-video-slot" />}
@@ -1042,14 +1045,14 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
                 <div className="pm-settings">
                   {!live && !room && <PlayerSettingPicker id="speed" title="Speed" value={prefs.speed}
                     choices={SPEEDS.map(value => ({ value, label: speedLabel(value) }))} open={openSetting} onOpen={setOpenSetting} onChange={changeSpeed} />}
-                  {qualities.length > 1 && <PlayerSettingPicker id="quality" title="Quality" value={chosenQuality(qualities, quality)}
+                  {!desc?.canvas && qualities.length > 1 && <PlayerSettingPicker id="quality" title="Quality" value={chosenQuality(qualities, quality)}
                     choices={qualities.map(q => ({ value: q.height, label: q.label, detail: q.rate }))} open={openSetting} onOpen={setOpenSetting}
                     onChange={chooseQuality} note={dataSaver ? 'Your browser asks to save data. This quality is saved separately.' : undefined} />}
                   <PlayerSettingPicker id="aspect" title="Aspect ratio" value={aspect} choices={ASPECTS.map(a => ({ value: a.id, label: a.label }))}
                     open={openSetting} onOpen={setOpenSetting} onChange={setAspect} />
                   {!tv && <Focusable focusKey="pm:canvas" className="pm-row" role="switch" aria={{ checked: canvas }} label="Canvas streaming"
                     onEnter={() => setCanvas(!canvas)}>
-                    <span>Canvas streaming</span><span className="pm-value">{canvas ? 'On' : 'Off'}</span>
+                    <span>Canvas streaming</span><span className="pm-value">{canvas ? desc?.canvas ? 'On · up to 480p' : 'On' : 'Off'}</span>
                     <span className="pm-switch" aria-hidden="true" />
                   </Focusable>}
                   <PlayerSettingPicker id="sleep" title="Sleep timer" value={sleepMinutes}
@@ -1063,7 +1066,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
                   <Focusable focusKey="pm:info" className="pm-action" onEnter={() => { closeOverlay(); setInfo(true) }} data-testid="player-info-btn">
                     <Icon name="info" size={18} />Stream information
                   </Focusable>
-                  {!tv && <Focusable focusKey="pm:pip" className="pm-action" onEnter={() => { closeOverlay(); void pip() }} data-testid="player-pip">
+                  {!tv && !desc?.canvas && <Focusable focusKey="pm:pip" className="pm-action" onEnter={() => { closeOverlay(); void pip() }} data-testid="player-pip">
                     <Icon name="pip" size={18} />Picture in picture
                   </Focusable>}
                   <Focusable focusKey="pm:keys" className="pm-action" onEnter={() => { closeOverlay(); setHelp(true) }} data-testid="player-keys-btn">
