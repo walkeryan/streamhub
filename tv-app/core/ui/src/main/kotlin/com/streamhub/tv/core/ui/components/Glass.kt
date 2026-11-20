@@ -99,11 +99,34 @@ fun GlassButton(
         focused -> Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.34f), Color.White.copy(alpha = 0.18f)))
         else -> Brush.verticalGradient(listOf(PictureGlass.Top, PictureGlass.Bottom))
     }
+    val haloColor = if (focused) t.accent.copy(alpha = 0.55f) else Color.Black.copy(alpha = 0.22f)
+    val haloWidth = if (focused) 16.dp else 6.dp
     Box(
         modifier
             .scale(scale)
             .size(size)
-            .shadow(if (focused) 14.dp else 6.dp, CircleShape, ambientColor = if (focused) t.accent else Color.Black, spotColor = if (focused) t.accent else Color.Black)
+            .then(
+                if (primary) {
+                    // Opaque white hides the platform shadow under it, so the real one is fine here.
+                    Modifier.shadow(if (focused) 14.dp else 6.dp, CircleShape, ambientColor = if (focused) t.accent else Color.Black, spotColor = if (focused) t.accent else Color.Black)
+                } else {
+                    // No elevation shadow on see-through glass: Android paints it under the whole
+                    // button, so it shows through the 5-34 % fill, and TV GPUs tessellate it as a
+                    // visible octagon. Instead a halo is drawn only outside the circle's edge.
+                    Modifier.drawBehind {
+                        val r = this.size.minDimension / 2
+                        val outer = r + haloWidth.toPx()
+                        val edge = r / outer
+                        drawCircle(
+                            Brush.radialGradient(
+                                0f to Color.Transparent, edge to Color.Transparent, edge to haloColor, 1f to Color.Transparent,
+                                center = center, radius = outer,
+                            ),
+                            radius = outer,
+                        )
+                    }
+                },
+            )
             .clip(CircleShape)
             .background(fill)
             .border(if (focused) 3.dp else 1.dp, if (focused) t.accent else PictureGlass.Line, CircleShape)
