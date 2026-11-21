@@ -16,6 +16,17 @@ APP_GROUP=streamhub
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 
+# NVIDIA can mount an X11 Vulkan manifest even on headless servers. Offer its
+# EGL entry point alongside the installed drivers, preserving explicit Vulkan settings.
+nvidia_icd=/etc/vulkan/icd.d/nvidia_icd.json
+if [ -z "${VK_ADD_DRIVER_FILES:-}" ] && [ -r "$nvidia_icd" ] && \
+    grep -q 'libGLX_nvidia.so.0' "$nvidia_icd" && ldconfig -p | grep -q 'libEGL_nvidia.so.0'; then
+    headless_icd=$(mktemp /tmp/streamhub-vulkan-XXXXXXXX.json)
+    sed 's/libGLX_nvidia\.so\.0/libEGL_nvidia.so.0/g' "$nvidia_icd" > "$headless_icd"
+    chmod 644 "$headless_icd"
+    export VK_ADD_DRIVER_FILES="$headless_icd"
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
     exec "$@"
 fi
