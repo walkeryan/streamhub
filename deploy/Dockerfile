@@ -65,6 +65,7 @@ RUN set -eux; \
         tini \
         gosu \
         tzdata \
+        mesa-vulkan-drivers \
         ffmpeg \
         intel-media-va-driver-non-free \
         vainfo; \

@@ -588,6 +588,24 @@ async def test_upstream_refusal_is_not_retried_with_another_encoder(
     await proxy.shutdown()
 
 
+@pytest.mark.parametrize("canvas", [False, True])
+async def test_hdr_film_uses_color_conversion_in_both_web_players(api: Api, spawned: list, canvas: bool) -> None:
+    await add_film(api)
+    api.c.playback.probe = FakeProbe(probe())
+    response = await api.post("/playback/resolve", json={"id": "lib:iptv:7", "prefer_canvas": canvas})
+    descriptor = response.json()
+    assert grant_of(api, descriptor).color_convert
+    assert (await api.client.get(local(descriptor["url"]))).status_code == 200
+    args, _ = spawned[0]
+    filters = args[args.index("-vf") + 1]
+    assert "apply_dolbyvision=1" in filters
+    if canvas:
+        assert "range=full" in filters and filters.index("libplacebo") < filters.index("tile")
+    else:
+        assert "range=tv" in filters and args[args.index("-color_trc") + 1] == "bt709"
+    await api.c.proxy.shutdown()
+
+
 async def test_canvas_opt_in_uses_signed_distinct_hls_with_selected_track(api: Api, spawned: list) -> None:
     await add_film(api, max_connections=1)
     api.c.playback.probe = FakeProbe(probe())

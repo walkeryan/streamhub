@@ -32,6 +32,7 @@ MAX_OUTPUT = 512 * 1024
 ENTRIES = (
     "format=format_name,duration,bit_rate"
     ":stream=codec_type,codec_name,profile,pix_fmt,width,height,channels,channel_layout,avg_frame_rate,color_transfer"
+    ":stream_side_data=dv_profile"
     ":stream_tags=language,title"
     ":stream_disposition=default,attached_pic"
 )
@@ -85,6 +86,11 @@ def parse_probe(raw: Any, now: datetime | None = None) -> dict[str, Any] | None:
                 if fps is not None:
                     video["fps"] = fps
                 transfer = str(stream.get("color_transfer") or "").lower()
+                if any(
+                    isinstance(side, dict) and side.get("dv_profile") is not None
+                    for side in stream.get("side_data_list") or []
+                ):
+                    video["dolby_vision"] = True
                 if transfer:
                     video["transfer"] = transfer[:24]
         elif stream.get("codec_type") == "audio" and codec:

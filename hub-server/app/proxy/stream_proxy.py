@@ -372,6 +372,7 @@ class VodPlan:
     max_height: int | None = None
     audio_track: int | None = None
     start_s: int = 0
+    color_convert: bool = False
     family: str = ""  # sessions of one viewer for one file replace each other
 
 
@@ -422,6 +423,20 @@ def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
     return args
 
 
+# Explicit device creation also permits Mesa's software Vulkan driver on CPU-only hubs.
+COLOR_DEVICE = ["-init_hw_device", "vulkan=colors", "-filter_hw_device", "colors"]
+
+
+def sdr_filter(*, jpeg: bool = False) -> str:
+    # Browser JPEG decoders expect full-range BT.601 coefficients and sRGB samples.
+    output = (
+        "colorspace=smpte170m:range=full:color_trc=iec61966-2-1"
+        if jpeg
+        else "colorspace=bt709:range=tv:color_trc=bt709"
+    )
+    return f"libplacebo=format=yuv420p:color_primaries=bt709:{output}:apply_dolbyvision=1"
+
+
 def canvas_args(
     ffmpeg: str,
     url: str,
@@ -443,6 +458,9 @@ def canvas_args(
         args += ["-reconnect_at_eof", "1"]
     # Apply the input display aspect ratio before packing square-pixel tiles.
     scale = "scale=w='max(2,trunc(min(854,min(ih,480)*dar)/2)*2)':h='max(2,trunc(min(min(ih,480),854/dar)/2)*2)'"
+    if vod and vod.color_convert:
+        args[1:1] = COLOR_DEVICE
+        scale += ":flags=fast_bilinear," + sdr_filter(jpeg=True)
     # A second, unbounded audio input can block the HLS muxer while the real audio
     # is playing. Generate silence only on the retry for a missing audio stream.
     audio = f"0:a:{vod.audio_track or 0}" if vod else "0:a:0"
@@ -604,6 +622,20 @@ def vod_ffmpeg_attempts(
     pace = [*ceiling, "-force_key_frames", f"expr:gte(t,n_forced*{VOD_SEGMENT_S})"]
     software = ["-vf", f"{scale}format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", *pace]
     attempts: list[tuple[str, list[str]]] = []
+    if plan.color_convert:
+        # Decode in software to retain Dolby Vision frame metadata through the color filter.
+        # Resize at source precision before color conversion to keep UHD playback affordable.
+        resize = f"scale={size[0]}:{size[1]}:flags=fast_bilinear," if size else ""
+        filters = resize + sdr_filter()
+        tags = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
+        if plan.hw == "nvenc":
+            attempts.append(
+                (
+                    "nvenc-sdr",
+                    command(COLOR_DEVICE, ["-vf", filters, *tags, "-c:v", "h264_nvenc", *pace, "-forced-idr", "1"]),
+                )
+            )
+        return [*attempts, ("libx264-sdr", command(COLOR_DEVICE, ["-vf", filters, *tags, *software[2:]]))]
     if plan.hw == "nvenc":
         nvenc = ["-vf", f"{scale}format=yuv420p", "-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23"]
         nvenc += ["-b:v", "0", *pace, "-forced-idr", "1"]

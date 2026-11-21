@@ -203,9 +203,11 @@ async def test_the_tv_a_channel_and_a_room_ignore_the_cap(api: Api, monkeypatch:
 
 
 # ---------------------------------------------------------------- sessions
-async def test_the_session_key_carries_the_cap(api: Api, spawned: list) -> None:
+@pytest.mark.parametrize("hdr", [False, True])
+async def test_the_session_key_carries_the_cap(api: Api, spawned: list, hdr: bool) -> None:
     await add_film(api)
-    api.c.playback.probe = FakeProbe(film())
+    api.c.playback.probe = FakeProbe(film(UHD if hdr else {**UHD, "pix_fmt": "yuv420p"}))
+    variant = "transcode-sdr" if hdr else "transcode"
 
     async def play(**body: Any) -> list[str]:
         d = (await api.post("/playback/resolve", json={"id": "lib:iptv:7", **body})).json()
@@ -213,21 +215,31 @@ async def test_the_session_key_carries_the_cap(api: Api, spawned: list) -> None:
         assert playlist.status_code == 200, playlist.text
         return list(api.c.proxy._hls)
 
+    def check_scale(args: list[str], size: str) -> None:
+        filters = after(args, "-vf")
+        if hdr:
+            assert filters.startswith(f"scale={size}:flags=fast_bilinear,libplacebo=")
+        else:
+            assert filters == f"scale={size},format=yuv420p"
+
     [original] = await play()
-    assert original.endswith(":vod:transcode:none:1:0:0")
+    assert original.endswith(f":vod:{variant}:none:1:0:0")
     args, first = spawned[0]
-    assert after(args, "-vf") == "scale=1920:-2,format=yuv420p" and after(args, "-maxrate") == "8M"
+    check_scale(args, "1920:-2")
+    assert after(args, "-maxrate") == "8M"
     # Another quality is another session with its own output, never the first one's segments...
     [capped] = await play(max_height=720)
-    assert capped.endswith(":vod:transcode:none:1:0:720") and capped != original
+    assert capped.endswith(f":vod:{variant}:none:1:0:720") and capped != original
     args, second = spawned[1]
-    assert after(args, "-vf") == "scale=1280:720,format=yuv420p" and after(args, "-maxrate") == "2800k"
+    check_scale(args, "1280:720")
+    assert after(args, "-maxrate") == "2800k"
     # ...and it replaces this viewer's previous one at once, as a seek does: one transcoder, one connection.
     assert first.stopped and not second.stopped and len(spawned) == 2
     # The same quality again shares the session that is running.
     assert await play(max_height=720) == [capped] and len(spawned) == 2
     [lower] = await play(max_height=480, start_position_ms=600_000)
-    assert lower.endswith(":vod:transcode:none:1:600:480") and second.stopped
+    assert lower.endswith(f":vod:{variant}:none:1:600:480") and second.stopped
     args, _ = spawned[2]
-    assert after(args, "-ss") == "600" and after(args, "-vf") == "scale=854:480,format=yuv420p"
+    assert after(args, "-ss") == "600"
+    check_scale(args, "854:480")
     await api.c.proxy.shutdown()
