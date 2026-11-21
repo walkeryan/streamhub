@@ -53,3 +53,47 @@ def test_incomplete_segment_cannot_return_a_picture(tmp_path: Path) -> None:
     path.write_bytes(b"not a complete transport packet")
     with pytest.raises(ValueError):
         packed_audio(path)
+
+
+@pytest.mark.parametrize(("height", "width"), [(720, 1280), (1080, 1920)])
+def test_hd_canvas_uses_four_phone_sized_sheets(tmp_path: Path, height: int, width: int) -> None:
+    from app.proxy.stream_proxy import VodPlan
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("ffmpeg is not installed")
+    source = tmp_path / "hd.mkv"
+    subprocess.run(
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=1920x1080:rate=12",
+            "-t",
+            "3",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            str(source),
+        ],
+        check=True,
+    )
+    args = canvas_args(
+        ffmpeg, str(source), {}, tmp_path, live=False, vod=VodPlan(video="canvas", max_height=height), silent=True
+    )
+    subprocess.run(args, check=True, timeout=30)
+    data = packed_audio(tmp_path / "seg_00000.ts", hd=True)
+    pos = data.index(PICTURE_OWNER + b"\0") + len(PICTURE_OWNER) + 5
+    assert data[pos] == 4
+    pos += 1
+    for _ in range(4):
+        length = int.from_bytes(data[pos : pos + 4], "big")
+        pos += 4
+        with Image.open(io.BytesIO(data[pos : pos + length])) as sheet:
+            assert sheet.size == (width * 2, height * 3)
+        pos += length
+    assert data[pos : pos + 1] == b"\xff"  # first AAC frame

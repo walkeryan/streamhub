@@ -354,3 +354,11 @@ test('the sheet lists every controller button the mapping gives a meaning', () =
   assert.deepEqual(CONTROLLER_HELP.filter((l) => l.buttons.includes('LB')).map((l) => l.only), ['live', 'film'])
   assert.deepEqual(CONTROLLER_HELP.filter((l) => l.buttons.includes('LT')).map((l) => l.only), ['film'])
 })
+
+test('canvas offers selectable HD caps even without source metadata and omits H.264 rate estimates', () => {
+  for (const info of [null, {video: {height: 1080}}]) {
+    const options = qualityOptions(info, true)
+    assert.deepEqual(options.map(o => o.height), [null, 720, 1080])
+    assert.ok(options.every(o => o.rate === null))
+  }
+})

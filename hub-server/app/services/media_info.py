@@ -140,5 +140,5 @@ def media_info(
         "encoder": encoder_kind(delivery, "none" if video_plan == "canvas" else hw),
         "output_width": size[0] if size else None,
         "output_height": size[1] if size else None,
-        "max_height": max_height if video_plan == "transcode" else None,
+        "max_height": max_height if video_plan in ("transcode", "canvas") else None,
     }

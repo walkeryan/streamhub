@@ -272,7 +272,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
         switchingRenderer.current = null
         const d = descriptorSource.current
           ? await descriptorSource.current(intent.current.generation)
-          : await resolve({ ...req, replaces, preferCanvas: !!opts.canvasAudio, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs, maxHeight: req.id.startsWith('ch:') ? null : maxHeight.current }, intent.current.generation)
+          : await resolve({ ...req, replaces, preferCanvas: !!opts.canvasAudio, audioTrack: restart.current.audioTrack ?? req.audioTrack, startPositionMs: restart.current.startMs ?? req.startPositionMs, maxHeight: req.id.startsWith('ch:') && !opts.canvasAudio ? null : maxHeight.current }, intent.current.generation)
         if (cancelled || !ownsSession()) return
         setDesc(d)
         descRef.current = d
@@ -595,9 +595,9 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
       if (maxHeight.current === height) return
       maxHeight.current = height
       const d = descRef.current
-      if (!d || d.live || d.mode === 'handoff' || descriptorSource.current || terminal.current) return
+      if (!d || (d.live && !d.canvas) || d.mode === 'handoff' || descriptorSource.current || terminal.current) return
       clearWaiting(); clearRetry(); retry.current = 0
-      restart.current = { ...restart.current, startMs: titlePositionMs() }
+      restart.current = { ...restart.current, startMs: d.live ? undefined : titlePositionMs() }
       setAttempt((a) => a + 1)
     },
     /** Have the server encode another audio track of the file, continuing from the current position. */

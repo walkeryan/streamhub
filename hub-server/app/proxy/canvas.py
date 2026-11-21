@@ -22,13 +22,14 @@ def _size(n: int) -> bytes:
     return bytes((n >> shift) & 127 for shift in (21, 14, 7, 0))
 
 
-def packed_audio(path: Path) -> bytes:
+def packed_audio(path: Path, *, hd: bool = False) -> bytes:
     """Extract PID 256 (sheet) and 257 (selected audio, or silence for a silent film)."""
     with path.open("rb") as source:
         segment = source.read(MAX_SEGMENT_BYTES + 1)
     if len(segment) > MAX_SEGMENT_BYTES or len(segment) % 188:
         raise ValueError("Invalid canvas segment size")
     picture, audio = bytearray(), bytearray()
+    sheets: list[bytearray] = []
     first_pts: dict[int, int] = {}
     view = memoryview(segment)
     for start in range(0, len(segment), 188):
@@ -40,6 +41,9 @@ def packed_audio(path: Path) -> bytes:
             continue
         offset = 5 + packet[4] if packet[3] & 32 else 4
         if packet[1] & 64:
+            if hd and pid == 256 and picture:
+                sheets.append(picture)
+                picture = bytearray()
             pes = packet[offset:]
             if len(pes) < 14 or pes[:3] != b"\0\0\1" or not pes[7] & 128:
                 raise ValueError("Missing canvas timestamp")
@@ -48,11 +52,19 @@ def packed_audio(path: Path) -> bytes:
                 first_pts[pid] = (p[0] & 14) << 29 | p[1] << 22 | (p[2] & 254) << 14 | p[3] << 7 | p[4] >> 1
             offset += 9 + pes[8]
         (picture if pid == 256 else audio).extend(packet[offset:])
-    if not picture.startswith(b"\xff\xd8") or not picture.endswith(b"\xff\xd9") or not audio:
+    sheets.append(picture)
+    if not audio or not all(sheet.startswith(b"\xff\xd8") and sheet.endswith(b"\xff\xd9") for sheet in sheets):
         raise ValueError("Incomplete canvas segment")
     audio_pts = first_pts[257]
     delta = ((first_pts[256] - audio_pts + (1 << 32)) % (1 << 33)) - (1 << 32)
     timing = round(delta / 90).to_bytes(4, "big", signed=True)
     tag = _priv(b"com.apple.streaming.transportStreamTimestamp", audio_pts.to_bytes(8, "big"))
-    tag += _priv(PICTURE_OWNER, timing + picture)
+    # HD carries up to four half-second sheets to keep decoded phone bitmaps below 4096px.
+    if hd:
+        if len(sheets) > 4:
+            raise ValueError("Too many canvas sheets")
+        payload = bytes([len(sheets)]) + b"".join(len(sheet).to_bytes(4, "big") + sheet for sheet in sheets)
+    else:
+        payload = bytes(picture)
+    tag += _priv(PICTURE_OWNER, timing + payload)
     return b"ID3\x04\0\0" + _size(len(tag)) + tag + audio

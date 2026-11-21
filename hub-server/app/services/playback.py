@@ -522,6 +522,7 @@ class PlaybackResolver:
                 https_site,
                 rewind_at,
                 bool(variant_id and allow_unverified_audio),
+                max_height=max_height,
             )
         if h.scheme == "lib":
             row = await self._catalog.title_row(h.a, h.b)
@@ -928,6 +929,7 @@ class PlaybackResolver:
         https_site: bool,
         rewind_at: datetime | None = None,
         audio_consent: bool = False,
+        max_height: int | None = None,
     ) -> dict[str, Any]:
         policy_at = rewind_at
         if catchup_programme_id:
@@ -993,6 +995,7 @@ class PlaybackResolver:
             policy_at=archive_start,
             policy_until=archive_end,
             kind="channel",
+            canvas_height=max_height if client == "web_canvas" else None,
         )
         # A channel is never held for its audio: the preferred languages only steer the track choice.
         desc.update(await self._runtime_audio(profile_id, ch.data or {}))
@@ -1107,6 +1110,8 @@ class PlaybackResolver:
             vod = await self._web_vod(
                 profile_id, row, src, target, audio_track, start_position_ms, max_height=max_height
             )
+        if client == "web_canvas" and vod is not None:
+            vod.max_height = max_height
         desc = self._descriptor(
             profile_id,
             src,
@@ -1346,6 +1351,7 @@ class PlaybackResolver:
         canvas = client == "web_canvas"
         if canvas and vod is not None:
             vod.video = "canvas"
+            vod.max_height = max_height
         plan = vod if vod is not None and vod.video is not None else None
         mode = PlaybackMode.HLS if plan is not None else PlaybackMode.PROXY
         device = client if client == "android_tv" else "web"
@@ -1567,6 +1573,7 @@ class PlaybackResolver:
         kind: str | None = None,
         private: bool = False,
         room: str | None = None,
+        canvas_height: int | None = None,
         probe: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if client == "web_canvas" and "never" in (
@@ -1645,7 +1652,7 @@ class PlaybackResolver:
                     vod_width=plan.width if plan else None,
                     vod_height=plan.height if plan else None,
                     color_convert=plan.color_convert if plan else False,
-                    max_height=plan.max_height if plan else None,
+                    max_height=plan.max_height if plan else canvas_height,
                     audio_track=plan.audio_track if plan else None,
                     start_s=plan.start_s if plan else 0,
                     title=shown,
@@ -1683,7 +1690,7 @@ class PlaybackResolver:
                 video_plan="canvas" if canvas else plan.video if plan else None,
                 hw=str(self._settings.get("transcode_hw") or "none"),
                 live_transcode=transcode and plan is None,
-                max_height=plan.max_height if plan else None,
+                max_height=plan.max_height if plan else canvas_height,
             ),
             "title": title,
             "subtitle": subtitle,

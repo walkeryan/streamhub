@@ -243,3 +243,31 @@ async def test_the_session_key_carries_the_cap(api: Api, spawned: list, hdr: boo
     assert after(args, "-ss") == "600"
     check_scale(args, "854:480")
     await api.c.proxy.shutdown()
+
+
+@pytest.mark.parametrize("live", [False, True])
+async def test_canvas_quality_reaches_the_encoder_even_at_source_height(api: Api, spawned: list, live: bool) -> None:
+    if live:
+        await add_m3u(api, FIXTURES / "sample.m3u")
+        title_id = (await api.get("/channels")).json()["channels"][0]["id"]
+    else:
+        await add_film(api)
+        api.c.playback.probe = FakeProbe(probe())
+        title_id = "lib:iptv:7"
+    for height in (720, 1080):
+        response = await api.post(
+            "/playback/resolve",
+            json={
+                "id": title_id,
+                "prefer_canvas": True,
+                "max_height": height,
+                "replaces": title_id,
+            },
+        )
+        assert response.status_code == 200, response.text
+        descriptor = response.json()
+        assert grant_of(api, descriptor).max_height == height
+        assert (await api.client.get(local(descriptor["url"]))).status_code == 200
+        filters = after(spawned[-1][0], "-vf")
+        assert f"min(ih,{height})" in filters and "tile=2x3" in filters
+    await api.c.proxy.shutdown()
