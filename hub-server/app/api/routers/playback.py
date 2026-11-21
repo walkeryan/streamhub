@@ -547,9 +547,8 @@ def _hls_session_key(c: C, g: StreamGrant) -> tuple[str, str, VodPlan | None]:
             family=family,
         )
         # The cap is part of the key: output encoded for one quality is never served as another.
-        key = f"{family}:vod:{plan.video}:{plan.hw}:{plan.audio_track}:{plan.start_s}:{plan.max_height or 0}"
-        if plan.color_convert:
-            key += ":sdr"
+        variant = f"{plan.video}-sdr" if plan.color_convert else plan.video
+        key = f"{family}:vod:{variant}:{plan.hw}:{plan.audio_track}:{plan.start_s}:{plan.max_height or 0}"
         return key, "none", plan
     if g.canvas:
         return f"{g.source_id}:{g.url}:canvas", "canvas", None
