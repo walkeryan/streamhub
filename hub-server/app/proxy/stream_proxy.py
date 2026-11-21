@@ -78,6 +78,9 @@ MAX_PAIR_LEASES = 16
 VOD_SEGMENT_S = 4
 VOD_READRATE = "2"
 VOD_BURST_S = "30"
+# Live canvas input is read at playback speed after this much: three segments to start on at once,
+# well inside the six the live playlist keeps.
+CANVAS_LIVE_BURST_S = "6"
 # A finished VOD session holds no upstream connection, only files: keep it through a pause.
 VOD_DONE_IDLE_S = 600.0
 # A pinned upstream URL is kept this long after its last use, and while a session is using it.
@@ -452,7 +455,12 @@ def canvas_args(
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *_upstream_args(url, headers)]
     if vod and vod.start_s:
         args += ["-ss", str(vod.start_s)]
-    if not live:
+    if live:
+        # A channel can arrive faster than it plays: a start-up backlog, or a provider's filler clip
+        # sent on a loop. Unpaced, that rolled the six-segment window away within a second and every
+        # segment a viewer asked for was already deleted.
+        args += ["-readrate", "1", "-readrate_initial_burst", CANVAS_LIVE_BURST_S]
+    else:
         args += ["-readrate", VOD_READRATE, "-readrate_initial_burst", VOD_BURST_S]
     if live and url.startswith("http"):
         args += ["-reconnect_at_eof", "1"]

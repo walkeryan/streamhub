@@ -54,3 +54,44 @@ test('the audio clock selects JPEG tiles, including the first segment and a back
   stop()
   timeline.stop()
 })
+
+test('the picture stays up while the next segment\'s JPEG decodes', (t) => {
+  const loading = []
+  class SlowSheet {
+    naturalWidth = 0
+    naturalHeight = 0
+    set src(_url) { loading.push(this) }
+    finish() { this.naturalWidth = 1280; this.naturalHeight = 1080; this.onload() }
+  }
+  const globals = { document: new EventTarget(), Image: SlowSheet, cancelAnimationFrame() {} }
+  for (const [name, value] of Object.entries(globals)) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name)
+    Object.defineProperty(globalThis, name, { configurable: true, value })
+    t.after(() => { if (previous) Object.defineProperty(globalThis, name, previous); else delete globalThis[name] })
+  }
+  const audio = Object.assign(new EventTarget(), { paused: true, currentTime: 1.9, textTracks: new EventTarget() })
+  const positions = []
+  const canvas = { hidden: true, getContext: () => ({ drawImage: (_img, x, y) => positions.push([x, y]) }) }
+  const timeline = startCanvasTimeline(audio)
+  timeline.add(0, pictureTag(0))
+  timeline.add(2, pictureTag(0))
+  const stop = paintServerFrames(audio, canvas)
+  assert.equal(canvas.hidden, true) // nothing decoded yet
+  loading.shift().finish()
+  assert.equal(canvas.hidden, false)
+  const painted = positions.length
+  // Playback crosses into the next segment. Its sheet takes a moment to decode: the last
+  // picture stays on screen instead of blinking to the black behind the canvas.
+  audio.currentTime = 2.01
+  audio.dispatchEvent(new Event('timeupdate'))
+  assert.equal(canvas.hidden, false)
+  assert.equal(positions.length, painted)
+  loading.shift().finish()
+  assert.equal(canvas.hidden, false)
+  assert.deepEqual(positions.at(-1), [0, 0])
+  // A seek is a different picture altogether: nothing stale is shown while it loads.
+  audio.dispatchEvent(new Event('seeking'))
+  assert.equal(canvas.hidden, true)
+  stop()
+  timeline.stop()
+})

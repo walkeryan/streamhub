@@ -48,6 +48,31 @@ def test_real_canvas_segments(tmp_path: Path, live: bool, with_audio: bool) -> N
     assert len(decoded) > 100_000 and bool(any(decoded)) == with_audio
 
 
+def test_live_canvas_reads_its_source_at_playback_speed(tmp_path: Path) -> None:
+    """A source that sends faster than it plays (a start-up backlog, a provider's looping filler clip)
+    must not roll the six-segment live window away before a viewer can fetch from it."""
+    import time
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("ffmpeg is not installed")
+    source = tmp_path / "source.mkv"
+    subprocess.run(
+        [ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=24", "-f", "lavfi", "-i",
+         "sine=frequency=440", "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", str(source)],
+        check=True,
+    )  # fmt: skip
+    proc = subprocess.Popen(canvas_args(ffmpeg, str(source), {}, tmp_path, live=True, vod=None))
+    try:
+        time.sleep(5)
+        newest = max(int(path.stem[4:]) for path in tmp_path.glob("seg_*.ts"))
+    finally:
+        proc.kill()
+        proc.wait()
+    # Six seconds of start-up burst and five of playback: about five segments, never the whole minute.
+    assert 2 <= newest <= 8
+
+
 def test_incomplete_segment_cannot_return_a_picture(tmp_path: Path) -> None:
     path = tmp_path / "broken.ts"
     path.write_bytes(b"not a complete transport packet")

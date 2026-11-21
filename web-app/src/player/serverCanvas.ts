@@ -72,14 +72,18 @@ export function paintServerFrames(media: HTMLMediaElement, canvas: HTMLCanvasEle
   let columns = 4, rows = 6
   let loaded = -1
 
-  function clear() {
+  /** Forget the sheet. What is painted stays on the canvas. */
+  function drop() {
     if (url) URL.revokeObjectURL(url)
     current = image = null
     url = ''
     sheets = []
     loaded = -1
-    canvas.hidden = true
     lastFrame = -1
+  }
+  function clear() {
+    drop()
+    canvas.hidden = true
   }
   function draw() {
     if (!current || !sheets.length || media.seeking) return
@@ -120,14 +124,19 @@ export function paintServerFrames(media: HTMLMediaElement, canvas: HTMLCanvasEle
       }
     }
     if (active !== current) {
-      clear()
       const bytes = active && ('bytes' in active ? active.bytes : active.value?.data && new Uint8Array(active.value.data))
-      if (active && bytes && bytes.byteLength > 4) {
+      const next = bytes && bytes.byteLength > 4 ? unpackSheets(bytes) : []
+      if (active && bytes && next.length) {
+        // The next segment's JPEG takes a moment to decode. Hiding the canvas until then showed the
+        // black behind it every two seconds, so the last picture stays up until the new one is ready.
+        drop()
         current = active
         offset = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getInt32(0) / 1000
-        sheets = unpackSheets(bytes)
+        sheets = next
         columns = bytes[4] === 0xff ? 4 : 2
         rows = bytes[4] === 0xff ? 6 : 3
+      } else {
+        clear()
       }
     }
     draw()
