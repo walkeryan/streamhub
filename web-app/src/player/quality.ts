@@ -36,8 +36,15 @@ export interface QualityOption {
  * source already meets would change nothing on the server, so it is not offered; a source of
  * unknown height gets Original alone.
  */
-export function qualityOptions(info: MediaInfo | null | undefined): QualityOption[] {
+export function qualityOptions(info: MediaInfo | null | undefined, canvas = false): QualityOption[] {
   const height = info?.video?.height ?? null
+  if (canvas) {
+    const options: QualityOption[] = [{ height: null, label: 'Up to 480p (default)', rate: null }]
+    for (const cap of [720, 1080] as const) {
+      options.push({ height: cap, label: `Up to ${cap}p`, rate: null })
+    }
+    return options
+  }
   let original: number | null = info?.bitrate_kbps ?? null
   // Without a cap a transcode is the file's rate at most, and never more than its own ceiling.
   if (original !== null && info?.delivery === 'transcode' && !info.max_height) original = Math.min(original, TRANSCODE_KBPS + AUDIO_KBPS)

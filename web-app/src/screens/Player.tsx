@@ -316,13 +316,13 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   }
   const openMenu = useCallback((section: MenuSection) => { setOpenSetting(null); setMenuSection(section); setOverlay('menu') }, [setOverlay])
   // Offered for a film this player resolves itself: a room's stream is the room's, a channel comes as it is.
-  const qualities = !live && !room && desc?.id === id ? qualityOptions(desc.media_info) : []
+  const qualities = (!live || desc?.canvas) && !room && desc?.id === id ? qualityOptions(desc.media_info, !!desc.canvas) : []
   const chooseQuality = (height: QualityHeight | null, label: string) => {
     setQualityState(height)
     saveQuality(dataSaver, height)
     if (height !== chosenQuality(qualities, quality)) {
       // The new stream starts where this one is: show that place, not zero, while it comes.
-      seek.setHeading(position)
+      if (!live) seek.setHeading(position)
       pb.setMaxHeight(height)
       showFlash(`Quality: ${label}`)
     }
@@ -1045,14 +1045,14 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
                 <div className="pm-settings">
                   {!live && !room && <PlayerSettingPicker id="speed" title="Speed" value={prefs.speed}
                     choices={SPEEDS.map(value => ({ value, label: speedLabel(value) }))} open={openSetting} onOpen={setOpenSetting} onChange={changeSpeed} />}
-                  {!desc?.canvas && qualities.length > 1 && <PlayerSettingPicker id="quality" title="Quality" value={chosenQuality(qualities, quality)}
+                  {qualities.length > 1 && <PlayerSettingPicker id="quality" title="Quality" value={chosenQuality(qualities, quality)}
                     choices={qualities.map(q => ({ value: q.height, label: q.label, detail: q.rate }))} open={openSetting} onOpen={setOpenSetting}
                     onChange={chooseQuality} note={dataSaver ? 'Your browser asks to save data. This quality is saved separately.' : undefined} />}
                   <PlayerSettingPicker id="aspect" title="Aspect ratio" value={aspect} choices={ASPECTS.map(a => ({ value: a.id, label: a.label }))}
                     open={openSetting} onOpen={setOpenSetting} onChange={setAspect} />
                   {!tv && <Focusable focusKey="pm:canvas" className="pm-row" role="switch" aria={{ checked: canvas }} label="Canvas streaming"
                     onEnter={() => setCanvas(!canvas)}>
-                    <span>Canvas streaming</span><span className="pm-value">{canvas ? desc?.canvas ? 'On · up to 480p' : 'On' : 'Off'}</span>
+                    <span>Canvas streaming</span><span className="pm-value">{canvas ? 'On' : 'Off'}</span>
                     <span className="pm-switch" aria-hidden="true" />
                   </Focusable>}
                   <PlayerSettingPicker id="sleep" title="Sleep timer" value={sleepMinutes}

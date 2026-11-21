@@ -457,7 +457,13 @@ def canvas_args(
     if live and url.startswith("http"):
         args += ["-reconnect_at_eof", "1"]
     # Apply the input display aspect ratio before packing square-pixel tiles.
-    scale = "scale=w='max(2,trunc(min(854,min(ih,480)*dar)/2)*2)':h='max(2,trunc(min(min(ih,480),854/dar)/2)*2)'"
+    height = vod.max_height if vod and vod.max_height in (720, 1080) else 480
+    width = {480: 854, 720: 1280, 1080: 1920}[height]
+    cols, rows = (2, 3) if height > 480 else (COLUMNS, ROWS)
+    scale = (
+        f"scale=w='max(2,trunc(min({width},min(ih,{height})*dar)/2)*2)'"
+        f":h='max(2,trunc(min(min(ih,{height}),{width}/dar)/2)*2)'"
+    )
     if vod and vod.color_convert:
         args[1:1] = COLOR_DEVICE
         scale += ":flags=fast_bilinear," + sdr_filter(jpeg=True)
@@ -476,7 +482,7 @@ def canvas_args(
         "-map",
         "1:a:0" if silent else audio,
         "-vf",
-        f"fps={FPS},{scale},setsar=1,tile={COLUMNS}x{ROWS}",
+        f"fps={FPS},{scale},setsar=1,tile={cols}x{rows}",
         "-c:v",
         "mjpeg",
         "-pix_fmt",
@@ -1481,6 +1487,7 @@ class StreamProxy:
         buffered: bool = False,
         pair_lease_id: str | None = None,
         vod: VodPlan | None = None,
+        canvas_height: int | None = None,
         viewer: Viewer | None = None,
         pin_key: str | None = None,
         sid: str | None = None,
@@ -1501,11 +1508,12 @@ class StreamProxy:
 
         def attempts_for(target: str, outdir: Path) -> list[tuple[str, list[str]]]:
             if transcode == "canvas" or (vod is not None and vod.video == "canvas"):
+                canvas_plan = vod or VodPlan(video="canvas", max_height=canvas_height)
                 return [
-                    ("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=vod)),
+                    ("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan)),
                     (
                         "canvas-silent",
-                        canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=vod, silent=True),
+                        canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan, silent=True),
                     ),
                 ]
             if vod is not None:

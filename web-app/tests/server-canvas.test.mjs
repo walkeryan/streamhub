@@ -2,15 +2,15 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { paintServerFrames, startCanvasTimeline } from '../src/player/serverCanvas.ts'
 
-function pictureTag(deltaMs) {
+function pictureTag(deltaMs, payload = [255, 216]) {
   const owner = new TextEncoder().encode('streamhub.canvas.v1\0')
-  const frameSize = owner.length + 4 + 2
+  const frameSize = owner.length + 4 + payload.length
   const tag = new Uint8Array(20 + frameSize)
   tag.set([73, 68, 51, 4, 0, 0, 0, 0, 0, 10 + frameSize])
   tag.set([80, 82, 73, 86, 0, 0, 0, frameSize], 10)
   tag.set(owner, 20)
   new DataView(tag.buffer).setInt32(20 + owner.length, deltaMs)
-  tag.set([255, 216], tag.length - 2)
+  tag.set(payload, tag.length - payload.length)
   return tag
 }
 
@@ -44,6 +44,13 @@ test('the audio clock selects JPEG tiles, including the first segment and a back
   timeline.flush(0, 2)
   audio.dispatchEvent(new Event('timeupdate'))
   assert.equal(canvas.hidden, true)
+  // Four independently decoded 2×3 JPEGs cover one HD segment; seek into its second sheet.
+  timeline.add(4, pictureTag(0, [4, ...Array(4).fill([0, 0, 0, 2, 255, 216]).flat()]))
+  audio.currentTime = 4.6
+  audio.dispatchEvent(new Event('seeked'))
+  assert.equal(canvas.width, 640)
+  assert.equal(canvas.height, 360)
+  assert.deepEqual(positions.at(-1), [640, 0])
   stop()
   timeline.stop()
 })

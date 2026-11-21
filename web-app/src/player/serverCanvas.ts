@@ -38,6 +38,25 @@ export function startCanvasTimeline(media: HTMLMediaElement) {
   }
 }
 
+// SD has one 4×6 JPEG after the timing offset. HD stores a count and length-prefixed 2×3 JPEGs.
+function unpackSheets(bytes: Uint8Array<ArrayBuffer>) {
+  const count = bytes[4] ?? 0
+  if (count === 0xff) return [bytes.subarray(4)]
+  const sheets = []
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  let pos = 5
+  if (count < 1 || count > 4) return []
+  for (let i = 0; i < count; i++) {
+    if (pos + 4 > bytes.length) return []
+    const length = view.getUint32(pos)
+    pos += 4
+    if (!length || pos + length > bytes.length) return []
+    sheets.push(bytes.subarray(pos, pos + length))
+    pos += length
+  }
+  return pos === bytes.length ? sheets : []
+}
+
 export function paintServerFrames(media: HTMLMediaElement, canvas: HTMLCanvasElement): () => void {
   const ctx = canvas.getContext('2d', { alpha: false })
   if (!ctx) return () => {}
@@ -49,22 +68,38 @@ export function paintServerFrames(media: HTMLMediaElement, canvas: HTMLCanvasEle
   let offset = 0
   let lastFrame = -1
   let timer = 0
+  let sheets: Uint8Array<ArrayBuffer>[] = []
+  let columns = 4, rows = 6
+  let loaded = -1
 
   function clear() {
     if (url) URL.revokeObjectURL(url)
     current = image = null
     url = ''
+    sheets = []
+    loaded = -1
     canvas.hidden = true
     lastFrame = -1
   }
   function draw() {
-    if (!current || !image?.naturalWidth || media.seeking) return
-    const frame = Math.min(23, Math.max(0, Math.floor((media.currentTime - current.startTime - offset) * 12)))
-    if (frame === lastFrame) return
-    const w = image.naturalWidth / 4, h = image.naturalHeight / 6
+    if (!current || !sheets.length || media.seeking) return
+    const perSheet = columns * rows
+    const frame = Math.min(sheets.length * perSheet - 1, Math.max(0, Math.floor((media.currentTime - current.startTime - offset) * 12)))
+    const index = Math.floor(frame / perSheet)
+    if (index !== loaded) {
+      loaded = index
+      if (url) URL.revokeObjectURL(url)
+      const sheet = new Image()
+      image = sheet
+      sheet.onload = () => { if (sheet === image) draw() }
+      url = URL.createObjectURL(new Blob([sheets[index]!], { type: 'image/jpeg' }))
+      sheet.src = url
+    }
+    if (!image?.naturalWidth || frame === lastFrame) return
+    const w = image.naturalWidth / columns, h = image.naturalHeight / rows
     if (canvas.width !== w) canvas.width = w
     if (canvas.height !== h) canvas.height = h
-    ctx!.drawImage(image, (frame % 4) * w, Math.floor(frame / 4) * h, w, h, 0, 0, w, h)
+    ctx!.drawImage(image, (frame % columns) * w, Math.floor((frame % perSheet) / columns) * h, w, h, 0, 0, w, h)
     canvas.hidden = false
     lastFrame = frame
   }
@@ -90,11 +125,9 @@ export function paintServerFrames(media: HTMLMediaElement, canvas: HTMLCanvasEle
       if (active && bytes && bytes.byteLength > 4) {
         current = active
         offset = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getInt32(0) / 1000
-        const sheet = new Image()
-        image = sheet
-        sheet.onload = () => { if (sheet === image) draw() }
-        url = URL.createObjectURL(new Blob([bytes.subarray(4)], { type: 'image/jpeg' }))
-        sheet.src = url
+        sheets = unpackSheets(bytes)
+        columns = bytes[4] === 0xff ? 4 : 2
+        rows = bytes[4] === 0xff ? 6 : 3
       }
     }
     draw()

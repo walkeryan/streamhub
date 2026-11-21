@@ -551,7 +551,7 @@ def _hls_session_key(c: C, g: StreamGrant) -> tuple[str, str, VodPlan | None]:
         key = f"{family}:vod:{variant}:{plan.hw}:{plan.audio_track}:{plan.start_s}:{plan.max_height or 0}"
         return key, "none", plan
     if g.canvas:
-        return f"{g.source_id}:{g.url}:canvas", "canvas", None
+        return f"{g.source_id}:{g.url}:canvas:{g.max_height or 480}", "canvas", None
     transcode = hw if g.transcode else "none"
     if g.transcode and transcode == "none":
         transcode = "software"
@@ -600,6 +600,7 @@ async def stream_hls(
                 generation=g.recovery_generation,
                 pair_lease_id=g.pair_lease_id,
                 vod=vod,
+                canvas_height=g.max_height if g.canvas else None,
                 viewer=_viewer(g),
                 # A file remuxed without a plan is one process for everyone watching it: one upstream viewer.
                 pin_key=None if g.live or recording else vod.family if vod is not None else key,
@@ -667,7 +668,7 @@ async def stream_hls_segment(token: str, sid: str, name: str, request: Request, 
     private = c.content_policy.enabled or viewer.rated
     if g.canvas:
         try:
-            data = await asyncio.to_thread(packed_audio, path)
+            data = await asyncio.to_thread(packed_audio, path, hd=g.max_height in (720, 1080))
         except FileNotFoundError as exc:
             raise NotFound("segment expired") from exc
         except ValueError as exc:
