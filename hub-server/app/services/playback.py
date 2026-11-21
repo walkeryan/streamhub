@@ -116,6 +116,7 @@ class StreamGrant:
     vod_width: int | None = None
     # The source's height and the viewer's quality cap, when the cap applies (``capped_height``).
     vod_height: int | None = None
+    color_convert: bool = False
     max_height: int | None = None
     audio_track: int | None = None
     start_s: int = 0
@@ -144,6 +145,7 @@ class WebVod:
     audio_track: int | None
     start_s: int
     duration_ms: int | None
+    color_convert: bool = False
     height: int | None = None
     max_height: int | None = None  # the quality cap in force; None when none was asked for or the source is no taller
 
@@ -210,6 +212,7 @@ class StreamTokens:
                 "vc": grant.vod_codec,
                 "vw": grant.vod_width,
                 "vh": grant.vod_height,
+                "cc": grant.color_convert,
                 "mh": grant.max_height,
                 "atr": grant.audio_track,
                 "ss": grant.start_s,
@@ -251,6 +254,7 @@ class StreamTokens:
             vod_codec=d.get("vc"),
             vod_width=d.get("vw"),
             vod_height=d.get("vh"),
+            color_convert=bool(d.get("cc")),
             max_height=d.get("mh"),
             audio_track=d.get("atr"),
             start_s=int(d.get("ss") or 0),
@@ -1290,8 +1294,15 @@ class PlaybackResolver:
         start_ms = resume_ms if start_position_ms is None else start_position_ms
         start_s = vod_start_s(start_ms, duration_ms)
         cap = capped_height(video.get("height"), max_height)
+        # Older probes may have only the 10-bit HEVC pixel format for a Dolby Vision file.
+        color_convert = bool(
+            video.get("dolby_vision")
+            or video.get("transfer") in ("smpte2084", "arib-std-b67")
+            or (video.get("codec") == "hevc" and "10" in str(video.get("pix_fmt")))
+        )
         return WebVod(
-            video="transcode" if cap else web_vod_plan(probe, selected),
+            color_convert=color_convert,
+            video="transcode" if cap or color_convert else web_vod_plan(probe, selected),
             codec=video.get("codec"),
             width=video.get("width"),
             tracks=tracks,
@@ -1358,6 +1369,7 @@ class PlaybackResolver:
                 vod_codec=plan.codec if plan else None,
                 vod_width=plan.width if plan else None,
                 vod_height=plan.height if plan else None,
+                color_convert=plan.color_convert if plan else False,
                 max_height=plan.max_height if plan else None,
                 audio_track=plan.audio_track if plan else None,
                 start_s=plan.start_s if plan else 0,
@@ -1632,6 +1644,7 @@ class PlaybackResolver:
                     vod_codec=plan.codec if plan else None,
                     vod_width=plan.width if plan else None,
                     vod_height=plan.height if plan else None,
+                    color_convert=plan.color_convert if plan else False,
                     max_height=plan.max_height if plan else None,
                     audio_track=plan.audio_track if plan else None,
                     start_s=plan.start_s if plan else 0,

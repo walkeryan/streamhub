@@ -62,6 +62,7 @@ class RoomSession:
     host_profile_id: str
     user_id: str | None  # who started it: the proxy session is tagged with a user like any other
     start_s: int
+    color_convert: bool = False
     epoch: int = 1  # ``Room.stream_epoch`` as of this start; clients reload their playlist when it changes
     urls: dict[str, str] = field(default_factory=dict)  # member id -> the playlist URL they were given
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -195,6 +196,7 @@ class RoomPlayback:
                     max_connections=scope.max_connections,
                     video=vod.video or "copy",
                     codec=vod.codec,
+                    color_convert=vod.color_convert,
                     width=vod.width,
                     audio_track=vod.audio_track,
                     tracks=vod.tracks,
@@ -285,6 +287,7 @@ class RoomPlayback:
             video=session.video,
             hw=hw if session.video == "transcode" else "none",
             codec=session.codec,
+            color_convert=session.color_convert,
             width=session.width,
             audio_track=session.audio_track,
             start_s=session.start_s,
