@@ -36,6 +36,13 @@ data class AuthTokens(
     val profile: Profile,
 )
 
+/** POST /auth/player-token: an access token for the native player, lasting up to an hour. */
+@Serializable
+data class PlayerTokenResponse(
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("expires_in") val expiresIn: Long,
+)
+
 @Serializable
 data class DeviceCode(
     @SerialName("device_code") val deviceCode: String,

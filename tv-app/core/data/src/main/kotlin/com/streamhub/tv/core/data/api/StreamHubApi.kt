@@ -1,6 +1,7 @@
 package com.streamhub.tv.core.data.api
 
 import com.streamhub.tv.core.data.auth.Session
+import com.streamhub.tv.core.data.auth.playerTokenDue
 import com.streamhub.tv.core.data.auth.sameSwitchSession
 import io.ktor.client.plugins.auth.AuthCircuitBreaker
 import io.ktor.client.request.header
@@ -328,6 +329,31 @@ class StreamHubApi @Inject constructor(
             header(HttpHeaders.Authorization,"Bearer $token")
             setBody(MultiviewRelease(leaseId))
         }.unit()
+    }
+
+    /**
+     * While a title plays: swaps the session's token for an hour-long player token when it is short or
+     * near its end (see PlayerToken.kt), so playback does not depend on the hidden page. Bound to [owner]
+     * like a progress report: the token is minted from that person's token and kept only for them. True
+     * when a new token was stored. A 401 asks the page once (it answers when it is not hidden).
+     */
+    suspend fun renewPlayerToken(owner: Session, nowSeconds: Long = System.currentTimeMillis() / 1000): Boolean {
+        val current = session.current()
+        if (!sameSwitchSession(owner, current) || !playerTokenDue(current, nowSeconds)) return false
+        val base = owner.apiBase ?: return false
+        suspend fun mint(token: String): HttpResponse = client.post("$base/auth/player-token") {
+            attributes.put(AuthCircuitBreaker, Unit)
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        val used = current.accessToken?.takeIf { it.isNotBlank() } ?: return false
+        var response = mint(used)
+        if (response.status == HttpStatusCode.Unauthorized) {
+            val fresh = webTokens.currentAccessToken(used) ?: return false
+            if (!sameSwitchSession(owner, session.current())) return false
+            response = mint(fresh)
+        }
+        val minted = response.ok<PlayerTokenResponse>()
+        return session.adoptPlayerToken(owner, minted.accessToken)
     }
 
     suspend fun reportProgress(report: ProgressReport, owner:Session):Boolean {

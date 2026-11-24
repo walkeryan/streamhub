@@ -207,6 +207,17 @@ class SessionStore @Inject constructor(@ApplicationContext private val context: 
         return done
     }
 
+    /** Keeps a player token minted for [owner] (see PlayerToken.kt) as the session's access token. */
+    suspend fun adoptPlayerToken(owner: Session, access: String): Boolean {
+        var done=false
+        context.sessionStore.edit { values ->
+            sessionWithPlayerToken(owner,readSession(values),access) ?: return@edit
+            values[K.access]=access
+            done=true
+        }
+        return done
+    }
+
     private fun readSession(values: Preferences) = Session(
         values[K.server], values[K.access], values[K.refresh],
         values[K.profile]?.let { runCatching { json.decodeFromString(Profile.serializer(), it) }.getOrNull() },
