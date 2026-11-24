@@ -19,6 +19,7 @@ import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import com.streamhub.tv.core.data.auth.Session
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.sameSwitchSession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import com.streamhub.tv.core.data.repo.OwnedProgressJobs
 import com.streamhub.tv.core.data.repo.channelPlayback
@@ -116,6 +117,7 @@ class StreamHubPlayer(
     private var progressOwner: Session? = null
     private val reportJobs=OwnedProgressJobs()
     private var tickerJob: Job? = null
+    private var tokenJob: Job? = null
     private var reconnectJob: Job? = null
     private var current: PlaybackDescriptor? = null
     private var mediaEpoch=0L
@@ -218,6 +220,14 @@ class StreamHubPlayer(
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .build()
+        // The session's token is renewed by the player itself while it plays (see PlayerToken.kt): the
+        // page that owns the session is hidden behind it and cannot be relied on to answer.
+        tokenJob = scope.launch {
+            while (isActive) {
+                delay(TOKEN_CHECK_MS)
+                renewToken()
+            }
+        }
         tickerJob = scope.launch {
             while (isActive) {
                 _state.value = _state.value.copy(
@@ -244,6 +254,7 @@ class StreamHubPlayer(
         exoPlayer.playWhenReady=false
         current = d
         progressOwner=owner
+        scope.launch { renewToken() }
         mediaEpoch++;trackRevision++;audioApproval.clear();requestedPreferredAudio=null
         wantsPlayback=true;waitingForAudio=needsRuntimeAudioCheck(d.audioLanguageRequired,d.preferredAudioLanguages)
         exoPlayer.playWhenReady=false
@@ -365,6 +376,11 @@ class StreamHubPlayer(
         updatingMedia=false
         exoPlayer.playWhenReady = wantsPlayback && !waitingForAudio
         enforceAudioLanguage()
+    }
+
+    private suspend fun renewToken() {
+        val owner = progressOwner ?: return
+        runCatching { api.renewPlayerToken(owner) }.onFailure { if (it is CancellationException) throw it }
     }
 
     private fun startProgressLoop() {
@@ -492,7 +508,7 @@ class StreamHubPlayer(
      */
     fun release() {
         progressOwner=null
-        tickerJob?.cancel();progressJob?.cancel();reconnectJob?.cancel()
+        tickerJob?.cancel();tokenJob?.cancel();progressJob?.cancel();reconnectJob?.cancel()
         exoPlayer.removeListener(listener)
         exoPlayer.release()
         val closing=scope
@@ -513,6 +529,7 @@ class StreamHubPlayer(
 
     companion object {
         const val PROGRESS_INTERVAL_MS = 10_000L
+        const val TOKEN_CHECK_MS = 60_000L
         const val FINAL_REPORT_GRACE_MS = 3_000L
         const val BASE_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L

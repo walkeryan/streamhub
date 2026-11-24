@@ -93,6 +93,15 @@ async def me(request: Request, response: Response, c: C) -> dict[str, Any]:
     return out
 
 
+@router.post("/auth/player-token", response_model=S.PlayerToken, tags=["auth"])
+async def player_token(request: Request, response: Response, c: C, _principal: P) -> dict[str, Any]:
+    """An hour-long access token for a native player (see AuthService.player_token). The session
+    is validated first (the principal), so a revoked or suspended one cannot mint."""
+    response.headers["Cache-Control"] = "private, no-store"
+    access, expires_in = c.auth.player_token(_bearer(request))
+    return {"access_token": access, "expires_in": expires_in}
+
+
 @router.get("/auth/sessions", response_model=list[S.AuthSession], tags=["auth"])
 async def list_sessions(c: C, p: P, user_id: str | None = None) -> list[dict[str, Any]]:
     """The caller's signed-in devices; someone else's with ``users.manage``."""

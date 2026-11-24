@@ -93,6 +93,11 @@ class AuthTokens(_M):
     profile: Profile
 
 
+class PlayerToken(_M):
+    access_token: str
+    expires_in: int
+
+
 class LoginRequest(_M):
     profile_id: str
     pin: str | None = None

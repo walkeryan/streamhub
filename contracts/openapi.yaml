@@ -1731,6 +1731,18 @@ paths:
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } }
   /auth/refresh:
     post: { security: [], summary: "Exchange a refresh token for a new pair; refresh tokens rotate", description: "Every refresh answers a new refresh token and makes the presented one the previous one. The previous one is still honoured for 60 seconds (two tabs, or a retried request, refreshing at once) and answers the current pair without rotating again. A token older than that being presented means a copy is being replayed: the session is revoked (401 session_revoked) for whoever holds it, and the device signs in again. A client stores the new refresh token before it uses the new access token.", requestBody: { content: { application/json: { schema: { type: object, properties: { refresh_token: {type: string} } } } } }, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/AuthTokens' } } } } } }
+  /auth/player-token:
+    post:
+      summary: An hour-long access token for a native player
+      description: >-
+        For a native player whose session is owned by a page that may be hidden behind it (the TV app's
+        web shell): the player swaps a valid access token for one like it lasting up to an hour, and
+        renews it while it plays, so progress and the next episode do not depend on the page. A chain of
+        player tokens ends 12 hours after the access token it started from (401 token_expired); every
+        request still validates the session, so a sign-out ends them at once. A refresh token is refused.
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { type: object, required: [access_token, expires_in], properties: { access_token: {type: string}, expires_in: {type: integer, description: seconds} } } } } }
+        '401': { description: "invalid or expired token, or the chain ended (token_expired)" }
   /auth/device:
     post: { security: [], summary: TV starts pairing; shows user_code, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceCode' } } } } } }
   /auth/device/lookup:

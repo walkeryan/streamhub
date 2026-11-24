@@ -297,6 +297,27 @@ class AuthService:
             raise Unauthorized("invalid token") from exc
         return payload
 
+    # A native player outlives the 15-minute access token: on the TV the page that owns the session
+    # (and its refresh token) is hidden behind the player and cannot be relied on to answer. So the
+    # player swaps a valid access token for one of an hour, and renews it while it plays. A chain of
+    # them ends PLAYER_CHAIN_S after the access token it started from (``pti``), so it never becomes a
+    # session of its own; and as every request validates the session, a sign-out still ends it at once.
+    PLAYER_TTL_S = 3600
+    PLAYER_CHAIN_S = 12 * 3600
+
+    def player_token(self, token: str) -> tuple[str, int]:
+        """An access token like ``token`` (already validated by the caller) lasting up to an hour."""
+        claims = self._decode(token, "access")
+        now = int(time.time())
+        started = claims.get("pti", claims.get("iat"))
+        if not isinstance(started, int) or isinstance(started, bool):
+            raise Unauthorized("invalid token")
+        exp = min(now + self.PLAYER_TTL_S, started + self.PLAYER_CHAIN_S)
+        if exp - now < 60:
+            raise Unauthorized("token expired", code="token_expired")
+        payload = {**claims, "iat": now, "exp": exp, "jti": secrets.token_hex(8), "pti": started}
+        return jwt.encode(payload, self._key, algorithm=ALG), exp - now
+
     def _decode(self, token: str, typ: str) -> dict[str, Any]:
         payload = self._claims(token)
         if payload.get("typ") != typ:
