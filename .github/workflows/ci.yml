@@ -65,6 +65,16 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: hub-server/pyproject.toml
+      - name: Check signed-in Home, TV search and release-date browsing
+        run: |
+          python -m pip install -e "../hub-server[dev]"
+          npx playwright install --with-deps chrome
+          npx playwright test --config playwright.real-http.config.ts home-refresh.spec.ts tv-feedback.spec.ts
 
   android:
     name: Android TV debug APK

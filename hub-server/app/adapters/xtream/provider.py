@@ -36,6 +36,7 @@ from app.domain.entities import (
     TestResult,
 )
 from app.domain.ports import AdapterContext, CatalogSink
+from app.domain.release import release_date
 from app.infra.http import request_with_retry
 from app.infra.logging import redact_url
 from app.services.audio_selection import provider_audio_extra
@@ -222,11 +223,20 @@ def _raw_extra(shown: Presented, name: str) -> dict[str, Any]:
     return {"raw_title": name, "raw_category": shown.raw_category, "kids": shown.kids}
 
 
-def _release_extra(row: dict[str, Any]) -> dict[str, str]:
-    raw = F.first(row, "releaseDate", "release_date", "releasedate", "first_air_date")
-    if isinstance(raw, str) and len(raw) >= 10:
-        return {"originally_available_at": raw[:10]}
-    return {}
+_RELEASE_FIELDS = ("releaseDate", "release_date", "releasedate", "first_air_date")
+
+
+def _release(row: dict[str, Any], *, series: bool = False) -> tuple[int | None, dict[str, str]]:
+    fields = ("first_air_date", *_RELEASE_FIELDS[:3]) if series else _RELEASE_FIELDS
+    for key in fields:
+        day = release_date(row.get(key))
+        if day:
+            return int(day[:4]), {"originally_available_at": day}
+    for key in ("year", *fields):
+        year = F.year_from(row.get(key))
+        if year:
+            return year, {}
+    return None, {}
 
 
 def map_vod(
@@ -241,17 +251,18 @@ def map_vod(
     name = F.as_str(F.first(row, "name", "title", "o_name")) or f"VOD {sid}"
     ext = F.as_str(F.first(row, "container_extension", "extension", "ext")) or "mp4"
     cat_id = F.as_str(F.first(row, "category_id", "categoryId"))
+    year, released = _release(row)
     shown = presentation.title(
         name,
         cats.get(cat_id or "") or "",
-        year=F.as_int(row.get("year")) or F.year_from(row.get("releaseDate"), row.get("release_date")),
+        year=year,
         is_adult=F.as_bool(row.get("is_adult") or 0),
     )
     return CatalogItem(
         ext_id=sid,
         kind=MediaKind.VOD,
         title=shown.title,
-        year=shown.year or F.year_from(name),
+        year=shown.year,
         poster=F.as_str(F.first(row, "stream_icon", "cover", "movie_image", "icon", "cover_big")),
         rating=F.as_float(F.first(row, "rating", "rating_5based")),
         tmdb_id=F.tmdb_from(row),
@@ -264,7 +275,7 @@ def map_vod(
             "ext": ext,
             "stream_id": sid,
             **_raw_extra(shown, name),
-            **_release_extra(row),
+            **released,
             **provider_audio_extra(row.get("audio")),
         },
         language=shown.language,
@@ -282,17 +293,18 @@ def map_series(
     name = F.as_str(F.first(row, "name", "title")) or f"Series {sid}"
     backdrop = row.get("backdrop_path")
     cat_id = F.as_str(F.first(row, "category_id", "categoryId"))
+    year, released = _release(row, series=True)
     shown = presentation.title(
         name,
         cats.get(cat_id or "") or "",
-        year=F.year_from(row.get("releaseDate"), row.get("release_date"), row.get("year")),
+        year=year,
         is_adult=F.as_bool(row.get("is_adult") or 0),
     )
     return CatalogItem(
         ext_id=series_ext_id(sid),
         kind=MediaKind.SERIES,
         title=shown.title,
-        year=shown.year or F.year_from(name),
+        year=shown.year,
         overview=F.as_str(F.first(row, "plot", "description", "overview")),
         poster=F.as_str(F.first(row, "cover", "stream_icon", "cover_big")),
         backdrop=F.as_str(backdrop),
@@ -301,7 +313,7 @@ def map_series(
         tmdb_id=F.tmdb_from(row),
         group=shown.shelf or None,
         added_at=F.as_epoch(F.first(row, "last_modified", "added")),
-        extra={"series_id": sid, **_raw_extra(shown, name), **_release_extra(row)},
+        extra={"series_id": sid, **_raw_extra(shown, name), **released},
         language=shown.language,
         quality=shown.quality,
         adult=shown.adult,
@@ -480,7 +492,9 @@ class XtreamSource:
                 dur = F.as_int(F.first(i, "duration_secs", "durationSecs"))
                 if dur:
                     item.duration_ms = dur * 1000
-                item.year = item.year or F.year_from(i.get("releasedate"), i.get("release_date"))
+                year, released = _release(i)
+                item.year = year or item.year
+                item.extra.update(released)
         return item
 
     async def children(self, item: CatalogItem) -> list[CatalogItem]:

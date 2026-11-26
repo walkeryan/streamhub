@@ -74,8 +74,17 @@ h1.tp-show { cursor: default; }
 .tp-cast.fx[data-focused='true'] .tp-cast-photo { outline: var(--focus-border) solid var(--t-focus-ring); outline-offset: 0.15rem; }
 
 /* More like this: posters with the green tick on what plays here, the name under each. */
+.tp-similar-row { padding-block: 1.4rem 0.75rem; }
 .tp-like { width: 8.6rem; }
-.tp-like .tile-poster { width: 8.6rem; height: 12.9rem; }
+.tp-like .ds-cap-below { display: grid; gap: 0.125rem; white-space: normal; }
+.tp-like .ds-cap-below small { color: var(--t-text-muted); font-size: var(--fs-micro); }
+@media (min-width: 721px) {
+  .tp-actions { row-gap: 2.25rem; }
+  .tp-actions + .tp-status { margin-top: 2.65rem; }
+}
+.tp-like .tile-poster { position: relative; width: 8.6rem; height: 12.9rem; }
+.tp-like.fx[data-focused='true'] { transform: none; outline: none; box-shadow: none; }
+.tp-like.fx[data-focused='true'] .tile-poster { outline: var(--focus-border) solid var(--t-focus-ring); outline-offset: .15rem; }
 .tp-attribution { margin-top: -1rem; }
 
 /* One source in the audio and version sheet: a name line and a detail line, each truncated. */

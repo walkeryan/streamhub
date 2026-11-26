@@ -16,6 +16,9 @@ from tests.test_large_catalog_filters import seed_catalog
         ("4K-EN-NETFLIX-Star Wars (1977)", "Star Wars"),
         ("D+ | FR | Star Wars: The Force Awakens (2015)", "Star Wars: The Force Awakens"),
         ("Max", "Max"),
+        ("Death Race 2050", "Death Race 2050"),
+        ("EN | Route 2050 [2017] [4K]", "Route 2050"),
+        ("Blade Runner 2049 (2017)", "Blade Runner 2049"),
         ("Star Wars: The Last Jedi", "Star Wars: The Last Jedi"),
     ],
 )

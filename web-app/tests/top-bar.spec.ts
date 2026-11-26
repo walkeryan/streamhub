@@ -26,7 +26,7 @@ async function upToBar(page: Page) {
 async function expectOneRow(page: Page, width: number) {
   const bar = await rect(rail(page))
   expect([bar.x, bar.y, bar.width]).toEqual([0, 0, width])
-  const parts = (await page.locator('[data-testid="rail"] > *').evaluateAll((all) => all.map((e) => e.getBoundingClientRect().toJSON() as DOMRect))).filter((p) => p.width > 0 && p.height > 0)
+  const parts = (await page.locator('[data-testid="rail"] > :not(.sr-only)').evaluateAll((all) => all.map((e) => e.getBoundingClientRect().toJSON() as DOMRect))).filter((p) => p.width > 0 && p.height > 0)
   expect(parts.length).toBeGreaterThanOrEqual(SECTIONS.length + 3)
   let edge = 0
   for (const part of parts) {
@@ -49,7 +49,7 @@ for (const [width, height] of [[1920, 1080], [1024, 768]] as const) {
       const play = page.getByTestId('hero-play')
       await expect(play).toHaveAttribute('data-focused', 'true')
 
-      // Wordmark, the six sections by name, then Search, More and the profile; no hover, no focus needed.
+      // Wordmark, Search, the six sections by name, More and the profile; no hover, no focus needed.
       await expect(rail(page).getByText('StreamHub', { exact: true })).toBeVisible()
       await expect(rail(page).locator('.rail-item .lbl')).toHaveText(SECTIONS)
       for (const label of await rail(page).locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
@@ -77,10 +77,8 @@ for (const [width, height] of [[1920, 1080], [1024, 768]] as const) {
       // Left and Right walk the bar and stop at its ends; Down from any entry returns to the content.
       await page.keyboard.press('ArrowUp')
       await page.keyboard.press('ArrowLeft')
-      await expect(home).toHaveAttribute('data-focused', 'true')
-      // A browser with speech recognition also has the microphone beside the search box.
-      const voice = (await page.getByTestId('nav-search-voice').count()) ? ['nav-search-voice'] : []
-      const order = ['nav-live-tv', 'nav-sports', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-search', ...voice, 'nav-more', 'nav-profile']
+      await expect(page.getByTestId('nav-search')).toHaveAttribute('data-focused', 'true')
+      const order = ['nav-home', 'nav-live-tv', 'nav-sports', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-more', 'nav-profile']
       for (const next of order) {
         await page.keyboard.press('ArrowRight')
         await expect(page.getByTestId(next)).toHaveAttribute('data-focused', 'true')

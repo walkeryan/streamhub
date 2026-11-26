@@ -6,6 +6,7 @@ import type { Channel, SearchProgramme, SearchResult, SearchSectionName, Tile } 
 import { Attribution, LogoBlock } from '../components/ui'
 import { Button, Chip, Empty, ErrorState, Icon, OverflowMenu, SectionHeader, Skeleton } from '../ds'
 import { MediaTile, openPath } from '../components/Tile'
+import { CardActions } from '../components/CardActions'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
@@ -217,7 +218,7 @@ function TitleGroup({ title, tiles, onOpen }: { title: string; tiles: Tile[]; on
   return <section className="search-section" aria-label={title}>
     <SectionHeader title={title} />
     <FocusGroup focusKey={`search:titles:${title}`} className="grid-tiles search-grid">
-      {tiles.map(t => <div key={t.id} className="search-result">
+      {tiles.map(t => <CardActions key={t.id} className="search-result" cardKey={`search::${t.id}`} menuKey={`search:actions:${t.id}`}>
         <MediaTile tile={t} scope="search" titleAlways mark="availability" onOpen={onOpen} />
         <div className="search-result-actions">
           <OverflowMenu focusKey={`search:actions:${t.id}`} menuKey={`search:menu:${t.id}`} title={t.title} label={`More actions for ${t.title}`} size="sm" testId="search-result-actions"
@@ -229,7 +230,7 @@ function TitleGroup({ title, tiles, onOpen }: { title: string; tiles: Tile[]; on
               keepOpen: true, onEnter: () => { if (watchlist.isError) void watchlist.refetch() },
             }]} />
         </div>
-      </div>)}
+      </CardActions>)}
     </FocusGroup>
   </section>
 }

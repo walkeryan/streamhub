@@ -83,6 +83,8 @@ def normalise_title(title: str) -> str:
     return _NON_ALNUM.sub(" ", t).strip()
 
 
+# Bare numbers can be part of the official name (Death Race 2050, Blade Runner 2049).
+_DISPLAY_YEAR = re.compile(r"\s*(?:\((?:18|19|20|21)\d{2}\)|\[(?:18|19|20|21)\d{2}\])\s*$")
 _DISPLAY_PREFIX = re.compile(
     r"^\s*(?:4K|3D|UHD|FHD|HD|SD|EN|ENG|FR|FRA|DE|DEU|ES|ESP|IT|ITA|PT|NL|US|UK|"
     r"NETFLIX|AMAZON|HBO|DISNEY|D\+)\s*[|:–-]\s*",
@@ -99,7 +101,7 @@ def clean_display_title(title: str) -> str:
             break
         cleaned = updated
     cleaned = re.sub(r"\s*\[(?:4K|HD|FHD|UHD|1080p|2160p)\]\s*$", "", cleaned, flags=re.I)
-    cleaned = _YEAR_RE.sub("", cleaned).strip()
+    cleaned = _DISPLAY_YEAR.sub("", cleaned).strip()
     return cleaned or title
 
 

@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { Focusable } from '../nav/Focusable'
 import { Icon } from './Icon'
 import { FeatureCard } from './FeatureCard'
+import { CardActions } from './CardActions'
 import { ProgressBar, SourceChips } from './ui'
 import { Initials, SafeImg } from './SafeImg'
 import { cn, fmtTime, hueOf, progressOf, useNow } from '../lib/util'
@@ -37,12 +38,8 @@ export const namesSource = (sources: SourceBadge[]): boolean =>
 
 function Fallback({ title }: { title: string }) {
   const h = hueOf(title)
-  return (
-    <div className="absolute inset-0 grid place-items-center p-3 text-center font-semibold"
-      style={{ background: `linear-gradient(160deg, hsl(${h} 40% 28%), hsl(${(h + 50) % 360} 45% 16%))`, color: '#fff' }}>
-      <span className="clamp2">{title}</span>
-    </div>
-  )
+  return <div className="tile-art-fallback absolute inset-0" aria-hidden="true"
+    style={{ background: `linear-gradient(160deg, hsl(${h} 40% 28%), hsl(${(h + 50) % 360} 45% 16%))` }} />
 }
 
 export const MediaTile = memo(function MediaTile(p: {
@@ -52,6 +49,7 @@ export const MediaTile = memo(function MediaTile(p: {
    * a green tick when it plays here, nothing when it does not (a request in progress still shows itself).
    */
   mark?: 'availability'
+  captionBelow?: boolean
 }) {
   const open = useOpenTile()
   const layout = p.layout ?? 'poster'
@@ -61,18 +59,18 @@ export const MediaTile = memo(function MediaTile(p: {
   return (
     <Focusable
       focusKey={`${p.scope}::${p.tile.id}`}
-      className={cn('tile', layout === 'landscape' ? 'tile-landscape' : 'tile-poster')}
-      label={p.tile.title}
+      className={p.captionBelow ? 'ds-captioned tp-like' : cn('tile', layout === 'landscape' ? 'tile-landscape' : 'tile-poster')}
+      label={p.captionBelow && p.tile.year ? `${p.tile.title} (${p.tile.year})` : p.tile.title}
       role="link"
       data-testid="tile"
       scroll
       onEnter={() => (p.onOpen ?? open)(p.tile)}
       onFocus={() => p.onFocusTile?.(p.tile)}
     >
-      {({ focused }) => (
-        <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className="tile" style={{ position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
+      {({ focused }) => (<>
+        <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className={cn('tile', p.captionBelow && 'tile-poster')} style={p.captionBelow ? undefined : { position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
           <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} reveal fallback={<Fallback title={p.tile.title} />} />
-          <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>
+          {!p.captionBelow && <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>}
           {/* A request on its way says where it is, in place of where the title plays. */}
           {request ? <RequestTileStatus progress={request} of={p.tile.title} /> : p.mark === 'availability' ? (
             p.tile.sources.some((s) => s.playable_in_app) && <AvailableTick />
@@ -80,7 +78,8 @@ export const MediaTile = memo(function MediaTile(p: {
           {p.tile.is_favorite && <span className="tile-fav" role="img" aria-label="Favorite"><Icon name="heart" filled /></span>}
           {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && <ProgressBar label={`Viewing progress · ${p.tile.title}`} pct={p.tile.progress_pct} className="tile-progress" />}
         </div>
-      )}
+        {p.captionBelow && <p className="ds-cap-below"><span className="clamp2">{p.tile.title}</span>{p.tile.year && <small>{p.tile.year}</small>}</p>}
+      </>)}
     </Focusable>
   )
 })
@@ -184,11 +183,11 @@ export function TileRow(p: {
       <SectionHeader title={p.title} />
       <HRow focusKey={`row:${p.id}`} className={cn(p.presentation === 'wide' && 'feature-row')}>
         {p.tiles.map((t) =>
-          p.onRemove ? <div className="continue-tile" key={t.id}>
+          p.onRemove ? <CardActions className="continue-tile" key={t.id} cardKey={`${p.id}::${t.id}`} menuKey={`continue:more:${t.id}`}>
             <LandscapeTile tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
             <div className="continue-menu"><OverflowMenu focusKey={`continue:more:${t.id}`} menuKey={`continue:menu:${t.id}`} title={t.title}
               label={`More actions for ${t.title}`} items={[{ key: 'remove', icon: 'x', label: 'Remove from Continue Watching', onEnter: () => p.onRemove?.(t) }]} /></div>
-          </div> : p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
+          </CardActions> : p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
             <ChannelTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
           ) : layout === 'landscape' ? (
             // artwork cut for a wide tile rarely carries the title, so it is always captioned (under it)

@@ -226,7 +226,10 @@ async def test_tmdb_429_backoff_and_cache(tmp_path: Path, monkeypatch: pytest.Mo
     ctx = AdapterContext(
         http_factory=lambda **kw: httpx.AsyncClient(headers=kw.get("headers")), cache=MemoryCache(), data_dir=tmp_path
     )
-    tmdb = TmdbClient(ctx, lambda: "key123")
+    from unittest.mock import AsyncMock
+
+    release = AsyncMock()
+    tmdb = TmdbClient(ctx, lambda: "key123", release_writer=release)
     with respx.mock() as router:
         route = router.get(f"{TMDB}/movie/603").mock(
             side_effect=[httpx.Response(429, headers={"Retry-After": "2"}), httpx.Response(200, json=MATRIX)]
@@ -237,6 +240,7 @@ async def test_tmdb_429_backoff_and_cache(tmp_path: Path, monkeypatch: pytest.Mo
         assert route.calls[0].request.url.params["api_key"] == "key123"
         await tmdb.details("movie", 603)
         assert route.call_count == 2  # second call served from cache
+        release.assert_awaited_once_with("movie", 603, MATRIX["release_date"])
     assert TmdbClient(ctx, lambda: None).enabled is False
 
 

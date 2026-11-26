@@ -13,7 +13,7 @@ export default defineConfig({
   projects: [{ name: 'google-chrome-real-http', use: { ...devices['Desktop Chrome'], channel: 'chrome' } }],
   webServer: {
     command: 'cd ../hub-server && ${STREAMHUB_TEST_PYTHON:-python3} -m tests.real_http_harness --dist ../web-app/dist --port 5187',
-    url: 'http://127.0.0.1:5187/api/openapi.json',
+    url: 'http://127.0.0.1:5187/api/v1/health',
     reuseExistingServer: false,
     timeout: 30_000,
   },

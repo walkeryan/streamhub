@@ -456,6 +456,13 @@ class SyncRun(Base):
     stats: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class CatalogRelease(Base):
+    __tablename__ = "catalog_release"
+    media_type: Mapped[str] = mapped_column(String(8), primary_key=True)
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    release_date: Mapped[str] = mapped_column(String(10))
+
+
 class CacheEntry(Base):
     __tablename__ = "cache"
     key: Mapped[str] = mapped_column(String(512), primary_key=True)

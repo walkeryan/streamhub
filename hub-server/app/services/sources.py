@@ -540,6 +540,8 @@ async def upsert_titles(db: Database, rows: list[dict[str, Any]]) -> None:
             set_ = {c: getattr(ex, c) for c in cols}
             # An abbreviated sync response may omit a previously supplied date.
             set_["added_at"] = func.coalesce(ex.added_at, Title.added_at)
+            same_title = (ex.tmdb_id == Title.tmdb_id) | (ex.tmdb_id.is_(None) & (ex.norm_title == Title.norm_title))
+            set_["year"] = func.coalesce(ex.year, case((same_title, Title.year)))
             # List endpoints often omit ids that a detail call found later. Erasing them
             # would change the title's hub id and orphan its favorites and progress.
             for c in IDENTIFIER_COLUMNS:
@@ -555,7 +557,7 @@ async def upsert_titles(db: Database, rows: list[dict[str, Any]]) -> None:
             old_release = func.json_extract(Title.extra, release_path)
             set_["extra"] = case(
                 (func.nullif(func.json_extract(ex.extra, release_path), "").is_not(None), set_["extra"]),
-                (old_release.is_not(None), func.json_set(set_["extra"], release_path, old_release)),
+                (same_title & old_release.is_not(None), func.json_set(set_["extra"], release_path, old_release)),
                 else_=set_["extra"],
             )
             if chunk[0]["sync_gen"] == LAZY_GEN:

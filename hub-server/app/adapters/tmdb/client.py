@@ -19,6 +19,7 @@ import httpx
 
 from app.domain.entities import MetaTitle, ProviderOffer
 from app.domain.ports import AdapterContext
+from app.domain.release import release_date, release_year
 from app.infra.http import request_with_retry
 from app.services.classification import tmdb_age_evidence
 
@@ -41,17 +42,6 @@ def image_url(path: str | None, size: str = "w500") -> str | None:
     if path.startswith("http"):
         return path
     return f"{IMG}/{size}{path}"
-
-
-def _year(date: str | None) -> int | None:
-    if date and len(date) >= 4 and date[:4].isdigit():
-        return int(date[:4])
-    return None
-
-
-def _date(value: Any) -> str | None:
-    text = str(value or "")[:10]
-    return text if len(text) == 10 and text[4] == "-" and text[:4].isdigit() else None
 
 
 def to_meta(d: dict[str, Any], media_type: str | None = None) -> MetaTitle | None:
@@ -82,8 +72,8 @@ def to_meta(d: dict[str, Any], media_type: str | None = None) -> MetaTitle | Non
         tmdb_id=int(d["id"]),
         media_type=mt,
         title=title,
-        year=_year(d.get("release_date") or d.get("first_air_date")),
-        release_date=_date(d.get("release_date") or d.get("first_air_date")),
+        year=release_year(d.get("release_date") or d.get("first_air_date")),
+        release_date=release_date(d.get("release_date") or d.get("first_air_date")),
         overview=d.get("overview") or None,
         poster=image_url(d.get("poster_path"), "w342"),
         backdrop=image_url(d.get("backdrop_path"), "w1280"),
@@ -121,10 +111,12 @@ class TmdbClient:
         ctx: AdapterContext,
         key_getter: Callable[[], str | None],
         evidence_writer: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+        release_writer: Callable[[str, int, str | None], Awaitable[None]] | None = None,
     ) -> None:
         self._ctx = ctx
         self._key_getter = key_getter
         self._evidence_writer = evidence_writer
+        self._release_writer = release_writer
 
     @property
     def enabled(self) -> bool:
@@ -162,6 +154,20 @@ class TmdbClient:
         data = resp.json()
         if isinstance(data, dict):
             data["_streamhub_retrieved_at"] = datetime.now(UTC).isoformat()
+            # Record the canonical day on a fresh detail response, never one write per cache hit.
+            if self._release_writer and "append_to_response" in params:
+                parts = path.strip("/").split("/")
+                if (
+                    len(parts) == 2
+                    and parts[0] in ("movie", "tv")
+                    and parts[1].isdigit()
+                    and data.get("id") == int(parts[1])
+                ):
+                    field = "release_date" if parts[0] == "movie" else "first_air_date"
+                    day = release_date(data.get(field))
+                    # A confirmed withdrawal (for example a postponed premiere) also updates the index.
+                    if day or (field in data and data[field] in ("", None)):
+                        await self._release_writer(parts[0], int(parts[1]), day)
             await self._ctx.cache.set(cache_key, data, ttl)
             return data
         return None
