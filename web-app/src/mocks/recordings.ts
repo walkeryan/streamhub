@@ -155,12 +155,18 @@ export const recordingHandlers = [
     if (s.rules.length >= MAX_RULES) return error(409, 'rule_limit', `A profile can have at most ${MAX_RULES} recording rules. Delete one first.`)
     const rule: RecordingRule = {
       id: newId(), profile_id: me.id, profile_name: me.name, kind: b.kind, match: b.match.trim(), channel_id: b.channel_id ?? null,
-      channel_name: channels.find((c) => c.id === b.channel_id)?.name ?? null, new_only: !!b.new_only, keep: b.keep ?? null, enabled: true, created_at: new Date().toISOString(),
+      channel_name: channels.find((c) => c.id === b.channel_id)?.name ?? null, new_only: !!b.new_only, keep: b.keep ?? null, pad_before_s: (b as RecordingRule).pad_before_s, pad_after_s: (b as RecordingRule).pad_after_s, enabled: true, created_at: new Date().toISOString(),
     }
     s.rules.push(rule)
     applyRule(s, rule)
     save(s)
     return HttpResponse.json(rule, { status: 201 })
+  }),
+  http.post(`${B}/recordings/:id/issues`, async ({ params, request }) => {
+    const row = load().recordings.find(r => r.id === params.id && r.has_file)
+    if (!row) return error(404, 'not_found', 'Recording unavailable.')
+    sessionStorage.setItem('mock.lastRecordingIssue', JSON.stringify({ id: params.id, ...await request.json() as object }))
+    return new HttpResponse(null, { status: 204 })
   }),
   http.patch(`${B}/recording-rules/:id`, async ({ params, request }) => {
     const refused = refuse(request)

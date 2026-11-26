@@ -9,6 +9,7 @@ export interface TrackInfo { id: number; label: string; active: boolean; languag
 
 export interface PlayerHandle {
   kind: EngineKind
+  programmeTime?: () => number | undefined
   destroy: () => void
   audioTracks: () => TrackInfo[]
   /** False while an engine is still discovering its initial track list. */
@@ -108,6 +109,7 @@ export async function attachSource(video: HTMLMediaElement, d: PlaybackDescripto
     return {
       kind: 'hls',
       audioReady: () => audioReady,
+      programmeTime: () => hls.playingDate?.getTime(),
       destroy: () => { pictures?.stop(); hls.destroy() },
       audioTracks: () => hls.audioTracks.map((t, i) => ({ id: i, label: t.name || t.lang || `Audio ${i + 1}`, language: t.lang, active: confirmedAudio === i })),
       setAudio: (id) => { hls.audioTrack = id },

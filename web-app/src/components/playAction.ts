@@ -31,17 +31,23 @@ export function usePlayAction() {
     pending.current = controller
     const profileId = useSession.getState().profile?.id
     let variantId = opts?.variantId
+    let allowUnverified = opts?.allowUnverifiedAudio
     if (!variantId && t.kind !== 'channel' && !opts?.catchup) {
       try {
         const choices = await playbackOptions(t.id, source?.source_id, controller.signal)
         if (controller.signal.aborted || useSession.getState().profile?.id !== profileId) return
-        if (!choices.automatic_variant_id) { go(`/title/${encodeURIComponent(t.id)}?choose=1`); return }
-        variantId = choices.automatic_variant_id
+        variantId = choices.automatic_variant_id ?? undefined
+        if (!variantId && !choices.remembered) {
+          const best = choices.options.find(o => o.preferred_audio_available) ?? choices.options[0]
+          variantId = best?.variant_id
+          allowUnverified = !!best
+        }
+        if (!variantId) { go(`/title/${encodeURIComponent(t.id)}?choose=1`); return }
       } catch (e) { if (controller.signal.aborted) return; toast(e instanceof Error ? e.message : 'Could not check audio. Choose a source from title details.', 'error'); return }
     }
     const q = new URLSearchParams()
     if (variantId) q.set('variant', variantId)
-    if (opts?.allowUnverifiedAudio && variantId) q.set('audio_choice', grantAudioConsent(t.id, variantId, { sourceId: source?.source_id, catchupProgrammeId: opts.catchup }))
+    if (allowUnverified && variantId) q.set('audio_choice', grantAudioConsent(t.id, variantId, { sourceId: source?.source_id, catchupProgrammeId: opts?.catchup }))
     // An audio track belongs to one variant's file; without the variant the index means nothing.
     if (opts?.audioTrack != null && variantId) q.set('audio', String(opts.audioTrack))
     if (source) q.set('source', source.source_id)

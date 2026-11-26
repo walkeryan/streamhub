@@ -39,4 +39,5 @@ export function useChannelRows(feed: ChannelFeed, view: { win: RowWindow; placed
 }
 
 /** The last line of a list that loads as it scrolls: more is coming, or how much there was. */
-export const channelsEnd = (more: boolean, total: number) => (more ? 'Loading more channels…' : `End of the list · ${total.toLocaleString()} channels`)
+export const channelCountLabel = (total: number) => `${total.toLocaleString()} ${total === 1 ? 'channel' : 'channels'}`
+export const channelsEnd = (more: boolean, total: number) => (more ? 'Loading more channels…' : `End of the list · ${channelCountLabel(total)}`)

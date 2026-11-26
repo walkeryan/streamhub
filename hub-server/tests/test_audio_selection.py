@@ -24,6 +24,7 @@ def resolver():
             }
         )
     )
+    r._progress = SimpleNamespace(source_preference=AsyncMock(return_value=None))
     r._catalog = SimpleNamespace(preferred_languages=AsyncMock(return_value=["eng"]))
     return r
 
@@ -63,7 +64,7 @@ async def test_same_source_variants_preserved():
     options = await r._audio_options("p", [en, fr])
     assert len(options) == 2
     assert [o["preferred_audio_available"] for o in options] == [True, False]
-    assert await r._select_audio("p", [en, fr], None, False) is en
+    assert await r._select_audio("p", [en, fr], None, False, hub_id="tmdb:movie:140607") == (en, None)
 
 
 async def test_unknown_or_foreign_audio_plays_without_asking():
@@ -71,18 +72,24 @@ async def test_unknown_or_foreign_audio_plays_without_asking():
     r = resolver()
     en, fr = row("en"), row("fr", tracks("fra"))
     for variant, consent in [(None, False), (None, True)]:
-        assert await r._select_audio("p", [en, fr], variant, consent) is en  # first by priority
-    assert await r._select_audio("p", [fr], None, False) is fr  # the only source, foreign or not
-    assert await r._select_audio("p", [en, fr], "lib:iptv:en", False) is en
+        assert await r._select_audio("p", [en, fr], variant, consent, hub_id="tmdb:movie:140607") == (
+            en,
+            None,
+        )  # first by priority
+    assert await r._select_audio("p", [fr], None, False, hub_id="tmdb:movie:140607") == (
+        fr,
+        None,
+    )  # the only source, foreign or not
+    assert await r._select_audio("p", [en, fr], "lib:iptv:en", False, hub_id="tmdb:movie:140607") == (en, None)
     # A verified preferred source still wins over the order.
     english = row("zz", tracks("eng"))
-    assert await r._select_audio("p", [en, fr, english], None, False) is english
-    assert await r._select_audio("p", [en, fr], "lib:iptv:en", True) is en
-    assert await r._select_audio("p", [en, fr], "lib:iptv:fr", True) is fr
+    assert await r._select_audio("p", [en, fr, english], None, False, hub_id="tmdb:movie:140607") == (english, None)
+    assert await r._select_audio("p", [en, fr], "lib:iptv:en", True, hub_id="tmdb:movie:140607") == (en, None)
+    assert await r._select_audio("p", [en, fr], "lib:iptv:fr", True, hub_id="tmdb:movie:140607") == (fr, None)
     with pytest.raises(NotFound):
-        await r._select_audio("p", [en, fr], "lib:iptv:other", True)
+        await r._select_audio("p", [en, fr], "lib:iptv:other", True, hub_id="tmdb:movie:140607")
     with pytest.raises(NotFound):
-        await r._select_audio("p", [en, fr], "lib:iptv:en", True, "other-source")
+        await r._select_audio("p", [en, fr], "lib:iptv:en", True, "other-source", hub_id="tmdb:movie:140607")
 
 
 async def test_disabled_source_rejected():
@@ -90,7 +97,7 @@ async def test_disabled_source_rejected():
     r._sources.rows_by_id.return_value["iptv"].enabled = False
     assert await r._audio_options("p", [row("en")]) == []
     with pytest.raises(NotFound):
-        await r._select_audio("p", [row("en")], "lib:iptv:en", True)
+        await r._select_audio("p", [row("en")], "lib:iptv:en", True, hub_id="tmdb:movie:140607")
 
 
 async def test_series_checks_episode_audio():
@@ -100,15 +107,15 @@ async def test_series_checks_episode_audio():
     episode = row("ep", tracks("fra"))
     r._next_episode = AsyncMock(return_value=episode)
     # The next episode plays even when its own audio is foreign.
-    assert await r._select_audio("p", [show], None, False) is episode
-    assert await r._select_audio("p", [show], "lib:iptv:show", True) is episode
+    assert await r._select_audio("p", [show], None, False, hub_id="tmdb:movie:140607") == (episode, None)
+    assert await r._select_audio("p", [show], "lib:iptv:show", True, hub_id="tmdb:movie:140607") == (episode, None)
 
 
 async def test_all_languages_keeps_unknown_option():
     r = resolver()
     r._catalog.preferred_languages.return_value = []
     unknown = row("en")
-    assert await r._select_audio("p", [unknown], None, False) is unknown
+    assert await r._select_audio("p", [unknown], None, False, hub_id="tmdb:movie:140607") == (unknown, None)
     assert not (await r._audio_options("p", [unknown]))[0]["audio_verified"]
 
 
@@ -184,7 +191,7 @@ async def test_the_episode_resolved_is_the_one_played_even_if_progress_moved():
     later = row("fr", tracks("fra"))
     r._next_episode = AsyncMock(side_effect=[row("en", tracks("eng")), later])
     # Progress moved while options were read: the episode played is the one asked for at resolve.
-    assert await r._select_audio("p", [show], None, False) is later
+    assert await r._select_audio("p", [show], None, False, hub_id="tmdb:movie:140607") == (later, None)
 
 
 async def test_invalid_tmdb_type_rejected_and_library_episode_has_own_progress_id():

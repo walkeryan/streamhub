@@ -6,6 +6,7 @@ import { setFocus } from './spatial'
 import { useTextEntry } from './textEntry'
 
 export interface FocusableProps {
+  id?: string
   focusKey?: string
   className?: string
   style?: CSSProperties
@@ -62,6 +63,7 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
   useImperativeHandle(outer, () => ({ focus: focusSelf, el: ref.current as HTMLElement | null }), [focusSelf, ref])
   return (
     <div
+      id={p.id}
       ref={ref}
       role={p.role ?? 'button'}
       tabIndex={-1}
@@ -77,6 +79,13 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       {...Object.fromEntries(Object.entries(p.aria ?? {}).map(([k, v]) => [`aria-${k}`, v]))}
       className={cn('fx', p.className)}
       style={p.style}
+      onKeyDown={(e) => {
+        if (e.key !== ' ' || e.target !== e.currentTarget || e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return
+        if (!['button', 'switch', 'radio', 'tab', 'menuitem'].includes(p.role ?? 'button')) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (!e.repeat && !disabledRef.current) onEnterRef.current?.()
+      }}
       onClick={async () => {
         if (disabledRef.current) return
         // A click (including touch or assistive activation) is deliberate, unlike
@@ -146,6 +155,9 @@ export function FocusGroup(p: FocusGroupProps) {
 
 /** Text input that takes DOM focus when spatially focused; Left/Right move the caret unless at an edge. */
 export function FocusableInput(p: {
+  id?: string
+  invalid?: boolean
+  describedBy?: string
   focusKey?: string
   value: string
   onChange: (v: string) => void
@@ -194,6 +206,9 @@ export function FocusableInput(p: {
       className={cn('fx field', p.className)}>
       <input
         ref={inputRef}
+        id={p.id}
+        aria-invalid={p.invalid || undefined}
+        aria-describedby={p.describedBy}
         tabIndex={-1}
         aria-label={p.label}
         type={p.type ?? 'text'}

@@ -17,13 +17,15 @@ import { RequestManagerSettings } from '../components/RequestManagerSettings'
 import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
 import { HomeNetworkSettings } from '../components/HomeNetworkSettings'
 import { useState } from 'react'
+import { ViewingAppearance } from '../components/ViewingAppearance'
+import { useHomeRows } from '../api/viewingPreferences'
 import { useProfilePreference } from '../api/profilePreferences'
-import { useSearchParams } from 'react-router'
+import { useOutletContext, useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ok, refreshMe } from '../api/client'
 import { qk, useChannelGroups, useDisclaimer, useHome, useLanguages, usePatchProfile, useSettings, useTvRelease } from '../api/hooks'
 import type { Profile } from '../api/types'
-import { Button, Chip, ErrorState, Modal } from '../components/ui'
+import { TabPanels, Button, Chip, ErrorState, Modal } from '../components/ui'
 import { Avatar } from '../components/Avatar'
 import { GlassIconButton, GlassPanel, PageHeader, SectionHeader } from '../ds'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
@@ -41,28 +43,30 @@ const TABS = [
 type Tab = (typeof TABS)[number][0]
 
 export function Settings() {
+  const { openShortcuts } = useOutletContext<{ openShortcuts: () => void }>()
   const [sp, setSp] = useSearchParams()
   const tab = (TABS.find((t) => t[0] === sp.get('tab'))?.[0] ?? 'profiles') as Tab
   useRestoreFocus(true, `set:tab:${tab}`)
   // Signed-in devices are the server's users-and-sessions model; a server without it has none to list.
   const sessions = useMe().data !== null
+  const tabs = TABS.filter(([id]) => id !== 'devices' || sessions)
   return (
     <div className="page-pad acct-page" data-testid="settings">
-      <PageHeader title="Settings" />
+      <PageHeader title="Settings"><Button focusKey="set:shortcuts" ghost icon="list" onEnter={openShortcuts}>Controls and shortcuts</Button></PageHeader>
       {/* The tabs scroll sideways on a phone rather than wrapping into a wall of chips. */}
-      <FocusGroup focusKey="set:tabs" className="chip-scroll" role="tablist">
-        {TABS.filter(([id]) => id !== 'devices' || sessions).map(([id, label]) => <Chip key={id} focusKey={`set:tab:${id}`} pressed={tab === id} onEnter={() => setSp({ tab: id }, { replace: true })} testId={`tab-${id}`}>{label}</Chip>)}
+      <FocusGroup focusKey="set:tabs" className="chip-scroll" role="tablist" label="Settings">
+        {tabs.map(([id, label]) => <Chip tab key={id} focusKey={`set:tab:${id}`} pressed={tab === id} onEnter={() => setSp({ tab: id }, { replace: true })} testId={`tab-${id}`}>{label}</Chip>)}
       </FocusGroup>
-      <div className="acct-body">
+      <TabPanels tabs={tabs.map(([id]) => `set:tab:${id}`)} active={`set:tab:${tab}`} className="acct-body">
         {tab === 'profiles' && <ProfilesTab />}
-        {tab === 'appearance' && <AppearanceTab />}
+        {tab === 'appearance' && <><AppearanceTab /><ViewingAppearance /></>}
         {tab === 'languages' && <LanguagesTab />}
         {tab === 'rows' && <RowsTab />}
         {tab === 'parental' && <ParentalTab />}
         {tab === 'playback' && <PlaybackTab />}
         {tab === 'about' && <AboutTab />}
         {tab === 'devices' && sessions && <DevicesTab />}
-      </div>
+      </TabPanels>
     </div>
   )
 }
@@ -148,9 +152,9 @@ function AppearanceTab() {
     <GlassPanel as="section" className="acct-group">
       <SectionHeader title="Theme" />
       <p className="acct-note">Themes apply immediately and are saved to {me.name}'s profile.</p>
-      <FocusGroup focusKey="theme:list" className="theme-grid">
+      <FocusGroup focusKey="theme:list" className="theme-grid" role="radiogroup" label="Theme">
         {themes.map((t) => (
-          <Focusable key={t.id} focusKey={`theme:${t.id}`} className="theme-card" role="radio" aria-pressed={me.theme_id === t.id} label={`${t.name} theme`} data-testid={`theme-${t.id}`} onEnter={() => choose(t.id, t.name)}>
+          <Focusable key={t.id} focusKey={`theme:${t.id}`} className="theme-card" role="radio" aria={{ checked: me.theme_id === t.id }} label={`${t.name} theme`} data-testid={`theme-${t.id}`} onEnter={() => choose(t.id, t.name)}>
             <div data-theme={t.id === 'adaptive' ? 'midnight' : t.id} className="theme-preview" aria-hidden="true">
               <div style={{ height: 44, borderRadius: 6, background: `linear-gradient(to top, var(--t-bg), transparent), linear-gradient(120deg, var(--t-surface-alt), var(--t-surface))`, display: 'flex', alignItems: 'flex-end', padding: 6 }}>
                 <span style={{ background: t.id === 'adaptive' ? 'hsl(280 70% 60%)' : 'var(--t-accent)', color: 'var(--t-accent-text)', fontSize: 9, fontWeight: 700, padding: '1px 8px', borderRadius: 4 }}>Play</span>
@@ -191,11 +195,9 @@ function LanguagesTab() {
 
 /* ------------------------------ home rows ------------------------------ */
 function RowsTab() {
-  // Which shelves Home has is the server's, for everyone; their order and visibility here is this browser's own.
   const admin = useCan('settings.admin')
   const home = useHome()
-  const prefs = useUi((s) => s.homePrefs)
-  const setPrefs = useUi((s) => s.setHomePrefs)
+  const { value: prefs, update: setPrefs, ready, error, retry } = useHomeRows()
   const all = home.data?.rows ?? []
   const pos = (id: string) => { const i = prefs.order.indexOf(id); return i < 0 ? 1000 : i }
   const rows = [...all].sort((a, b) => pos(a.id) - pos(b.id))
@@ -211,11 +213,12 @@ function RowsTab() {
     <>
     {admin && <HomeShelvesSettings />}
     <GlassPanel as="section" className="acct-group">
-      <SectionHeader title={admin ? 'Home rows in this browser' : 'Home rows'}
-        action={<GlassIconButton focusKey="rows:reset" icon="refresh" label="Reset to default" size="sm" onEnter={() => setPrefs({ order: [], hidden: [] })} />} />
-      <p className="acct-note">Reorder or hide rows on Home. This is saved in this browser.</p>
+      <SectionHeader title="Home rows"
+        action={<GlassIconButton focusKey="rows:reset" disabled={!ready} icon="refresh" label="Reset to default" size="sm" onEnter={() => setPrefs({ order: [], hidden: [] })} />} />
+      <p className="acct-note">Reorder or hide rows on every device that uses this profile.</p>
+      {error && <p role="alert">{error} <Button onEnter={() => void retry()}>Retry</Button></p>}
       <FocusGroup focusKey="rows:list" className="acct-list">
-        {rows.map((r) => (
+        {ready && rows.map((r) => (
           <div key={r.id} className="acct-row acct-order" data-testid="row-pref" data-hidden={prefs.hidden.includes(r.id)}>
             <span className="acct-row-main"><span className="acct-row-title"><strong>{r.title}</strong></span></span>
             <span className="acct-row-end">

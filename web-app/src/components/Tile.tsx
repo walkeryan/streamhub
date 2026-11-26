@@ -5,7 +5,7 @@ import { FeatureCard } from './FeatureCard'
 import { ProgressBar, SourceChips } from './ui'
 import { Initials, SafeImg } from './SafeImg'
 import { cn, fmtTime, hueOf, progressOf, useNow } from '../lib/util'
-import { AvailableTick, HRow, SectionHeader, StillCard } from '../ds'
+import { AvailableTick, OverflowMenu, HRow, SectionHeader, StillCard } from '../ds'
 import { useGo } from '../nav/back'
 import { tileRequest } from '../lib/requests'
 import { RequestTileStatus } from './RequestStatus'
@@ -78,7 +78,7 @@ export const MediaTile = memo(function MediaTile(p: {
             p.tile.sources.some((s) => s.playable_in_app) && <AvailableTick />
           ) : <div className="tile-badges">{p.tile.sources.length ? <TileBadge sources={p.tile.sources} /> : <span className="badge">Not available here</span>}</div>}
           {p.tile.is_favorite && <span className="tile-fav" role="img" aria-label="Favorite"><Icon name="heart" filled /></span>}
-          {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && <ProgressBar pct={p.tile.progress_pct} className="tile-progress" />}
+          {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && <ProgressBar label={`Viewing progress · ${p.tile.title}`} pct={p.tile.progress_pct} className="tile-progress" />}
         </div>
       )}
     </Focusable>
@@ -109,7 +109,7 @@ export function ChannelTile(p: { tile: TileT; scope: string; onFocusTile?: (t: T
           <span className="channel-name truncate">{t.subtitle ? `${t.subtitle} · ` : ''}{t.title}</span>
           <span className="channel-now clamp2">{t.now_playing?.title ?? 'No programme data'}</span>
         </div>
-        {pct !== null && <ProgressBar pct={pct} />}
+        {pct !== null && <ProgressBar label={`Programme progress · ${t.now_playing?.title ?? t.title}`} pct={pct} />}
       </div>
     </Focusable>
   )
@@ -172,7 +172,7 @@ function SeeAllTile({ scope, title, to, count, layout }: { scope: string; title:
 
 export function TileRow(p: {
   id: string; title: string; tiles: TileT[]; layout?: 'poster' | 'landscape' | 'hero' | 'channel'
-  onFocusTile?: (t: TileT) => void; empty?: string; presentation?: 'wide'
+  onRemove?: (t: TileT) => void; onFocusTile?: (t: TileT) => void; empty?: string; presentation?: 'wide'
   /** route of the full listing; adds a "See all" tile after the last one */
   seeAll?: string | null; count?: number
 }) {
@@ -184,7 +184,11 @@ export function TileRow(p: {
       <SectionHeader title={p.title} />
       <HRow focusKey={`row:${p.id}`} className={cn(p.presentation === 'wide' && 'feature-row')}>
         {p.tiles.map((t) =>
-          p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
+          p.onRemove ? <div className="continue-tile" key={t.id}>
+            <LandscapeTile tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
+            <div className="continue-menu"><OverflowMenu focusKey={`continue:more:${t.id}`} menuKey={`continue:menu:${t.id}`} title={t.title}
+              label={`More actions for ${t.title}`} items={[{ key: 'remove', icon: 'x', label: 'Remove from Continue Watching', onEnter: () => p.onRemove?.(t) }]} /></div>
+          </div> : p.presentation === 'wide' ? <FeatureTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} now={now} /> : layout === 'channel' || t.kind === 'channel' ? (
             <ChannelTile key={t.id} tile={t} scope={p.id} onFocusTile={p.onFocusTile} />
           ) : layout === 'landscape' ? (
             // artwork cut for a wide tile rarely carries the title, so it is always captioned (under it)

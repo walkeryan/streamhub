@@ -495,6 +495,7 @@ data class PlaybackRequest(
      * connection through its linger. Left out otherwise.
      */
     val replaces: String? = null,
+    @kotlinx.serialization.Transient val bufferAt: String? = null,
 )
 
 @Serializable
@@ -728,6 +729,7 @@ data class PlaybackOptions(
     @SerialName("stream_token") val streamToken: String,
     @SerialName("lease_id") val leaseId: String,
     val paused: Boolean = false,
+    @SerialName("position_at") val positionAt: String? = null,
     val at: String? = null,
 )
 @Serializable data class BufferSeekResult(val url: String, val window: BufferWindow)

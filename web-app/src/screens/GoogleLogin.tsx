@@ -118,8 +118,10 @@ export function LoginGate() {
   const first = config.data?.google_enabled ? 'google:signin' : config.data?.plex_enabled ? 'plex:signin' : config.data?.password_enabled ? 'password:open' : null
   useEffect(() => {
     if (!first || pending || waiting) return
-    const timer = window.setTimeout(() => void setFocus(typing ? 'password:username' : first), 50)
-    return () => window.clearTimeout(timer)
+    // Child controls are registered by the time this effect runs. A deferred
+    // focus can take the next keystroke away from a password manager or viewer.
+    if (document.activeElement instanceof HTMLInputElement) return
+    void setFocus(typing ? 'password:username' : first)
   }, [first,pending,waiting,typing])
   const plex = () => { setError(null); setBusy(true); goToPlex(returnPath()).catch((e: unknown) => { setBusy(false); setError(signInError(e, 'Plex sign-in could not be started.')) }) }
   useEffect(()=>{if(!pending)return;const timer=window.setTimeout(()=>setFocus('owner-login:cancel'),20);return()=>window.clearTimeout(timer)},[pending])

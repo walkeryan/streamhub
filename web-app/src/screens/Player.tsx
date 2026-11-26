@@ -27,6 +27,8 @@ import { SPEEDS, loadPrefs, nextSpeed, nextVolume, savePrefs, speedLabel, type P
 import { useSeekControl } from '../player/useSeekControl'
 import { chosenQuality, loadQuality, qualityOptions, saveQuality, savingData, type QualityHeight } from '../player/quality'
 import { busyHeading, busyLines } from '../player/sourceBusy'
+import { RecordingIssueDialog } from '../recordings/RecordingIssueDialog'
+import { saveLiveBookmark } from '../player/liveBookmark'
 import { LocalBufferControls } from '../player/LocalBufferControls'
 import { RewindControls } from '../player/RewindControls'
 import type { RoomSession } from '../room/session'
@@ -83,6 +85,8 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const audioTrack = audioParam !== null && /^\d{1,3}$/.test(audioParam) ? Number(audioParam) : null
   const catchup = sp.get('catchup')
   const rewindAt = sp.get('rewind')
+  const bufferAt = sp.get('buffer_at')
+  const recordingStart = id.startsWith('rec:') && sp.get('recording_start') === '1' ? 0 : undefined
   const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId, { sourceId, catchupProgrammeId: catchup, rewindAt }), [profileId, audioChoice, id, variantId, sourceId, catchup, rewindAt])
   const location = useLocation()
   // Browsing under a minimised player changes the address, not what this player plays.
@@ -119,7 +123,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   // A feed failover's switch: the channel it left, named to the server so that channel's stream is freed first.
   const [replacing, setReplacing] = useState<{ to: string; from: string } | null>(null)
   const replaces = !room && replacing?.to === id ? replacing.from : null
-  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, audioTrack, replaces }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, audioTrack, replaces])
+  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, bufferAt, startPositionMs: recordingStart, audioTrack, replaces }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, bufferAt, recordingStart, audioTrack, replaces])
   const channelAudio = useChannelAudio(req, manualChoice === selectionKey)
   // A room's audio was settled when the member joined; its stream comes from the room, without a local rewind buffer.
   const audio = room ? { ...channelAudio, enabled: false, blocked: false, request: req } : channelAudio
@@ -130,6 +134,10 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const pb = usePlayback(pictureRef, audio.request, { canvasAudio: canvas && !tv && !room ? canvasAudioRef : undefined, buffer: !room, descriptor: room?.descriptor, maxHeight: quality })
   const videoRef = pb.mediaRef
   const { desc, state } = pb
+  useEffect(() => {
+    if (pb.requiresEdition === id && !room && !mini && activeId.current === id && !isChannel)
+      navigate(`/title/${encodeURIComponent(id)}?choose=1`, { replace: true })
+  }, [pb.requiresEdition, room, mini, id, isChannel, navigate])
   const live = desc?.id === id ? !!desc.live : isChannel && !catchup && !rewindAt
   // A restart-at-offset stream: the media element starts at `offset` seconds into the title and only
   // knows what the server has produced so far; the title's length comes from the descriptor.
@@ -184,6 +192,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const [menuSection, setMenuSection] = useState<MenuSection>('all')
   const [help, setHelp] = useState(false)
   // Stream information: a panel beside the picture, not a dialog. Playback and the keys carry on.
+  const [report, setReport] = useState<{ id: string; position: number; playing: boolean } | null>(null)
   const [info, setInfo] = useState(false)
   const infoRef = useRef(false)
   infoRef.current = info
@@ -225,6 +234,10 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const mayStartRoom = useCan('rooms.create')
   // A phone's bar has two rows of 44 px targets: what does not fit moves into the settings menu.
   const phone = usePhone()
+  const [lockId, setLockId] = useState<string | null>(null)
+  const locked = lockId === id && !mini
+  useEffect(() => { if (locked) void setFocus('pt:unlock') }, [locked])
+  useEffect(() => { setLockId(null) }, [id, mini])
   const zappable = isChannel && !room
   // Someone holding a game controller is shown its buttons beside the controls.
   const padRecent = useControllerRecent()
@@ -244,6 +257,11 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     const hide = () => { if (overChrome.current) idle.current = window.setTimeout(hide, CHROME_IDLE_MS); else setUi(false) }
     idle.current = window.setTimeout(hide, CHROME_IDLE_MS)
   }, [])
+  const unlock = () => {
+    setLockId(null)
+    poke()
+    requestAnimationFrame(() => { void setFocus('pt:lock') })
+  }
   const osdTimer = useRef(0)
   const showOsd = useCallback(() => {
     setOsd(true)
@@ -581,7 +599,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   // zapping with the controls hidden keeps them hidden (poke() runs on every key)
   const hideIfHidden = useCallback((visible: boolean) => { if (!visible) hideChrome() }, [hideChrome])
   // A room never zaps: its live channel takes the keys a title does.
-  const handlers = { id, live: live && !room, titleLive: live, inRoom: !!room, canSeek, isChannel, zap, zapTo, togglePlay, run, seek, poke, showOsd, toast, hideIfHidden, mini, skip: skip?.run ?? null }
+  const handlers = { id, locked, live: live && !room, titleLive: live, inRoom: !!room, canSeek, isChannel, zap, zapTo, togglePlay, run, seek, poke, showOsd, toast, hideIfHidden, mini, skip: skip?.run ?? null }
   const apiRef = useRef(handlers)
   apiRef.current = handlers
   useEffect(() => {
@@ -589,7 +607,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     const onKey = (e: KeyboardEvent) => {
       const a = apiRef.current
       // Minimised, the keys are the page's: the bar is reached and used like any other control.
-      if (a.mini) return
+      if (a.mini || a.locked || document.querySelector('[data-testid="recording-issue"]')) return
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
       // A real volume key has set the device's volume already: the player's as well would count it twice.
@@ -705,6 +723,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const backTimer = useRef(0)
   useEffect(() => () => window.clearTimeout(backTimer.current), [])
   useBackHandler(() => {
+    if (locked) { unlock(); return true }
     if (audio.blocked || activeId.current !== id) { cancelPending(); return true }
     // A seek that has not been made yet is the first thing Back takes away.
     if (seek.cancel()) return true
@@ -774,6 +793,18 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     return () => window.clearTimeout(id2)
   }, [sleepAt, setSleep, toast, exit, videoRef])
 
+  const savePlace = useRef<() => void>(() => {})
+  savePlace.current = () => {
+    const at = pb.programmeTime()
+    if (pb.bufferWindow && pb.timeshifted && profileId && channel?.now && at != null && at >= Date.parse(channel.now.start) && at < Date.parse(channel.now.stop))
+      saveLiveBookmark(profileId, id, channel.now.start, at)
+  }
+  useEffect(() => {
+    const interval = window.setInterval(() => savePlace.current(), 5000)
+    const save = () => savePlace.current()
+    window.addEventListener('pagehide', save)
+    return () => { save(); window.removeEventListener('pagehide', save); window.clearInterval(interval) }
+  }, [])
   const pct = live && channel?.now ? progressOf(channel.now.start, channel.now.stop, now) : 0
   const loaded = (restartable ? time.produced : time.buffered).map(([from, to]): Range => [offset + from, offset + to])
   const hint = seek.pending ? seekHint(seek.pending.target - seek.pending.base) : null
@@ -833,9 +864,9 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   return (
     <div className="player" ref={rootRef} data-testid="player" data-mini={mini || undefined} data-state={audio.blocked ? 'checking-audio' : state === 'playing' && desc?.id !== id ? 'resolving' : state} data-stream-start={restartable ? desc.start_position_ms ?? 0 : undefined} role="main"
       // A finger's taps are read on the picture (below); its drags on the controls keep them up through pointerdown.
-      onPointerMove={(e) => { if (e.pointerType !== 'touch' && !mini) poke() }} onPointerDown={() => { if (!mini) poke() }} style={{ cursor: showChrome || mini ? 'default' : 'none' }}>
+      onPointerMove={(e) => { if (e.pointerType !== 'touch' && !mini) poke() }} onPointerDown={() => { if (!mini && !locked) poke() }} style={{ cursor: showChrome || mini ? 'default' : 'none' }}>
       {/* focus target for "the video itself": Up from the control bar lands here, so no hidden button keeps focus */}
-      {!mini && <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>}
+      {!mini && !locked && <Focusable focusKey="pv:video" className="sr-only fx-none" scroll={false} label={title} role="presentation"><span /></Focusable>}
       {/* The same element full screen and minimised (it keeps its place among the children): the stream never restarts. */}
       <audio ref={canvasAudioRef} hidden />
       <video ref={pictureRef} playsInline poster={NO_POSTER} loop={live && desc?.mime === 'video/webm'} style={{ objectFit: mini ? 'cover' : aspect }} data-testid="video" aria-label={title}
@@ -850,7 +881,10 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
           onTogether={mayTogether ? () => { expand(); void startTogether() } : undefined}
           onAudio={() => { expand(); openMenu('audio') }} />
       )}
-      {!mini && <>
+      {locked && <div className="player-touch-lock" data-testid="touch-locked">
+        <FocusGroup focusKey="pt:locked" boundary preferred="pt:unlock"><Button focusKey="pt:unlock" onEnter={unlock}>Unlock player controls</Button></FocusGroup>
+      </div>}
+      {!mini && !locked && <>
 
       {!audio.blocked && (state === 'resolving' || state === 'loading' || state === 'buffering' || state === 'reconnecting') && (
         <div className="grid place-items-center" style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }} role="status">
@@ -916,6 +950,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
           </div>
           {roomCtl?.top}
           <FocusGroup focusKey="pt" className="ptop-actions">
+            {(phone || (!tv && navigator.maxTouchPoints > 0)) && <GlassButton focusKey="pt:lock" icon="lock" label="Lock player controls" onEnter={() => setLockId(id)} testId="player-lock" />}
             {canMinimise && <GlassButton focusKey="pt:mini" icon="minimise" label="Minimise" title="Minimise: keep playing while you browse" onEnter={minimise} testId="player-minimise" />}
             <GlassButton focusKey="pt:back" icon="x" label={room ? 'Leave room' : 'Close player'} onEnter={leaveOrExit} testId="player-close" />
           </FocusGroup>
@@ -1005,7 +1040,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
               {!showChrome && padRecent && <PadHintRow hints={padHints({ live, zappable, room: !!room, canSeek, paused })} />}
             </div>
           </div>
-          {channel?.now && <ProgressBar pct={pct} />}
+          {channel?.now && <ProgressBar label={`Programme progress · ${channel.now.title}`} pct={pct} />}
         </div>
       )}
 
@@ -1062,6 +1097,10 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
                   {mayTogether && <Focusable focusKey="pm:together" className="pm-action" disabled={startingRoom} onEnter={() => void startTogether()} data-testid="player-together">
                     <Icon name="people" size={18} />Watch together
                   </Focusable>}
+                  {isRecording && <Focusable focusKey="pm:report" className="pm-action" onEnter={() => {
+                    setReport({ id, position: Math.max(0, Math.round((offset + (videoRef.current?.currentTime ?? 0)) * 1000)), playing: videoRef.current?.paused === false })
+                    pb.pause(); closeOverlay()
+                  }}>Report a recording issue</Focusable>}
                   <Focusable focusKey="pm:info" className="pm-action" onEnter={() => { closeOverlay(); setInfo(true) }} data-testid="player-info-btn">
                     <Icon name="info" size={18} />Stream information
                   </Focusable>
@@ -1079,6 +1118,9 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
         )
       })()}
       <ShortcutHelp open={help} live={live} onClose={() => setHelp(false)} />
+      {report?.id === id && <RecordingIssueDialog id={id.slice(4)} positionMs={report.position} onClose={() => {
+        setReport(null); if (report.playing) pb.resume(); void setFocus('pb:menu')
+      }} />}
       {info && desc?.id === id && <InfoPanel info={desc.media_info} videoRef={videoRef} streamStartS={restartable ? offset : null} downloadKbps={pb.downloadKbps} onClose={() => setInfo(false)} />}
 
       {roomCtl?.layers}

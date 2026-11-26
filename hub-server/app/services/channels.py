@@ -13,13 +13,24 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, case, func, or_, select, tuple_
+from sqlalchemy import and_, case, delete, func, or_, select, text, tuple_
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import aliased
 
 from app.adapters.language.country import channel_country, group_country
 from app.domain.groups import GROUP_SEPARATOR, group_path, split_group_path
 from app.infra.db import Database
-from app.infra.models import Channel, ChannelGroup, Favorite, Profile, Programme, Progress, Setting, Source
+from app.infra.models import (
+    Channel,
+    ChannelGroup,
+    Favorite,
+    Profile,
+    ProfileChannel,
+    Programme,
+    Progress,
+    Setting,
+    Source,
+)
 from app.services import ids
 from app.services.errors import NotFound, ServiceError
 from app.services.event_slots import (
@@ -209,26 +220,92 @@ class ChannelService:
         key = json.dumps({"p": profile_id, **params}, sort_keys=True, default=str)
         list_id = hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:16]
         async with self._db.session() as s:
-            row = await s.get(Setting, LIST_PREFIX + list_id)
             value = {
                 "profile_id": profile_id,
                 "params": params,
                 "ids": channel_ids,
                 "at": datetime.now(UTC).isoformat(),
             }
-            if row is None:
-                s.add(Setting(key=LIST_PREFIX + list_id, value=value))
-            else:
-                row.value = value
+            stmt = sqlite_insert(Setting).values(key=LIST_PREFIX + list_id, value=value)
+            await s.execute(stmt.on_conflict_do_update(index_elements=["key"], set_={"value": stmt.excluded.value}))
             await s.commit()
         return list_id
 
     async def load_list(self, list_id: str, profile_id: str) -> list[int]:
         async with self._db.session() as s:
             row = await s.get(Setting, LIST_PREFIX + list_id)
-        if row is None or not isinstance(row.value, dict) or row.value.get("profile_id") != profile_id:
-            raise NotFound("unknown list_id")
-        return [int(x) for x in row.value.get("ids") or []]
+            if row is None or not isinstance(row.value, dict) or row.value.get("profile_id") != profile_id:
+                raise NotFound("unknown list_id")
+            ids_in_list = [int(x) for x in row.value.get("ids") or []]
+            prefs = list(await s.scalars(select(ProfileChannel).where(ProfileChannel.profile_id == profile_id)))
+        hidden = {pref.channel_id for pref in prefs if pref.hidden}
+        ranks = {pref.channel_id: pref.position for pref in prefs if pref.position is not None}
+        return sorted(
+            (cid for cid in ids_in_list if cid not in hidden), key=lambda cid: (cid not in ranks, ranks.get(cid, 0))
+        )
+
+    @staticmethod
+    def _lineup_order() -> tuple[Any, ...]:
+        return (
+            ProfileChannel.position.is_(None),
+            ProfileChannel.position,
+            Channel.number,
+            ChannelGroup.sort,
+            Channel.id,
+        )
+
+    async def hidden_lineup(self, profile_id: str) -> list[dict[str, Any]]:
+        query, _ = await self._channel_query(profile_id, all_languages=True, include_personal_hidden=True)
+        async with self._db.session() as s:
+            hidden = list(
+                (await s.scalars(query.where(ProfileChannel.hidden.is_(True)).order_by(*self._lineup_order()))).all()
+            )
+        return await self.to_api(hidden, profile_id)
+
+    async def change_lineup(self, profile_id: str, hub_id: str, action: str) -> None:
+        channel = await self.channel_by_hub_id(hub_id)
+        query, _ = await self._channel_query(profile_id, all_languages=True, include_personal_hidden=action == "show")
+        async with self._db.session() as s:
+            # Reordering is relative to what another profile device most recently saved.
+            await s.execute(text("BEGIN IMMEDIATE"))
+            if action in ("hide", "show"):
+                if await s.scalar(query.where(Channel.id == channel.id)) is None:
+                    raise NotFound("channel unavailable")
+                stmt = sqlite_insert(ProfileChannel).values(
+                    profile_id=profile_id, channel_id=channel.id, hidden=action == "hide"
+                )
+                await s.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=["profile_id", "channel_id"], set_={"hidden": stmt.excluded.hidden}
+                    )
+                )
+            else:
+                ordered = list(
+                    (await s.scalars(query.with_only_columns(Channel.id).order_by(*self._lineup_order()))).all()
+                )
+                if channel.id not in ordered:
+                    raise NotFound("channel unavailable")
+                old = ordered.index(channel.id)
+                new = 0 if action == "top" else max(0, old - 1) if action == "up" else min(len(ordered) - 1, old + 1)
+                if old != new:
+                    ordered.insert(new, ordered.pop(old))
+                    # Only the ordered prefix needs positions. The untouched tail keeps the source order.
+                    stmt = sqlite_insert(ProfileChannel)
+                    await s.execute(
+                        stmt.on_conflict_do_update(
+                            index_elements=["profile_id", "channel_id"], set_={"position": stmt.excluded.position}
+                        ),
+                        [
+                            {"profile_id": profile_id, "channel_id": cid, "position": index}
+                            for index, cid in enumerate(ordered[: max(old, new) + 1])
+                        ],
+                    )
+            await s.commit()
+
+    async def reset_lineup(self, profile_id: str) -> None:
+        async with self._db.session() as s:
+            await s.execute(delete(ProfileChannel).where(ProfileChannel.profile_id == profile_id))
+            await s.commit()
 
     async def list_channels(
         self,
@@ -267,7 +344,7 @@ class ChannelService:
         )
         async with self._db.session() as s:
             total = int((await s.execute(select(func.count()).select_from(query.subquery()))).scalar_one())
-            query = query.order_by(Channel.number, ChannelGroup.sort, Channel.id)
+            query = query.order_by(*self._lineup_order())
             if offset:
                 query = query.offset(offset)
             if limit is not None:
@@ -307,6 +384,7 @@ class ChannelService:
         all_languages: bool = False,
         has_epg: bool = False,
         include_hidden: bool = False,
+        include_personal_hidden: bool = False,
     ) -> tuple[Any, list[str]]:
         prof = await self._profile(profile_id) if profile_id else None
         raw = (
@@ -325,6 +403,11 @@ class ChannelService:
             .join(Source, Source.id == Channel.source_id)
             .where(Source.enabled.is_(True))
         )
+        query = query.outerjoin(
+            ProfileChannel, and_(ProfileChannel.channel_id == Channel.id, ProfileChannel.profile_id == profile_id)
+        )
+        if not include_personal_hidden:
+            query = query.where(ProfileChannel.hidden.is_not(True))
         if not group and not include_hidden:
             query = query.where(ChannelGroup.hidden.is_(False))
             under_hidden = await self._under_hidden_parent()
@@ -422,11 +505,7 @@ class ChannelService:
         query, langs = await self._channel_query(profile_id)
         async with self._db.session() as s:
             order = list(
-                (
-                    await s.execute(
-                        query.with_only_columns(Channel.id).order_by(Channel.number, ChannelGroup.sort, Channel.id)
-                    )
-                ).scalars()
+                (await s.execute(query.with_only_columns(Channel.id).order_by(*self._lineup_order()))).scalars()
             )
         if channel_id not in order:
             return None

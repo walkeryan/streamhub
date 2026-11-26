@@ -41,7 +41,8 @@ export function bridgeOf(w: unknown): StreamHubTVBridge | null {
 
 /** What the TV is asked to play: the inputs to its own resolve (client=android_tv), never a stream address. */
 export interface ShellTitlePlay {
-  v: 1
+  v: 1 | 2
+  buffer_at?: string
   kind: 'title'
   id: string
   source_id?: string
@@ -78,6 +79,9 @@ export function titlePlay(to: string, consent: ConsentCheck): ShellTitlePlay | n
   const source = sp.get('source')
   const catchup = sp.get('catchup')
   const rewind = sp.get('rewind')
+  const buffered = sp.get('buffer_at')
+  if (buffered && id.startsWith('ch:')) { play.v = 2; play.buffer_at = buffered }
+  if (id.startsWith('rec:') && sp.get('recording_start') === '1') play.start_position_ms = 0
   if (source) play.source_id = source
   if (variant) play.variant_id = variant
   if (catchup) play.catchup_programme_id = catchup

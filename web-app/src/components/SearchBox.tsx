@@ -124,8 +124,8 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
     {canVoice && <Focusable focusKey={SEARCH_BOX.voice} className="rail-item rail-icon fx-flat rail-search-action" label={listening ? 'Stop listening' : 'Search by voice'}
       title={listening ? 'Stop listening' : 'Search by voice'} aria-pressed={listening} data-listening={listening || undefined} data-testid={page ? "search-page-voice" : "nav-search-voice"}
       onEnter={() => { if (listening) voice.stop(); else { box.submit(); voice.start() } }}><Icon name="mic" /></Focusable>}
-    {entry.shell && canVoice && (box.onSearch || listening) && <Focusable focusKey="search:type" className="rail-item fx-flat" label="Type search" onEnter={() => { focusSelf(); typeQuery() }}>Type</Focusable>}
-    <span className="sr-only" role="status">{listening ? 'Listening…' : ''}</span>
+    {entry.shell && <Focusable focusKey="search:type" className="rail-item fx-flat" label="Type search" onEnter={() => { if (!box.onSearch) box.submit(); focusSelf(); typeQuery() }}>Type</Focusable>}
+    <span className="sr-only" role="status">{listening ? 'Listening…' : entry.editing || (typing && !entry.shell) ? 'Typing' : ''}</span>
     </>
   )
 }

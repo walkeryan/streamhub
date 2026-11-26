@@ -110,3 +110,16 @@ test('mark watched and unwatched from the glass button', async ({ page }) => {
   await unwatch.click()
   await expect(page.getByRole('button', { name: 'Mark watched', exact: true })).toHaveAttribute('aria-pressed', 'false')
 })
+
+test('remembering a non-default edition saves its own selected audio track', async ({ page }) => {
+  await enter(page, '/title/tmdb%3Amovie%3A103?choose=1')
+  await page.getByRole('button', { name: 'Remember my next verified edition and audio choice' }).click()
+  await page.getByRole('button', { name: /^Audio for IPTV/ }).click()
+  await page.getByRole('dialog').last().getByRole('button', { name: /French/ }).click()
+  const saved = page.waitForRequest(req => req.method() === 'PUT' && req.url().includes('/playback/preference'))
+  await page.locator('.source-choice').filter({ hasText: 'IPTV' }).click()
+  const query = new URL((await saved).url()).searchParams
+  expect(query.get('variant_id')).toBe('mock:s_xt:tmdb:movie:103')
+  expect(query.get('audio_track')).toBe('1')
+  await expect(page).toHaveURL(/audio=1/)
+})

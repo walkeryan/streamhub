@@ -107,7 +107,7 @@ test.describe('on a 1600 by 830 window', () => {
     await expect(info(page)).toContainText('3 Cinema Classics')
     await expect(info(page).getByRole('heading')).toHaveText(await nowCells(page).nth(2).locator('.truncate').first().innerText())
     expect((await geometry(page)).top).toBe(top)
-    await info(page).getByRole('button', { name: 'Watch', exact: true }).click()
+    await info(page).getByRole('button', { name: 'Join live', exact: true }).click()
     await expect(page).toHaveURL(/\/play\/ch/)
   })
 
@@ -269,7 +269,7 @@ test.describe('on a 1600 by 830 window', () => {
     await expect(page.getByTestId('live-choice')).toHaveCount(0)
     // Search is an icon that opens a field, stays while it holds text, and clears with one small ×.
     await searchLive(page, 'Metro')
-    await expect(page.getByText('1 channels', { exact: true })).toBeVisible()
+    await expect(page.getByText('1 channel', { exact: true })).toBeVisible()
     await page.getByTestId('guide').getByRole('button', { name: '2 Metro Sports 1', exact: true }).hover()
     await expect(page.getByLabel('Search channels or number')).toHaveValue('Metro')
     const clear = page.getByRole('button', { name: 'Clear search', exact: true })
@@ -300,7 +300,7 @@ test('below 1100 px the details are one line over the grid that opens the rest',
   const sheet = page.getByTestId('guide-sheet')
   await expect(sheet.getByRole('heading')).toHaveText(title)
   await expect(sheet).toContainText('Fixture programme.')
-  await expect(sheet.getByRole('button', { name: 'Watch', exact: true })).toHaveAttribute('data-focused', 'true')
+  await expect(sheet.getByRole('button', { name: 'Join live', exact: true })).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Escape')
   await expect(sheet).toHaveCount(0)
   await expect(line).toHaveAttribute('data-focused', 'true')
@@ -371,4 +371,24 @@ test.describe('on a phone', () => {
     await expect(options.getByRole('button', { name: 'With schedules', exact: true })).toHaveAttribute('aria-pressed', 'true')
     expect(await fits(page)).toBe(true)
   })
+})
+
+test('a programme shows only available entry points and Resume opens its saved buffer time', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 830 })
+  const checked = page.waitForResponse(r => new URL(r.url()).pathname.endsWith('/channels/entry'))
+  await enter(page)
+  const response = await checked
+  expect(response.ok()).toBe(true)
+  const query = new URL(response.url()).searchParams
+  const id = query.get('channel_id')!, start = query.get('start')!
+  const resume = new Date(Date.parse(start) + 20_000).toISOString()
+  await expect(info(page).getByRole('button', { name: 'Join live' })).toBeVisible()
+  await expect(info(page).getByRole('button', { name: /Start over|Resume/ })).toHaveCount(0)
+  await page.evaluate(({ id, start, resume }) => {
+    sessionStorage.setItem('mock.live.entries', JSON.stringify({ [`${id}|${start}`]: { buffer_start: start, buffer_resume: resume } }))
+  }, { id, start, resume })
+  await page.reload()
+  await expect(info(page).getByRole('button', { name: /Start over/ })).toBeVisible()
+  await info(page).getByRole('button', { name: /Resume/ }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('buffer_at')).toBe(resume)
 })

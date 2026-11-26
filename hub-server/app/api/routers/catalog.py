@@ -7,9 +7,10 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request, Response
+from pydantic import AwareDatetime
 
 from app.api import schemas as S
-from app.api.deps import C, P, SourcesAdmin
+from app.api.deps import C, P, SourcesAdmin, require
 from app.api.policy_route import PolicyCatalogRoute
 from app.services import title_extras as extras
 from app.services.adult import adult_scope, require_adult
@@ -218,10 +219,18 @@ async def title(id: str, c: C, p: P) -> dict[str, Any]:
     await require_watch(c.db, p.permissions, id)
     # Opening a title is when the user linked to the library server's account picks up what
     # they watched there (see ``ProgressService.merge_account_state``); nobody else asks it.
-    await c.progress.merge_account_state(p.profile_id, await _title_rows(c, id))
+    rows = await _title_rows(c, id)
+    await c.progress.merge_account_state(p.profile_id, rows)
     # The rating ceiling answers first, in its own words; then the adult lock, before anything is returned.
     detail = await c.catalog.detail(id, p.profile_id)
     await require_adult(c.db, p, id)
+    progress = await c.progress.get(
+        p.profile_id,
+        id,
+        *(c.catalog.item_hub_id(row) for row in rows),
+        *(f"lib:{row.source_id}:{row.ext_id}" for row in rows),
+    )
+    detail["resume_position_ms"] = progress.position_ms if progress and not progress.completed else 0
     return await c.requests.annotate_detail(p, detail)
 
 
@@ -465,6 +474,52 @@ async def channels(
     return await c.recorder.annotate(p, listed)
 
 
+@router.get("/channels/entry", response_model=S.LiveProgrammeEntry, tags=["live"])
+async def programme_entry(
+    channel_id: str,
+    start: AwareDatetime,
+    c: C,
+    p: Annotated[Principal, require("watch.live")],
+    bookmark: AwareDatetime | None = None,
+) -> dict[str, Any]:
+    channel = await c.playback._authorized_channel(p.profile_id, channel_id)
+    current = (await c.channels.to_api([channel], p.profile_id))[0].get("now")
+    if not current or current["start"] != start:
+        return {}
+    await c.content_policy.require(p.profile_id, channel_id, at=start)
+    bookmark = bookmark or c.proxy.dvr.bookmarks.get(p.profile_id)
+    if bookmark is not None and not start <= bookmark < current["stop"]:
+        bookmark = None
+    first, resume = await c.proxy.retained_positions(channel_id, [start, bookmark])
+    recording_id = await c.recorder.entry_recording(p, channel_id, start)
+    progress = await c.progress.get(p.profile_id, "rec:" + recording_id) if recording_id else None
+    return {
+        "recording_id": recording_id,
+        "recording_resume_ms": progress.position_ms
+        if progress and not progress.completed and progress.position_ms > 0
+        else None,
+        "buffer_start": start if first else None,
+        "buffer_resume": bookmark if resume else None,
+    }
+
+
+@router.get("/channels/lineup/hidden", response_model=list[S.Channel], tags=["live"])
+async def hidden_lineup(c: C, p: Annotated[Principal, require("watch.live")]) -> list[dict[str, Any]]:
+    return await c.channels.hidden_lineup(p.profile_id)
+
+
+@router.post("/channels/lineup", status_code=204, tags=["live"])
+async def change_lineup(body: S.LineupChange, c: C, p: Annotated[Principal, require("watch.live")]) -> Response:
+    await c.channels.change_lineup(p.profile_id, body.channel_id, body.action)
+    return Response(status_code=204)
+
+
+@router.delete("/channels/lineup", status_code=204, tags=["live"])
+async def reset_lineup(c: C, p: Annotated[Principal, require("watch.live")]) -> Response:
+    await c.channels.reset_lineup(p.profile_id)
+    return Response(status_code=204)
+
+
 @router.get("/channels/groups", response_model=list[S.ChannelGroup], tags=["live"])
 async def channel_groups(
     c: C,
@@ -552,13 +607,22 @@ async def watchlist(c: C, p: P, include_adult: IncludeAdult = False) -> list[dic
 
 @router.put("/watchlist", status_code=204, tags=["user"])
 async def put_watchlist(body: S.WatchlistPut, c: C, p: P) -> Response:
-    await c.watchlist.put(p.profile_id, body.id)
+    await c.watchlist.put(p.profile_id, body.id, playable=bool(await c.home.watchlist_audio(p.profile_id, body.id)))
     return Response(status_code=204)
 
 
 @router.delete("/watchlist", status_code=204, tags=["user"])
 async def delete_watchlist(c: C, p: P, id: str) -> Response:
     await c.watchlist.delete(p.profile_id, id)
+    return Response(status_code=204)
+
+
+@router.put("/history/continue-watching", status_code=204, tags=["user"])
+async def set_continue_hidden(c: C, p: P, id: str, hidden: bool) -> Response:
+    await require_watch(c.db, p.permissions, id)
+    await require_adult(c.db, p, id)
+    await c.content_policy.require(p.profile_id, id)
+    await c.progress.hide_from_continue(p.profile_id, id, hidden)
     return Response(status_code=204)
 
 

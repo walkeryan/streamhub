@@ -12,6 +12,13 @@ import { adultUnlocked, holds, kindOfBody, mockProfile, ownProfile, peopleHandle
 import { feedAlternates, sportsChannels, sportsEvents, sportsNetworks } from './sports'
 
 const B = '/api/v1'
+const lineupKey = (id: string) => `mock.lineup.${id}`
+function lineup(profile: string): { order: string[]; hidden: string[] } {
+  const raw = sessionStorage.getItem(lineupKey(profile))
+  return raw ? JSON.parse(raw) : { order: channels.map(c => c.id), hidden: [] }
+}
+const editionChoices = new Map<string, { variant: string; track: number | null }>()
+const hiddenContinue = new Set<string>()
 const accepted = new Set<string>(JSON.parse(sessionStorage.getItem('mock.accepted') ?? '[]') as string[])
 const srcs: Source[] = [...sources]
 let settings = { tmdb_api_key_set: false, region: 'US', sleep_timer_min: null as number | null, epg_refresh_hours: 12, transcode_hw: 'none', proxy_mode: 'auto', home_public_address: false }
@@ -151,6 +158,14 @@ export const handlers = [
   }),
   http.get(`${B}/playback/alternates`, ({ request }) => HttpResponse.json(feedAlternates(new URL(request.url).searchParams.get('id') ?? ''))),
   http.get(`${B}/playback/rewind`, () => HttpResponse.json({ mode: 'unavailable', advertised_start: null, advertised_end: null, verified: false, recording_enabled: false, granularity_seconds: 60, reason: 'Fixture has no archive.' })),
+  http.put(`${B}/playback/preference`, ({ request }) => {
+    const query = new URL(request.url).searchParams
+    const key = `${currentProfileId(request)}|${query.get('id')}`
+    const variant = query.get('variant_id')
+    if (variant) editionChoices.set(key, { variant, track: query.has('audio_track') ? Number(query.get('audio_track')) : null })
+    else editionChoices.delete(key)
+    return new HttpResponse(null, { status: 204 })
+  }),
   http.get(`${B}/playback/options`, ({ request }) => {
     const id = new URL(request.url).searchParams.get('id') ?? ''
     // Explicit verified-audio fixtures, never a production inference from a name.
@@ -167,11 +182,22 @@ export const handlers = [
       { index: 1, language: 'fra', codec: 'aac', channels: 2, title: null, default: false },
     ] : []
     const options: components['schemas']['PlaybackOption'][] = (tile?.sources ?? []).filter((s) => s.playable_in_app).map((s) => ({ variant_id: `mock:${s.source_id}:${id}`, source_id: s.source_id, source_name: s.name, provider_label: tile?.title ?? id, kind: tile?.kind, audio_languages: audio_tracks.length ? ['eng', 'fra'] : ['eng'], default_audio_language: 'eng', audio_verified: true, audio_evidence: audio_tracks.length ? 'media_probe' : 'audio_track_metadata', preferred_audio_available: true, audio_tracks, preferred_audio_track: audio_tracks.length ? 0 : null }))
-    return HttpResponse.json({ id, preferred_languages: ['eng'], options, automatic_variant_id: options[0]?.variant_id ?? null, selection_required: false })
+    const remembered = editionChoices.get(`${currentProfileId(request)}|${id}`)
+    const chosen = remembered ? options.find(o => o.variant_id === remembered.variant) : options[0]
+    return HttpResponse.json({ id, preferred_languages: ['eng'], options, automatic_variant_id: chosen?.variant_id ?? null, selection_required: !!remembered && !chosen, remembered: !!remembered, remembered_audio_track: remembered?.track ?? null })
   }),
   http.get(`${B}/auth/config`, () => HttpResponse.json({ google_enabled: false, google_required: false })),
   http.get(`${B}/health`, () => HttpResponse.json({ ok: true })),
   http.get(`${B}/profiles/:id/prefs`, ({ params }) => HttpResponse.json(JSON.parse(sessionStorage.getItem(`mock.prefs.${params.id}`) ?? '{}'))),
+  http.patch(`${B}/profiles/:id/prefs`, async ({ params, request }) => {
+    const key = `mock.prefs.${params.id}`
+    const previous = JSON.parse(sessionStorage.getItem(key) ?? '{}')
+    const changes = await request.json() as Record<string, unknown>
+    const onlyMissing = new URL(request.url).searchParams.get('only_missing') === 'true'
+    const prefs = onlyMissing ? { ...changes, ...previous } : { ...previous, ...changes }
+    sessionStorage.setItem(key, JSON.stringify(prefs))
+    return HttpResponse.json(prefs)
+  }),
   http.put(`${B}/profiles/:id/prefs`, async ({ params, request }) => {
     const document = await request.json()
     sessionStorage.setItem(`mock.prefs.${params.id}`, JSON.stringify(document))
@@ -262,7 +288,19 @@ export const handlers = [
     { key: 'disney', name: 'Disney+', web_url: 'https://www.disneyplus.com/' },
   ])),
 
-  http.get(`${B}/home`, async () => { await delay(120); return HttpResponse.json(homeRows(homeShelves())) }),
+  http.put(`${B}/history/continue-watching`, ({ request }) => {
+    const query = new URL(request.url).searchParams
+    const key = `${currentProfileId(request)}|${query.get('id')}`
+    if (query.get('hidden') === 'true') hiddenContinue.add(key)
+    else hiddenContinue.delete(key)
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.get(`${B}/home`, async ({ request }) => {
+    await delay(120)
+    const home = homeRows(homeShelves())
+    for (const row of home.rows) if (row.id === 'continue_watching') row.tiles = row.tiles.filter(t => !hiddenContinue.has(`${currentProfileId(request)}|${t.id}`))
+    return HttpResponse.json(home)
+  }),
   http.get(`${B}/search`, async ({ request }) => {
     const params = new URL(request.url).searchParams
     const q = (params.get('q') ?? '').trim().toLowerCase()
@@ -421,6 +459,27 @@ export const handlers = [
     return HttpResponse.json({ tiles: list.slice((page - 1) * size, page * size), page, page_size: size, has_more: page * size < list.length, total: list.length })
   }),
 
+  http.get(`${B}/channels/entry`, ({ request }) => {
+    const query = new URL(request.url).searchParams
+    const saved = JSON.parse(sessionStorage.getItem('mock.live.entries') ?? '{}') as Record<string, components['schemas']['LiveProgrammeEntry']>
+    return HttpResponse.json(saved[`${query.get('channel_id')}|${query.get('start')}`] ?? {})
+  }),
+  http.get(`${B}/channels/lineup/hidden`, ({ request }) => HttpResponse.json(channels.filter(c => lineup(currentProfileId(request)).hidden.includes(c.id)).map(withNowNext))),
+  http.post(`${B}/channels/lineup`, async ({ request }) => {
+    const pid = currentProfileId(request), value = lineup(pid)
+    const { channel_id: id, action } = await request.json() as { channel_id: string; action: string }
+    const index = value.order.indexOf(id)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    if (action === 'hide') value.hidden = [...new Set([...value.hidden, id])]
+    else if (action === 'show') value.hidden = value.hidden.filter(c => c !== id)
+    else {
+      value.order.splice(index, 1)
+      value.order.splice(action === 'top' ? 0 : Math.max(0, index + (action === 'up' ? -1 : 1)), 0, id)
+    }
+    sessionStorage.setItem(lineupKey(pid), JSON.stringify(value))
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${B}/channels/lineup`, ({ request }) => { sessionStorage.removeItem(lineupKey(currentProfileId(request))); return new HttpResponse(null, { status: 204 }) }),
   http.get(`${B}/channels`, async ({ request }) => {
     const u = new URL(request.url)
     const group = u.searchParams.get('group')
@@ -431,7 +490,8 @@ export const handlers = [
     const pid = currentProfileId(request)
     const langs = lang === 'all' ? [] : lang ? lang.split(',') : profiles.find((p) => p.id === pid)?.languages ?? []
     const selected = group ? groupPaths(group) : null
-    const list = channels
+    const personal = lineup(pid)
+    const list = personal.order.flatMap(id => channels.find(c => c.id === id) ?? []).filter(c => !personal.hidden.includes(c.id))
       .filter((c) => countryMatches(c.country, country) && !groupHidden(c.group) && (!selected || selected.has(c.group)) && (!langs.length || langs.includes(c.language)) && (!favs || fav.has(c.id)) && (!q || c.name.toLowerCase().includes(q) || String(c.number) === q))
 
     const offset = Number(u.searchParams.get('offset') ?? 0), limit = Number(u.searchParams.get('limit') ?? list.length)
@@ -531,8 +591,9 @@ export const handlers = [
   }),
   // A stop at the end marks a title watched, a stop at the start unwatched, as the server reads them.
   http.post(`${B}/playback/progress`, async ({ request }) => {
-    const b = (await request.json()) as { id: string; position_ms: number; duration_ms?: number | null; state: string }
-    if (b.state === 'stopped' && b.position_ms <= 0) delete progress[b.id]
+    const b = (await request.json()) as { id: string; watched?: boolean; position_ms: number; duration_ms?: number | null; state: string }
+    if (b.watched === true) progress[b.id] = { pos: 1, dur: 1 }
+    else if (b.state === 'stopped' && b.position_ms <= 0) delete progress[b.id]
     else if (b.state === 'stopped' && b.duration_ms && b.position_ms >= b.duration_ms) progress[b.id] = { pos: b.duration_ms, dur: b.duration_ms }
     return new HttpResponse(null, { status: 204 })
   }),

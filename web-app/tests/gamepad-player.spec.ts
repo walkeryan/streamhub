@@ -158,12 +158,12 @@ test('the shortcut sheet lists the controller; the hint row and the sheet fit a 
   await page.getByTestId('player-keys-btn').click()
   const sheet = page.getByTestId('player-shortcuts')
   await expect(sheet).toBeVisible()
+  await expect(sheet).toContainText('PgUp')
+  await sheet.getByRole('tab', { name: 'Controller' }).click()
   const pad = sheet.getByTestId('controller-help')
   await expect(pad).toContainText('Controller')
   for (const text of ['Select', 'Play or pause', 'Stream information', 'Menu: audio, subtitles, quality and more', 'Back or forward 10 seconds', 'Back or forward 30 seconds', 'volume']) await expect(pad).toContainText(text)
   await expect(pad).not.toContainText('Previous or next channel')
-  // The keyboard's Page keys are listed with the other keys.
-  await expect(sheet).toContainText('PgUp')
   for (const size of [{ width: 1920, height: 1080 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(size)
     expect(await noSideScroll(page)).toBe(true)

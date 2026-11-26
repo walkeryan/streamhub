@@ -48,7 +48,7 @@ test('record a programme from the guide, see it in Upcoming, and cancel it', asy
   await expect(page.getByTestId('guide-recording')).toHaveText('Will record')
 
   await openMore(page, 'Recordings')
-  await expect(page.getByTestId('recordings-tab-upcoming')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('recordings-tab-upcoming')).toHaveAttribute('aria-selected', 'true')
   const row = page.getByTestId('recording-row')
   await expect(row).toHaveCount(1)
   await expect(row).toContainText(title)
@@ -169,7 +169,7 @@ test('keyboard only: walk Upcoming, Recorded and Rules', async ({ page }) => {
   // Recorded: finished ones play; a failed or missed one says why.
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('recordings-tab-recorded')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('recordings-tab-recorded')).toHaveAttribute('aria-selected', 'true')
   const rows = page.getByTestId('recording-row')
   await expect(rows).toHaveCount(4)
   await expect(rows.filter({ hasText: 'Recording failed' }).getByTestId('recording-reason')).toHaveText('The disk fell below the free space the server keeps.')

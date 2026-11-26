@@ -81,9 +81,9 @@ test('the results page has no filters, chips or notes: sections of results and n
   await expect(screen.getByRole('textbox')).toHaveCount(0)
   await expect(screen.locator('.chip')).toHaveCount(0)
   await expect(screen.getByRole('button', { name: /language|filter|sort|source|room|popular/i })).toHaveCount(0)
-  await expect(screen.getByRole('heading', { level: 1 })).toHaveCount(0)
-  // The only buttons are "Show more"; every other control is a result.
-  for (const button of await screen.getByRole('button').all()) await expect(button).toHaveText('Show more')
+  await expect(screen.getByRole('heading', { name: 'Search', level: 1 })).toHaveCount(1)
+  await expect(screen.getByRole('button', { name: /^More actions for / }).first()).toBeVisible()
+  for (const button of await screen.getByRole('button').all()) await expect(button).toHaveAccessibleName(/^(More actions for |Show more)/i)
   await expect(screen.getByText(/coverage|metadata|not in your library|type at least/i)).toHaveCount(0)
   // Results start right under the bar.
   const bar = await rect(page.getByTestId('rail'))
@@ -394,7 +394,7 @@ test('Tab walks the bar into the results in page order, and types in the box whe
     stops.push((await focused(page).getAttribute('data-testid')) ?? '')
     if (stops.at(-1) === 'nav-search') break
   }
-  expect(stops).toEqual(['search-channel', 'tile', 'nav-search'])
+  expect(stops).toEqual(['search-channel', 'tile', 'search-result-actions', 'nav-search'])
   await expect(page.getByTestId('nav-search')).toHaveAttribute('data-focused', 'true')
   await expect(searchBox(page)).toBeFocused()
   await page.keyboard.press('Control+a')
@@ -564,18 +564,18 @@ for (const form of ['desktop', 'phone'] as const) {
   })
 }
 
-async function installVoiceBridge(page: Page) {
-  await page.addInitScript(() => {
+async function installVoiceBridge(page: Page, inlineVoice = true) {
+  await page.addInitScript((inline) => {
     Object.assign(window, { StreamHubTV: {
       play: () => true, signedOut() {}, deliverToken() {},
-      capabilities: () => JSON.stringify({ voice_search: true, inline_voice_search: true }),
+      capabilities: () => JSON.stringify({ voice_search: true, inline_voice_search: inline }),
       message: (raw: string) => {
         const m = JSON.parse(raw)
         if (m.kind === 'voice_command') sessionStorage.setItem('test.voice', m.command)
         return true
       },
     } })
-  })
+  }, inlineVoice)
 }
 
 test('physical typing takes over TV voice search and keeps multiword input across query updates', async ({ page }) => {
@@ -656,4 +656,118 @@ test('an actor opens their movies and TV series and Back returns to the query', 
   await expect(page.getByRole('heading', { name: 'No titles on this page' })).toBeVisible()
   await page.goBack()
   await expect(page.getByRole('link', { name: 'Casey Vale' })).toBeVisible()
+})
+
+test('a result can be saved and removed without losing the query, scroll or opener', async ({ page }) => {
+  await enter(page, '/search?q=harbor')
+  const opener = page.getByRole('button', { name: 'More actions for Harbor Lights', exact: true })
+  await opener.scrollIntoViewIfNeeded()
+  const top = await page.evaluate(() => scrollY)
+  await opener.click()
+  const menu = page.getByRole('menu', { name: 'More actions for Harbor Lights' })
+  const action = menu.getByRole('menuitem', { name: /^(Add to|Remove from) My List$/ })
+  await expect(action).toBeVisible()
+  const savedBefore = (await action.innerText()).startsWith('Remove')
+  await action.click()
+  await expect(page.getByRole('status').filter({ hasText: savedBefore ? 'Harbor Lights removed from My List' : 'Harbor Lights added to My List' })).toBeVisible()
+  await expect(opener).toBeFocused()
+  await expect(page).toHaveURL(/search\?q=harbor$/)
+  expect(await page.evaluate(() => scrollY)).toBe(top)
+  await opener.press('Space')
+  await menu.getByRole('menuitem', { name: savedBefore ? 'Add to My List' : 'Remove from My List' }).click()
+  await expect(opener).toBeFocused()
+})
+
+test('TV viewers can choose typing directly from Home without starting the microphone', async ({ page }) => {
+  await installVoiceBridge(page)
+  await enter(page)
+  await page.getByRole('button', { name: 'Type search', exact: true }).click()
+  await expect(searchBox(page)).toBeFocused()
+  await expect(searchBox(page)).toBeEditable()
+  await page.keyboard.type('Harbor Lights')
+  await expect(searchBox(page)).toHaveValue('Harbor Lights')
+  await expect(page).toHaveURL(/search\?q=Harbor%20Lights$/)
+  expect(await page.evaluate(() => sessionStorage.getItem('test.voice'))).toBeNull()
+})
+
+test('Search has a named phone landmark, page title and heading', async ({ page }) => {
+  await page.setViewportSize(PHONE.viewport)
+  await enter(page, '/search')
+  await expect(page).toHaveTitle('Search · StreamHub')
+  const search = page.getByRole('main', { name: 'Search' })
+  await expect(search.getByRole('heading', { level: 1, name: 'Search', exact: true })).toBeAttached()
+  await expect(search.getByRole('textbox', { name: 'Search', exact: true })).toBeVisible()
+})
+
+test('settings help describes three input methods and returns focus to its opener', async ({ page }) => {
+  await enter(page, '/settings?tab=appearance')
+  const tab = page.getByRole('tab', { name: 'Appearance' })
+  await expect(tab).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tabpanel', { name: 'Appearance' })).toBeVisible()
+  const radios = page.getByRole('radiogroup', { name: 'Theme' })
+  await expect(radios.getByRole('radio', { checked: true })).toHaveCount(1)
+  const oled = page.getByTestId('theme-oled')
+  await oled.press('Space')
+  await expect(oled).toHaveAttribute('aria-checked', 'true')
+  await expect(radios.getByRole('radio', { checked: true })).toHaveCount(1)
+  for (const control of await page.getByRole('tablist', { name: 'Settings' }).getByRole('tab').all()) {
+    const pair = await control.evaluate(el => document.getElementById(el.getAttribute('aria-controls')!)?.getAttribute('aria-labelledby') === el.id)
+    expect(pair).toBe(true)
+  }
+  const opener = page.getByRole('button', { name: 'Controls and shortcuts' })
+  await opener.click()
+  const help = page.getByRole('dialog', { name: 'Controls and shortcuts' })
+  await help.getByRole('tab', { name: 'Touch' }).click()
+  await expect(help.getByRole('tabpanel', { name: 'Touch' })).toContainText('double-tap the left half')
+  await help.getByRole('tab', { name: 'Remote' }).click()
+  await expect(help.getByRole('tabpanel', { name: 'Remote' })).toContainText('Back')
+  await page.keyboard.press('Escape')
+  await expect(opener).toBeFocused()
+  await page.keyboard.press('Shift+?')
+  await expect(help).toBeVisible()
+  await help.getByRole('tab', { name: 'Keyboard' }).click()
+  await expect(help.getByRole('tabpanel', { name: 'Keyboard' })).toContainText('Type a search')
+})
+
+test('source labels focus their inputs and validation describes and focuses the first error', async ({ page }) => {
+  await enter(page, '/sources', 'owner')
+  await page.getByRole('button', { name: 'Add Jellyfin' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Add Jellyfin' })
+  await dialog.locator('label').filter({ hasText: 'Password' }).click()
+  await expect(dialog.getByLabel('Password')).toBeFocused()
+  await dialog.getByRole('button', { name: 'Add source' }).click()
+  const name = dialog.getByRole('textbox', { name: 'Name', exact: true })
+  await expect(name).toBeFocused()
+  await expect(name).toHaveAttribute('aria-invalid', 'true')
+  await expect(name).toHaveAccessibleDescription('Give the source a name')
+})
+
+
+test('a TV without inline voice offers a focused editable keyboard action', async ({ page }) => {
+  await installVoiceBridge(page, false)
+  await enter(page)
+  await expect(page.getByRole('button', { name: 'Search by voice' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Type search' }).click()
+  await expect(searchBox(page)).toBeEditable()
+  await expect(searchBox(page)).toBeFocused()
+  await expect(page.getByRole('status').filter({ hasText: 'Typing' })).toBeAttached()
+})
+
+test('Space toggles each service state and viewing progress announces its subject', async ({ page }) => {
+  await enter(page, '/sources', 'owner')
+  const service = page.getByRole('switch', { name: 'Netflix', exact: true })
+  await expect(service).toBeVisible()
+  const before = await service.getAttribute('aria-checked')
+  expect(['true', 'false']).toContain(before)
+  await service.press('Space')
+  await expect(service).toHaveAttribute('aria-checked', before === 'true' ? 'false' : 'true')
+  await service.press('Space')
+  await expect(service).toHaveAttribute('aria-checked', before!)
+  await page.goto('/')
+  const bars = page.getByRole('progressbar')
+  await expect(bars.first()).toBeAttached()
+  for (const bar of await bars.all()) {
+    await expect(bar).toHaveAccessibleName(/(Programme|Viewing) progress · .+/)
+    await expect(bar).toHaveAttribute('aria-valuenow', /^\d+$/)
+  }
 })

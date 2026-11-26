@@ -9,6 +9,7 @@ import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/
 import { Icon } from '../components/Icon'
 import { GlassIconButton, PageHeader, Section } from '../ds'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
+import { setFocus } from '../nav/spatial'
 import { useRestoreFocus } from '../nav/back'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
@@ -143,7 +144,7 @@ export function Sources() {
               <FocusGroup key={svc.key} focusKey={`svc:${svc.key}`} className="svc-card">
                 <b>{svc.name}</b>
                 <div className="acct-chips">
-                  <Focusable focusKey={`svc:${svc.key}:toggle`} className="chip fx-flat" aria-pressed={on} role="switch" data-testid={`svc-${svc.key}`} label={`${svc.name} ${on ? 'on' : 'off'}`} onEnter={() => toggleService(svc)}>{on ? 'On' : 'Off'}</Focusable>
+                  <Focusable focusKey={`svc:${svc.key}:toggle`} className="chip fx-flat" aria={{ checked: on }} role="switch" data-testid={`svc-${svc.key}`} label={svc.name} onEnter={() => toggleService(svc)}>{on ? 'On' : 'Off'}</Focusable>
                   <Focusable focusKey={`svc:${svc.key}:test`} className="chip fx-flat" label={`Test link for ${svc.name}`} onEnter={() => { const u = webUrl(svc.key); if (u) window.open(u, '_blank', 'noopener') }}>Test link</Focusable>
                 </div>
               </FocusGroup>
@@ -232,6 +233,8 @@ function SourceForm({ kind, onClose, submit, onNeedGate }: { kind: 'jellyfin' | 
     const r = schemas[kind].safeParse(v)
     if (!r.success) {
       setErrs(Object.fromEntries(r.error.issues.map((i) => [String(i.path[0]), i.message])))
+      const first = r.error.issues[0]?.path[0]
+      if (typeof first === 'string') void setFocus(`f:${first}`)
       return
     }
     setErrs({})
@@ -249,8 +252,8 @@ function SourceForm({ kind, onClose, submit, onNeedGate }: { kind: 'jellyfin' | 
   const field = (k: string, label: string, opts: { type?: string; placeholder?: string; first?: boolean } = {}) => (
     <div className="flex flex-col gap-1">
       <label className="acct-kicker" htmlFor={`f-${k}`}>{label}</label>
-      <FocusableInput focusKey={opts.first ? 'f:name' : `f:${k}`} label={label} type={opts.type} placeholder={opts.placeholder} value={v[k] ?? ''} onChange={set(k)} onSubmit={() => void go()} />
-      {errs[k] && <span role="alert" className="acct-small acct-error">{errs[k]}</span>}
+      <FocusableInput id={`f-${k}`} invalid={!!errs[k]} describedBy={errs[k] ? `f-error-${k}` : undefined} focusKey={opts.first ? 'f:name' : `f:${k}`} label={label} type={opts.type} placeholder={opts.placeholder} value={v[k] ?? ''} onChange={set(k)} onSubmit={() => void go()} />
+      {errs[k] && <span id={`f-error-${k}`} role="alert" className="acct-small acct-error">{errs[k]}</span>}
     </div>
   )
   const onFile = async (f: File | undefined) => {

@@ -253,6 +253,6 @@ test.describe('as an admin', () => {
 test('settings: a viewer does not get the request manager section', async ({ page }) => {
   await signIn(page)
   await page.goto('/settings?tab=playback')
-  await expect(page.getByTestId('tab-playback')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('tab-playback')).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('request-manager')).toHaveCount(0)
 })

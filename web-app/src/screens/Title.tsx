@@ -54,6 +54,9 @@ function TitleDetails({ id }: { id: string }) {
   const navigate = useNavigate()
   const audio = usePlaybackOptions(t?.kind !== 'channel' && t?.sources.some((s) => s.playable_in_app) ? id : undefined)
   // null until the viewer picks one: the server then plays the preferred language, else the file's default.
+  const [editionTracks, setEditionTracks] = useState<Record<string, number>>({})
+  const [rememberEdition, setRememberEdition] = useState(false)
+  const [savingEdition, setSavingEdition] = useState(false)
   const [pickedTrack, setPickedTrack] = useState<number | null>(null)
   const qc = useQueryClient()
   const watchlist = useWatchlist()
@@ -146,7 +149,8 @@ function TitleDetails({ id }: { id: string }) {
   const onWatchlist = (watchlist.data ?? []).some((w) => w.id === t.id)
   const pct = t.progress_pct ?? 0
   const watched = pct >= 100
-  const left = pct > 0 && pct < 100 && t.runtime_min ? Math.max(1, Math.round(t.runtime_min * (1 - pct / 100))) : null
+  const inProgress = (pct > 0 || (t.resume_position_ms ?? 0) > 0) && !watched
+  const left = inProgress && pct > 0 && t.runtime_min ? Math.max(1, Math.round(t.runtime_min * (1 - pct / 100))) : null
   const canPlay = inApp.length > 0
   const requestShown = requestOf(t)
 
@@ -154,13 +158,15 @@ function TitleDetails({ id }: { id: string }) {
   const options = audio.data?.options ?? []
   const trackOption = t.kind === 'channel' ? undefined : options.find((o) => o.variant_id === audio.data?.automatic_variant_id) ?? (options.length === 1 ? options[0] : undefined)
   const tracks = trackOption?.audio_tracks ?? []
-  const shownTrack = pickedTrack ?? initialTrack(tracks, trackOption?.preferred_audio_track)
+  const shownTrack = pickedTrack ?? audio.data?.remembered_audio_track ?? initialTrack(tracks, trackOption?.preferred_audio_track)
   const playing = tracks.find((track) => track.index === shownTrack)
-  const playLabel = canPlay ? (t.kind !== 'channel' && audio.data && !audio.data.options.length ? 'Choose audio / source' : left ? `Resume · ${left} min left` : 'Play') : 'Open in app'
+  const playLabel = canPlay ? (t.kind !== 'channel' && audio.data && !audio.data.options.length ? 'Choose audio / source' : inProgress ? (left ? `Resume · ${left} min left` : 'Resume') : 'Play') : 'Open in app'
 
   const primary = () => {
     if (canPlay) {
       if (t.kind === 'channel') return void play(t)
+      if (!audio.data) return void play(t)
+      if (audio.data.remembered && audio.data.selection_required) { setPicker('play'); return }
       // A picked track is an explicit choice of that file's audio, so it needs no second confirmation.
       if (trackOption && pickedTrack !== null) return void play(t, null, { variantId: trackOption.variant_id, audioTrack: pickedTrack })
       if (audio.data?.automatic_variant_id) return void play(t, null, { variantId: audio.data.automatic_variant_id })
@@ -174,8 +180,24 @@ function TitleDetails({ id }: { id: string }) {
     setPicker('play')
   }
   // Picking a source is the choice: it plays, with no second "play this anyway?".
-  const chooseVariant = (option: PlaybackOption) => {
-    setPicker(null); void play(t, null, { variantId: option.variant_id, allowUnverifiedAudio: true, audioTrack: option.variant_id === trackOption?.variant_id ? pickedTrack : null })
+  const saveEdition = async (variant?: string, track?: number | null) => {
+    setSavingEdition(true)
+    try {
+      await ok(api.PUT('/playback/preference', { params: { query: { id: t.id, variant_id: variant, audio_track: track ?? undefined } } }))
+      await audio.refetch()
+      return true
+    } catch {
+      toast('Could not save this edition. Check its audio and try again.', 'error')
+      return false
+    } finally { setSavingEdition(false) }
+  }
+  const editionTrack = (option: PlaybackOption) => editionTracks[option.variant_id]
+    ?? (option.variant_id === trackOption?.variant_id ? pickedTrack : null)
+    ?? initialTrack(option.audio_tracks ?? [], option.preferred_audio_track)
+  const chooseVariant = async (option: PlaybackOption) => {
+    const track = rememberEdition ? editionTrack(option) : option.variant_id === trackOption?.variant_id ? pickedTrack : null
+    if (rememberEdition && !await saveEdition(option.variant_id, track)) return
+    setPicker(null); void play(t, null, { variantId: option.variant_id, allowUnverifiedAudio: true, audioTrack: track })
   }
   const choose = (s: SourceBadge) => { setPicker(null); void play(t, s) }
   const sendRequest = (picked?: number[]) => {
@@ -220,10 +242,9 @@ function TitleDetails({ id }: { id: string }) {
   }
   const choosable = t.kind !== 'channel' && inApp.length > 0
   const refresh = () => { for (const key of ['home', 'search', 'browse', 'title', 'title-activity', 'history']) void qc.invalidateQueries({ queryKey: [key] }) }
-  // Watched is a stop at the very end; unwatched (and Start over) a stop at the start, which clears the resume point.
   const report = (atEnd: boolean) => {
     const dur = (t.runtime_min ?? 0) * 60_000
-    return ok(api.POST('/playback/progress', { body: { id: t.id, position_ms: atEnd ? dur : 0, duration_ms: dur || null, state: 'stopped' } }))
+    return ok(api.POST('/playback/progress', { body: { id: t.id, watched: atEnd, position_ms: atEnd ? dur : 0, duration_ms: dur || null, state: 'stopped' } }))
   }
   const toggleWatched = async () => {
     try {
@@ -233,7 +254,7 @@ function TitleDetails({ id }: { id: string }) {
     } catch { toast('Could not save watched status. Try again.', 'error') }
   }
   const startOver = async () => {
-    try { await report(false) } catch { /* the worst case is playing from the resume point */ }
+    try { await report(false) } catch { toast('Could not restart this title. Try again.', 'error'); return }
     refresh()
     primary()
   }
@@ -306,7 +327,7 @@ function TitleDetails({ id }: { id: string }) {
           <div className="tp-pic">
             <div className="tp-pic-art" data-shape={shape}>
               <SafeImg className="art" src={art} alt="" fallback={<div className="grid place-items-center h-full p-4 text-center heading">{showTitle ?? t.title}</div>} />
-              {pct > 0 && pct < 100 && <ProgressBar pct={pct} className="tp-pic-bar" />}
+              {pct > 0 && pct < 100 && <ProgressBar label={`Viewing progress · ${t.title}`} pct={pct} className="tp-pic-bar" />}
             </div>
             {(left || watched) && <p className="tp-pic-cap">{watched ? 'Watched' : `${left} min left`}</p>}
           </div>
@@ -335,14 +356,14 @@ function TitleDetails({ id }: { id: string }) {
 
             <FocusGroup focusKey="title:actions" className="tp-actions" preferred="title:play">
               {(canPlay || handoff.length > 0) && (
-                <Button focusKey="title:play" primary lg className="tp-play" onEnter={primary} testId="title-play" label={phone && left ? playLabel : undefined}>
-                  <Icon name="play" /><span>{phone && left ? 'Resume' : playLabel}</span>
+                <Button focusKey="title:play" primary lg className="tp-play" onEnter={primary} testId="title-play" label={phone && inProgress ? playLabel : undefined}>
+                  <Icon name="play" /><span>{phone && inProgress ? 'Resume' : playLabel}</span>
                 </Button>
               )}
               {canRequest && !canPlay && !handoff.length && (
                 <Button focusKey="title:request" primary lg className="tp-play" onEnter={startRequest} testId="title-request"><Icon name="plus" /><span>{requestLabel}</span></Button>
               )}
-              {canPlay && left && t.kind !== 'channel' && <GlassIconButton focusKey="title:restart" icon="restart" label="Start over" onEnter={() => void startOver()} testId="title-restart" />}
+              {canPlay && inProgress && t.kind !== 'channel' && <GlassIconButton focusKey="title:restart" icon="restart" label="Start over" onEnter={() => void startOver()} testId="title-restart" />}
               {canPlay && t.kind !== 'channel' && (
                 <GlassIconButton focusKey="title:watched" icon="watched" label={watched ? 'Mark unwatched' : 'Mark watched'} pressed={watched} onEnter={() => void toggleWatched()} testId="title-watched" />
               )}
@@ -402,11 +423,18 @@ function TitleDetails({ id }: { id: string }) {
             {audio.isPending && <p role="status">Checking available sources…</p>}
             {audio.error && <ErrorState error={audio.error} onRetry={() => void audio.refetch()} />}
             {/* Two short lines per source, each cut with an ellipsis: a long label must never widen the sheet. */}
-            {audio.data?.options.map((option, i) => <Button key={option.variant_id} focusKey={`pick:${i}`} className="source-choice" onEnter={() => chooseVariant(option)}
+            {audio.data?.remembered && audio.data.selection_required && <p role="status">Your remembered edition or audio changed. Choose an available version.</p>}
+            {audio.data?.options.some(o => o.audio_verified) && <Button focusKey="pick:remember" pressed={rememberEdition} onEnter={() => setRememberEdition(!rememberEdition)}>Remember my next verified edition and audio choice</Button>}
+            {audio.data?.remembered && <Button focusKey="pick:forget" disabled={savingEdition} onEnter={() => void saveEdition()}>Forget saved edition</Button>}
+            {audio.data?.options.map((option, i) => <div key={option.variant_id} className="flex flex-col gap-1">
+              {rememberEdition && (option.audio_tracks?.length ?? 0) > 1 && <CatalogPicker scope={`pick:audio:${i}`} label={`Audio for ${option.source_name} · ${option.provider_label ?? t.title}`} search={false}
+                value={String(editionTrack(option) ?? '')} options={(option.audio_tracks ?? []).filter(track => track.language && track.language !== 'und').map(track => ({ id: String(track.index), label: trackLabel(track) }))}
+                onChange={value => setEditionTracks(old => ({ ...old, [option.variant_id]: Number(value) }))} />}
+              <Button disabled={savingEdition || (rememberEdition && !option.audio_verified)} focusKey={`pick:${i}`} className="source-choice" onEnter={() => chooseVariant(option)}
               label={`${option.source_name} · ${audioDescription(option)}${option.provider_label ? ` · ${option.provider_label}` : ''}`}>
               <span className="truncate"><strong>{option.source_name}</strong>{option.provider_label && option.provider_label !== option.source_name ? ` · ${option.provider_label}` : ''}</span>
               <span className="label truncate">{audioDescription(option)}{!option.audio_verified && option.language_hint ? ` · Listed as ${languageName(option.language_hint)}` : ''}</span>
-            </Button>)}
+            </Button></div>)}
             {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}
           </> : handoff.map((s, i) => <Button key={s.source_id + s.kind} focusKey={`pick:${i}`} onEnter={() => choose(s)}>{s.name}</Button>)}
           <Button focusKey="pick:cancel" ghost onEnter={() => setPicker(null)}>Cancel</Button>

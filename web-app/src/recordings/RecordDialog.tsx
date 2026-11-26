@@ -7,6 +7,8 @@ import { setFocus } from '../nav/spatial'
 import { recordingOf, seriesTitle } from '../lib/recordings'
 import { fmtTime } from '../lib/util'
 import { useUi } from '../store/ui'
+import { LiveAlternatives } from '../player/LiveAlternatives'
+import { automaticPadding, RulePadding } from './RulePadding'
 import { RecordingBadge } from './RecordingBadge'
 
 export interface RecordTarget { channel: Pick<Channel, 'id' | 'name'>; programmes: Programme[] }
@@ -27,11 +29,13 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
   const [index, setIndex] = useState(0)
   const [team, setTeam] = useState('')
   const [keyword, setKeyword] = useState('')
+  const [padding, setPadding] = useState(automaticPadding)
+  const [paddingOpen, setPaddingOpen] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const p = target?.programmes[Math.min(index, (target?.programmes.length ?? 1) - 1)]
   const key = target ? `${target.channel.id}|${target.programmes.map((x) => x.id).join(',')}` : ''
-  useEffect(() => { setIndex(0); setAdvanced(false); setKeyword(''); setError(null) }, [key])
+  useEffect(() => { setIndex(0); setAdvanced(false); setPaddingOpen(false); setPadding(automaticPadding); setKeyword(''); setError(null) }, [key])
   useEffect(() => { setTeam('') }, [p?.id])
   if (!target || !p) return null
 
@@ -53,7 +57,7 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
     const text = match.trim()
     if (busy || !text) return
     setError(null)
-    createRule.mutate({ kind, match: text, channel_id: body.channel_id ?? null, new_only: !!body.new_only, keep: null }, { onSuccess: () => done(said.replace('{match}', text)), onError: failed })
+    createRule.mutate({ kind, match: text, channel_id: body.channel_id ?? null, new_only: !!body.new_only, keep: null, ...padding }, { onSuccess: () => done(said.replace('{match}', text)), onError: failed })
   }
   const stop = () => {
     if (busy || !existing) return
@@ -70,10 +74,13 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
       <p className="muted flex items-center gap-2 flex-wrap">{target.channel.name} · {fmtTime(p.start)} to {fmtTime(p.stop)}{p.category ? ` · ${p.category}` : ''}<RecordingBadge state={p.recording_state} /></p>
       {error && <p role="alert" data-testid="record-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
       <FocusGroup focusKey="rec:choices" className="flex flex-col gap-2">
-        {onWatch && onAir && <Button focusKey="rec:watch" primary icon="play" onEnter={() => { onClose(); onWatch(p) }} testId="record-watch">Watch now</Button>}
+        {onWatch && onAir && <Button focusKey="rec:watch" primary icon="play" onEnter={() => { onClose(); onWatch(p) }} testId="record-watch">Join live</Button>}
+        {onWatch && onAir && <LiveAlternatives channel={p.channel_id} start={p.start} scope="rec:entry" onClose={onClose} />}
         {active
           ? <Button focusKey="rec:cancel" danger icon="x" disabled={busy || !existing} onEnter={stop} testId="record-cancel">{p.recording_state === 'recording' ? 'Stop recording' : 'Do not record this programme'}</Button>
           : <Button focusKey="rec:one" primary={!(onWatch && onAir)} icon="record" disabled={busy} onEnter={one} testId="record-one">Record this programme</Button>}
+        <Button focusKey="rec:window" ghost pressed={paddingOpen} onEnter={() => setPaddingOpen(!paddingOpen)}>Rule recording window</Button>
+        {paddingOpen && <RulePadding value={padding} update={setPadding} example={{ start: p.start, stop: p.stop, sport }} />}
         <Button focusKey="rec:series" className="rec-choice" disabled={busy} onEnter={() => rule('series', seriesTitle(p.title), { channel_id: p.channel_id, new_only: true }, 'Every new episode of {match} will be recorded.')} testId="record-series">
           <span className="flex flex-col items-start min-w-0"><span>Record every new episode</span><span className="label">{seriesTitle(p.title)} on {target.channel.name}, repeats skipped</span></span>
         </Button>

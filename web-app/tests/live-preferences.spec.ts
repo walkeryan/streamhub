@@ -1,25 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { chooseLiveGroup, chooseLiveOption, closeLiveOptions, openLiveOptions, signIn } from './helpers'
 
-type Document = Record<string, unknown>
-async function backend(page: Page, documents: Record<string, Document>) {
-  await page.exposeFunction('livePrefsBackend', (id: string, method: string, body: Document | null) => {
-    if (method === 'PUT') documents[id] = body!
-    return documents[id] ?? {}
-  })
-  await page.addInitScript(() => {
-    const original = window.fetch.bind(window)
-    window.fetch = async (input, init) => {
-      const req = new Request(input, init)
-      const match = new URL(req.url).pathname.match(/^\/api\/v1\/profiles\/([^/]+)\/prefs$/)
-      if (match) {
-        const state = window as unknown as { livePrefsBackend: (id: string, method: string, body: Document | null) => Promise<Document> }
-        return Response.json(await state.livePrefsBackend(match[1], req.method, req.method === 'PUT' ? await req.json() : null))
-      }
-      return original(req)
-    }
-  })
-}
+import { backend, type Document } from './profilePrefsFixture'
 
 test('US country and English are independent in channels, guide, and unknown-region access', async ({ page }) => {
   await signIn(page)

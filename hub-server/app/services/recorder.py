@@ -31,7 +31,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import delete, select, tuple_, update
+from sqlalchemy import case, delete, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 
 from app.infra.db import Database
@@ -383,6 +383,37 @@ class RecorderService:
             raise NotFound("recording not found")
         return row, path
 
+    async def entry_recording(self, p: Principal, channel_id: str, start: datetime) -> str | None:
+        if not recording_policy.can_view(p):
+            return None
+        async with self._db.session() as s:
+            recording_id = await s.scalar(
+                select(Recording.id).where(Recording.programme_key == programme_key(channel_id, start))
+            )
+        if recording_id is not None:
+            try:
+                await self.playable(p, recording_id)
+                return recording_id
+            except NotFound:
+                pass
+        return None
+
+    async def report_issue(self, p: Principal, recording_id: str, category: str, position_ms: int) -> None:
+        from app.services.users import audit
+
+        await self.playable(p, recording_id)
+        async with self._db.session() as s:
+            audit(
+                s,
+                p.user_id,
+                "recording.issue",
+                None,
+                recording_id=recording_id,
+                category=category,
+                position_ms=position_ms,
+            )
+            await s.commit()
+
     async def stored(self, recording_id: str) -> Path:
         """The file behind a stream grant that was issued for a recording, if both are still there."""
         async with self._db.session() as s:
@@ -487,6 +518,8 @@ class RecorderService:
                 "channel_name": channels.get(r.channel_id) if r.channel_id else None,
                 "new_only": r.new_only,
                 "keep": r.keep,
+                "pad_before_s": r.pad_before_s,
+                "pad_after_s": r.pad_after_s,
                 "enabled": r.enabled,
                 "created_at": r.created_at,
             }
@@ -581,6 +614,7 @@ class RecorderService:
         start: datetime,
         stop: datetime,
         evidence: dict[str, Any] | None,
+        rule: RecordingRule | None = None,
     ) -> dict[str, Any]:
         """Everything a recording keeps of its guide entry; nothing is read from the guide again."""
         d = programme_details(title, category)
@@ -598,8 +632,10 @@ class RecorderService:
             "age_evidence": dict(evidence or {}),
             "starts_at": start,
             "ends_at": stop,
-            "pad_before_s": PAD_BEFORE_S,
-            "pad_after_s": PAD_AFTER_SPORT_S if d.is_sport else PAD_AFTER_S,
+            "pad_before_s": rule.pad_before_s if rule and rule.pad_before_s is not None else PAD_BEFORE_S,
+            "pad_after_s": rule.pad_after_s
+            if rule and rule.pad_after_s is not None
+            else (PAD_AFTER_SPORT_S if d.is_sport else PAD_AFTER_S),
             "error": None,
             "path": None,
             "size_bytes": None,
@@ -790,7 +826,15 @@ class RecorderService:
         return (await self.add_or_get_rule(p, kind, match, channel_id, new_only, keep))[0]
 
     async def add_or_get_rule(
-        self, p: Principal, kind: str, match: str, channel_id: str | None, new_only: bool, keep: int | None
+        self,
+        p: Principal,
+        kind: str,
+        match: str,
+        channel_id: str | None,
+        new_only: bool,
+        keep: int | None,
+        pad_before_s: int | None = None,
+        pad_after_s: int | None = None,
     ) -> tuple[RecordingRule, bool]:
         """The rule and whether this call created it (False: the profile already had the same one)."""
         self._require_schedule(p)
@@ -816,6 +860,8 @@ class RecorderService:
                 channel_id=channel_id,
                 new_only=bool(new_only),
                 keep=keep,
+                pad_before_s=pad_before_s,
+                pad_after_s=pad_after_s,
                 enabled=True,
                 created_at=self.clock(),
             )
@@ -851,9 +897,22 @@ class RecorderService:
         for flag in ("new_only", "enabled"):
             if patch.get(flag) is not None:
                 values[flag] = bool(patch[flag])
+        padding: dict[str, Any] = {key: patch[key] for key in ("pad_before_s", "pad_after_s") if key in patch}
+        values.update(padding)
         if values:
-            async with self._db.session() as s:
+            async with self._apply_lock, self._lock, self._db.session() as s:
                 await s.execute(update(RecordingRule).where(RecordingRule.id == rule.id).values(**values))
+                if padding:
+                    effective = dict(padding)
+                    if "pad_before_s" in padding and padding["pad_before_s"] is None:
+                        effective["pad_before_s"] = PAD_BEFORE_S
+                    if "pad_after_s" in padding and padding["pad_after_s"] is None:
+                        effective["pad_after_s"] = case((Recording.is_sport, PAD_AFTER_SPORT_S), else_=PAD_AFTER_S)
+                    await s.execute(
+                        update(Recording)
+                        .where(Recording.rule_id == rule.id, Recording.state == "scheduled")
+                        .values(**effective)
+                    )
                 await s.commit()
                 rule = await s.get(RecordingRule, rule.id, populate_existing=True) or rule
         if (rule.match, rule.channel_id, rule.new_only, rule.enabled) != before:
@@ -883,7 +942,9 @@ class RecorderService:
         # Rules run outside any request, so the profile's content policy is applied here.
         reset = active_policy.set(await policy.scope(profile_id) if policy is not None else None)
         try:
-            eligible, _ = await self._channels._channel_query(profile_id, all_languages=True)
+            eligible, _ = await self._channels._channel_query(
+                profile_id, all_languages=True, include_personal_hidden=True
+            )
             ch = eligible.subquery()
             query = (
                 select(
@@ -1006,6 +1067,7 @@ class RecorderService:
                         start=pick.start,
                         stop=pick.stop,
                         evidence=pick.evidence,
+                        rule=rule,
                     ),
                 )
                 try:

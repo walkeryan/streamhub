@@ -154,7 +154,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
     val together by vm.watchTogether.collectAsStateWithLifecycle()
     if (inPip) {
         // Picture-in-picture: the picture alone; the web app's bar carries the controls.
-        Box(Modifier.fillMaxSize().background(Color.Black)) { VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect) }
+        Box(Modifier.fillMaxSize().background(Color.Black)) { VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect, s.captions) }
         return
     }
     val rootFocus = remember { FocusRequester() }
@@ -166,6 +166,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
     var pendingExit by remember { mutableStateOf<Job?>(null) }
     var backHint by remember { mutableStateOf(false) }
     var backHintShown by remember { mutableStateOf(false) }
+    var shortcutsOpen by remember { mutableStateOf(false) }
     val ok = remember { OkPress() }
     val room = s.room
     val inRoom = s.roomCode != null
@@ -208,6 +209,10 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
                 val menuOpen = s.overlay == Overlay.MiniList || s.overlay == Overlay.Menu || s.overlay == Overlay.Rewind || s.overlay == Overlay.Buffer
                 val controls = s.overlay == Overlay.Controls
                 val live = s.live && !s.bufferTimeshift
+                if (!menuOpen && !s.stillWatching && s.picker == null && e.nativeKeyEvent.unicodeChar == '?'.code) {
+                    if (e.type == KeyEventType.KeyDown) shortcutsOpen = true
+                    return@onPreviewKeyEvent true
+                }
                 // Every press counts as activity for the control row's 5 s idle timer, and shows somebody is
                 // watching (Still watching? counts autoplays with no press between).
                 if (e.type == KeyEventType.KeyDown) { vm.touchControls(); vm.userInteracted() }
@@ -284,7 +289,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
             }
             .focusable(),
     ) {
-        VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect)
+        VideoSurface(vm.player, Modifier.fillMaxSize(), s.aspect, s.captions)
         if(s.overlay == Overlay.Rewind && s.audioChoice == null) ProviderRewindDialog(vm, s)
         if(s.overlay == Overlay.Buffer && s.audioChoice == null) BufferPlaybackDialog(vm,s,ps)
         s.audioChoice?.let { choice -> AudioSourceDialog(choice.options, vm::cancelAudioChoice, onChoose=vm::confirmAudioChoice) }
@@ -366,6 +371,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
         ) {
             PlayerMenu(vm, s, ps, canMinimise = onMinimise != null)
         }
+        if (shortcutsOpen) RemoteShortcutDialog(s.live && !s.bufferTimeshift, inRoom) { shortcutsOpen = false }
     }
 }
 
@@ -671,6 +677,14 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
     var confirmation by remember {mutableStateOf<TrackOption?>(null)}
     var confirmOpener by remember {mutableStateOf<FocusRequester?>(null)}
     var trackMessage by remember {mutableStateOf<String?>(null)}
+    var reportAt by remember { mutableStateOf<Long?>(null) }
+    var resumeAfterReport by remember { mutableStateOf(false) }
+    var sendingReport by remember { mutableStateOf(false) }
+    var reportError by remember { mutableStateOf<String?>(null) }
+    val closeReport: () -> Unit = {
+        reportAt = null
+        if (resumeAfterReport) vm.resumePlayback()
+    }
     var streamInfo by remember { mutableStateOf(false) }
     val infoOpener = remember { FocusRequester() }
     var invite by remember { mutableStateOf(false) }
@@ -691,6 +705,7 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             roomLocked = room?.controlsLocked == true,
             roomHost = room?.isHost == true,
             channel = isChannel,
+            recording = !inRoom && s.descriptor?.id?.startsWith("rec:") == true,
             hasBufferWindow = s.bufferWindow != null,
             bufferedSeconds = s.bufferWindow?.bufferedSeconds?.toInt(),
             rewindError = s.rewindError,
@@ -729,6 +744,12 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             onSleep = vm::setSleep,
             onWatchTogether = vm::startWatchTogether,
             onStreamInfo = { streamInfo = true },
+            onReport = {
+                reportError = null
+                reportAt = s.titlePositionMs(vm.player.exoPlayer.currentPosition).coerceAtLeast(0)
+                resumeAfterReport = vm.player.exoPlayer.playWhenReady
+                vm.pausePlayback()
+            },
             onRetry = vm::retry,
             onClose = vm::hideOverlay,
         ),
@@ -736,6 +757,37 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         streamInfoOpener = infoOpener,
         inviteOpener = inviteOpener,
     )
+    reportAt?.let { at ->
+        val recording = s.descriptor?.id?.removePrefix("rec:")
+        val dismiss: () -> Unit = { if (!sendingReport) closeReport() }
+        Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            GlassPanel(Modifier.width(600.dp)) {
+                DialogTitle("Report a recording issue")
+                val seconds = at / 1000
+                DialogText("Playback position · %d:%02d".format(seconds / 60, seconds % 60))
+                listOf("wrong_programme" to "Wrong programme", "missing_start" to "Missing beginning", "missing_end" to "Missing ending",
+                    "picture" to "Picture issue", "audio" to "Audio issue").forEach { (code, label) ->
+                    ShButton(label, {
+                        if (recording != null && !sendingReport) {
+                            sendingReport = true
+                            menuScope.launch {
+                                try {
+                                    vm.reportRecordingIssue(recording, code, at)
+                                    closeReport(); vm.flashMessage("Recording report received.")
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    reportError = "The report could not be sent. Choose an issue to try again."
+                                } finally { sendingReport = false }
+                            }
+                        }
+                    })
+                }
+                reportError?.let { DialogText(it) }
+                ShButton("Cancel", dismiss)
+            }
+        }
+    }
     if (streamInfo) StreamInfoDialog(vm, s) { streamInfo = false; menuScope.launch { withFrameNanos { }; runCatching { infoOpener.requestFocus() } } }
     if (invite && s.roomCode != null) InviteDialog(s.roomCode, s.roomShareUrl) { invite = false; menuScope.launch { withFrameNanos { }; runCatching { inviteOpener.requestFocus() } } }
     confirmation?.let {track ->

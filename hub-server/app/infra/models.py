@@ -392,6 +392,7 @@ class Progress(Base):
     position_ms: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    hidden_from_continue: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 
@@ -402,6 +403,16 @@ class Watchlist(Base):
     profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
     ref_id: Mapped[str] = mapped_column(String(256))
     added_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_playable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    playable_since: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class PlaybackPreference(Base):
+    __tablename__ = "playback_preference"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), primary_key=True)
+    ref_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    variant_id: Mapped[str] = mapped_column(String(256))
+    audio: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
 class ServiceRegistry(Base):
@@ -541,6 +552,14 @@ class Notice(Base):
     read_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
+class ProfileChannel(Base):
+    __tablename__ = "profile_channel"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channel.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+
+
 class RecordingRule(Base):
     """A standing instruction to record matching programmes; applied after each guide refresh."""
 
@@ -551,6 +570,8 @@ class RecordingRule(Base):
     match: Mapped[str] = mapped_column(String(256))  # series title, team name or keyword
     channel_id: Mapped[str | None] = mapped_column(String(256), nullable=True)  # ch:… hub id; None = any channel
     new_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    pad_before_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pad_after_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
     keep: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = keep all
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

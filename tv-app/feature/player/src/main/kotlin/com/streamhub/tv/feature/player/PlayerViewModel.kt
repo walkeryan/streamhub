@@ -7,6 +7,8 @@ import com.streamhub.tv.core.data.repo.MeRepository
 import com.streamhub.tv.core.data.repo.ProfileFilterStore
 import com.streamhub.tv.core.data.repo.RoomRepository
 import com.streamhub.tv.core.data.model.UpNext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonPrimitive
 import com.streamhub.tv.core.data.repo.RoomSeat
 import com.streamhub.tv.core.data.repo.WatchTogether
@@ -73,6 +75,7 @@ import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackMode
 import com.streamhub.tv.core.data.repo.ChannelListCache
 import com.streamhub.tv.core.data.repo.PlaybackCoordinator
+import com.streamhub.tv.core.player.CaptionAppearance
 import com.streamhub.tv.core.player.AspectMode
 import com.streamhub.tv.core.player.PlayerFactory
 import com.streamhub.tv.core.player.StreamHubPlayer
@@ -148,6 +151,7 @@ data class PlayerScreenState(
     val upNext: UpNextFlow.Plan = UpNextFlow.NONE,
     /** The profile's `autoplay_next` (missing = on), read when the player opened. */
     val autoplayNext: Boolean = true,
+    val captions: CaptionAppearance? = null,
     /** The profile's `back_minimises` (missing = off): Back shrinks a playing title into the mini player. */
     val backMinimises: Boolean = false,
     /** Skip intro is up and seeks here. */
@@ -444,6 +448,13 @@ class PlayerViewModel @Inject constructor(
                 player.play(d, reportOwner, RoomSync.playerPosition(carried ?: roomPosition() ?: d.resumePositionMs, stream))
                 // A new room is paused at the start; until the room says "playing" this member waits.
                 if (roomClient?.state?.value?.clock?.playing != true) player.pause()
+            } else if (currentRequest?.bufferAt != null) {
+                check(lease != null) { "Buffered position expired." }
+                val result = buffer.seek(Instant.parse(currentRequest!!.bufferAt))
+                currentCoroutineContext().ensureActive()
+                check(sessions.current().catalogScope() == owner) { "Playback scope changed." }
+                player.play(d.copy(url = result.url), reportOwner)
+                _state.update { it.copy(bufferWindow = result.window, bufferTimeshift = true) }
             } else if (startPositionMs != null) player.play(d, reportOwner, startPositionMs) else player.play(d, reportOwner)
             _state.update { it.copy(bufferWindow=lease?.window,bufferBusy=false) }
             if(lease != null) bufferHeartbeat=viewModelScope.launch {
@@ -451,7 +462,12 @@ class PlayerViewModel @Inject constructor(
                     while(true) {
                         delay(30_000)
                         if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
-                        val window=buffer.heartbeat(paused=!player.exoPlayer.playWhenReady)
+                        val exo = player.exoPlayer
+                        val timeline = exo.currentTimeline
+                        val origin = if (_state.value.bufferTimeshift && !timeline.isEmpty)
+                            timeline.getWindow(exo.currentMediaItemIndex, androidx.media3.common.Timeline.Window()).windowStartTimeMs else androidx.media3.common.C.TIME_UNSET
+                        val at = if (origin == androidx.media3.common.C.TIME_UNSET) null else Instant.ofEpochMilli(origin + exo.currentPosition)
+                        val window=buffer.heartbeat(paused=!exo.playWhenReady, positionAt=at)
                         currentCoroutineContext().ensureActive()
                         if(sessions.current().catalogScope()!=owner || buffer.leaseId!=lease.leaseId) return@launch
                         _state.update { it.copy(bufferWindow=window) }
@@ -478,6 +494,7 @@ class PlayerViewModel @Inject constructor(
 
     fun playWithoutBuffer() {
         val descriptor=_state.value.descriptor ?: return
+        currentRequest = currentRequest?.copy(bufferAt = null)
         attachJob?.cancel(); attachJob=viewModelScope.launch { start(descriptor.copy(bufferAvailable=false)); showOsd() }
     }
 
@@ -614,14 +631,17 @@ class PlayerViewModel @Inject constructor(
     /** The profile's player preferences: `autoplay_next`, then `back_minimises`. A failed read keeps the defaults. */
     private suspend fun loadPlaybackPrefs() {
         val profile = sessions.current().profile?.id ?: return
-        val value = try { prefs.read(profile, AUTOPLAY_NEXT_PREF) }
+        val document = try { prefs.readAll(profile) }
         catch (e: CancellationException) { if (currentCoroutineContext().isActive) return else throw e }
         catch (_: Exception) { return }
-        _state.update { it.copy(autoplayNext = autoplayNextPref(value)) }
-        val back = try { prefs.read(profile, BACK_MINIMISES_PREF) }
-        catch (e: CancellationException) { if (currentCoroutineContext().isActive) return else throw e }
-        catch (_: Exception) { return }
-        _state.update { it.copy(backMinimises = backMinimisesPref(back)) }
+        val captions = (document["captions.v1"] as? JsonObject)?.let { raw ->
+            fun field(key: String) = (raw[key] as? JsonPrimitive)?.contentOrNull
+            val size = field("size") ?: return@let null
+            val background = field("background") ?: return@let null
+            CaptionAppearance(size, field("color") == "yellow", background)
+        }
+        _state.update { it.copy(autoplayNext = autoplayNextPref(document[AUTOPLAY_NEXT_PREF]),
+            backMinimises = backMinimisesPref(document[BACK_MINIMISES_PREF]), captions = captions) }
     }
 
     /** "Back shrinks to mini player" in the settings: applies at once and is stored in the profile's preferences. */
@@ -1155,6 +1175,7 @@ class PlayerViewModel @Inject constructor(
 
     fun hideOverlay() { rewindJob?.cancel(); bufferSeekJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false, bufferBusy=false, audioChoice=null) } }
     fun openMiniList() { if (seat == null && _state.value.live && _state.value.channels.isNotEmpty()) _state.update { it.copy(overlay = Overlay.MiniList) } }
+    suspend fun reportRecordingIssue(id: String, category: String, position: Long) = api.reportRecordingIssue(id, category, position)
     fun openMenu() { _state.update { it.copy(overlay = Overlay.Menu) } }
 
     fun openRewind() {

@@ -612,7 +612,8 @@ test.describe('the Users screen', () => {
     await form.getByRole('button', { name: '1 week', exact: true }).click()
     await page.getByTestId('invite-create').click()
     const link = await page.getByLabel('Invite link', { exact: true }).inputValue()
-    expect(link).toMatch(/^http:\/\/localhost:\d+\/invite\/[A-Za-z0-9_-]{43}$/)
+    expect(new URL(link).origin).toBe(new URL(page.url()).origin)
+    expect(new URL(link).pathname).toMatch(/^\/invite\/[A-Za-z0-9_-]{43}$/)
     await expect(page.getByTestId('invite-copy')).toHaveAttribute('data-focused', 'true')
     await page.keyboard.press('Enter')
     await expect(page.locator('.toast').last()).toHaveText('Link copied.')
@@ -665,7 +666,7 @@ test.describe('the Users screen', () => {
     // Roles: open Kid, switch one permission, save.
     await page.keyboard.press('ArrowRight')
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('users-tab-roles')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('users-tab-roles')).toHaveAttribute('aria-selected', 'true')
     await walk(page, 'ArrowDown', page.getByTestId('role-edit-kid'))
     await page.keyboard.press('Enter')
     const editor = page.getByTestId('role-editor')
@@ -739,7 +740,7 @@ test.describe('the Users screen', () => {
       await enter(page, '/users')
       for (const tab of ['people', 'roles', 'invites', 'activity']) {
         await page.getByTestId(`users-tab-${tab}`).tap()
-        await expect(page.getByTestId(`users-tab-${tab}`)).toHaveAttribute('aria-pressed', 'true')
+        await expect(page.getByTestId(`users-tab-${tab}`)).toHaveAttribute('aria-selected', 'true')
         expect(await fits(page), tab).toBe(true)
       }
       await page.getByTestId('users-tab-people').tap()
@@ -951,10 +952,10 @@ test.describe('devices', () => {
 
   test('Settings lists your own devices: rename, revoke, and revoking this one signs out', async ({ page }) => {
     await enter(page, '/settings?tab=devices', { who: 'guest' })
-    await expect(page.getByTestId('tab-devices')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('tab-devices')).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByTestId('device-row')).toHaveCount(2)
-    await expect(device(page, 'Browser on Windows')).toContainText('This device')
-    await expect(device(page, 'Browser on Windows')).toContainText('Browser · Last seen just now')
+    await expect(device(page, 'This device')).toContainText('This device')
+    await expect(device(page, 'This device')).toContainText('Browser · Last seen just now')
     await expect(device(page, 'Kitchen tablet')).toContainText('Last seen 3 h ago')
     // Marking a device as shared is for those who manage users.
     await expect(page.getByTestId('device-shared')).toHaveCount(0)
@@ -969,7 +970,7 @@ test.describe('devices', () => {
     await expect(device(page, 'Hall tablet')).toBeVisible()
     await device(page, 'Hall tablet').getByTestId('device-revoke').click()
     await expect(page.getByTestId('device-row')).toHaveCount(1)
-    await device(page, 'Browser on Windows').getByTestId('device-revoke').click()
+    await device(page, 'This device').getByTestId('device-revoke').click()
     await expect(page.getByTestId('profile-picker')).toBeVisible()
     expect(await page.evaluate(() => localStorage.getItem('sh.session.v1'))).toBeNull()
   })

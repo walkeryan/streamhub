@@ -54,9 +54,9 @@ class BufferLeaseSession(private val api: BufferLeaseApi) {
         }
     }
 
-    suspend fun heartbeat(paused: Boolean): BufferWindow = mutex.withLock {
+    suspend fun heartbeat(paused: Boolean, positionAt: Instant? = null): BufferWindow = mutex.withLock {
         val (token,lease)=active ?: error("No active buffer lease")
-        val updated=api.heartbeat(BufferLeaseAction(token,lease.leaseId,paused=paused))
+        val updated=api.heartbeat(BufferLeaseAction(token,lease.leaseId,paused=paused,positionAt=positionAt?.toString()))
         currentCoroutineContext().ensureActive()
         active=token to lease.copy(window=updated)
         updated

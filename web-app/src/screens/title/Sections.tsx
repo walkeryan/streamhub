@@ -49,7 +49,7 @@ export function ActivityRow({ entries }: { entries: TitleActivityEntry[] }) {
               <div className="tp-act-text">
                 <b>{name}</b>
                 <small>{activityText(e)}</small>
-                {e.action === 'watching' && e.progress_pct != null && <ProgressBar pct={e.progress_pct} className="tp-act-bar" />}
+                {e.action === 'watching' && e.progress_pct != null && <ProgressBar label={`Viewing progress · ${name}`} pct={e.progress_pct} className="tp-act-bar" />}
               </div>
             </div>
           )

@@ -118,8 +118,8 @@ class StreamHubApi @Inject constructor(
     // ---- Profiles ------------------------------------------------------------------------------
 
     suspend fun profilePrefs(profileId: String): JsonObject = get("/profiles/${id(profileId)}/prefs")
-    suspend fun putProfilePrefs(profileId: String, prefs: JsonObject): JsonObject =
-        client.put(url("/profiles/${id(profileId)}/prefs")) { setBody(prefs) }.ok()
+    suspend fun patchProfilePrefs(profileId: String, prefs: JsonObject): JsonObject =
+        client.patch(url("/profiles/${id(profileId)}/prefs")) { setBody(prefs) }.ok()
 
     suspend fun profiles(): List<Profile> = get("/profiles")
     suspend fun createProfile(p: Profile) = client.post(url("/profiles")) { setBody(p) }.unit()
@@ -406,6 +406,11 @@ class StreamHubApi @Inject constructor(
     /** 201 scheduled, or 200 when this programme was already scheduled: both answer with the recording. */
     suspend fun record(req: RecordRequest): Recording = client.post(url("/recordings")) { setBody(req) }.ok()
     /** Cancels an upcoming or running recording; deletes a finished one and its file. */
+    suspend fun reportRecordingIssue(recordingId: String, category: String, positionMs: Long) =
+        client.post(url("/recordings/${id(recordingId)}/issues")) {
+            setBody(buildJsonObject { put("category", category); put("position_ms", positionMs) })
+        }.unit()
+
     suspend fun deleteRecording(recordingId: String) = client.delete(url("/recordings/${id(recordingId)}")).unit()
     suspend fun recordingRules(): RecordingRulesResponse = get("/recording-rules")
     suspend fun createRecordingRule(req: RecordingRuleCreate): RecordingRule = client.post(url("/recording-rules")) { setBody(req) }.ok()

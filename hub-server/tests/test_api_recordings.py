@@ -496,3 +496,78 @@ async def test_a_recording_snapshots_its_programmes_rating(api: Api) -> None:
         await s.commit()
     assert [x["title"] for x in (await teen.get("/recordings")).json()["recordings"]] == ["Harbour Songs", "Loose Reel"]
     assert [x["title"] for x in (await strict.get("/recordings")).json()["recordings"]] == ["Harbour Songs"]
+
+
+async def test_rule_padding_updates_scheduled_only_and_restores_defaults(api: Api) -> None:
+    ch = await channel(api, await add_source(api))
+    await programme(api, ch, "Fixture daily", soon(1))
+    await programme(api, ch, "Fixture daily", soon(5))
+    rule = await api.post(
+        "/recording-rules", json={"kind": "series", "match": "Fixture daily", "pad_before_s": 0, "pad_after_s": 900}
+    )
+    assert rule.status_code == 201, rule.text
+    rid = rule.json()["id"]
+    rows = (await api.get("/recordings")).json()["recordings"]
+    assert [(r["pad_before_s"], r["pad_after_s"]) for r in rows] == [(0, 900), (0, 900)]
+    async with api.c.db.session() as s:
+        first = await s.get(Recording, rows[0]["id"])
+        assert first
+        first.state = "recording"
+        await s.commit()
+    patched = await api.patch(f"/recording-rules/{rid}", json={"pad_before_s": None, "pad_after_s": 0})
+    assert patched.status_code == 200, patched.text
+    rows = (await api.get("/recordings")).json()["recordings"]
+    assert [(r["pad_before_s"], r["pad_after_s"]) for r in rows] == [(0, 900), (120, 0)]
+    assert (await api.patch(f"/recording-rules/{rid}", json={"pad_after_s": -1})).status_code == 422
+
+
+async def test_lineup_before_paging_and_per_profile(api: Api) -> None:
+    await add_source(api)
+    other = await login(api, "Second viewer")
+    params = {"language": "all", "limit": 1}
+    all_rows = (await api.get("/channels", params={"language": "all"})).json()["channels"]
+    first, last = all_rows[0]["id"], all_rows[-1]["id"]
+    assert first != last
+    assert (await api.post("/channels/lineup", json={"channel_id": last, "action": "top"})).status_code == 204
+    assert (await api.get("/channels", params=params)).json()["channels"][0]["id"] == last
+    assert (await api.get("/channels", params=params, headers=other)).json()["channels"][0]["id"] == first
+    assert (await api.post("/channels/lineup", json={"channel_id": last, "action": "hide"})).status_code == 204
+    result = (await api.get("/channels", params=params)).json()
+    assert result["total"] == len(all_rows) - 1 and result["channels"][0]["id"] == first
+    assert [r["id"] for r in (await api.get("/channels/lineup/hidden")).json()] == [last]
+    assert (await api.delete("/channels/lineup")).status_code == 204
+    assert (await api.get("/channels", params=params)).json()["channels"][0]["id"] == first
+    assert (await api.get("/channels/lineup/hidden")).json() == []
+
+
+async def test_recording_issue_and_actual_live_entry(api: Api) -> None:
+    from app.infra.models import AuditLog
+
+    ch = await channel(api, await add_source(api))
+    start = soon(0) - timedelta(minutes=9)
+    async with api.c.db.session() as s:
+        await s.execute(delete(Programme).where(Programme.feed == ch.source_id))
+        await s.commit()
+    pid = await programme(api, ch, "Fixture airing", start)
+    params = {"channel_id": hub(ch), "start": start.isoformat()}
+    empty = await api.get("/channels/entry", params=params)
+    assert empty.status_code == 200 and not any(empty.json().values()), empty.text
+    r = await api.post("/recordings", json={"programme_id": pid})
+    assert r.status_code == 201, r.text
+    rid = r.json()["id"]
+    assert api.c.recorder.recordings_dir is not None
+    (api.c.recorder.recordings_dir / "fixture.mkv").write_bytes(b"synthetic capture")
+    async with api.c.db.session() as s:
+        row = await s.get(Recording, rid)
+        assert row
+        row.state, row.path = "failed", "fixture.mkv"
+        await s.commit()
+    assert (await api.get("/channels/entry", params=params)).json()["recording_id"] == rid
+    body = {"category": "audio", "position_ms": 47000}
+    report = await api.post(f"/recordings/{rid}/issues", json=body)
+    assert report.status_code == 204, report.text
+    other = await login(api, "Other viewer")
+    assert (await api.post(f"/recordings/{rid}/issues", json=body, headers=other)).status_code == 404
+    async with api.c.db.session() as s:
+        receipt = await s.scalar(select(AuditLog).where(AuditLog.action == "recording.issue"))
+        assert receipt and receipt.detail == {"recording_id": rid, **body}

@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect } from 'react'
+import './components/viewingAppearance.css'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { matchPath, Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './api/client'
@@ -13,6 +14,7 @@ import { Button, ErrorState, Skeleton, Toasts } from './components/ui'
 import { ControllerHint } from './components/PadHints'
 import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
+import { useViewingAppearance } from './api/viewingPreferences'
 import { bootTheme, useTheme } from './lib/theme'
 import { useSession } from './store/session'
 import { useReturnToRoom } from './room/returnToRoom'
@@ -33,6 +35,7 @@ import { Sources } from './screens/Sources'
 import { Pair } from './screens/Pair'
 import { ShellPlay } from './screens/ShellPlay'
 import { inShell } from './shell'
+import { ShortcutHelp } from './player/ShortcutHelp'
 import { PlayerHost } from './player/PlayerHost'
 
 const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
@@ -57,6 +60,18 @@ function useScrolledFlag() {
 }
 
 function Shell() {
+  const [shortcuts, setShortcuts] = useState(false)
+  useEffect(() => {
+    const showHelp = (event: KeyboardEvent) => {
+      if (event.key !== '?' || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey ||
+          document.querySelector('[role="dialog"], [role="menu"]') ||
+          (event.target instanceof HTMLElement && (event.target.isContentEditable || event.target.closest('input, textarea, select')))) return
+      event.preventDefault()
+      setShortcuts(true)
+    }
+    window.addEventListener('keydown', showHelp)
+    return () => window.removeEventListener('keydown', showHelp)
+  }, [])
   const loc = useLocation()
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
   useScrolledFlag()
@@ -64,9 +79,10 @@ function Shell() {
     <div className="shell">
       <Rail />
       {/* Down from the top bar, and Back while in it, return to what was focused here. */}
-      <FocusGroup focusKey="MAIN" as="main" className="main">
-        <Suspense fallback={<div className="page-pad"><Skeleton style={{ height: '16rem' }} /></div>}><Outlet /></Suspense>
+      <FocusGroup focusKey="MAIN" as="main" className="main" label={loc.pathname === '/search' ? 'Search' : undefined}>
+        <Suspense fallback={<div className="page-pad"><Skeleton style={{ height: '16rem' }} /></div>}><Outlet context={{ openShortcuts: () => setShortcuts(true) }} /></Suspense>
       </FocusGroup>
+      <ShortcutHelp open={shortcuts} onClose={() => setShortcuts(false)} />
     </div>
   )
 }
@@ -106,6 +122,7 @@ export function App() {
     if (current.data && current.data.id === useSession.getState().profile?.id && JSON.stringify(current.data) !== JSON.stringify(useSession.getState().profile)) setProfile(current.data)
   }, [current.data, setProfile])
   useTheme(profile?.theme_id)
+  useViewingAppearance()
   useGlobalBack()
   // A room link opened signed out returns to the room once signed in.
   useReturnToRoom(!!profile && !googleComplete)

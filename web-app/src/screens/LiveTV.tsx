@@ -1,3 +1,5 @@
+import { ChannelLineup } from './ChannelLineup'
+import { channelCountLabel } from './useChannelFeed'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router'
 import { z } from 'zod'
@@ -52,6 +54,7 @@ export function LiveTV() {
   // Wide screens leave the guide room beside the header for the focused programme (see Guide).
   const wide = useWide()
   const [side, setSide] = useState<HTMLDivElement | null>(null)
+  const [lineupOpen, setLineupOpen] = useState(false)
   const [optionsOpen, setOptionsOpen] = useState(false)
   // Search is an icon until it is asked for, and stays a field for as long as it holds text.
   const [searchOpen, setSearchOpen] = useState(false)
@@ -113,7 +116,7 @@ export function LiveTV() {
     languageOffered && lang !== defaults.language && (lang === 'mine' ? 'My languages' : lang === 'all' ? 'All languages' : LANG_NAMES[lang] ?? languages.data?.find((l) => l.code === lang)?.name ?? lang),
     regionOffered && country !== 'US' && (country === 'all' ? 'All regions' : 'Unknown region'),
   ].filter((n): n is string => !!n)
-  const counted = total === null ? '' : `${total.toLocaleString()} channels`
+  const counted = total === null ? '' : channelCountLabel(total)
   const listed = { ...filters, group: group || undefined }
 
   if (!saved.ready) return <div className="live-screen" data-testid="live">
@@ -159,6 +162,7 @@ export function LiveTV() {
       </FocusGroup>
       {view === 'guide' && wide && <div ref={setSide} className="live-head-side" />}
     </div>
+    {lineupOpen && <ChannelLineup onClose={() => { setLineupOpen(false); setOptionsOpen(true) }} />}
     <Modal open={optionsOpen} onClose={() => setOptionsOpen(false)} title="Options" firstFocusKey="guide:scheduled" variant="sheet" testId="live-options-sheet">
       <section className="live-option"><h3 className="label">The guide lists</h3>
         <FocusGroup focusKey="live:schedules" className="flex gap-2 flex-wrap" role="group" label="Guide channels">
@@ -177,6 +181,7 @@ export function LiveTV() {
       </section>}
       {sourceOptions.length > 2 && <FocusGroup focusKey="live:sources" className="flex"><CatalogPicker scope="live:source" label="Source" value={source} options={sourceOptions} onChange={setSource} /></FocusGroup>}
       <FocusGroup focusKey="live:options-actions" className="flex gap-2 flex-wrap">
+        <Button focusKey="live:lineup" onEnter={() => { setOptionsOpen(false); setLineupOpen(true) }}>My channel lineup</Button>
         <Button focusKey="live:options:done" primary onEnter={() => setOptionsOpen(false)}>Done</Button>
       </FocusGroup>
     </Modal>

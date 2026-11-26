@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from tests.conftest import FIXTURES, Api, add_m3u
@@ -206,3 +207,18 @@ async def test_profile_prefs_roundtrip_and_limit(api: Api) -> None:
     assert (await api.get(f"/profiles/{me}/prefs")).json() == body
     # home layout is untouched by prefs
     assert (await api.get(f"/profiles/{me}/home_layout")).status_code == 200
+
+
+async def test_profile_prefs_merge_independent_devices_and_import_once(api: Api) -> None:
+    await api.login_admin()
+    route = f"/profiles/{api.profile_id}/prefs"
+    replies = await asyncio.gather(
+        api.patch(route, json={"posterSize.v1": "large"}),
+        api.patch(route, json={"homeRows.v1": {"order": ["movies"], "hidden": []}}),
+    )
+    assert all(reply.status_code == 200 for reply in replies)
+    expected = {"posterSize.v1": "large", "homeRows.v1": {"order": ["movies"], "hidden": []}}
+    assert (await api.get(route)).json() == expected
+    assert (await api.patch(route + "?only_missing=true", json={"posterSize.v1": "small"})).json() == expected
+    assert (await api.patch(route, json={"overflow": "x" * 17000})).status_code == 413
+    assert (await api.get(route)).json() == expected

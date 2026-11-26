@@ -1,4 +1,5 @@
 import { HomeNotices } from '../components/Notices'
+import { useContinueVisibility } from '../components/ContinueVisibility'
 import { WatchingNow } from '../components/WatchingNow'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
@@ -9,19 +10,35 @@ import { SafeImg } from '../components/SafeImg'
 import { TileBadge, TileRow, namesSource } from '../components/Tile'
 import { FocusGroup } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
-import { useUi } from '../store/ui'
+import { useProfilePreference } from '../api/profilePreferences'
+import { useHomeRows } from '../api/viewingPreferences'
 import { useAdaptiveAccent } from '../lib/theme'
 
 export const isPlayable = (t: Tile) => t.kind === 'channel' || t.sources.some((s) => s.playable_in_app)
 
 export function Home() {
   const { data, isLoading, error, refetch } = useHome()
-  const prefs = useUi((s) => s.homePrefs)
+  const visibility = useContinueVisibility()
+  const { value: prefs } = useHomeRows()
   const go = useGo()
   const [idx, setIdx] = useState(0)
   const [driver, setDriver] = useState<Tile | null>(null)
   const [heroFocused, setHeroFocused] = useState(false)
 
+  const [reduceMotion, setReduceMotion] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
+  const rotation = useProfilePreference<boolean>('featuredPaused.v1', false, (raw) => typeof raw === 'boolean' ? raw : null)
+  const [allowMotion, setAllowMotion] = useState(false)
+  useEffect(() => {
+    const media = matchMedia('(prefers-reduced-motion: reduce)')
+    const change = () => { setReduceMotion(media.matches); setAllowMotion(false) }
+    media.addEventListener('change', change)
+    return () => media.removeEventListener('change', change)
+  }, [])
+  const rotating = rotation.ready && !rotation.value && (!reduceMotion || allowMotion)
+  const toggleRotation = () => {
+    setAllowMotion(!rotating)
+    rotation.update(rotating)
+  }
   const hero = data?.hero ?? []
   const rows = useMemo(() => {
     const list = (data?.rows ?? []).filter((r) => !prefs.hidden.includes(r.id) && r.tiles.length > 0)
@@ -37,10 +54,10 @@ export function Home() {
 
   // Auto-advance every 8 s; paused while a hero button is focused or a row tile is driving the hero.
   useEffect(() => {
-    if (hero.length < 2 || heroFocused || driver) return
+    if (!rotating || hero.length < 2 || heroFocused || driver) return
     const id = window.setInterval(() => { if (!document.hidden) setIdx((i) => (i + 1) % hero.length) }, 8000)
     return () => window.clearInterval(id)
-  }, [hero.length, heroFocused, driver])
+  }, [rotating, hero.length, heroFocused, driver])
 
   useRestoreFocus(!!data, 'hero:play')
 
@@ -53,6 +70,7 @@ export function Home() {
   )
   if (!active) return (
     <div className="page-pad">
+      {visibility.notice}
       <Empty icon="source" title="Nothing to watch yet" hint="Connect Plex, Jellyfin, an IPTV provider or your streaming services and your library shows up here.">
         <Button focusKey="hero:play" primary icon="plus" onEnter={() => go('/sources')}>Add a source</Button>
       </Empty>
@@ -83,6 +101,7 @@ export function Home() {
               <Icon name="play" />{playable ? 'Play' : 'Open in app'}
             </Button>
             <GlassIconButton focusKey="hero:details" icon="info" label="Details" testId="hero-details" onEnter={() => go(`/title/${encodeURIComponent(active.id)}`)} />
+            {hero.length > 1 && <GlassIconButton focusKey="hero:rotate" icon={rotating ? 'pause' : 'play'} label={rotating ? 'Pause featured rotation' : 'Play featured rotation'} disabled={!rotation.ready} onEnter={toggleRotation} />}
             {hero.length > 1 && (
               <div className="home-hero-dots" aria-hidden="true">
                 {hero.map((h, i) => <i key={h.id} data-on={i === shown} />)}
@@ -92,8 +111,9 @@ export function Home() {
         </div>
       </section>
       <div className="home-rows">
+        {visibility.notice}
         {rows.map((r) => (
-          <TileRow key={r.id} id={r.id} title={r.title} tiles={r.tiles} layout={r.layout} seeAll={r.browse_path} onFocusTile={setDriver} />
+          <TileRow key={r.id} id={r.id} title={r.title} tiles={r.tiles} onRemove={r.id === 'continue_watching' ? visibility.remove : undefined} layout={r.layout} seeAll={r.browse_path} onFocusTile={setDriver} />
         ))}
       </div>
       <HomeFocusSentinel onClear={() => setDriver(null)} />
