@@ -47,12 +47,12 @@ test('keyboard only: Up from the hero reaches the bar, Escape returns to the con
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   await expect(page).toHaveURL(/\/$/)
-  // Arrows stop on the search box without taking the caret (no on-screen keyboard); Enter is the choice to type.
+  // Arrows move through navigation. Enter opens Search with the field ready for input.
   await focusBarEntry(page, 'nav-search')
   await expect(searchBox(page)).not.toBeFocused()
   await page.keyboard.press('Enter')
   await expect(searchBox(page)).toBeFocused()
-  await expect(page).toHaveURL(/\/$/)
+  await expect(page).toHaveURL(/\/search$/)
   await page.keyboard.type('harbor')
   await expect(page).toHaveURL(/\/search\?q=harbor$/)
   await expect(page.getByTestId('search-titles')).toBeVisible({ timeout: 8000 })

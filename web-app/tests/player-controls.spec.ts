@@ -577,8 +577,8 @@ test.describe('on a phone', () => {
     await page.touchscreen.tap(centre.x, centre.y)
     await expect(ui(page)).toHaveAttribute('data-show', 'false')
 
-    // Two taps on the right third: ten seconds on, with a hint; a third tap makes it twenty. One seek in the end.
-    const right = { x: picture.x + picture.width * 0.85, y: centre.y }
+    // Two taps just inside the right half: ten seconds on, with a hint; a third tap makes it twenty. One seek in the end.
+    const right = { x: picture.x + picture.width * 0.6, y: centre.y }
     await page.waitForTimeout(400)
     const local = await video(page, (v) => v.currentTime)
     await page.touchscreen.tap(right.x, right.y)
@@ -590,7 +590,7 @@ test.describe('on a phone', () => {
     await expect(page.getByTestId('seek-hint')).toHaveCount(0)
     expect((await seeks(page)).at(-1)).toBeGreaterThanOrEqual(local + 19)
     expect(resolves).toHaveLength(1)
-    const left = { x: picture.x + picture.width * 0.1, y: centre.y }
+    const left = { x: picture.x + picture.width * 0.4, y: centre.y }
     await page.touchscreen.tap(left.x, left.y)
     await page.touchscreen.tap(left.x, left.y)
     await expect(page.getByTestId('seek-hint')).toHaveText('−10 s')

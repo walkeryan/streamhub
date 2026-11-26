@@ -97,6 +97,8 @@ export const useVoice = create<VoiceStore>((set, get) => ({
   final: null,
   error: null,
   receive: (e) => {
+    // A TV result can already be queued on the WebView when typing cancels recognition.
+    if ((e.state === 'partial' || e.state === 'final') && get().status !== 'listening') return
     if (e.state === 'listening') set({ status: 'listening', heard: get().status === 'listening' ? get().heard : '' })
     else if (e.state === 'partial') set({ status: 'listening', heard: e.text ?? '' })
     else if (e.state === 'final' && e.text) set({ status: 'idle', heard: '', final: { text: e.text, seq: ++seq } })

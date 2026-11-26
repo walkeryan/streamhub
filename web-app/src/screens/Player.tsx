@@ -799,18 +799,17 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
 
   // ---- pointer and touch on the picture ----
   // A mouse click plays or pauses and a double click is full screen. A finger shows or hides the controls,
-  // and two taps on the left or right third skip ten seconds (more taps add up, like the keys).
+  // and two taps on the left or right half skip ten seconds (more taps add up, like the keys).
   const pointer = useRef({ kind: 'mouse', shown: false })
   const lastTap = useRef({ side: 0, at: 0 })
   const onPictureClick = (e: MouseEvent<HTMLVideoElement>) => {
     if (pointer.current.kind !== 'touch') { togglePlay(); return }
     const box = e.currentTarget.getBoundingClientRect()
-    const x = box.width > 0 ? (e.clientX - box.left) / box.width : 0.5
-    const side = x < 1 / 3 ? -1 : x > 2 / 3 ? 1 : 0
+    const side = e.clientX < box.left + box.width / 2 ? -1 : 1
     const at = performance.now()
-    const again = side !== 0 && lastTap.current.side === side && at - lastTap.current.at < DOUBLE_TAP_MS
+    const again = lastTap.current.side === side && at - lastTap.current.at < DOUBLE_TAP_MS
     lastTap.current = { side, at }
-    if (again && canSeek) { seek.step(side as -1 | 1); return }
+    if (again && canSeek) { seek.step(side); return }
     if (pointer.current.shown && !paused) hideChrome(); else poke()
   }
 
