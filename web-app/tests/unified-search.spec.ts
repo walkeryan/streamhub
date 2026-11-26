@@ -600,6 +600,7 @@ test('physical typing takes over TV voice search and keeps multiword input acros
 test('a hardware keyboard can type on the focused TV search field before activating the microphone', async ({ page }) => {
   await installVoiceBridge(page)
   await enter(page)
+  await expect(page.getByTestId('hero-play')).toHaveAttribute('data-focused', 'true')
   await focusBarEntry(page, 'nav-search')
   await page.keyboard.type('Sunday League')
   await expect(page).toHaveURL(/search\?q=Sunday%20League$/)
