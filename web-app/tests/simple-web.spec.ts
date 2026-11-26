@@ -475,7 +475,7 @@ test('My List gathers favorites, watchlist and history as tabs', async ({ page }
   await expect(page).toHaveURL(/\/favorites$/)
   await expect(page.getByRole('heading', { name: 'My List', exact: true })).toBeVisible()
   const list = page.getByTestId('favorites')
-  await expect(list.getByRole('tablist').getByRole('button')).toHaveText(['Favorites', 'Watchlist', 'History'])
+  await expect(list.getByRole('tablist').getByRole('tab')).toHaveText(['Favorites', 'Watchlist', 'History'])
   await expect(page.getByTestId('mylist-favorites')).toHaveAttribute('data-focused', 'true')
   await expect(list.getByTestId('tile')).toHaveText([/Metro Sports 1/, /Static Radio TV/, /Harbor Lights/])
   await page.keyboard.press('ArrowRight')
@@ -488,7 +488,7 @@ test('My List gathers favorites, watchlist and history as tabs', async ({ page }
   await expect(list.getByTestId('tile')).toHaveText([/Harbor Lights/, /Neon Cartographers/])
   // Home's Watchlist row links to its tab.
   await page.goto('/favorites?tab=watchlist')
-  await expect(page.getByTestId('mylist-watchlist')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('mylist-watchlist')).toHaveAttribute('aria-selected', 'true')
 })
 
 test('Search lists a title no source has in the same grid, marked as such; the empty search page leads to the metadata catalog', async ({ page }) => {

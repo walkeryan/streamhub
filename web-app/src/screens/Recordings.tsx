@@ -1,6 +1,8 @@
+import { TabPanels } from '../components/ui'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useDeleteRecording, useDeleteRecordingRule, usePatchRecordingRule, useRecordingRules, useRecordings } from '../api/hooks'
+import { automaticPadding, RulePadding } from '../recordings/RulePadding'
 import type { Recording, RecordingRule } from '../api/types'
 import { Button, Chip, Empty, ErrorState, GlassIconButton, Icon, Modal, OverflowMenu, PageHeader, SectionHeader, Skeleton } from '../ds'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
@@ -41,7 +43,7 @@ export function Recordings() {
   const [deleting, setDeleting] = useState<Recording | null>(null)
   const [deletingRule, setDeletingRule] = useState<RecordingRule | null>(null)
   const [editing, setEditing] = useState<RecordingRule | null>(null)
-  const [draft, setDraft] = useState({ match: '', new_only: false, keep: null as number | null })
+  const [draft, setDraft] = useState({ ...automaticPadding, match: '', new_only: false, keep: null as number | null })
   useRestoreFocus(!(allowed || isAdmin) || !!list.data || !!list.error, list.data?.enabled && allowed ? `rec:tab:${tab}` : 'rec:guide')
 
   const all = list.data?.recordings ?? []
@@ -75,12 +77,13 @@ export function Recordings() {
       onSuccess: (r) => toast(r.enabled ? `Rule on: matching programmes are being scheduled.` : `Rule off. Its upcoming recordings were removed.`, 'success'), onError: failed,
     })
   }
-  const edit = (rule: RecordingRule) => { setDraft({ match: rule.match, new_only: rule.new_only, keep: rule.keep ?? null }); setEditing(rule) }
+  const edit = (rule: RecordingRule) => { setDraft({ pad_before_s: rule.pad_before_s ?? null, pad_after_s: rule.pad_after_s ?? null, match: rule.match, new_only: rule.new_only, keep: rule.keep ?? null }); setEditing(rule) }
   const saveRule = () => {
     const rule = editing
     if (!rule || !draft.match.trim() || patchRule.isPending) return
-    patchRule.mutate({ id: rule.id, patch: { match: draft.match.trim(), new_only: draft.new_only, keep: draft.keep } }, { onSuccess: () => { setEditing(null); toast('Rule saved.', 'success') }, onError: failed })
+    patchRule.mutate({ id: rule.id, patch: { match: draft.match.trim(), new_only: draft.new_only, keep: draft.keep, pad_before_s: draft.pad_before_s, pad_after_s: draft.pad_after_s } }, { onSuccess: () => { setEditing(null); toast('Rule saved.', 'success') }, onError: failed })
   }
+  const nextForRule = list.data?.recordings.find(r => editing && r.rule_id === editing.id && r.state === 'scheduled')
   const confirmDeleteRule = () => {
     const rule = deletingRule
     setDeletingRule(null)
@@ -174,11 +177,11 @@ export function Recordings() {
   return (
     <div className="page-pad lib-page" data-testid="recordings">
       <PageHeader title="Recordings" className="lib-head">
-        {tabbed && <FocusGroup focusKey="rec:tabs" className="lib-chips" role="tablist">
-          {TABS.map((t) => <Chip key={t.id} focusKey={`rec:tab:${t.id}`} pressed={tab === t.id} onEnter={() => setTab(t.id)} testId={`recordings-tab-${t.id}`}>{t.label}</Chip>)}
+        {tabbed && <FocusGroup focusKey="rec:tabs" className="lib-chips" role="tablist" label="Recordings">
+          {TABS.map((t) => <Chip tab key={t.id} focusKey={`rec:tab:${t.id}`} pressed={tab === t.id} onEnter={() => setTab(t.id)} testId={`recordings-tab-${t.id}`}>{t.label}</Chip>)}
         </FocusGroup>}
       </PageHeader>
-      {body}
+      {tabbed ? <TabPanels tabs={TABS.map(t => `rec:tab:${t.id}`)} active={`rec:tab:${tab}`}>{body}</TabPanels> : body}
       <Modal open={!!deleting} onClose={() => setDeleting(null)} title={`${deleting?.state === 'done' ? 'Delete' : 'Remove'} ${deleting?.title ?? ''}?`} firstFocusKey="recdel:cancel" testId="recording-delete-confirm">
         <p className="muted">{deleting?.state === 'done' ? 'The recording and its file are deleted from the server. This cannot be undone.' : 'It is taken off this list. Nothing was recorded.'}</p>
         <div className="lib-actions">
@@ -200,6 +203,8 @@ export function Recordings() {
           <div className="lib-chips">
             <Chip focusKey="ruleedit:new" pressed={draft.new_only} onEnter={() => setDraft((d) => ({ ...d, new_only: !d.new_only }))}>New only (skip repeats)</Chip>
           </div>
+          <RulePadding value={draft} update={v => setDraft(d => ({ ...d, ...v }))}
+            example={nextForRule ? { start: nextForRule.starts_at, stop: nextForRule.ends_at, sport: !!nextForRule.is_sport } : undefined} />
           <span className="label">Keep</span>
           <FocusGroup focusKey="ruleedit:keep" className="lib-chips">
             {KEEP.map((n) => <Chip key={n ?? 'all'} focusKey={`ruleedit:keep:${n ?? 'all'}`} pressed={draft.keep === n} onEnter={() => setDraft((d) => ({ ...d, keep: n }))}>{n ? `Last ${n}` : 'All'}</Chip>)}

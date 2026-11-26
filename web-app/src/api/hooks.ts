@@ -202,7 +202,7 @@ export const useLanguages = () =>
   useQuery({ queryKey: ['channel-languages', useProfileId()], queryFn: () => unwrap<LanguageCount[]>(api.GET('/channels/languages')) })
 
 export interface EpgRequest { ids: string[]; from: number; to: number; enabled: boolean }
-export interface EpgChunks { byChannel: Record<string, Programme[]>; loading: boolean[]; error: unknown }
+export interface EpgChunks { byChannel: Record<string, Programme[]>; loading: boolean[]; error: unknown; retryFailed: () => void }
 // Not a closure: the same function on every render is what lets the merged schedule keep its identity until an answer changes.
 const mergeEpg = (results: UseQueryResult<EpgData>[]): EpgChunks => {
   const lists = new Map<string, Programme[][]>()
@@ -210,6 +210,7 @@ const mergeEpg = (results: UseQueryResult<EpgData>[]): EpgChunks => {
   return {
     byChannel: Object.fromEntries([...lists].map(([id, parts]) => [id, mergeProgrammes(parts)])),
     loading: results.map((r) => r.isLoading),
+    retryFailed: () => { for (const result of results) if (result.isError) void result.refetch() },
     error: results.find((r) => r.error)?.error ?? null,
   }
 }
@@ -497,7 +498,7 @@ export function useDeleteRecording() {
 export function useCreateRecordingRule() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: { kind: RecordingRule['kind']; match: string; channel_id?: string | null; new_only?: boolean; keep?: number | null }) =>
+    mutationFn: (body: { kind: RecordingRule['kind']; match: string; channel_id?: string | null; new_only?: boolean; keep?: number | null; pad_before_s?: number | null; pad_after_s?: number | null }) =>
       unwrap<RecordingRule>(api.POST('/recording-rules', { body })),
     onSettled: () => refreshRecordings(qc),
   })
@@ -506,7 +507,7 @@ export function useCreateRecordingRule() {
 export function usePatchRecordingRule() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (v: { id: string; patch: { match?: string; channel_id?: string | null; new_only?: boolean; keep?: number | null; enabled?: boolean } }) =>
+    mutationFn: (v: { id: string; patch: { match?: string; channel_id?: string | null; new_only?: boolean; keep?: number | null; pad_before_s?: number | null; pad_after_s?: number | null; enabled?: boolean } }) =>
       unwrap<RecordingRule>(api.PATCH('/recording-rules/{id}', { params: { path: { id: v.id } }, body: v.patch })),
     onSettled: () => refreshRecordings(qc),
   })

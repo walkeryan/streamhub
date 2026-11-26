@@ -45,7 +45,7 @@ export function StillCard(p: {
         <SafeImg className="art" src={p.image} alt="" loading="lazy" draggable={false}
           fallback={<span className="ds-art-fallback" style={{ background: nameGradient(p.fallbackName) }}>{p.fallbackName}</span>} />
         {p.badge && <span className="ds-still-badge">{p.badge}</span>}
-        {pct > 0 && pct < 100 && <ProgressBar pct={pct} className="ds-still-bar" />}
+        {pct > 0 && pct < 100 && <ProgressBar label={`Viewing progress · ${p.label}`} pct={pct} className="ds-still-bar" />}
         {p.corner ?? (p.watched && <WatchedTick />)}
       </div>
       <p className="ds-still-cap">{p.title}{p.meta ? <small>{p.meta}</small> : null}</p>

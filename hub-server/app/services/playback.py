@@ -528,8 +528,15 @@ class PlaybackResolver:
             row = await self._catalog.title_row(h.a, h.b)
             if row is None:
                 raise NotFound("title not found")
-            row = await self._select_audio(
-                profile_id, [row], variant_id, allow_unverified_audio, source_id, audio_track=audio_track, probe=web
+            row, audio_track = await self._select_audio(
+                profile_id,
+                [row],
+                variant_id,
+                allow_unverified_audio,
+                source_id,
+                audio_track=audio_track,
+                probe=web,
+                hub_id=hub_id,
             )
             playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
             return await self._resolve_title(
@@ -655,10 +662,17 @@ class PlaybackResolver:
         preferred = await self._catalog.preferred_languages(profile_id, None)
         options = []
         probes = MAX_OPTION_PROBES if probe else 0
+        allowed = None
+        if self._governed():
+            allowed = await self.content_policy.allowed_refs(
+                profile_id, [ids.lib_id(r.source_id, r.ext_id) for r in rows]
+            )
         for row in sorted(
             rows, key=lambda r: (getattr(sources.get(r.source_id), "priority", 100), r.source_id, r.ext_id)
         ):
             src = sources.get(row.source_id)
+            if allowed is not None and ids.lib_id(row.source_id, row.ext_id) not in allowed:
+                continue
             if src is None or not src.enabled:
                 continue
             evidence_row = row
@@ -722,7 +736,56 @@ class PlaybackResolver:
         if variant_id is not None and variant_id != option["variant_id"]:
             raise NotFound("audio variant does not belong to this channel")
 
-    async def options(self, profile_id: str, hub_id: str, source_id: str | None = None) -> dict[str, Any]:
+    @staticmethod
+    def _audio_signature(option: dict[str, Any], index: int | None, preferred: list[str]) -> dict[str, Any]:
+        return {
+            "languages": option["audio_languages"],
+            "default": option["default_audio_language"],
+            "tracks": [[t["index"], t["language"], t.get("title")] for t in option["audio_tracks"]],
+            "preferred": preferred,
+            "index": index,
+        }
+
+    async def _remembered(
+        self, profile_id: str, hub_id: str, options: list[dict[str, Any]], preferred: list[str]
+    ) -> tuple[bool, dict[str, Any] | None, int | None]:
+        saved = await self._progress.source_preference(profile_id, hub_id)
+        if saved is None:
+            return False, None, None
+        option = next((o for o in options if o["variant_id"] == saved.variant_id), None)
+        index = saved.audio.get("index")
+        if option and option["audio_verified"] and saved.audio == self._audio_signature(option, index, preferred):
+            return True, option, index
+        return True, None, None
+
+    async def remember(self, profile_id: str, hub_id: str, variant_id: str | None, index: int | None) -> None:
+        if not hub_id.startswith(("lib:", "tmdb:")):
+            raise ServiceError("Choose a library edition to remember.")
+        await self._require_content(profile_id, hub_id)
+        if variant_id is None:
+            await self._progress.save_source_preference(profile_id, hub_id, None, {})
+            return
+        choices = await self.options(profile_id, hub_id)
+        option = next((o for o in choices["options"] if o["variant_id"] == variant_id), None)
+        if option is None:
+            raise NotFound("This edition is unavailable.")
+        await self._require_content(profile_id, variant_id)
+        if not option["audio_verified"]:
+            raise Conflict("Audio must be verified before this edition can be remembered.")
+        if index is None:
+            index = option["preferred_audio_track"]
+        if index is None and not option["default_audio_language"]:
+            raise Conflict("Choose an identified audio track before remembering this edition.")
+        if index is not None and not any(
+            t["index"] == index and t["language"] != "und" for t in option["audio_tracks"]
+        ):
+            raise Conflict("Choose an available, identified audio track.")
+        signature = self._audio_signature(option, index, choices["preferred_languages"])
+        await self._progress.save_source_preference(profile_id, hub_id, variant_id, signature)
+
+    async def options(
+        self, profile_id: str, hub_id: str, source_id: str | None = None, *, probe: bool = True
+    ) -> dict[str, Any]:
         await self._require_content(profile_id, hub_id)
         try:
             h = ids.parse(hub_id)
@@ -769,16 +832,18 @@ class PlaybackResolver:
             raise NotFound("unknown id")
         if source_id:
             rows = [row for row in rows if row.source_id == source_id]
-        options = await self._audio_options(profile_id, rows, probe=True)
+        options = await self._audio_options(profile_id, rows, probe=probe)
         preferred = await self._catalog.preferred_languages(profile_id, None)
-        automatic = _best_option(options, preferred)
+        remembered, chosen, track = await self._remembered(profile_id, hub_id, options, preferred)
+        automatic = chosen if remembered else _best_option(options, preferred)
         return {
             "id": hub_id,
             "preferred_languages": preferred,
             "options": options,
             "automatic_variant_id": automatic["variant_id"] if automatic else None,
-            # Nothing is ever held for an audio choice (see ``_select_audio``).
-            "selection_required": False,
+            "remembered": remembered,
+            "remembered_audio_track": track,
+            "selection_required": remembered and chosen is None,
         }
 
     async def _select_audio(
@@ -791,7 +856,8 @@ class PlaybackResolver:
         *,
         audio_track: int | None = None,
         probe: bool = False,
-    ) -> Title:
+        hub_id: str,
+    ) -> tuple[Title, int | None]:
         """The variant that plays: the one named, else the best guess for the profile's languages.
 
         Never held for a confirmation (the owner's decision: "if there is only one stream, never ask me";
@@ -803,6 +869,18 @@ class PlaybackResolver:
         if source_id:
             rows = [row for row in rows if row.source_id == source_id]
         options = await self._audio_options(profile_id, rows, probe=probe)
+        preferred = await self._catalog.preferred_languages(profile_id, None)
+        remembered, chosen, saved_track = await self._remembered(profile_id, hub_id, options, preferred)
+        if remembered and not chosen and not (variant_id and allow_unverified_audio):
+            raise Conflict(
+                "Your saved edition or audio changed. Choose again.",
+                code="audio_selection_required",
+                extra={"remembered_edition_changed": True},
+            )
+        if chosen and (not variant_id or variant_id == chosen["variant_id"]):
+            variant_id = chosen["variant_id"]
+            if audio_track is None:
+                audio_track = saved_track
         if variant_id:
             selected = next((o for o in options if o["variant_id"] == variant_id), None)
             if selected is None:
@@ -814,7 +892,7 @@ class PlaybackResolver:
         row = next(r for r in rows if ids.lib_id(r.source_id, r.ext_id) == selected["variant_id"])
         if row.kind in ("show", "series", "season"):
             row = await self._next_episode(profile_id, row)
-        return row
+        return row, audio_track
 
     async def _resolve_trailer(self, profile_id: str, hub_id: str) -> dict[str, Any]:
         """``trailer:<title id>`` → hand-off to the YouTube app (specific video if TMDB knows one)."""
@@ -1061,6 +1139,7 @@ class PlaybackResolver:
         client: str,
         https_site: bool,
         progress_ids: list[str] | None = None,
+        display_title: str | None = None,
         audio_consent: bool = False,
         audio_track: int | None = None,
         start_position_ms: int | None = None,
@@ -1069,6 +1148,7 @@ class PlaybackResolver:
     ) -> dict[str, Any]:
         await self._require_content(profile_id, ids.lib_id(row.source_id, row.ext_id))
         await self._require_slot()
+        display_title = display_title or await self._catalog.display_title(row)
         src, prov = await self._sources.provider_for(row.source_id)
         if not isinstance(prov, PlaybackProvider):
             raise ServiceError("source cannot play titles")
@@ -1105,7 +1185,7 @@ class PlaybackResolver:
             room.source_id, room.url, room.headers = src.id, target.url, dict(target.headers)
             room.max_connections = self._sources.max_connections(src)
             room.variant_id, room.vod = lib, vod
-            room.title, room.kind = None if row.adult else row.title, row.kind
+            room.title, room.kind = None if row.adult else display_title, row.kind
         elif client == "web_canvas" or (client != "android_tv" and self._probe_applies(src, target)):
             vod = await self._web_vod(
                 profile_id, row, src, target, audio_track, start_position_ms, max_height=max_height
@@ -1120,7 +1200,7 @@ class PlaybackResolver:
             client,
             https_site,
             channel_key=None,
-            title=row.title,
+            title=display_title,
             subtitle=subtitle,
             poster=image(src, row.poster, ids.lib_id(row.source_id, row.ext_id)),
             vod=vod,
@@ -1482,7 +1562,7 @@ class PlaybackResolver:
     ) -> dict[str, Any]:
         sources, meta, badges, matches = await self._tmdb_matches(media_type, tmdb_id)
         if matches and (not source_id or any(m.source_id == source_id for m in matches)):
-            row = await self._select_audio(
+            row, audio_track = await self._select_audio(
                 profile_id,
                 matches,
                 variant_id,
@@ -1490,6 +1570,7 @@ class PlaybackResolver:
                 source_id,
                 audio_track=audio_track,
                 probe=client != "android_tv",
+                hub_id=hub_id,
             )
             playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
             return await self._resolve_title(
@@ -1498,11 +1579,18 @@ class PlaybackResolver:
                 playback_id,
                 client,
                 https_site,
+                display_title=meta.title if meta and row.kind in ("movie", "vod") else None,
                 audio_consent=bool(variant_id and allow_unverified_audio),
                 audio_track=audio_track,
                 start_position_ms=start_position_ms,
                 room=room,
                 max_height=max_height,
+            )
+        if not variant_id and not source_id and await self._progress.source_preference(profile_id, hub_id):
+            raise Conflict(
+                "Your saved edition is unavailable. Choose again.",
+                code="audio_selection_required",
+                extra={"remembered_edition_changed": True},
             )
         if variant_id:
             raise NotFound("variant does not belong to this title or source")

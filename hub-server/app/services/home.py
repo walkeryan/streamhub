@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -12,15 +13,17 @@ from app.services.adult import adult_included, adult_scope
 from app.services.availability import AvailabilityService
 from app.services.catalog import NEW_RELEASES, CatalogService, is_replay_shelf, shelf_path
 from app.services.channels import ChannelService
+from app.services.errors import Forbidden, NotFound
+from app.services.playback import PlaybackResolver
 from app.services.recommendations import recommendations
 from app.services.sources import SourceService
 from app.services.tiles import TileContext, meta_tile
-from app.services.user_state import HOME_ROWS, HomeLayoutService, ProgressService
+from app.services.user_state import HOME_ROWS, HomeLayoutService, ProgressService, WatchlistService
 
 log = logging.getLogger(__name__)
 
 ROW_TITLES = dict(HOME_ROWS)
-ROW_LAYOUT = {"on_now": "channel", "continue_watching": "landscape"}
+ROW_LAYOUT = {"ready_to_watch": "landscape", "on_now": "channel", "continue_watching": "landscape"}
 ROW_PATHS = {"on_now": "/live", "watchlist": "/favorites?tab=watchlist", "favorites": "/favorites"}
 HERO_SIZE = 8
 SHELF_ROWS = 8  # chosen automatically, after New Releases
@@ -43,6 +46,8 @@ class HomeService:
         sources: SourceService,
         availability: AvailabilityService,
         meta: MetadataProvider,
+        playback: PlaybackResolver | None = None,
+        watchlist: WatchlistService | None = None,
     ) -> None:
         self._catalog = catalog
         self._channels = channels
@@ -51,12 +56,30 @@ class HomeService:
         self._sources = sources
         self._availability = availability
         self._meta = meta
+        self._playback = playback
+        self._watchlist = watchlist
 
     async def continue_watching(self, profile_id: str, ctx: TileContext) -> list[dict[str, Any]]:
         local = await self._progress.in_progress(profile_id, 30)
         tiles = await self._catalog.tiles_for_ids([p.ref_id for p in local], ctx)
         # Shared provider credentials cannot attribute external history to a profile.
         return tiles[:30]
+
+    async def watchlist_audio(self, profile_id: str, ref_id: str) -> str | None:
+        """Checked against the same editions, profile and audio evidence as playback, without opening a file."""
+        if not self._playback or not ref_id.startswith(("lib:", "tmdb:")):
+            return None
+        try:
+            options = await self._playback.options(profile_id, ref_id, probe=False)
+        except (Forbidden, NotFound):
+            return None
+        for option in options["options"]:
+            if option["variant_id"] != options["automatic_variant_id"]:
+                continue
+            names = [self._sources.language.language_name(code) for code in option["audio_languages"]]
+            audio = ", ".join(names) if option["audio_verified"] else "Audio unverified"
+            return f"{option['source_name']} · {audio}"
+        return None
 
     async def on_now(self, profile_id: str, ctx: TileContext) -> tuple[list[dict[str, Any]], str]:
         # Ask for more than the row shows so a favourite is not cut off before it can lead.
@@ -209,6 +232,30 @@ class HomeService:
         # A name on both sides ("Netflix", "Kids") needs its side in the row title.
         on_both = {s["name"] for s in stats["movies"]} & {s["name"] for s in stats["shows"]}
 
+        watchlist_tiles = []
+        ready_tiles = []
+        if "watchlist" in visible or "ready_to_watch" in visible:
+            saved = await self._catalog.watchlist_ids(profile_id)
+            if "watchlist" in visible:
+                watchlist_tiles = await self._catalog.tiles_for_ids(saved[:SHELF_TILES], ctx)
+            watchlist = self._watchlist
+            if watchlist and "ready_to_watch" in visible and saved:
+                candidates = await watchlist.availability_candidates(profile_id, saved, SHELF_TILES)
+                slots = asyncio.Semaphore(4)
+
+                async def describe(ref: str) -> tuple[str, str | None]:
+                    async with slots:
+                        description = await watchlist.cached_audio(
+                            profile_id, ref, lambda: self.watchlist_audio(profile_id, ref)
+                        )
+                        return ref, description
+
+                descriptions = dict(await asyncio.gather(*(describe(ref) for ref in candidates)))
+                ready = await watchlist.newly_available(
+                    profile_id, {ref: value is not None for ref, value in descriptions.items()}
+                )
+                ready_tiles = await self._catalog.tiles_for_ids(ready[:SHELF_TILES], ctx)
+                ready_tiles = [dict(tile, subtitle=descriptions[tile["id"]]) for tile in ready_tiles]
         for rid in visible:
             tiles: list[dict[str, Any]] = []
             title = ROW_TITLES.get(rid, rid)
@@ -224,7 +271,9 @@ class HomeService:
             elif rid == "recently_added":
                 tiles = recent
             elif rid == "watchlist":
-                tiles = await self._catalog.tiles_for_ids(await self._catalog.watchlist_ids(profile_id), ctx)
+                tiles = watchlist_tiles
+            elif rid == "ready_to_watch":
+                tiles = ready_tiles
             elif rid == "favorites":
                 fav = await self._catalog.favorite_ids(
                     profile_id, kinds={"movie", "show", "vod", "series", "episode", "season"}

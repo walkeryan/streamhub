@@ -74,7 +74,7 @@
 /* Theme cards: a glass card with a little screen in the theme's colours; the one in use is ringed in the accent. */
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr)); gap: var(--gap-row); padding: 0.4rem; margin: -0.4rem; }
 .theme-card { border-radius: var(--r-lg); padding: 0.7rem; background: var(--glass-tint); border: 1px solid var(--glass-line); display: flex; flex-direction: column; gap: 0.5rem; }
-.theme-card[aria-pressed='true'] { box-shadow: 0 0 0 0.15rem var(--t-accent); border-color: transparent; }
+.theme-card[aria-checked='true'] { box-shadow: 0 0 0 0.15rem var(--t-accent); border-color: transparent; }
 .theme-card.fx[data-focused='true'] { outline-color: var(--t-accent); box-shadow: var(--glow-accent); }
 .theme-name { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-weight: 650; }
 .theme-preview { border-radius: var(--r-md); padding: 0.625rem; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; background: var(--t-bg); color: var(--t-text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t-text) 10%, transparent); }

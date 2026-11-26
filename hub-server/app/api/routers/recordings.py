@@ -37,6 +37,12 @@ async def create_recording(body: S.RecordingCreate, response: Response, c: C, p:
     return (await c.recorder.to_api([row]))[0]
 
 
+@router.post("/recordings/{id}/issues", status_code=204, tags=["recordings"])
+async def report_recording_issue(id: str, body: S.RecordingIssue, c: C, p: P) -> Response:
+    await c.recorder.report_issue(p, id, body.category, body.position_ms)
+    return Response(status_code=204)
+
+
 @router.delete("/recordings/{id}", status_code=204, tags=["recordings"])
 async def delete_recording(id: str, c: C, p: P) -> Response:
     await c.recorder.cancel(p, id)
@@ -61,7 +67,9 @@ async def list_recording_rules(c: C, p: P) -> dict[str, Any]:
     tags=["recordings"],
 )
 async def create_recording_rule(body: S.RecordingRuleCreate, response: Response, c: C, p: P) -> dict[str, Any]:
-    row, created = await c.recorder.add_or_get_rule(p, body.kind, body.match, body.channel_id, body.new_only, body.keep)
+    row, created = await c.recorder.add_or_get_rule(
+        p, body.kind, body.match, body.channel_id, body.new_only, body.keep, body.pad_before_s, body.pad_after_s
+    )
     if not created:
         response.status_code = 200
     return (await c.recorder.rules_to_api([row]))[0]

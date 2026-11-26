@@ -684,6 +684,7 @@ class StreamProxy:
     ) -> None:
         self._client_factory = client_factory
         self.dvr = dvr or DvrManager()
+        self._buffer_channel: tuple[str, str] | None = None
         self._clock = clock
         self._sleep = sleep
         self._shared: dict[str, SharedUpstream] = {}
@@ -1751,6 +1752,7 @@ class StreamProxy:
         max_connections: int | None,
         generation: int | None,
         viewer: Viewer | None = None,
+        channel_id: str | None = None,
     ) -> dict[str, Any]:
         if not self.dvr.enabled:
             raise Conflict("Local recording is disabled.", code="recording_disabled")
@@ -1774,6 +1776,8 @@ class StreamProxy:
             )
             lease = self.dvr.join(key, profile)
             window = self.dvr.window(key)
+            if channel_id is not None:
+                self._buffer_channel = (key, channel_id)
             acquired = True
             return {"lease_id": lease, "session_id": sess.sid, "window": window}
         except BaseException:
@@ -1791,6 +1795,17 @@ class StreamProxy:
             self.dvr.leave(key, profile, lease)
             if self.dvr.key == key and not self.dvr.held(key):
                 await self._stop_hls(key)
+
+    async def retained_positions(self, channel_id: str, positions: list[Any]) -> list[bool]:
+        async with self._hls_lock:
+            key = self.dvr.key
+            if key is None or self._buffer_channel != (key, channel_id) or not self.dvr.held(key):
+                return [False] * len(positions)
+            try:
+                self.dvr.refresh(key)
+            except (OSError, ValueError, ServiceError):
+                return [False] * len(positions)
+            return [at is not None and any(s.start <= at < s.end for s in self.dvr.segments) for at in positions]
 
     async def buffer_window(self, key: str) -> dict[str, Any]:
         async with self._hls_lock:

@@ -13,7 +13,7 @@ import { Icon } from '../components/Icon'
 import { LinkToCopy } from '../components/LinkToCopy'
 import { LimitsEditor, PermissionSwitches, Toggle } from '../components/PeopleControls'
 import { PASSWORD_MAX, PASSWORD_MIN, type PinKind } from '../components/SignInSecret'
-import { Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
+import { TabPanels, Button, Chip, Empty, ErrorState, Modal, Skeleton } from '../components/ui'
 import { GlassIconButton, PageHeader, Section, SectionHeader } from '../ds'
 import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
@@ -43,17 +43,17 @@ export function Users() {
   return (
     <div className="page-pad acct-page" data-testid="users">
       <PageHeader title="Users" meta={users.data ? `${users.data.filter((u) => u.status !== 'pending').length}` : undefined} />
-      <FocusGroup focusKey="users:tabs" className="chip-scroll" role="tablist">
-        {TABS.map(([id, label]) => <Chip key={id} focusKey={`users:tab:${id}`} pressed={tab === id} onEnter={() => setSp(id === 'people' ? {} : { tab: id }, { replace: true })} testId={`users-tab-${id}`}>{label}</Chip>)}
+      <FocusGroup focusKey="users:tabs" className="chip-scroll" role="tablist" label="Users">
+        {TABS.map(([id, label]) => <Chip tab key={id} focusKey={`users:tab:${id}`} pressed={tab === id} onEnter={() => setSp(id === 'people' ? {} : { tab: id }, { replace: true })} testId={`users-tab-${id}`}>{label}</Chip>)}
       </FocusGroup>
-      <div className="acct-body acct-body-wide">
+      <TabPanels tabs={TABS.map(([id]) => `users:tab:${id}`)} active={`users:tab:${tab}`} className="acct-body acct-body-wide">
         {failed ? <ErrorState error={failed} onRetry={() => { void users.refetch(); void roles.refetch() }} />
           : !users.data || !roles.data ? <Skeleton style={{ height: '14rem' }} />
           : tab === 'people' ? <PeopleTab users={users.data} roles={roles.data} />
           : tab === 'roles' ? <RolesTab roles={roles.data} />
           : tab === 'invites' ? <InvitesTab roles={roles.data} />
           : <ActivityTab users={users.data} roles={roles.data} />}
-      </div>
+      </TabPanels>
     </div>
   )
 }

@@ -35,6 +35,7 @@ components:
       properties:
         code: {type: string}
         message: {type: string}
+        remembered_edition_changed: {type: boolean, description: A previously saved edition or verified audio changed and must be chosen again.}
         active: {type: array, items: {$ref: '#/components/schemas/ActiveStream'}, description: "On source_busy: the streams this server is running on the source, longest-running first; may be empty when something outside this server holds the connections. On user_stream_limit: the user's own streams that use up their limit."}
         limit: {type: integer, nullable: true, description: "On source_busy: how many connections the source allows, when known. On user_stream_limit: the user's max_streams."}
         missing: {type: array, items: {$ref: '#/components/schemas/Permission'}, description: "403 forbidden only: the permissions the caller lacks"}
@@ -446,6 +447,7 @@ components:
             overview: {type: string}
             genres: {type: array, items: {type: string}}
             runtime_min: {type: integer, nullable: true}
+            resume_position_ms: {type: integer, default: 0}
             cast: {type: array, items: {type: object, properties: {name: {type: string}, character: {type: string}, photo: {type: string, nullable: true}}}}
             seasons: { type: array, items: { $ref: '#/components/schemas/EpisodeTile' } }
             episodes: { type: array, items: { $ref: '#/components/schemas/EpisodeTile' } }
@@ -743,6 +745,8 @@ components:
         preferred_languages: {type: array, items: {type: string}}
         options: {type: array, items: {$ref: '#/components/schemas/PlaybackOption'}}
         automatic_variant_id: {type: string, nullable: true}
+        remembered: {type: boolean}
+        remembered_audio_track: {type: integer, nullable: true}
         selection_required: {type: boolean}
     PlaybackRequest:
       type: object
@@ -820,6 +824,7 @@ components:
           properties:
             lease_id: {type: string, maxLength: 128}
             paused: {type: boolean, default: false}
+            position_at: {type: string, format: date-time, nullable: true}
     BufferSeekRequest:
       allOf:
         - {$ref: '#/components/schemas/BufferViewerRequest'}
@@ -942,6 +947,7 @@ components:
         position >= 95% of duration also counts as watched.
       required: [id, position_ms, state]
       properties:
+        watched: {type: boolean, nullable: true, description: Explicit watched or unwatched action independent of a known duration.}
         expected_profile_id: {type: string, nullable: true, maxLength: 128, description: Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes.}
         id: {type: string}
         source_id: {type: string, nullable: true}
@@ -971,7 +977,7 @@ components:
       properties:
         rows:
           type: array
-          description: "Row ids: continue_watching, on_now, recently_added, watchlist, favorites, trending, source:<id>. Ordered by sort."
+          description: "Row ids: continue_watching, on_now, recently_added, watchlist, ready_to_watch, favorites, trending, source:<id>. Ordered by sort."
           items:
             type: object
             required: [id]
@@ -1070,6 +1076,13 @@ components:
         ref_id: {type: string, nullable: true, description: "hub id the notice is about"}
         created_at: {type: string, format: date-time}
         read_at: {type: string, format: date-time, nullable: true}
+    LiveProgrammeEntry:
+      type: object
+      properties:
+        recording_id: {type: string, nullable: true}
+        recording_resume_ms: {type: integer, nullable: true}
+        buffer_start: {type: string, format: date-time, nullable: true}
+        buffer_resume: {type: string, format: date-time, nullable: true}
     RecordingState: { type: string, enum: [scheduled, recording, done, failed, missed, cancelled] }
     Recording:
       type: object
@@ -1109,6 +1122,8 @@ components:
         match: {type: string}
         channel_id: {type: string, nullable: true, description: "null = any channel"}
         channel_name: {type: string, nullable: true}
+        pad_before_s: {type: integer, nullable: true, minimum: 0, maximum: 21600}
+        pad_after_s: {type: integer, nullable: true, minimum: 0, maximum: 21600}
         new_only: {type: boolean, description: "skip listings marked as repeats and episodes already recorded"}
         keep: {type: integer, nullable: true, description: "finished recordings to keep, oldest deleted first; null = all"}
         enabled: {type: boolean}
@@ -1785,6 +1800,15 @@ paths:
   /profiles/{id}/prefs:
     get: { summary: Free-form client prefs for a profile (recent searches, reduced motion…), parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '200': { description: "JSON object ({} when unset)", content: { application/json: { schema: { $ref: '#/components/schemas/ClientPrefs' } } } } } }
     put: { summary: Replace the profile's client prefs (JSON object, max 16 KB serialized; 413 payload_too_large otherwise), parameters: [{name: id, in: path, required: true, schema: {type: string}}], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ClientPrefs' } } } }, responses: { '200': { description: stored object, content: { application/json: { schema: { $ref: '#/components/schemas/ClientPrefs' } } } }, '413': { description: too large } } }
+    patch:
+      summary: Update individual profile preferences atomically
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: only_missing, in: query, schema: {type: boolean, default: false}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ClientPrefs'}}}}
+      responses:
+        '200': {description: Merged preferences, content: {application/json: {schema: {$ref: '#/components/schemas/ClientPrefs'}}}}
+        '413': {description: Preferences exceed the size limit}
 
   /disclaimer:
     get: { security: [], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Disclaimer' } } } } } }
@@ -1814,7 +1838,7 @@ paths:
 
   /home:
     get:
-      summary: Home rows for the current profile (Continue Watching, On Now, Recently Added, Watchlist, Favorites, per-source rows)
+      summary: Home rows for the current profile (Continue Watching, On Now, Recently Added, Watchlist, Ready to watch, Favorites, per-source rows)
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { hero: { type: array, items: { $ref: '#/components/schemas/Tile' } }, rows: { type: array, items: { $ref: '#/components/schemas/Row' } } } } } } } }
   /search:
     get:
@@ -1856,6 +1880,15 @@ paths:
       parameters:
         - {name: id, in: query, required: true, schema: {type: string, maxLength: 512}, description: "ch:<source>:<channel>"}
       responses: {'200': {description: Alternate feeds, possibly none, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackAlternates'}}}}}
+  /playback/preference:
+    put:
+      operationId: rememberPlaybackEdition
+      tags: [playback]
+      parameters:
+        - {in: query, name: id, required: true, schema: {type: string}}
+        - {in: query, name: variant_id, schema: {type: string}}
+        - {in: query, name: audio_track, schema: {type: integer, minimum: 0}}
+      responses: {'204': {description: Edition preference updated}}
   /playback/options:
     get:
       parameters:
@@ -1974,6 +2007,26 @@ paths:
         - { name: offset, in: query, schema: {type: integer, minimum: 0, default: 0} }
         - { name: has_epg, in: query, schema: {type: boolean, default: false} }
       responses: { '200': { description: ok, content: { application/json: { schema: { type: object, properties: { list_id: {type: string}, total: {type: integer, nullable: true}, offset: {type: integer}, limit: {type: integer, nullable: true}, channels: { type: array, items: { $ref: '#/components/schemas/Channel' } } } } } } } }
+  /channels/lineup/hidden:
+    get:
+      summary: Channels hidden by this profile
+      responses: { '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Channel'}}}}} }
+  /channels/lineup:
+    post:
+      summary: Move, hide or restore one channel in the current profile's guide
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [channel_id, action], properties: {channel_id: {type: string}, action: {type: string, enum: [top, up, down, hide, show]}}}}}}
+      responses: { '204': {description: Saved} }
+    delete:
+      summary: Restore the current profile's default channel order and visibility
+      responses: { '204': {description: Restored} }
+  /channels/entry:
+    get:
+      summary: Available entry points for the programme currently on this channel
+      parameters:
+        - {name: channel_id, in: query, required: true, schema: {type: string}}
+        - {name: start, in: query, required: true, schema: {type: string, format: date-time}}
+        - {name: bookmark, in: query, schema: {type: string, format: date-time}}
+      responses: { '200': {description: Available playback positions, content: {application/json: {schema: {$ref: '#/components/schemas/LiveProgrammeEntry'}}}} }
   /channels/groups:
     get:
       parameters:
@@ -2152,6 +2205,14 @@ paths:
     get: { responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
     put: { requestBody: { content: { application/json: { schema: { type: object, properties: { id: {type: string} } } } } }, responses: { '204': { description: ok } } }
     delete: { parameters: [{name: id, in: query, required: true, schema: {type: string}}], responses: { '204': { description: ok } } }
+  /history/continue-watching:
+    put:
+      operationId: setContinueWatchingHidden
+      tags: [user]
+      parameters:
+        - {in: query, name: id, required: true, schema: {type: string}}
+        - {in: query, name: hidden, required: true, schema: {type: boolean}}
+      responses: {'204': {description: Shelf visibility saved; history and position are retained.}}
   /history:
     get: { summary: Recently watched, responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Tile' } } } } } } }
 
@@ -2406,13 +2467,19 @@ paths:
         '200': { description: this programme was already scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
         '403': { description: recording_forbidden }
         '409': { description: "recording_unavailable | programme_ended | already_scheduled (by another profile) | guide_changed" }
+  /recordings/{id}/issues:
+    post:
+      summary: Report a playback issue for a recording
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [category, position_ms], properties: {category: {type: string, enum: [wrong_programme, missing_start, missing_end, picture, audio]}, position_ms: {type: integer, minimum: 0, maximum: 604800000}}}}}}
+      responses: { '204': {description: Report received} }
   /recordings/{id}:
     delete: { summary: Cancel an upcoming or running recording; delete a finished one and its file, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
   /recording-rules:
     get: { summary: The current profile's rules (everyone's for a holder of users.manage), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }
     post:
       summary: Record every matching programme, now and after each guide refresh
-      requestBody: { content: { application/json: { schema: { type: object, required: [kind, match], properties: { kind: {type: string, enum: [series, team, keyword]}, match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean, default: false}, keep: {type: integer, nullable: true} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [kind, match], properties: { kind: {type: string, enum: [series, team, keyword]}, match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean, default: false}, keep: {type: integer, nullable: true}, pad_before_s: {type: integer, nullable: true, minimum: 0, maximum: 21600}, pad_after_s: {type: integer, nullable: true, minimum: 0, maximum: 21600} } } } } }
       responses:
         '201': { description: created; matching programmes are scheduled at once, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }
         '200': { description: the profile already has this rule, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }
@@ -2423,7 +2490,7 @@ paths:
       summary: Edit, disable or enable a rule
       description: Fields left out are kept. Disabling a rule, or changing what it matches, drops the upcoming recordings it scheduled.
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean}, keep: {type: integer, nullable: true}, enabled: {type: boolean} } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { match: {type: string}, channel_id: {type: string, nullable: true}, new_only: {type: boolean}, keep: {type: integer, nullable: true}, pad_before_s: {type: integer, nullable: true, minimum: 0, maximum: 21600}, pad_after_s: {type: integer, nullable: true, minimum: 0, maximum: 21600}, enabled: {type: boolean} } } } } }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/RecordingRule' } } } }, '409': { description: recording_unavailable } }
     delete: { summary: Remove a rule and the upcoming recordings it scheduled; finished ones stay, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
 

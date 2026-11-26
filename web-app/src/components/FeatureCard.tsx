@@ -13,7 +13,7 @@ export function FeatureCard({ focusKey, label, title, eyebrow, art, logo, fallba
     <div className="feature-art">
       <SafeImg className="feature-image" src={art} alt="" loading="lazy" decoding="async" fallback={fallback} />
       {badge && <span className="feature-status">{badge}</span>}
-      {typeof progress === 'number' && <div className="feature-progress"><ProgressBar pct={progress} /></div>}
+      {typeof progress === 'number' && <div className="feature-progress"><ProgressBar label={`Programme progress · ${title}`} pct={progress} /></div>}
     </div>
     <div className="feature-copy">
       <p className="label clamp2">{eyebrow}</p>

@@ -7,6 +7,7 @@ import { useCreateRecordingRule, useDeleteRecording, useRecordings, useScheduleR
 import { useCan } from '../api/me'
 import type { components } from '../api/schema'
 import type { Recording } from '../api/types'
+import { LiveAlternatives } from '../player/LiveAlternatives'
 import { Button, Chip, ErrorState, GlassIconButton, HRow, Icon, Modal, PageHeader, SectionHeader, SkeletonRow } from '../ds'
 import { LogoBlock } from '../components/ui'
 import { LanguageFilter } from '../components/LanguageFilter'
@@ -422,7 +423,8 @@ function EventSheet({ event, today, now, recordable, recordings, onClose, onWatc
     <p className="ds-meta sports-sheet-meta"><span className="truncate">{event.sport} · {channelLine(event.feeds)}</span></p>
     {error && <p role="alert" data-testid="sports-sheet-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
     <FocusGroup focusKey="sports:sheet" className="flex flex-col gap-2">
-      {started && <Button focusKey="sports:sheet:watch" className="fx-flat" primary icon="play" onEnter={onWatch}>Watch now</Button>}
+      {started && <Button focusKey="sports:sheet:watch" className="fx-flat" primary icon="play" onEnter={onWatch}>Join live</Button>}
+      {started && event.feeds.length === 1 && event.kind !== 'channel' && <LiveAlternatives channel={event.feeds[0]!.channel_id} start={event.start} scope="sports:entry" onClose={onClose} />}
       {recordable && feed && (active
         ? <Button focusKey="sports:sheet:cancel" className="fx-flat" danger icon="x" disabled={busy} onEnter={stop} testId="sports-record-cancel">{existing?.state === 'recording' ? 'Stop recording' : 'Do not record this game'}</Button>
         : <Button focusKey="sports:sheet:record" className="fx-flat" primary={!started} icon="record" disabled={busy} onEnter={one} testId="sports-record">Record this game</Button>)}

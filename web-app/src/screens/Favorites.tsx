@@ -1,3 +1,4 @@
+import { TabPanels } from '../components/ui'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useFavorites, useHistory, useWatchlist } from '../api/hooks'
@@ -31,10 +32,11 @@ export function Favorites() {
   return (
     <div className="page-pad lib-page" data-testid="favorites">
       <PageHeader title="My List" className="lib-head">
-        <FocusGroup focusKey="fav:tabs" className="lib-chips" role="tablist">
-          {TABS.map((t) => <Chip key={t.id} focusKey={`fav:tab:${t.id}`} pressed={tab.id === t.id} testId={`mylist-${t.id}`} onEnter={() => { setSearch(''); setPage(0); setSp(t.id === 'favorites' ? {} : { tab: t.id }, { replace: true }) }}>{t.label}</Chip>)}
+        <FocusGroup focusKey="fav:tabs" className="lib-chips" role="tablist" label="My List">
+          {TABS.map((t) => <Chip tab key={t.id} focusKey={`fav:tab:${t.id}`} pressed={tab.id === t.id} testId={`mylist-${t.id}`} onEnter={() => { setSearch(''); setPage(0); setSp(t.id === 'favorites' ? {} : { tab: t.id }, { replace: true }) }}>{t.label}</Chip>)}
         </FocusGroup>
       </PageHeader>
+      <TabPanels tabs={TABS.map(t => `fav:tab:${t.id}`)} active={`fav:tab:${tab.id}`}>
       {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : <>
         {(data?.length ?? 0) > 12 && <div className="lib-search"><FocusableInput focusKey="fav:search" label={`Search ${noun}`} placeholder={`Search your ${noun}`} value={search} onChange={(v) => { setSearch(v); setPage(0) }} /></div>}
         {isLoading ? <div className="grid-tiles lib-grid" aria-hidden="true">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="ds-skel-tile" style={{ aspectRatio: '2/3' }} />)}</div> : !data?.length ? (
@@ -66,6 +68,7 @@ export function Favorites() {
           </div>
         )}
       </>}
+      </TabPanels>
     </div>
   )
 }

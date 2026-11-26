@@ -221,7 +221,7 @@ export function Guide({ filters, scheduledOnly, onShowAll, selectedChannelId, on
   return (
     <div data-testid="guide" className="epg-view" aria-label="Programme guide">
       {wide ? detailsSlot && createPortal(<GuideDetailsPanel {...details} />, detailsSlot) : <GuideDetailsLine {...details} />}
-      {failed ? <ErrorState error={failed} onRetry={() => void ch.refetch()} /> : ch.isLoading ? <Skeleton className="epg-skel" /> : count === 0 ? (
+      {failed ? <ErrorState error={failed} onRetry={() => { if (ch.error && !pages) void ch.refetch(); else epg.retryFailed() }} /> : ch.isLoading ? <Skeleton className="epg-skel" /> : count === 0 ? (
         <Empty icon="guide" title="No channels match" hint={scheduledOnly ? 'No current schedules match these filters. Try All channels, another language, or a different search.' : 'Try another language or a different channel name.'}>
           {scheduledOnly && <Button focusKey="guide:show-all" onEnter={onShowAll}>Show channels without schedules</Button>}
         </Empty>

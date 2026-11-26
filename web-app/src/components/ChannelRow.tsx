@@ -30,7 +30,7 @@ export function ChannelRow(p: {
           <>
             <span className="chan-row-line"><span className="label truncate">{c.now ? `${c.now.title}` : 'No programme data'}</span><RecordingBadge state={c.now?.recording_state} short /></span>
             {!p.dense && c.next && <span className="chan-row-line"><span className="label truncate chan-row-next">Next · {fmtTime(c.next.start)} {c.next.title}</span><RecordingBadge state={c.next.recording_state} short /></span>}
-            {pct !== null && (p.dense ? <span className="chan-row-progress"><ProgressBar pct={pct} /></span> : <ProgressBar pct={pct} className="mt-1" />)}
+            {pct !== null && (p.dense ? <span className="chan-row-progress"><ProgressBar label={`Programme progress · ${c.now?.title ?? c.name}`} pct={pct} /></span> : <ProgressBar label={`Programme progress · ${c.now?.title ?? c.name}`} pct={pct} className="mt-1" />)}
           </>
         )}
       </span>

@@ -22,11 +22,13 @@ from app.infra.image_fit import LIGHT_BYTES, fit
 from app.proxy.canvas import packed_audio
 from app.proxy.stream_proxy import HlsSourceBusy, Viewer, VodPlan
 from app.services import ids
+from app.services.adult import require_adult
 from app.services.context import absolute, is_https
 from app.services.errors import BadGateway, Conflict, Forbidden, Gone, NotFound, ServiceError, Unauthorized
 from app.services.playback import StreamGrant, play_key
 from app.services.sports import feed_alternates
 from app.services.streams import is_recording, open_failed, panes, source_busy
+from app.services.visibility import require_watch
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -177,6 +179,16 @@ async def multiview_release(body: S.MultiviewRelease, c: C, p: P) -> Response:
     return Response(status_code=204)
 
 
+@router.put("/playback/preference", status_code=204, tags=["playback"])
+async def remember_playback(
+    c: C, p: P, id: str, variant_id: str | None = None, audio_track: int | None = None
+) -> Response:
+    await require_watch(c.db, p.permissions, id)
+    await require_adult(c.db, p, id)
+    await c.playback.remember(p.profile_id, id, variant_id, audio_track)
+    return Response(status_code=204)
+
+
 @router.get("/playback/options", tags=["playback"])
 async def playback_options(id: str, c: C, p: P, source_id: str | None = None) -> dict[str, Any]:
     """Source variants and their audio. A VOD file whose source lists no audio tracks is probed here, once."""
@@ -215,6 +227,7 @@ async def buffer_lease(body: S.BufferLeaseRequest, c: C, p: P) -> dict[str, Any]
             max_connections=c.sources.max_connections(source),
             generation=g.recovery_generation,
             viewer=_viewer(g),
+            channel_id="ch:" + g.channel_key,
         )
     except HlsSourceBusy as exc:
         raise await _source_busy(c, g) from exc
@@ -224,7 +237,12 @@ async def buffer_lease(body: S.BufferLeaseRequest, c: C, p: P) -> dict[str, Any]
 async def buffer_heartbeat(body: S.BufferViewerRequest, c: C, p: P) -> dict[str, Any]:
     _, key, _ = await _buffer_grant(body.stream_token, c, p)
     c.proxy.dvr.heartbeat(key, p.profile_id, body.lease_id, body.paused)
-    return await c.proxy.buffer_window(key)
+    window = await c.proxy.buffer_window(key)
+    if body.position_at is not None and any(
+        segment.start <= body.position_at < segment.end for segment in c.proxy.dvr.segments
+    ):
+        c.proxy.dvr.bookmarks[p.profile_id] = body.position_at
+    return window
 
 
 @router.post("/playback/buffer/seek", response_model=S.BufferSeekResponse, tags=["playback"])
@@ -237,6 +255,7 @@ async def buffer_seek(body: S.BufferSeekRequest, c: C, p: P) -> dict[str, Any]:
     query = {"lease_id": body.lease_id}
     if body.at is not None:
         query["at"] = body.at.isoformat()
+        c.proxy.dvr.bookmarks[p.profile_id] = body.at
     return {
         "url": absolute(f"/api/v1/stream/{body.stream_token}/index.m3u8?" + urlencode(query)),
         "window": await c.proxy.buffer_window(key),
@@ -322,6 +341,7 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
         source_id=source_id,
         forward_item=forward,
         aliases=aliases,
+        watched=body.watched,
     )
     # The player's own word on its stream: still playing (it counts toward the user's limit even
     # when no bytes pass through this server), or stopped (it no longer does).

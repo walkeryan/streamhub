@@ -269,6 +269,12 @@ async def put_prefs(id: str, body: dict[str, Any], c: C, p: P) -> dict[str, Any]
     return await c.client_prefs.put(id, body)
 
 
+@router.patch("/profiles/{id}/prefs", tags=["profiles"])
+async def patch_prefs(id: str, body: dict[str, Any], c: C, p: P, only_missing: bool = False) -> dict[str, Any]:
+    _own(p, id)
+    return await c.client_prefs.put(id, body, merge=True, only_missing=only_missing)
+
+
 @router.post("/auth/profile-switch", response_model=S.AuthTokens, tags=["auth"])
 async def profile_switch(body: S.ProfileSwitch, c: C, p: P) -> dict[str, Any]:
     profile, tokens = await c.auth.switch_profile(p, body.profile_id, body.pin, body.password)

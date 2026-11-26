@@ -274,6 +274,18 @@ class CatalogService:
         async with self._db.session() as s:
             return list((await s.execute(query)).scalars())
 
+    async def display_title(self, row: Title) -> str:
+        if row.kind == "episode":
+            return ids.episode_display_title(row.title, row.episode_number)
+        media_type = ids.tmdb_type_for_kind(row.kind)
+        if not media_type:
+            return row.title
+        if self.meta.enabled and row.tmdb_id and not row.adult:
+            meta = await self.meta.details(media_type, row.tmdb_id)
+            if meta:
+                return meta.title
+        return ids.clean_display_title(row.title)
+
     async def tiles_for_ids(self, ref_ids: list[str], ctx: TileContext) -> list[dict[str, Any]]:
         """Resolve hub ids (tmdb:/lib:/ch:) to tiles, preserving order and skipping unknown ids.
 
@@ -281,6 +293,7 @@ class CatalogService:
         anywhere else unless the request included them.
         """
         out: dict[str, dict[str, Any]] = {}
+        labels: dict[str, Title] = {}
         lib_keys: list[tuple[str, str]] = []
         ch_keys: list[tuple[str, str]] = []
         tmdb_keys: list[tuple[str, int]] = []
@@ -304,6 +317,7 @@ class CatalogService:
                     t = ctx.title_tile(row)
                     t["id"] = ids.lib_id(sid, ext)  # keep the id the client stored
                     out[t["id"]] = t
+                    labels[t["id"]] = row
             chans: list[Channel] = []
             for sid, ext in ch_keys:
                 ch = (
@@ -336,6 +350,7 @@ class CatalogService:
                 merged = ctx.merge(ctx.title_tile(r) for r in rows)
                 if merged:
                     out[hub] = merged[0]
+                    labels[hub] = rows[0]
                     continue
             meta = await self.meta.details(media_type, tid) if self.meta.enabled else None
             if meta:
@@ -350,6 +365,13 @@ class CatalogService:
                     general=True,
                 )
                 out[hub] = meta_tile(meta, badges, ctx.favorites, ctx.progress_pct(hub))
+        label_slots = asyncio.Semaphore(4)
+
+        async def label(key: str, row: Title) -> None:
+            async with label_slots:
+                out[key]["title"] = await self.display_title(row)
+
+        await asyncio.gather(*(label(key, row) for key, row in labels.items()))
         return [out[r] for r in ref_ids if r in out]
 
     # ------------------------------------------------------------------ detail

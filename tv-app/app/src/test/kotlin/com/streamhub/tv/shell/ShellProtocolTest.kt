@@ -35,6 +35,12 @@ class ShellProtocolTest {
         assertEquals(120_000L, t.startPositionMs)
     }
 
+    @Test fun retainedPositionIsPreservedAndCannotBeRequestedForMovies() {
+        val buffered = title("""{"v":2,"kind":"title","id":"ch:local:25","buffer_at":"2026-01-02T12:34:56Z"}""")
+        assertEquals("2026-01-02T12:34:56Z", buffered.request.bufferAt)
+        assertTrue(refused("""{"v":2,"kind":"title","id":"rec:25","buffer_at":"2026-01-02T12:34:56Z"}"""))
+    }
+
     @Test fun catchUpRewindAndRecordingsAreResolvedAsTheyAre() {
         assertEquals("prog:9", title("""{"v":1,"kind":"title","id":"ch:1","catchup_programme_id":"prog:9"}""").request.catchupProgrammeId)
         assertEquals("2026-11-13T20:00:00Z", title("""{"v":1,"kind":"title","id":"ch:1","rewind_at":"2026-11-13T20:00:00Z"}""").request.rewindAt)

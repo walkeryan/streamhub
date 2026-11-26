@@ -71,3 +71,10 @@ test('an access token is refreshed for the TV shortly before it expires', () => 
   assert.equal(expiresSoon('opaque-token', now), false)
   assert.equal(expiresSoon('h.not-base64!.s', now), false)
 })
+
+test('buffer entry requires a compatible TV and a recording can explicitly start at zero', () => {
+  const at = '2026-01-02T12:34:56Z'
+  assert.deepEqual(titlePlay('/play/ch%3Alocal%3A25?buffer_at=' + encodeURIComponent(at), noConsent),
+    { v: 2, kind: 'title', id: 'ch:local:25', buffer_at: at })
+  assert.equal(titlePlay('/play/rec%3A25?recording_start=1', noConsent).start_position_ms, 0)
+})

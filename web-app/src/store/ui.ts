@@ -25,7 +25,6 @@ interface UiState {
   addSearch: (q: string) => void
   clearSearches: () => void
   homePrefs: HomePrefs
-  setHomePrefs: (p: HomePrefs) => void
   /** Last-loaded ordered channel list, used for zapping in the player (contract has no list_id lookup). */
   channelList: { listId: string | null; channels: Channel[] }
   setChannelList: (listId: string | null, channels: Channel[]) => void
@@ -95,10 +94,6 @@ export const useUi = create<UiState>((set, get) => ({
     lsSet(scopeKey(SEARCH_KEY), null)
   },
   homePrefs: safeJson<HomePrefs>(lsGet(scopeKey(HOME_KEY)), { order: [], hidden: [] }),
-  setHomePrefs: (homePrefs) => {
-    set({ homePrefs })
-    lsSet(scopeKey(HOME_KEY), JSON.stringify(homePrefs))
-  },
   channelList: { listId: null, channels: [] },
   setChannelList: (listId, channels) => set({ channelList: { listId, channels } }),
   lastChannelId: null,

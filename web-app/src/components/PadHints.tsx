@@ -93,7 +93,7 @@ export function ControllerHint() {
           <span><PadGlyphs buttons={['LB', 'RB']} /> Channel or skip</span>
           <span><PadGlyph name="Start" /> Player menu</span>
         </span>
-        <span className="label">All the buttons: Start in the player, then Keyboard and controller.</span>
+        <span className="label">All the buttons: Start in the player, then Controls and shortcuts.</span>
       </div>
       <button type="button" className="pad-intro-close" aria-label="Close" onClick={() => setShown(false)}><Icon name="x" size={18} /></button>
     </div>

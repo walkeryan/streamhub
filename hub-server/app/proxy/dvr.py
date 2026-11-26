@@ -81,6 +81,7 @@ class DvrManager:
         self.directory: Path | None = None
         self.leases: dict[str, ViewerLease] = {}
         self.segments: list[DvrSegment] = []
+        self.bookmarks: dict[str, datetime] = {}
         self.ever_leased = False
         self.pending = 0
 
@@ -256,6 +257,7 @@ class DvrManager:
         if key == self.key:
             # Producer termination and owned-directory cleanup belong to StreamProxy.
             self.key = self.directory = None
+            self.bookmarks.clear()
             self.leases.clear()
             self.segments.clear()
             self.ever_leased = False

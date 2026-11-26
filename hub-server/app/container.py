@@ -200,7 +200,6 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     scheduler = SyncScheduler(
         sync, requests.reconcile, recorder.run_tick, classifier.run_batch, poll_requests=requests.poll_due
     )
-    home = HomeService(catalog, channels, progress, layout, sources, availability, tmdb)
     active = ActiveStreams()
     tokens = StreamTokens(crypto, settings.stream_token_ttl_s)
     playback = PlaybackResolver(
@@ -216,6 +215,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         active=active,
     )
 
+    home = HomeService(catalog, channels, progress, layout, sources, availability, tmdb, playback, watchlist)
     playback.content_policy = content_policy
     playback.auth = auth
     streams = StreamRegistry(db)

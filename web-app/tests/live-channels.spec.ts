@@ -92,7 +92,7 @@ for (const size of [{ width: 1600, height: 830 }, { width: 1280, height: 720 }])
       expect(seen.bottom).toBeLessThanOrEqual(size.height)
       expect(size.height - seen.bottom).toBeLessThan(16)
       expect(seen.visibleRows).toBeGreaterThanOrEqual(4)
-      expect(seen.heights).toBe(2) // every row one height, but the focused one, which is drawn a little larger
+      await expect.poll(async () => (await geometry(page)).heights).toBe(2) // Wait for the focus scale transition.
       expect(await rows(page).count()).toBeLessThanOrEqual(30)
       expect(offsets).toEqual([0])
       await expect(end(page)).toHaveText('Loading more channels…')
@@ -279,4 +279,16 @@ test.describe('on a phone', () => {
     await rows(page).nth(3).tap()
     await expect(page).toHaveURL(/\/play\/ch/)
   })
+})
+
+test('a phone can add and remove a channel favorite without starting playback', async ({ page }) => {
+  await page.setViewportSize(PHONE.viewport)
+  await enter(page)
+  const add = page.getByRole('button', { name: 'Add Harbor News 24 to favorites', exact: true })
+  await add.click()
+  const remove = page.getByRole('button', { name: 'Remove Harbor News 24 from favorites', exact: true })
+  await expect(remove).toBeVisible()
+  await remove.click()
+  await expect(add).toBeVisible()
+  await expect(page).toHaveURL(/\/live$/)
 })

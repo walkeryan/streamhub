@@ -46,6 +46,7 @@ class _M(BaseModel):
 
 
 class Error(_M):
+    remembered_edition_changed: bool | None = None
     code: str
     message: str
     missing: list[str] | None = Field(default=None, description="403 only: the permissions the caller lacks")
@@ -360,6 +361,7 @@ class TitleParent(_M):
 
 
 class TitleDetail(Tile):
+    resume_position_ms: int = 0
     overview: str = ""
     genres: list[str] = Field(default_factory=list)
     runtime_min: int | None = None
@@ -465,6 +467,18 @@ class ChannelList(_M):
     total: int | None = None
     offset: int = 0
     limit: int | None = None
+
+
+class LiveProgrammeEntry(_M):
+    recording_id: str | None = None
+    recording_resume_ms: int | None = None
+    buffer_start: datetime | None = None
+    buffer_resume: datetime | None = None
+
+
+class LineupChange(_M):
+    channel_id: str = Field(max_length=256)
+    action: Literal["top", "up", "down", "hide", "show"]
 
 
 class ChannelPatch(_M):
@@ -636,6 +650,7 @@ class BufferLeaseRequest(_M):
 
 
 class BufferViewerRequest(BufferLeaseRequest):
+    position_at: AwareDatetime | None = None
     lease_id: str = Field(min_length=1, max_length=128)
     paused: bool = False
 
@@ -773,6 +788,7 @@ class MultiviewDescriptor(_M):
 
 
 class ProgressReport(_M):
+    watched: bool | None = None
     expected_profile_id: str | None = Field(default=None, max_length=128)
     id: str
     source_id: str | None = None
@@ -1481,6 +1497,11 @@ class RecordingList(_M):
     recordings: list[Recording]
 
 
+class RecordingIssue(_M):
+    category: Literal["wrong_programme", "missing_start", "missing_end", "picture", "audio"]
+    position_ms: int = Field(ge=0, le=604800000)
+
+
 class RecordingCreate(_M):
     programme_id: str = Field(max_length=64)
     channel_id: str | None = Field(default=None, max_length=256)
@@ -1497,6 +1518,8 @@ class RecordingRule(_M):
     channel_name: str | None = None
     new_only: bool = False
     keep: int | None = None
+    pad_before_s: int | None = Field(default=None, ge=0, le=21600)
+    pad_after_s: int | None = Field(default=None, ge=0, le=21600)
     enabled: bool = True
     created_at: datetime
 
@@ -1513,6 +1536,8 @@ class RecordingRuleCreate(_M):
     channel_id: str | None = Field(default=None, max_length=256)
     new_only: bool = False
     keep: int | None = None
+    pad_before_s: int | None = Field(default=None, ge=0, le=21600)
+    pad_after_s: int | None = Field(default=None, ge=0, le=21600)
 
 
 class RecordingRulePatch(_M):
@@ -1520,4 +1545,6 @@ class RecordingRulePatch(_M):
     channel_id: str | None = Field(default=None, max_length=256)
     new_only: bool | None = None
     keep: int | None = None
+    pad_before_s: int | None = Field(default=None, ge=0, le=21600)
+    pad_after_s: int | None = Field(default=None, ge=0, le=21600)
     enabled: bool | None = None

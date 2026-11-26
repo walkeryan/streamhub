@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useRecordings, useToggleFavorite, type ChannelFilters } from '../api/hooks'
 import type { Channel } from '../api/types'
 import { Button, ErrorState, GlassIconButton, GlassPanel, ProgressBar, Skeleton } from '../ds'
@@ -108,6 +108,11 @@ export function Channels({ filters, selectedChannelId, onSelectChannel, upKey, e
     return () => window.clearTimeout(id)
   }, [focused, previewEnabled])
   const toggleFav = useToggleFavorite()
+  const [failedFavorite, setFailedFavorite] = useState<Channel | null>(null)
+  const favorite = (channel: Channel) => toggleFav.mutate({ kind: 'channel', id: channel.id, on: !channel.is_favorite }, {
+    onError: () => setFailedFavorite(channel),
+    onSuccess: () => setFailedFavorite(null),
+  })
   // Recording the focused channel's now or next, where the server has recording on and this profile may schedule.
   const recordings = useRecordings(useCan('recordings'), false)
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
@@ -122,9 +127,14 @@ export function Channels({ filters, selectedChannelId, onSelectChannel, upKey, e
           <FocusGroup focusKey="live:list" className="chan-list-canvas" role="listbox" label="Channels" remember preferred={home} style={{ height: `${count * ROW_REM + 2}rem` }}>
             {drawn.map((i) => {
               const c = channels[i]!
-              return <ChannelRow key={c.id} focusKey={rowKey(c.id)} channel={c} dense style={{ top: `${i * ROW_REM}rem` }} scroll={false}
+              return <Fragment key={c.id}><ChannelRow focusKey={rowKey(c.id)} channel={c} dense style={{ top: `${i * ROW_REM}rem` }} scroll={false}
                 data={{ row: String(i), 'tab-group': 'channels', 'tab-current': i === homeRow }}
                 onEnter={() => play(c)} onArrow={(d) => move(i, d)} onFocus={(layout) => { if (!pointer.current) revealRow(layout.node, CLEAR_REM); onSelectChannel(c.id) }} />
+                {phone && <div className="chan-phone-favorite" style={{ top: `${i * ROW_REM}rem` }}>
+                  <GlassIconButton focusKey={`live:favorite:${c.id}`} icon="heart" pressed={!!c.is_favorite} fillWhenPressed
+                    label={`${c.is_favorite ? 'Remove' : 'Add'} ${c.name} ${c.is_favorite ? 'from' : 'to'} favorites`} onEnter={() => favorite(c)} />
+                </div>}
+              </Fragment>
             })}
             <div className="chan-list-foot label" style={{ top: `${count * ROW_REM}rem` }} role="status" data-testid="channels-end">
               {isFetchNextPageError ? <>More channels could not be loaded. <Button focusKey="live:more" className="btn-chip" onEnter={() => void fetchNextPage()}>Try again</Button></>
@@ -141,18 +151,22 @@ export function Channels({ filters, selectedChannelId, onSelectChannel, upKey, e
         {focused ? <div className="live-info" data-testid="live-info">
           <h2 className="live-info-title truncate">{focused.number} · {focused.name}</h2>
           <p className="live-info-now">{focused.now ? `Now: ${focused.now.title} (${fmtTime(focused.now.start)} to ${fmtTime(focused.now.stop)})` : 'No programme data supplied for this channel'}<RecordingBadge state={focused.now?.recording_state} /></p>
-          {nowPct !== null && <ProgressBar pct={nowPct} className="live-info-bar" />}
+          {nowPct !== null && <ProgressBar label={`Programme progress · ${focused.now?.title ?? focused.name}`} pct={nowPct} className="live-info-bar" />}
           {focused.next && <p className="live-info-next">Next: {focused.next.title} at {fmtTime(focused.next.start)}<RecordingBadge state={focused.next.recording_state} /></p>}
         </div> : <p className="muted live-info">Select a channel for what is on.</p>}
         <FocusGroup focusKey="live:actions" className="live-actions">
           <Button focusKey="live:watch" primary icon="play" disabled={!focused} onEnter={() => focused && play(focused)}>Watch full screen</Button>
           <GlassIconButton focusKey="live:preview" icon="eye" label={`Preview ${previewEnabled ? 'on' : 'off'}`} pressed={previewEnabled} onEnter={() => setPreviewEnabled((v) => !v)} />
           <GlassIconButton focusKey="live:togglefav" icon="heart" fillWhenPressed disabled={!focused} pressed={!!focused?.is_favorite} label={focused?.is_favorite ? 'Remove favorite' : 'Add favorite'}
-            onEnter={() => focused && toggleFav.mutate({ kind: 'channel', id: focused.id, on: !focused.is_favorite })} />
+            onEnter={() => focused && favorite(focused)} />
           {recordable && <GlassIconButton focusKey="live:record" icon="record" label="Record" disabled={!focused?.now && !focused?.next} onEnter={() => focused && setRecordingId(focused.id)} testId="live-record" />}
         </FocusGroup>
       </GlassPanel>
     </aside>}
+    {failedFavorite && <div className="chan-save-error" role="alert">
+      Couldn’t update favorites for {failedFavorite.name}.
+      <Button focusKey="live:favorite:retry" disabled={toggleFav.isPending} onEnter={() => favorite(failedFavorite)}>Try again</Button>
+    </div>}
     <RecordDialog target={recordingChannel ? { channel: recordingChannel, programmes: [recordingChannel.now, recordingChannel.next].filter((p) => !!p) } : null} onClose={() => setRecordingId(null)} />
   </div>
 }

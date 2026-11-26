@@ -1,28 +1,27 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, unwrap } from './client'
 import { useSession } from '../store/session'
 
-// PUT replaces the document. Serialize our writers and fetch just before merging
-// so changing one screen's defaults preserves unrelated preferences.
+// Preserve the order of rapid edits from this browser; the server merges independent namespaces.
 const writes = new Map<string, Promise<unknown>>()
 type Document = Record<string, unknown>
 const assertProfile = (id: string) => {
   if (useSession.getState().profile?.id !== id) throw new Error('Profile changed before preferences were saved.')
 }
-async function save(id: string, namespace: string, value: unknown): Promise<Document> {
+async function save(id: string, namespace: string, value: unknown, onlyMissing = false): Promise<Document> {
   const previous = writes.get(id) ?? Promise.resolve()
   const next = previous.catch(() => undefined).then(async () => {
     assertProfile(id)
-    const current = await unwrap<Document>(api.GET('/profiles/{id}/prefs', { params: { path: { id } } }))
-    assertProfile(id)
-    return unwrap<Document>(api.PUT('/profiles/{id}/prefs', { params: { path: { id } }, body: { ...current, [namespace]: value } }))
+    return unwrap<Document>(api.PATCH('/profiles/{id}/prefs', {
+      params: { path: { id }, query: { only_missing: onlyMissing } }, body: { [namespace]: value },
+    }))
   })
   writes.set(id, next)
   try { return await next } finally { if (writes.get(id) === next) writes.delete(id) }
 }
 
-export function useProfilePreference<T>(namespace: string, defaults: T, validate: (raw: unknown) => T | null) {
+export function useProfilePreference<T>(namespace: string, defaults: T, validate: (raw: unknown) => T | null, importDefaults = false) {
   const id = useSession((s) => s.profile?.id ?? '')
   const key = `${id}:${namespace}`
   const qc = useQueryClient()
@@ -32,6 +31,14 @@ export function useProfilePreference<T>(namespace: string, defaults: T, validate
     queryKey: ['profile-prefs', id], enabled: !!id, staleTime: 0, refetchOnWindowFocus: true,
     queryFn: async () => { assertProfile(id); return unwrap<Document>(api.GET('/profiles/{id}/prefs', { params: { path: { id } } })) },
   })
+  const imported = useRef<string | null>(null)
+  useEffect(() => {
+    if (!importDefaults || !query.data || !id || namespace in query.data || imported.current === key) return
+    imported.current = key
+    void save(id, namespace, defaults, true).then((document) => {
+      if (useSession.getState().profile?.id === id) qc.setQueryData(['profile-prefs', id], document)
+    }).catch(() => { imported.current = null })
+  }, [defaults, id, importDefaults, key, namespace, qc, query.data])
   const stored = validate(query.data?.[namespace]) ?? defaults
   const own = local?.key === key ? local : null
   const value = own?.value ?? stored
@@ -50,8 +57,9 @@ export function useProfilePreference<T>(namespace: string, defaults: T, validate
       qc.setQueryData(['profile-prefs', id], document)
       if (revision.current === version) setLocal((current) => current?.key === key ? null : current)
     }).catch(() => {
-      if (revision.current === version) setLocal((current) => current?.key === key ? { ...current, saving: false, error: 'Filters could not be saved. Try changing them again.' } : current)
+      if (revision.current === version) setLocal((current) => current?.key === key ? { ...current, saving: false, error: 'This preference could not be saved. Try again.' } : current)
     })
   }
-  return { value, update, ready: query.isSuccess, saving: own?.saving ?? false, error: own?.error ?? (query.error ? 'Saved filters could not be loaded.' : null), retry: query.refetch }
+  const retry = () => own?.error && query.isSuccess ? update(own.value) : query.refetch()
+  return { value, update, ready: query.isSuccess, saving: own?.saving ?? false, error: own?.error ?? (query.error ? 'Saved preferences could not be loaded.' : null), retry }
 }

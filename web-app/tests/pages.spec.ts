@@ -4,10 +4,10 @@ import { signIn } from './helpers'
 test('sources: streaming service toggle and Test link opens the service web_url', async ({ page }) => {
   await signIn(page)
   await page.goto('/sources')
-  const hulu = page.getByTestId('svc-hulu')
-  await expect(hulu).toHaveAttribute('aria-pressed', 'false')
+  const hulu = page.getByRole('switch', { name: 'Hulu', exact: true })
+  await expect(hulu).toHaveAttribute('aria-checked', 'false')
   await hulu.click()
-  await expect(hulu).toHaveAttribute('aria-pressed', 'true')
+  await expect(hulu).toHaveAttribute('aria-checked', 'true')
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
     page.getByLabel('Test link for Hulu').click(),

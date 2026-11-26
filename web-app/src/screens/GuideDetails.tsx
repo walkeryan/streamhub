@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Channel, Programme } from '../api/types'
 import { Button, GlassIconButton, Icon, Modal } from '../ds'
 import { FocusGroup, Focusable } from '../nav/Focusable'
+import { LiveAlternatives } from '../player/LiveAlternatives'
 import { fmtTime } from '../lib/util'
 
 export interface GuideDetailsProps {
@@ -32,7 +33,8 @@ function Actions({ p, scope, after, tipAt }: { p: GuideDetailsProps; scope: stri
   const over = !!programme && Date.parse(programme.stop) <= p.now
   const act = (run: () => void) => () => { after?.(); run() }
   return <>
-    <Button focusKey={`${scope}:watch`} className="epg-watch" primary icon="play" onEnter={act(() => p.onWatch(c))} testId="guide-watch">Watch</Button>
+    <Button focusKey={`${scope}:watch`} className="epg-watch" primary icon="play" onEnter={act(() => p.onWatch(c))} testId="guide-watch">{programme && !over && Date.parse(programme.start) <= p.now ? 'Join live' : 'Watch'}</Button>
+    {programme && !over && Date.parse(programme.start) <= p.now && <LiveAlternatives channel={c.id} start={programme.start} scope={scope} onClose={after} />}
     {programme && !over && p.recordable && <GlassIconButton focusKey={`${scope}:record`} size="sm" icon="record" label="Record" tipAt={tipAt} onEnter={act(() => p.onRecord(c, programme))} testId="guide-record" />}
     {programme && over && programme.catchup_available && <GlassIconButton focusKey={`${scope}:catchup`} size="sm" icon="restart" label="Catch-up" tipAt={tipAt} onEnter={act(() => p.onCatchup(c, programme))} testId="guide-catchup" />}
   </>

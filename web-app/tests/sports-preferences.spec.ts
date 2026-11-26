@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openMore, signIn } from './helpers'
+import { signIn } from './helpers'
 
 test('Sports waits for saved filters, reloads them, and isolates another profile', async ({ page }) => {
   const docs: Record<string, Record<string, unknown>> = {
@@ -8,7 +8,8 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
   const queries: Array<{ profile: string; language: string; sport: string }> = []
   let blockReads = false, pending = false, release: () => void = () => undefined
   await page.exposeFunction('sportsPrefsBackend', async (id: string, method: string, body: Record<string, unknown> | null) => {
-    if (method === 'PUT') docs[id] = body!
+    if (method === 'PATCH') docs[id] = { ...docs[id], ...body }
+    else if (method === 'PUT') docs[id] = body!
     else if (blockReads) { pending = true; await new Promise<void>((resolve) => { release = resolve }) }
     return docs[id] ?? {}
   })
@@ -22,7 +23,7 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
         sportsPrefsBackend: (id: string, method: string, body: unknown) => Promise<unknown>
         recordSportsQuery: (query: { profile: string; language: string; sport: string }) => Promise<void>
       }
-      if (match) return Response.json(await state.sportsPrefsBackend(match[1], req.method, req.method === 'PUT' ? await req.json() : null))
+      if (match) return Response.json(await state.sportsPrefsBackend(match[1], req.method, req.method !== 'GET' ? await req.json() : null))
       if (url.pathname === '/api/v1/sports/channels') return Response.json({ channels: [], total: 0, limit: 24, offset: 0, truncated: false })
       if (url.pathname === '/api/v1/sports/events') {
         await state.recordSportsQuery({ profile: req.headers.get('authorization') ?? '', language: url.searchParams.get('language') ?? '', sport: url.searchParams.get('sport') ?? '' })
@@ -37,7 +38,7 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
     }
   })
   await signIn(page)
-  await openMore(page, 'Sports')
+  await page.getByRole('navigation').getByRole('link', { name: 'Sports', exact: true }).click()
   // Language lives in the search panel, sport on the chips: both are this profile's saved filters.
   await page.getByTestId('sports-filters').click()
   await page.getByRole('button', { name: 'All languages', exact: true }).click()

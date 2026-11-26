@@ -99,7 +99,7 @@ test('chips are the top level; a parent is one chip whose menu opens under it an
   expect(await inRow(page)).toEqual([...TOP_LEVEL.slice(0, 3), 'Sports · Football', ...TOP_LEVEL.slice(4)])
   await expect(groups(page).getByRole('button')).toHaveCount(TOP_LEVEL.length)
   await expect(page.getByRole('button', { name: /clear/i })).toHaveCount(0)
-  await expect(page.getByText('1 channels', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 channel', { exact: true })).toBeVisible()
   await sports(page).click()
   await expect(entry(page, 'Football')).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('[aria-checked="true"]')).toHaveCount(1)

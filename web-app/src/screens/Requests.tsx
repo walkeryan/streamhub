@@ -1,3 +1,4 @@
+import { TabPanels } from '../components/ui'
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useCreateRequest, useDecideRequest, useRefreshRequest, useRequests } from '../api/hooks'
@@ -81,11 +82,12 @@ export function Requests() {
   return (
     <div className="page-pad lib-page" data-testid="requests">
       <PageHeader title="Requests" className="lib-head">
-        <FocusGroup focusKey="req:tabs" className="lib-chips" role="tablist">
-          <Chip focusKey="req:tab:mine" pressed={scope === 'mine'} onEnter={() => setSp({}, { replace: true })} testId="requests-tab-mine">My requests</Chip>
-          {canApprove && <Chip focusKey="req:tab:all" pressed={scope === 'all'} onEnter={() => setSp({ scope: 'all' }, { replace: true })} testId="requests-tab-all">All requests</Chip>}
+        <FocusGroup focusKey="req:tabs" className="lib-chips" role="tablist" label="Requests">
+          <Chip tab focusKey="req:tab:mine" pressed={scope === 'mine'} onEnter={() => setSp({}, { replace: true })} testId="requests-tab-mine">My requests</Chip>
+          {canApprove && <Chip tab focusKey="req:tab:all" pressed={scope === 'all'} onEnter={() => setSp({ scope: 'all' }, { replace: true })} testId="requests-tab-all">All requests</Chip>}
         </FocusGroup>
       </PageHeader>
+      <TabPanels tabs={canApprove ? ['req:tab:mine', 'req:tab:all'] : ['req:tab:mine']} active={`req:tab:${scope}`}>
       {active.error ? <ErrorState error={active.error} onRetry={() => void active.refetch()} /> : !active.data ? (
         <div className="lib-list" aria-hidden="true">{Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="lib-row-skel" />)}</div>
       ) : !list.length ? (
@@ -119,6 +121,7 @@ export function Requests() {
           ))}
         </FocusGroup>
       )}
+      </TabPanels>
       <Modal open={!!declining} onClose={() => setDeclining(null)} title={`Decline ${declining?.title ?? ''}?`} firstFocusKey="reqdecline:cancel">
         <p className="muted">{declining?.profile_name ? `${declining.profile_name} is told, with your note if you add one.` : 'The requester is told, with your note if you add one.'}</p>
         <FocusableInput focusKey="reqdecline:note" label="Note for the requester (optional)" placeholder="Note for the requester (optional)" maxLength={500} value={note} onChange={setNote} onSubmit={confirmDecline} />

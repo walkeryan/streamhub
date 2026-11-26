@@ -1428,6 +1428,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/player-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * An hour-long access token for a native player
+         * @description For a native player whose session is owned by a page that may be hidden behind it (the TV app's web shell): the player swaps a valid access token for one like it lasting up to an hour, and renews it while it plays, so progress and the next episode do not depend on the page. A chain of player tokens ends 12 hours after the access token it started from (401 token_expired); every request still validates the session, so a sign-out ends them at once. A refresh token is refused.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            access_token: string;
+                            /** @description seconds */
+                            expires_in: number;
+                        };
+                    };
+                };
+                /** @description invalid or expired token, or the chain ended (token_expired) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/device": {
         parameters: {
             query?: never;
@@ -1919,7 +1969,42 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update individual profile preferences atomically */
+        patch: {
+            parameters: {
+                query?: {
+                    only_missing?: boolean;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ClientPrefs"];
+                };
+            };
+            responses: {
+                /** @description Merged preferences */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ClientPrefs"];
+                    };
+                };
+                /** @description Preferences exceed the size limit */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/disclaimer": {
@@ -2340,7 +2425,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Home rows for the current profile (Continue Watching, On Now, Recently Added, Watchlist, Favorites, per-source rows) */
+        /** Home rows for the current profile (Continue Watching, On Now, Recently Added, Watchlist, Ready to watch, Favorites, per-source rows) */
         get: {
             parameters: {
                 query?: never;
@@ -2645,6 +2730,22 @@ export interface paths {
             };
         };
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/playback/preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["rememberPlaybackEdition"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3188,6 +3289,142 @@ export interface paths {
                             limit?: number | null;
                             channels?: components["schemas"]["Channel"][];
                         };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/lineup/hidden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Channels hidden by this profile */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Channel"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/lineup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move, hide or restore one channel in the current profile's guide */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        channel_id: string;
+                        /** @enum {string} */
+                        action: "top" | "up" | "down" | "hide" | "show";
+                    };
+                };
+            };
+            responses: {
+                /** @description Saved */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        /** Restore the current profile's default channel order and visibility */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Restored */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/entry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Available entry points for the programme currently on this channel */
+        get: {
+            parameters: {
+                query: {
+                    channel_id: string;
+                    start: string;
+                    bookmark?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Available playback positions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["LiveProgrammeEntry"];
                     };
                 };
             };
@@ -4280,6 +4517,22 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/history/continue-watching": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setContinueWatchingHidden"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6246,6 +6499,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/recordings/{id}/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a playback issue for a recording */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        category: "wrong_programme" | "missing_start" | "missing_end" | "picture" | "audio";
+                        position_ms: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Report received */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/recordings/{id}": {
         parameters: {
             query?: never;
@@ -6340,6 +6637,8 @@ export interface paths {
                         /** @default false */
                         new_only?: boolean;
                         keep?: number | null;
+                        pad_before_s?: number | null;
+                        pad_after_s?: number | null;
                     };
                 };
             };
@@ -6444,6 +6743,8 @@ export interface paths {
                         channel_id?: string | null;
                         new_only?: boolean;
                         keep?: number | null;
+                        pad_before_s?: number | null;
+                        pad_after_s?: number | null;
                         enabled?: boolean;
                     };
                 };
@@ -6634,6 +6935,8 @@ export interface components {
         Error: {
             code: string;
             message: string;
+            /** @description A previously saved edition or verified audio changed and must be chosen again. */
+            remembered_edition_changed?: boolean;
             /** @description On source_busy: the streams this server is running on the source, longest-running first; may be empty when something outside this server holds the connections. On user_stream_limit: the user's own streams that use up their limit. */
             active?: components["schemas"]["ActiveStream"][];
             /** @description On source_busy: how many connections the source allows, when known. On user_stream_limit: the user's max_streams. */
@@ -7074,6 +7377,8 @@ export interface components {
             overview?: string;
             genres?: string[];
             runtime_min?: number | null;
+            /** @default 0 */
+            resume_position_ms: number;
             cast?: {
                 name?: string;
                 character?: string;
@@ -7397,6 +7702,8 @@ export interface components {
             preferred_languages: string[];
             options: components["schemas"]["PlaybackOption"][];
             automatic_variant_id?: string | null;
+            remembered?: boolean;
+            remembered_audio_track?: number | null;
             selection_required: boolean;
         };
         PlaybackRequest: {
@@ -7500,6 +7807,8 @@ export interface components {
             lease_id: string;
             /** @default false */
             paused: boolean;
+            /** Format: date-time */
+            position_at?: string | null;
         };
         BufferSeekRequest: components["schemas"]["BufferViewerRequest"] & {
             /** Format: date-time */
@@ -7637,6 +7946,8 @@ export interface components {
         };
         /** @description Sent every 10 s while playing and on pause/stop (ordinary bearer-auth POST). state=stopped with position_ms >= duration_ms marks the item watched (resume resets to 0); position >= 95% of duration also counts as watched. */
         ProgressReport: {
+            /** @description Explicit watched or unwatched action independent of a known duration. */
+            watched?: boolean | null;
             /** @description Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes. */
             expected_profile_id?: string | null;
             id: string;
@@ -7663,7 +7974,7 @@ export interface components {
             [key: string]: unknown;
         };
         HomeLayout: {
-            /** @description Row ids: continue_watching, on_now, recently_added, watchlist, favorites, trending, source:<id>. Ordered by sort. */
+            /** @description Row ids: continue_watching, on_now, recently_added, watchlist, ready_to_watch, favorites, trending, source:<id>. Ordered by sort. */
             rows: {
                 id: string;
                 /** @default false */
@@ -7799,6 +8110,14 @@ export interface components {
             /** Format: date-time */
             read_at?: string | null;
         };
+        LiveProgrammeEntry: {
+            recording_id?: string | null;
+            recording_resume_ms?: number | null;
+            /** Format: date-time */
+            buffer_start?: string | null;
+            /** Format: date-time */
+            buffer_resume?: string | null;
+        };
         /** @enum {string} */
         RecordingState: "scheduled" | "recording" | "done" | "failed" | "missed" | "cancelled";
         /** @description One programme to record. A snapshot of the guide entry taken when it was scheduled, so it outlives guide refreshes. Once it has a file (has_file) it plays with POST /playback/resolve {id: "rec:<id>"}. */
@@ -7854,6 +8173,8 @@ export interface components {
             /** @description null = any channel */
             channel_id?: string | null;
             channel_name?: string | null;
+            pad_before_s?: number | null;
+            pad_after_s?: number | null;
             /** @description skip listings marked as repeats and episodes already recorded */
             new_only: boolean;
             /** @description finished recordings to keep, oldest deleted first; null = all */
@@ -8242,7 +8563,51 @@ export interface components {
     pathItems: never;
 }
 export type $defs = Record<string, never>;
+export interface operations {
+    rememberPlaybackEdition: {
+        parameters: {
+            query: {
+                id: string;
+                variant_id?: string;
+                audio_track?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Edition preference updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setContinueWatchingHidden: {
+        parameters: {
+            query: {
+                id: string;
+                hidden: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Shelf visibility saved; history and position are retained. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+}
 type WithRequired<T, K extends keyof T> = T & {
     [P in K]-?: T[P];
 };
-export type operations = Record<string, never>;

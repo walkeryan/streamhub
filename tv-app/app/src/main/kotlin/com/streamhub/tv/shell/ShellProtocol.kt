@@ -93,7 +93,9 @@ fun parseShellPlay(json: String): ParsedPlay {
     val root = runCatching { StreamHubJson.parseToJsonElement(json) }.getOrNull() as? JsonObject
         ?: return ParsedPlay.Rejected("not a JSON object")
     return try {
-        if (root.optLong("v") != BRIDGE_VERSION.toLong()) throw Invalid("unsupported version")
+        val version = root.optLong("v")
+        val bufferedEntry = version == 2L && root.optString("kind") == "title" && root.optString("buffer_at") != null
+        if (version != BRIDGE_VERSION.toLong() && !bufferedEntry) throw Invalid("unsupported version")
         when (root.optString("kind")) {
             "title" -> {
                 val id = root.optId("id") ?: throw Invalid("id is missing")
@@ -102,6 +104,10 @@ fun parseShellPlay(json: String): ParsedPlay {
                     if (it.length > 64 || runCatching { OffsetDateTime.parse(it) }.isFailure) throw Invalid("rewind_at is not a date-time")
                 }
                 if (catchup != null && rewindAt != null) throw Invalid("catch-up and rewind together")
+                val bufferAt = root.optString("buffer_at")?.also {
+                    if (!id.startsWith("ch:") || catchup != null || rewindAt != null || it.length > 64 || runCatching { OffsetDateTime.parse(it) }.isFailure)
+                        throw Invalid("invalid buffer position")
+                }
                 val start = root.optLong("start_position_ms")?.also { if (it !in 0..MAX_START_MS) throw Invalid("start_position_ms out of range") }
                 val variant = root.optId("variant_id")
                 ParsedPlay.Ok(ShellPlay.Title(
@@ -113,6 +119,7 @@ fun parseShellPlay(json: String): ParsedPlay {
                         // Consent belongs to one chosen variant; without one there is nothing it applies to.
                         allowUnverifiedAudio = variant != null && root.optBoolean("allow_unverified_audio") == true,
                         rewindAt = rewindAt,
+                        bufferAt = bufferAt,
                     ),
                     start,
                 ))

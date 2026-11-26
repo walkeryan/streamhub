@@ -11,6 +11,7 @@ export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'pau
 
 export interface PlaybackReq {
   id: string; variantId?: string; allowUnverifiedAudio?: boolean; sourceId?: string | null; catchupProgrammeId?: string | null; rewindAt?: string | null
+  bufferAt?: string | null
   /** Index into the file's probed audio tracks; the server encodes that one track (web VOD). */
   audioTrack?: number | null
   /** Start a restart-at-offset stream here instead of at the profile's resume position. */
@@ -93,6 +94,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
   const [busy, setBusy] = useState<SourceBusy | null>(null)
   // The error on screen is a refusal another stream would get too (access, an administrator's stop), not a failing stream.
   const [refused, setRefused] = useState(false)
+  const [requiresEdition, setRequiresEdition] = useState<string | null>(null)
   // Watching back in the local buffer rather than at the live edge.
   const [timeshifted, setTimeshifted] = useState(false)
   const plays = useRef(0)
@@ -128,7 +130,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
     retryTimer.current = null
   }, [])
-  const key = req ? `${profileId}|${sessionGeneration}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}|${req.audioTrack ?? ''}` : ''
+  const key = req ? `${profileId}|${sessionGeneration}|${preferences}|${req.id}|${req.sourceId ?? ''}|${req.catchupProgrammeId ?? ''}|${req.variantId ?? ''}|${req.allowUnverifiedAudio ?? false}|${req.rewindAt ?? ""}|${req.bufferAt ?? ""}|${req.startPositionMs ?? ""}|${req.audioTrack ?? ''}` : ''
 
   // The source has no free connection. Retrying on a timer would only knock again: stop and say who has them.
   const showBusy = useCallback((found: SourceBusy) => {
@@ -258,6 +260,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
     setError(null)
     setBusy(null)
     setRefused(false)
+    setRequiresEdition(null)
     setTimeshifted(false)
     ;(async () => {
       try {
@@ -374,6 +377,13 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
                 if (!cancelled && !(failure instanceof DOMException && failure.name === 'AbortError')) setBufferIssue(bufferError(failure))
               }
             }
+            if (req.bufferAt) {
+              const result = await lease.seek(req.bufferAt)
+              if (cancelled) return
+              setTimeshifted(true); setBufferWindow(result.window)
+              await attach({ ...d, url: result.url })
+              return
+            }
           } catch (failure) {
             if (cancelled) return
             // Access/recovery failures must never fall back to an unleased stream.
@@ -381,6 +391,11 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
             setState('error'); setError(bufferError(failure))
             return
           }
+        }
+        if (req.bufferAt) {
+          terminal.current = true
+          setState('error'); setError('This programme position is no longer in the live buffer.')
+          return
         }
         await attach(d)
       } catch (e) {
@@ -395,6 +410,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
           terminal.current = true
           clearWaiting()
           clearRetry()
+          setRequiresEdition(e.code === 'audio_selection_required' && !recording && (e.body as { remembered_edition_changed?: boolean } | undefined)?.remembered_edition_changed ? req.id : null)
           setRefused(e.status === 401 || e.status === 403 || e.code === 'audio_selection_required' || e.code === 'playback_reload_required')
           setState('error')
           // A room's refusals (the room ended, it is full) are the server's own words.
@@ -458,7 +474,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
       // Back from a capped quality to a file the browser plays as it is: carry on where the viewer was, once.
       const carried = restart.current.startMs
       if (carried != null) restart.current = { ...restart.current, startMs: undefined }
-      const at = carried ?? d.resume_position_ms
+      const at = carried ?? req?.startPositionMs ?? d.resume_position_ms
       if (at > 0 && v.currentTime < 1) v.currentTime = at / 1000
     }
     // The source can drop mid-film and ffmpeg then closes the stream as if it had ended. Carry on from there.
@@ -550,10 +566,11 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
 
   return {
     mediaRef: videoRef,
-    desc, state, error, busy, refused, timeshifted, tracks, audioBlocked,
+    desc, state, error, busy, refused, requiresEdition, timeshifted, tracks, audioBlocked,
     pause: () => { wantsPlayback.current = false; pausedByViewer.current = true; videoRef.current?.pause() },
     resume: () => { wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
     consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
+    programmeTime: () => handle.current?.programmeTime?.(),
     bufferWindow, bufferIssue, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
     setAudio: (i: number) => {
       if (!handle.current?.audioTracks().some(t => t.id === i)) return

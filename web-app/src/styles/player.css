@@ -152,6 +152,8 @@
   .pm-drawer { width: 100%; max-height: 90dvh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
   .pm-body { padding-bottom: max(.65rem, env(safe-area-inset-bottom)); }
 }
+.shortcut-guide { min-height: 0; max-height: clamp(6rem, 48dvh, 28rem); overflow: auto; padding: .6rem; }
+.shortcut-instructions { display: grid; gap: .75rem; }
 .keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem 2rem; }
 .keys section { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
 .keys section:first-child { grid-row: span 2; }

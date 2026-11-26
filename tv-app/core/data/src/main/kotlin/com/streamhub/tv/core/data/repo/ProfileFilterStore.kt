@@ -20,10 +20,14 @@ class ProfileFilterStore @Inject constructor(private val api: StreamHubApi, priv
         }
     }
     suspend fun read(profileId: String, key: String): JsonElement? {
+        return readAll(profileId)[key]
+    }
+
+    suspend fun readAll(profileId: String): JsonObject {
         val owner = session.current().catalogScope()
         return mutex.withLock {
             ensureOwner(owner, profileId)
-            val result = api.profilePrefs(profileId)[key]
+            val result = api.profilePrefs(profileId)
             ensureOwner(owner, profileId)
             result
         }
@@ -32,12 +36,11 @@ class ProfileFilterStore @Inject constructor(private val api: StreamHubApi, priv
         val owner = session.current().catalogScope()
         return mutex.withLock {
             ensureOwner(owner, profileId)
-            val latest = api.profilePrefs(profileId)
+            val result = api.patchProfilePrefs(profileId, profilePreferencePatch(key, value))
             ensureOwner(owner, profileId)
-            api.putProfilePrefs(profileId, mergeProfileFilter(latest, key, value))
+            result
         }
     }
 }
 
-internal fun mergeProfileFilter(latest: JsonObject, key: String, value: JsonElement): JsonObject =
-    JsonObject(latest + (key to value))
+internal fun profilePreferencePatch(key: String, value: JsonElement): JsonObject = JsonObject(mapOf(key to value))

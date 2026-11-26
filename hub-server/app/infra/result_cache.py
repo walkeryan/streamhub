@@ -77,7 +77,7 @@ class CatalogRevisions:
         "service_registry",
         "age_classification",
     }
-    PERSONAL = {"profile", "favorite", "progress", "watchlist"}
+    PERSONAL = {"profile", "favorite", "progress", "watchlist", "playback_preference", "profile_channel"}
 
     def __init__(self) -> None:
         self.catalog = 0

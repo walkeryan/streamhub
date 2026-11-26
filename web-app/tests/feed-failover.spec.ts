@@ -57,8 +57,9 @@ test('a game feed that stops switches to the next feed of the game and frees the
   await freeze(page, false)
   await expect(page).toHaveURL(new RegExp(`/play/${encodeURIComponent(OTHER_FEED)}$`), { timeout: 15_000 })
   await expect(page.locator('.toast').last()).toHaveText(/stopped — switched to LUMEX TV 007$/)
+  // The route is updated before the new descriptor is requested.
+  await expect.poll(async () => (await resolves(page)).at(-1)).toMatchObject({ id: OTHER_FEED, replaces: GAME_FEED })
   const bodies = await resolves(page)
-  expect(bodies.at(-1)).toMatchObject({ id: OTHER_FEED, replaces: GAME_FEED })
   expect(bodies.filter((b) => b.replaces).length).toBe(1)
   await expect(page.getByTestId('player')).toHaveAttribute('data-state', 'playing')
 })

@@ -2,20 +2,17 @@ package com.streamhub.tv.core.data
 
 import com.streamhub.tv.core.data.api.StreamHubJson
 import com.streamhub.tv.core.data.model.*
-import com.streamhub.tv.core.data.repo.mergeProfileFilter
+import com.streamhub.tv.core.data.repo.profilePreferencePatch
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
 class CatalogFiltersTest {
     @Test fun nativeFilterSavePreservesOtherScreensAndWebPreferences() {
-        val existing = StreamHubJson.parseToJsonElement("""{"web_filters":{"region":"US"},"native_browse_shows":{"genre":"drama"},"native_browse_movies":{"sort":"year"}}""").jsonObject
         val movies = StreamHubJson.encodeToJsonElement(NativeBrowseFilters(source = "source-a", genre = "horror", language = "all"))
-        val merged = mergeProfileFilter(existing, "native_browse_movies", movies)
-        assertEquals(existing["web_filters"], merged["web_filters"])
-        assertEquals(existing["native_browse_shows"], merged["native_browse_shows"])
-        assertEquals("all", merged["native_browse_movies"]!!.jsonObject["language"]!!.jsonPrimitive.content)
-        assertEquals("year", existing["native_browse_movies"]!!.jsonObject["sort"]!!.jsonPrimitive.content)
+        val patch = profilePreferencePatch("native_browse_movies", movies)
+        assertEquals(setOf("native_browse_movies"), patch.keys)
+        assertEquals("all", patch.getValue("native_browse_movies").jsonObject["language"]!!.jsonPrimitive.content)
     }
     @Test fun missingPreferenceUsesProfileLanguagesWhileAllAndUnknownRemainExplicit() {
         assertNull(StreamHubJson.decodeFromString(NativeBrowseFilters.serializer(), "{}").language)

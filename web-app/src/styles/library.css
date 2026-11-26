@@ -4,6 +4,7 @@
 /* ---------- shared by the library screens ---------- */
 /* A library screen: its title line, then its blocks a section's gap apart. */
 .lib-page { display: flex; flex-direction: column; gap: var(--gap-lg); }
+.lib-page > [role="tabpanel"]:not([hidden]) { display: flex; flex-direction: column; gap: var(--gap-lg); }
 .lib-page > .ds-page-head { margin-bottom: 0; }
 /* The title line: the screen's own tools (tabs, Filter) follow its name instead of sitting at the far
    end, so remote focus moves a short way from the title to the content under it. They drop under the
@@ -125,6 +126,9 @@
 .search-row-number { min-width: 2rem; text-align: center; padding: 0.15rem 0.5rem; border-radius: var(--r-pill); background: var(--glass-tint);
   color: var(--t-text-muted); font-size: var(--fs-small); font-weight: 650; font-variant-numeric: tabular-nums; }
 .search-grid { padding: 0.25rem 0 0; }
+.search-result { position: relative; min-width: 0; }
+.search-result-actions { position: absolute; top: .35rem; right: .35rem; z-index: 1; }
+.search-result-actions .ds-glass { background: rgba(12, 14, 18, .85); color: white; }
 .search-more { display: flex; }
 .search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: var(--gap-lg); padding: 0.5rem 0; }
 .search-idle-lead { display: flex; align-items: center; gap: var(--gap-md); }

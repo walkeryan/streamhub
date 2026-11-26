@@ -10,7 +10,7 @@ test('track labels name language, layout and codec', () => {
   assert.equal(trackLabel(french), 'French · 5.1 · AC-3')
   assert.equal(trackLabel(english), 'English · Stereo · E-AC-3')
   assert.equal(trackLabel({ index: 2, language: 'und', codec: 'pcm_s16le', channels: 4 }), 'Unknown language · 4 ch · PCM_S16LE')
-  assert.equal(trackLabel({ index: 3, language: 'ces' }), 'CES')
+  assert.equal(trackLabel({ index: 3, language: 'ces' }), 'Czech')
 })
 
 test('the initial track is the preferred language, else the file default, else the first', () => {

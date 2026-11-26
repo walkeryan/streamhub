@@ -16,7 +16,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -25,9 +31,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.tv.material3.Text
 import com.streamhub.tv.core.data.room.RoomCode
 import com.streamhub.tv.core.player.TrackOption
+import com.streamhub.tv.core.ui.components.DialogText
+import com.streamhub.tv.core.ui.components.DialogTitle
+import com.streamhub.tv.core.ui.components.ShButton
 import com.streamhub.tv.core.ui.components.GlassIcons
 import com.streamhub.tv.core.ui.components.GlassPanel
 import com.streamhub.tv.core.ui.components.GlassRow
@@ -36,6 +47,7 @@ import com.streamhub.tv.core.ui.components.OnOffPill
 import com.streamhub.tv.core.ui.components.ShChip
 import com.streamhub.tv.core.ui.theme.LocalThemeTokens
 import com.streamhub.tv.core.ui.theme.Tokens
+import kotlinx.coroutines.launch
 import com.streamhub.tv.core.ui.theme.glass
 
 /** Everything the player's settings drawer shows (see [PlayerMenu], which fills it from the screen's state). */
@@ -66,6 +78,7 @@ internal data class SettingsModel(
     val sleepMinutes: Int? = null,
     val watchTogether: Boolean = false,
     val canRetry: Boolean = false,
+    val recording: Boolean = false,
 )
 
 internal class SettingsActions(
@@ -84,6 +97,7 @@ internal class SettingsActions(
     val onSleep: (Int?) -> Unit = {},
     val onWatchTogether: () -> Unit = {},
     val onStreamInfo: () -> Unit = {},
+    val onReport: () -> Unit = {},
     val onRetry: () -> Unit = {},
     val onClose: () -> Unit = {},
 )
@@ -105,6 +119,9 @@ internal fun SettingsDrawer(
     inviteOpener: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
+    var shortcutsOpen by remember { mutableStateOf(false) }
+    val shortcutsOpener = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
     val t = LocalThemeTokens.current
     val g = glass
     val inRoom = m.roomCode != null
@@ -198,10 +215,37 @@ internal fun SettingsDrawer(
             // A room for whatever is playing, with this TV as its host (the web player's "Watch together").
             if (m.watchTogether) GlassRow("Watch together", a.onWatchTogether, row, icon = GlassIcons.People)
             // What is playing and how it gets here: the server's facts and the player's own numbers.
+            if (m.recording) GlassRow("Report a recording issue", a.onReport, row, icon = GlassIcons.Info)
             GlassRow("Stream info", a.onStreamInfo, row.focusRequester(streamInfoOpener), icon = GlassIcons.Info)
+            GlassRow("Controls and shortcuts", { shortcutsOpen = true }, row.focusRequester(shortcutsOpener), icon = GlassIcons.Info)
             if (m.canRetry) GlassRow("Retry stream", a.onRetry, row, icon = GlassIcons.Retry)
             GlassRow("Close controls", a.onClose, row, icon = GlassIcons.Close)
         }
+    }
+    if (shortcutsOpen) {
+        RemoteShortcutDialog(m.channel, m.roomCode != null) {
+            shortcutsOpen = false
+            scope.launch { withFrameNanos { }; runCatching { shortcutsOpener.requestFocus() } }
+        }
+    }
+}
+
+@Composable
+internal fun RemoteShortcutDialog(channel: Boolean, inRoom: Boolean, onClose: () -> Unit) {
+    val closeFocus = remember { FocusRequester() }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        GlassPanel(Modifier.width(540.dp)) {
+            DialogTitle("Controls and shortcuts")
+            when {
+                inRoom -> DialogText("Use the playback controls to play or pause together when the room allows it.")
+                channel -> DialogText("Up or Down changes channel. OK opens the channel list. Left opens the archive when available.")
+                else -> DialogText("Left or Right skips 10 seconds. OK or Down opens the timeline and playback controls.")
+            }
+            DialogText("Hold OK or press Menu to open settings. Use the arrows to highlight a control and OK to choose it.")
+            DialogText("Back closes the current panel. On a keyboard, press ? during playback to open this guide.")
+            ShButton("Close", onClose, Modifier.padding(top = 10.dp).focusRequester(closeFocus))
+        }
+        LaunchedEffect(Unit) { withFrameNanos { }; runCatching { closeFocus.requestFocus() } }
     }
 }
 

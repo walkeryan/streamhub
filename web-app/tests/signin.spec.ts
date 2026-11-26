@@ -81,6 +81,21 @@ test.describe('the sign-in screen', () => {
     await expect(none.getByTestId('profile-picker')).toHaveCount(0)
   })
 
+  test('rapid credential entry keeps later keystrokes in the masked field', async ({ page }) => {
+    await enter(page, '/', { ways: 'password,remote' })
+    await button(page, 'Username and password').click()
+    const username = page.getByRole('textbox', { name: 'Username', exact: true })
+    const password = page.getByLabel('Password', { exact: true })
+    await username.fill('viewer')
+    await password.fill('fixture')
+    // Advance beyond the initial-focus delay that used to reclaim Username.
+    await page.waitForTimeout(80)
+    await page.keyboard.type('Z')
+    await expect(username).toHaveValue('viewer')
+    await expect(password).toHaveValue('fixtureZ')
+    await expect(password).toBeFocused()
+  })
+
   test('a server from before these ways shows what it always did', async ({ page }) => {
     await enter(page, '/')
     await expect(page.getByTestId('profile-picker')).toBeVisible()

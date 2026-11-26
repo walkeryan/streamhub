@@ -1,28 +1,8 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import { activeFilter, openFilters, signIn } from './helpers'
 
-type Document = Record<string, unknown>
-async function backend(page: Page, documents: Record<string, Document>, beforeRead?: (id: string) => Promise<void>) {
-  await page.exposeFunction('prefsBackend', async (id: string, method: string, body: Document | null) => {
-    if (method === 'PUT') documents[id] = body!
-    else await beforeRead?.(id)
-    return documents[id] ?? {}
-  })
-  await page.addInitScript(() => {
-    const original = window.fetch.bind(window)
-    window.fetch = async (input, init) => {
-      const req = new Request(input, init)
-      // A language row is offered only to a catalog with more than one language.
-      if (new URL(req.url).pathname === '/api/v1/browse/movies/languages') return Response.json([{ code: 'eng', name: 'English', count: 10 }, { code: 'spa', name: 'Spanish', count: 2 }])
-      const match = new URL(req.url).pathname.match(/^\/api\/v1\/profiles\/([^/]+)\/prefs$/)
-      if (match) {
-        const state = window as unknown as { prefsBackend: (id: string, method: string, body: Record<string, unknown> | null) => Promise<Record<string, unknown>> }
-        return Response.json(await state.prefsBackend(match[1], req.method, req.method === 'PUT' ? await req.json() : null))
-      }
-      return original(req)
-    }
-  })
-}
+import { backend, type Document } from './profilePrefsFixture'
+
 const namespace = 'browseFilters.v1.movies'
 const defaults = { source: '', sort: 'added', order: '', language: 'mine', category: '', genre: '' }
 
@@ -93,22 +73,22 @@ test('delayed previous-profile preferences never appear after switching profiles
 })
 
 
-test('switching profiles cancels a queued preference write before PUT', async ({ page }) => {
+test('switching profiles cancels a queued preference write before dispatch', async ({ page }) => {
   const documents: Record<string, Document> = { p2: { [namespace]: defaults }, p1: { [namespace]: defaults } }
   let armed = false, blocked = false
   const releases: Array<() => void> = []
-  await backend(page, documents, async (id) => {
-    if (id === 'p2' && armed) { blocked = true; await new Promise<void>((resolve) => { releases.push(resolve) }) }
+  await backend(page, documents, async (id, method) => {
+    if (method === 'PATCH' && id === 'p2' && armed) { blocked = true; await new Promise<void>((resolve) => { releases.push(resolve) }) }
   })
   await signIn(page)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
   await openFilters(page)
   await expect(page.getByRole('button', { name: 'Recently added', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  // Hydration reads preferences too. Gate the save's fresh read explicitly
-  // instead of assuming it is the second overall GET.
+  // Hold the dispatched write and queue a second edit while it is in flight.
   armed = true
   await page.getByRole('button', { name: 'Release date', exact: true }).click()
   await expect.poll(() => blocked).toBe(true)
+  await page.getByRole('button', { name: 'Title', exact: true }).click()
   expect(documents.p2[namespace]).toEqual(defaults)
   await page.evaluate(async () => {
     await fetch('/api/v1/disclaimer/accept', { method: 'POST', headers: { authorization: 'Bearer mock-access-p1' } })
@@ -126,5 +106,5 @@ test('switching profiles cancels a queued preference write before PUT', async ({
   for (const release of releases) release()
   await page.getByRole('button', { name: 'Title', exact: true }).click()
   await expect.poll(() => documents.p1[namespace]).toEqual({ ...defaults, sort: 'title' })
-  expect(documents.p2[namespace]).toEqual(defaults)
+  expect(documents.p2[namespace]).toEqual({ ...defaults, sort: 'release' })
 })

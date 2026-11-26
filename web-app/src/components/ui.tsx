@@ -38,18 +38,27 @@ export function Button(p: {
   )
 }
 
-export function Chip(p: { focusKey?: string; children: ReactNode; pressed?: boolean; onEnter: () => void; testId?: string; label?: string }) {
+export function Chip(p: { tab?: boolean; focusKey?: string; children: ReactNode; pressed?: boolean; onEnter: () => void; testId?: string; label?: string }) {
   return (
-    <Focusable focusKey={p.focusKey} onEnter={p.onEnter} aria-pressed={p.pressed} data-testid={p.testId} label={p.label} className="chip fx-flat">
+    <Focusable focusKey={p.focusKey} id={p.tab ? p.focusKey : undefined} role={p.tab ? 'tab' : 'button'}
+      aria={p.tab ? { selected: !!p.pressed, controls: `${p.focusKey}:panel` } : undefined}
+      onEnter={p.onEnter} aria-pressed={p.tab ? undefined : p.pressed} data-testid={p.testId} label={p.label} className="chip fx-flat">
       {p.children}
     </Focusable>
   )
 }
 
-export function ProgressBar({ pct, className }: { pct: number; className?: string }) {
+/** Inactive tabs keep a named panel while only the active screen loads its contents. */
+export function TabPanels({ tabs, active, className, children }: { tabs: string[]; active: string; className?: string; children: ReactNode }) {
+  return <>{tabs.map(key => <div key={key} id={`${key}:panel`} role="tabpanel" aria-labelledby={key}
+    hidden={key !== active} className={key === active ? className : undefined}>{key === active ? children : null}</div>)}</>
+}
+
+export function ProgressBar({ pct, label, className }: { pct: number; label: string; className?: string }) {
+  const value = Math.min(100, Math.max(0, pct))
   return (
-    <div className={cn('bar', className)} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
-      <i style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+    <div className={cn('bar', className)} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(value)}>
+      <i style={{ width: `${value}%` }} />
     </div>
   )
 }
