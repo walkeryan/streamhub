@@ -24,7 +24,7 @@ const SEARCH: Destination = { to: '/search', label: 'Search', icon: 'search' }
 const LIVE: Destination = { to: '/live', label: 'Live TV', icon: 'tv', at: ['/guide'] }
 const MY_LIST: Destination = { to: '/favorites', label: 'My List', icon: 'bookmark' }
 const SPORTS: Destination = { to: '/sports', label: 'Sports', icon: 'trophy', needs: 'sports' }
-/** Wide screens: every place to watch is named in the top bar; the search box sits with More and the profile at its end. */
+/** Wide screens: every place to watch is named in the top bar; the search box is the first action beside the brand. */
 const NAV: Destination[] = [
   HOME, LIVE, SPORTS,
   { to: '/browse/movies', label: 'Movies', icon: 'film', at: ['/browse/vod', '/discover/movies'] },
@@ -91,6 +91,7 @@ export function Rail() {
     <FocusGroup focusKey="RAIL" as="nav" label="Main navigation" className="rail" remember={false} preferred={entry && `rail:${entry}`}
       onFocusChange={setHasFocus} data-testid="rail">
       {!phone && <span className="rail-brand" onClick={() => open('/')}>Stream<b>Hub</b></span>}
+      {!phone && <SearchBox label={SEARCH.label} />}
       {/* A phone names each icon; the top bar has the room to say the name alone. */}
       {(phone ? BAR : nav).map((n) => (
         <Focusable key={n.label} focusKey={`rail:${n.to}`} className="rail-item fx-flat" role="link" label={n.label}
@@ -99,11 +100,7 @@ export function Rail() {
           <span className="lbl">{n.label}</span>
         </Focusable>
       ))}
-      {/* Wide: the one search box, a stop of the bar like any other. A phone's Search tab opens the results page, which has the box. */}
-      {!phone && <>
-        <div className="rail-gap" />
-        <SearchBox label={SEARCH.label} />
-      </>}
+      {!phone && <div className="rail-gap" />}
       <Focusable focusKey="rail:more" className={phone ? 'rail-item fx-flat' : 'rail-item rail-icon fx-flat'} label="More" title="More"
         aria-current={more.some(here) ? 'page' : undefined} data-testid="nav-more" onEnter={() => setMenu(true)}>
         <Icon name="menu" />

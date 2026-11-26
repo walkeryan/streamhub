@@ -22,6 +22,7 @@ import { LoginGate } from './screens/GoogleLogin'
 import { InviteLanding } from './screens/Invite'
 import { Home } from './screens/Home'
 import { Search } from './screens/Search'
+import { SearchCollection } from './screens/SearchCollection'
 import { TitleScreen } from './screens/Title'
 import { Discover } from './screens/Discover'
 import { Browse } from './screens/Browse'
@@ -140,6 +141,8 @@ export function App() {
           <Route element={<Shell />}>
             <Route index element={<Home />} />
             <Route path="search" element={<Search />} />
+            <Route path="search/actor/:id" element={<SearchCollection kind="actor" />} />
+            <Route path="search/service/:id" element={<SearchCollection kind="service" />} />
             <Route path="title/:id" element={<TitleScreen />} />
             <Route path="discover/:section" element={<Discover />} />
             <Route path="browse/:section" element={<Browse />} />

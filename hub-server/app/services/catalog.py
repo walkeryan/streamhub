@@ -24,6 +24,7 @@ from app.infra.models import (
     Favorite,
     Profile,
     Progress,
+    ServiceRegistry,
     Setting,
     Source,
     Title,
@@ -66,9 +67,9 @@ BROWSE_KINDS: dict[str, tuple[str, ...]] = {
     "vod": ("vod",),
     "series": ("series",),
 }
-SORTS = {"added", "title", "year", "rating"}
+SORTS = {"added", "title", "release", "year", "rating"}
 # Each sort's natural direction: newest, A to Z, newest year, best rated.
-DEFAULT_ORDER = {"added": "desc", "title": "asc", "year": "desc", "rating": "desc"}
+DEFAULT_ORDER = {"added": "desc", "title": "asc", "release": "desc", "year": "desc", "rating": "desc"}
 # Providers file recorded games, fight cards and wrestling shows under VOD; they are not films.
 # A word of the category name (or "replay" anywhere in it) marks such a category.
 SPORTS_VOD_WORDS = (
@@ -127,7 +128,7 @@ def jump_label(sort: str, value: Any) -> str:
         return first if "A" <= first <= "Z" else "#"
     if value is None or value == "":
         return "Unknown" if sort != "rating" else "Unrated"
-    if sort == "year":
+    if sort == "year" or (sort == "release" and len(str(value)) == 4):
         return str(value)
     if sort == "rating":
         return f"{int(float(value))}+"
@@ -712,6 +713,8 @@ class CatalogService:
         year: int | None = None,
         language: str | None = None,
         source_id: str | None = None,
+        actor: int | None = None,
+        service: str | None = None,
     ) -> dict[str, Any]:
         media_type = {"movies": "movie", "shows": "tv"}.get(section)
         if media_type is None:
@@ -729,10 +732,33 @@ class CatalogService:
         if source_id:
             enabled = [sid for sid in enabled if sid == source_id]
         languages = await self.preferred_languages(profile_id, language)
+        providers: list[int] = []
+        region = "US"
+        if service:
+            async with self._db.session() as session:
+                registry = await session.get(ServiceRegistry, service)
+                if not registry or not registry.tmdb_provider_ids:
+                    raise NotFound("Unknown streaming service")
+                providers = registry.tmdb_provider_ids
+            region = next(
+                (
+                    src.region
+                    for src in ctx.sources.values()
+                    if src.enabled and src.service_key == service and src.region
+                ),
+                "US",
+            )
         try:
             async with asyncio.timeout(12):
                 async with self._metadata_slots:
-                    metas, total = await self.meta.discover(media_type, page, sort, year)
+                    if actor:
+                        metas, total = await self.meta.actor_titles(actor, media_type, page)
+                    elif providers:
+                        metas, total = await self.meta.discover(
+                            media_type, page, sort, year, providers=providers, region=region
+                        )
+                    else:
+                        metas, total = await self.meta.discover(media_type, page, sort, year)
                 by_id = {
                     ids.tmdb_id(meta.media_type, meta.tmdb_id): meta
                     for meta in metas[:20]
@@ -953,6 +979,10 @@ class CatalogService:
                 key.label("hub"),
                 func.min(title_sort_key()).label("title_sort"),
                 func.max(Title.year).label("year_sort"),
+                func.coalesce(
+                    func.max(func.date(func.json_extract(Title.extra, "$.originally_available_at"))),
+                    cast(func.max(func.nullif(Title.year, 0)), String),
+                ).label("release_sort"),
                 func.max(Title.rating).label("rating_sort"),
                 func.max(Title.added_at).label("added_sort"),
                 func.max(Title.id).label("id_sort"),
@@ -1354,17 +1384,48 @@ class CatalogService:
                 aired = await search_programmes(chsvc, profile_id, q, language="all", source_id=source_id, cap=cap)
             return aired
 
+        async def actors() -> tuple[list[dict[str, str]], bool]:
+            if not discover or not self.meta.enabled or (kinds and "actor" not in kinds):
+                return [], True
+            try:
+                async with asyncio.timeout(DISCOVERY_BUDGET):
+                    async with self._metadata_slots:
+                        return await self.meta.search_actors(q), True
+            except Exception:
+                return [], False
+
+        async def services() -> list[dict[str, str]]:
+            if kinds and "service" not in kinds:
+                return []
+            async with self._db.session() as session:
+                rows = (await session.scalars(select(ServiceRegistry).order_by(ServiceRegistry.name))).all()
+            return [
+                {"id": row.key, "name": row.name}
+                for row in rows
+                if row.tmdb_provider_ids and (q.casefold() in row.name.casefold() or q.casefold() in row.key.casefold())
+            ]
+
         # The sections read different tables; side by side, each under this request's scopes.
         (
             titles,
             (found_channels, channel_total, channel_rank),
             (broadcasts, broadcast_total, more),
+            (found_actors, actors_complete),
+            found_services,
         ) = await asyncio.gather(
-            self._search_titles(q, profile_id, want, limit, language, source_id, discover), channels(), programmes()
+            self._search_titles(q, profile_id, want, limit, language, source_id, discover),
+            channels(),
+            programmes(),
+            actors(),
+            services(),
         )
         count = titles.pop("count")
+        if not actors_complete:
+            titles["metadata_incomplete"] = True
         return {
             **titles,
+            "actors": found_actors,
+            "services": found_services,
             "channels": found_channels,
             "programmes": broadcasts,
             "sections": {

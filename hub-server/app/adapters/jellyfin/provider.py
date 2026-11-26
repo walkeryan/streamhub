@@ -25,7 +25,9 @@ log = logging.getLogger(__name__)
 PAGE = 300
 TICKS_PER_MS = 10_000
 _KIND = {"Movie": MediaKind.MOVIE, "Series": MediaKind.SHOW, "Season": MediaKind.SEASON, "Episode": MediaKind.EPISODE}
-_FIELDS = "ProviderIds,Overview,Genres,DateCreated,MediaSources,ProductionYear,CommunityRating,RunTimeTicks"
+_FIELDS = (
+    "ProviderIds,Overview,Genres,PremiereDate,DateCreated,MediaSources,ProductionYear,CommunityRating,RunTimeTicks"
+)
 
 
 def auth_header(client_id: str, product: str, token: str | None = None) -> str:
@@ -211,6 +213,7 @@ class JellyfinSource:
             duration_ms=int(ticks) // TICKS_PER_MS if ticks else None,
             added_at=_parse_date(d.get("DateCreated")),
             extra={
+                "originally_available_at": (d.get("PremiereDate") or "")[:10] or None,
                 "container": container,
                 "resume_ms": int(ud.get("PlaybackPositionTicks") or 0) // TICKS_PER_MS,
                 "series_name": d.get("SeriesName"),

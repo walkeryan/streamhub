@@ -79,7 +79,7 @@ export const useSearch = (q: string, expand: readonly SearchSectionName[], disco
     enabled: key.length >= MIN_QUERY,
     staleTime: 30_000,
     queryFn: async ({ signal }) => completeSearch(await unwrap<Partial<SearchResult>>(api.GET('/search', {
-      signal, params: { query: { q: q.trim(), ...(full ? { expand: full } : {}), ...(discover ? { kinds: 'movie,show' } : { discover: false }) } },
+      signal, params: { query: { q: q.trim(), ...(full ? { expand: full } : {}), ...(discover ? { kinds: 'movie,show,vod,series,actor' } : { discover: false }) } },
     }))),
   })
 }
@@ -95,7 +95,7 @@ export function searchView(local: SearchResult, full: SearchResult | undefined):
   const named = full.discovered ? new Set(full.discovered) : null
   const added = full.results.filter((t) => !have.has(t.id) && (!named || named.has(t.id)))
   const titles = { count: Math.max(full.sections.titles.count, local.results.length + added.length), more: local.sections.titles.more || full.sections.titles.more }
-  return { ...local, results: [...local.results, ...added], sections: { ...local.sections, titles }, metadata_available: full.metadata_available, attribution: full.attribution }
+  return { ...local, actors: full.actors ?? [], results: [...local.results, ...added], sections: { ...local.sections, titles }, metadata_available: full.metadata_available, attribution: full.attribution }
 }
 
 export const useTitle = (id: string | undefined) =>
@@ -128,7 +128,7 @@ export const useSimilarTitles = (id: string | undefined) =>
     queryFn: () => unwrap<SimilarTitles>(api.GET('/titles/{id}/similar', { params: { path: { id: id! } } })),
   })
 
-export interface BrowseFilters { include_adult?: boolean; source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'year' | 'rating'; order?: 'asc' | 'desc' }
+export interface BrowseFilters { include_adult?: boolean; source_id?: string; language?: string; q?: string; category?: string; genre?: string; sort?: 'added' | 'title' | 'release' | 'year' | 'rating'; order?: 'asc' | 'desc' }
 /**
  * A browse grid that loads as it scrolls, both ways: it starts at `start` (page 1, or wherever a jump on the
  * side rail landed) and grows down with the next pages and up with the earlier ones.

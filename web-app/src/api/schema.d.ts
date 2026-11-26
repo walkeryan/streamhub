@@ -2823,6 +2823,10 @@ export interface paths {
                 query?: {
                     page?: number;
                     sort?: "popular" | "rating" | "newest";
+                    /** @description Cast credits, ordered by popularity. */
+                    actor?: number;
+                    /** @description Streaming service registry key. */
+                    service?: string;
                     year?: number;
                     language?: string;
                     source_id?: string;
@@ -2874,7 +2878,7 @@ export interface paths {
                 query?: {
                     source_id?: string;
                     genre?: string;
-                    sort?: "added" | "title" | "year" | "rating";
+                    sort?: "added" | "title" | "release" | "year" | "rating";
                     order?: "asc" | "desc";
                     page?: number;
                     category?: string;
@@ -2933,7 +2937,7 @@ export interface paths {
                     category?: string;
                     language?: string;
                     q?: string;
-                    sort?: "added" | "title" | "year" | "rating";
+                    sort?: "added" | "title" | "release" | "year" | "rating";
                     order?: "asc" | "desc";
                     include_adult?: boolean;
                 };
@@ -7146,7 +7150,7 @@ export interface components {
         };
         BrowseJumps: {
             /** @enum {string} */
-            sort: "added" | "title" | "year" | "rating";
+            sort: "added" | "title" | "release" | "year" | "rating";
             page_size: number;
             /** @description In listing order. Labels: A-Z and # (title), a year (year), 9+ ... 0+ and Unrated (rating), 'Nov 2026' (added); Unknown when a title has no value. */
             jumps: {
@@ -7231,7 +7235,13 @@ export interface components {
             /** @description State of the household's recording of this programme, if there is one. Null when recording is off. */
             recording_state?: components["schemas"]["RecordingState"] | null;
         };
+        SearchMatch: {
+            id: string;
+            name: string;
+        };
         SearchResults: {
+            actors?: components["schemas"]["SearchMatch"][];
+            services?: components["schemas"]["SearchMatch"][];
             /** @description Titles, best first: exact title, title prefix, word prefix, contains, then every word in any order; at equal rank what plays here comes before what opens in another app, and that before a title known from metadata alone. */
             results: components["schemas"]["Tile"][];
             metadata_available?: boolean;

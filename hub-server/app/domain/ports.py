@@ -195,8 +195,19 @@ class MetadataProvider(Protocol):
 
     async def search(self, query: str, limit: int = 20) -> list[MetaTitle]: ...
 
+    async def search_actors(self, query: str) -> list[dict[str, str]]: ...
+
+    async def actor_titles(self, actor: int, media_type: str, page: int) -> tuple[list[MetaTitle], int]: ...
+
     async def discover(
-        self, media_type: str, page: int = 1, sort: str = "popular", year: int | None = None
+        self,
+        media_type: str,
+        page: int = 1,
+        sort: str = "popular",
+        year: int | None = None,
+        *,
+        providers: list[int] | None = None,
+        region: str = "US",
     ) -> tuple[list[MetaTitle], int]: ...
 
     async def details(self, media_type: str, tmdb_id: int) -> MetaTitle | None: ...

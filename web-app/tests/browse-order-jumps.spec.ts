@@ -27,3 +27,17 @@ test('movies sort either way and jump from the side rail', async ({ page }) => {
   await expect(page.locator('[data-testid="tile"][data-focused="true"]')).toHaveAttribute('aria-label', new RegExp(`^${letter}`, 'i'))
   await expect(last).toHaveAttribute('aria-current', 'true')
 })
+
+for (const section of ['Movies', 'Shows']) {
+  test(`${section} explicitly selecting Recently added opens the ordered grid`, async ({ page }) => {
+    await signIn(page)
+    await page.getByRole('link', { name: section, exact: true }).click()
+    await openFilters(page)
+    await page.getByTestId('browse-filters').getByRole('button', { name: 'Recently added', exact: true }).click()
+    await closeFilters(page)
+    await expect(page.getByTestId('browse')).toHaveAttribute('data-view', 'grid')
+    await expect(page.getByTestId('browse-order')).toHaveText('Newest first')
+    await page.getByTestId('browse-order').click()
+    await expect(page.getByTestId('browse-order')).toHaveText('Oldest first')
+  })
+}

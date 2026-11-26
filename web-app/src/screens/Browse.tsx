@@ -19,15 +19,16 @@ import { LANG_NAMES } from '../lib/util'
 
 const TITLES: Record<string, string> = { movies: 'Movies', shows: 'Shows', vod: 'Movies on demand', series: 'Series on demand' }
 const SORTS: Array<{ id: NonNullable<BrowseFilters['sort']>; label: string }> = [
-  { id: 'added', label: 'Recently added' }, { id: 'title', label: 'Title' }, { id: 'year', label: 'Year' }, { id: 'rating', label: 'Rating' },
+  { id: 'added', label: 'Recently added' }, { id: 'title', label: 'Title' }, { id: 'release', label: 'Release date' }, { id: 'rating', label: 'Rating' },
 ]
 type Sort = NonNullable<BrowseFilters['sort']>
 type Order = NonNullable<BrowseFilters['order']>
 // Each sort's natural direction (the server's default) and how either direction reads.
-const NATURAL: Record<Sort, Order> = { added: 'desc', title: 'asc', year: 'desc', rating: 'desc' }
+const NATURAL: Record<Sort, Order> = { added: 'desc', title: 'asc', release: 'desc', year: 'desc', rating: 'desc' }
 const DIRECTION: Record<Sort, Record<Order, string>> = {
   added: { desc: 'Newest first', asc: 'Oldest first' },
   title: { asc: 'A to Z', desc: 'Z to A' },
+  release: { desc: 'Newest first', asc: 'Oldest first' },
   year: { desc: 'Newest first', asc: 'Oldest first' },
   rating: { desc: 'Highest first', asc: 'Lowest first' },
 }
@@ -37,13 +38,13 @@ const LANGUAGE_LABEL: Record<string, string> = { mine: 'My languages', all: 'All
 const capital = (s: string) => s.charAt(0).toLocaleUpperCase() + s.slice(1)
 
 const filterSchema = z.object({
-  source: z.string().max(256), sort: z.enum(['added', 'title', 'year', 'rating']),
+  source: z.string().max(256), sort: z.enum(['added', 'title', 'year', 'release', 'rating']),
   // '' is the sort's natural direction; filters saved before there was a choice have none.
   order: z.enum(['', 'asc', 'desc']).catch(''),
   language: z.string().max(256), category: z.string().max(256), genre: z.string().max(256),
 })
 type SavedFilters = z.infer<typeof filterSchema>
-const validateFilters = (raw: unknown) => { const parsed = filterSchema.safeParse(raw); return parsed.success ? parsed.data : null }
+const validateFilters = (raw: unknown) => { const parsed = filterSchema.safeParse(raw); return parsed.success ? { ...parsed.data, sort: parsed.data.sort === 'year' ? 'release' as const : parsed.data.sort } : null }
 
 export function Browse() {
   const section = useParams().section ?? 'movies'
@@ -60,8 +61,8 @@ export function Browse() {
   const unlink = () => { if (linked !== null) setParams({}, { replace: true }) }
   const setSource = (source: string) => { saved.update((v) => ({ ...v, source, category: '' })); unlink() }
   // A new sort starts in its own natural direction.
-  const setSort = (sort: SavedFilters['sort']) => saved.update((v) => ({ ...v, sort, order: '' }))
-  const setOrder = (next: Order) => saved.update((v) => ({ ...v, order: next === NATURAL[v.sort] ? '' : next }))
+  const setSort = (sort: SavedFilters['sort']) => saved.update((v) => ({ ...v, sort, order: sort === defaults.sort ? NATURAL[sort] : '' }))
+  const setOrder = (next: Order) => saved.update((v) => ({ ...v, order: v.sort !== defaults.sort && next === NATURAL[v.sort] ? '' : next }))
   const setLang = (language: string) => saved.update((v) => ({ ...v, language }))
   const setCategory = (category: string) => { if (linked === null) saved.update((v) => ({ ...v, category })); else setParams(category ? { category } : {}, { replace: true }) }
   const setGenre = (genre: string) => saved.update((v) => ({ ...v, genre }))
@@ -99,7 +100,7 @@ export function Browse() {
   if (category) active.push({ id: 'category', text: `Category: ${category}`, clear: () => setCategory('') })
   if (genre) active.push({ id: 'genre', text: `Genre: ${capital(genre)}`, clear: () => setGenre('') })
   if (source) active.push({ id: 'source', text: `Source: ${libs.find((s) => s.id === source)?.name ?? 'One source'}`, clear: () => setSource('') })
-  if (sort !== defaults.sort || savedOrder) active.push({ id: 'sort', text: `Sort: ${SORTS.find((s) => s.id === sort)?.label ?? sort}${savedOrder ? `, ${DIRECTION[sort][order].toLowerCase()}` : ''}`, clear: () => setSort(defaults.sort) })
+  if (sort !== defaults.sort || savedOrder) active.push({ id: 'sort', text: `Sort: ${SORTS.find((s) => s.id === sort)?.label ?? sort}${savedOrder && savedOrder !== NATURAL[sort] ? `, ${DIRECTION[sort][order].toLowerCase()}` : ''}`, clear: () => saved.update(v => ({ ...v, sort: defaults.sort, order: '' })) })
   if (lang !== defaults.language) active.push({ id: 'language', text: `Language: ${LANGUAGE_LABEL[lang] ?? LANG_NAMES[lang] ?? lang}`, clear: () => setLang(defaults.language) })
   // The chip under focus is about to go; hand focus to its neighbour, or back to Filter after the last one.
   const drop = (id: string, clear: () => void) => {

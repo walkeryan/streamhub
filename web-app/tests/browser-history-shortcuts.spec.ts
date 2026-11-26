@@ -11,8 +11,8 @@ test('Alt arrows leave focus alone; browser history restores filters and plain U
   await expect(inBar).toHaveCount(1)
   await page.getByRole('link', { name: 'Movies', exact: true }).click()
   await openFilters(page)
-  await page.getByRole('button', { name: 'Year', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Year', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Release date', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Release date', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await closeFilters(page)
   await page.getByRole('link', { name: 'Shows', exact: true }).click()
   await expect(page).toHaveURL(/\/browse\/shows$/)
@@ -20,7 +20,7 @@ test('Alt arrows leave focus alone; browser history restores filters and plain U
   await expect(inBar).toHaveCount(0)
   // A text field keeps its caret through Alt+Left, and the bar does not walk to its neighbour.
   const search = searchBox(page)
-  await search.click()
+  await page.keyboard.press('/')
   await expect(search).toBeFocused()
   await page.keyboard.press('Alt+ArrowLeft')
   await expect(search).toBeFocused()
@@ -30,7 +30,7 @@ test('Alt arrows leave focus alone; browser history restores filters and plain U
   // history separately; the companion test proves our handler leaves defaults intact.
   await page.goBack()
   await expect(page).toHaveURL(/\/browse\/movies$/)
-  await expect(activeFilter(page, 'Sort: Year')).toBeVisible()
+  await expect(activeFilter(page, 'Sort: Release date')).toBeVisible()
   await page.keyboard.press('Alt+ArrowRight')
   await page.goForward()
   await expect(page).toHaveURL(/\/browse\/shows$/)

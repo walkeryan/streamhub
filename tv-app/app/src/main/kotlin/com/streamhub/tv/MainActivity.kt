@@ -9,8 +9,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.FrameLayout
-import android.app.Activity
-import android.content.ActivityNotFoundException
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
@@ -94,27 +94,38 @@ class MainActivity : ComponentActivity() {
     private lateinit var controller: ShellWebController
     private val capabilities by lazy { DeviceCapabilities.json(this) }
 
-    /** Voice search: the TV's recogniser answers here; what was said goes to the page, which searches for it. */
-    private val listen = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        listening = false
-        val heard = if (result.resultCode == Activity.RESULT_OK) VoiceSearch.heard(result.data) else null
-        sendToPage(miniPlayerScript(if (heard != null) voiceEventJson("final", heard) else voiceEventJson("idle")))
+    private val speech by lazy { VoiceSearch(this) { state, words, error ->
+        sendToPage(miniPlayerScript(voiceEventJson(state, words, error)))
+    } }
+    private var awaitingMic = false
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (awaitingMic) {
+            awaitingMic = false
+            if (!granted) sendToPage(miniPlayerScript(voiceEventJson("error", error = "permission")))
+            else if (vm.screen.value == ShellScreen.Web && controller.ready) speech.start()
+        }
     }
-    private var listening = false
     private var imeVisible = false
 
     private fun voice(command: VoiceCommand) {
-        if (command == VoiceCommand.Stop) return // the recogniser's own screen is dismissed with Back
-        if (listening) return
-        try {
-            listening = true
-            sendToPage(miniPlayerScript(voiceEventJson("listening")))
-            listen.launch(VoiceSearch.intent())
-        } catch (_: ActivityNotFoundException) {
-            listening = false
-            sendToPage(miniPlayerScript(voiceEventJson("error", error = "unavailable")))
+        if (command == VoiceCommand.Stop) {
+            if (awaitingMic) {
+                awaitingMic = false
+                sendToPage(miniPlayerScript(voiceEventJson("idle")))
+            }
+            speech.stop()
+        } else if (!awaitingMic && !speech.listening) {
+            if (!VoiceSearch.available(this)) {
+                sendToPage(miniPlayerScript(voiceEventJson("error", error = "unavailable")))
+            } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                speech.start()
+            } else {
+                awaitingMic = true
+                micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            }
         }
     }
+
     /**
      * The native player is open, full screen or as the mini player (see [PlayerLink]): the page keeps
      * running (it answers token requests) and is told when it closes.
@@ -241,6 +252,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && speech.listening) {
+            if (event.action == KeyEvent.ACTION_UP) speech.stop()
+            return true
+        }
         if (event.keyCode == KeyEvent.KEYCODE_BACK && vm.screen.value == ShellScreen.Web) {
             // Back is the web app's: it closes a dialog or goes back, and on its home screen says no,
             // and then the app is left like any TV app. Repeats while held are ignored.
@@ -281,6 +296,7 @@ class MainActivity : ComponentActivity() {
     private fun checkForUpdate() = updatePrompt.checkIfDue(onWebApp = vm.screen.value == ShellScreen.Web, playerOpen = playerOpen)
 
     override fun onStop() {
+        voice(VoiceCommand.Stop)
         // Backgrounded: the page rests. Behind the native player it keeps running, to answer token requests.
         if (!playerOpen) { webView.onPause(); webView.pauseTimers() }
         super.onStop()

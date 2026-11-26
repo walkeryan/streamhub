@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import insert
 
 from app.infra.models import Title
@@ -96,3 +97,34 @@ def test_jump_labels() -> None:
     assert [jump_label("title", v) for v in ("alien", "9 to 5", "", None)] == ["A", "#", "#", "#"]
     assert jump_label("rating", 8.7) == "8+" and jump_label("rating", None) == "Unrated"
     assert jump_label("year", None) == "Unknown" and jump_label("added", "2026-11-03 10:00:00") == "Nov 2026"
+
+
+@pytest.mark.parametrize(("section", "kind"), [("movies", "vod"), ("shows", "series")])
+async def test_same_year_release_order_is_independent_of_addition(api: Api, section: str, kind: str) -> None:
+    await seed_catalog(api)
+    async with api.c.db.session() as session:
+        for title, release, added in [("Winter", "2025-01-17", 3), ("Summer", "2025-07-02", 1), ("Undated", None, 2)]:
+            session.add(
+                Title(
+                    source_id="catalog",
+                    ext_id=title,
+                    kind=kind,
+                    title=title,
+                    norm_title=title.lower(),
+                    year=2025 if release else None,
+                    language="eng",
+                    added_at=datetime(2026, 1, added, tzinfo=UTC),
+                    extra={"originally_available_at": release},
+                )
+            )
+        await session.commit()
+    for sort, order, expected in [
+        ("release", "desc", ["Summer", "Winter", "Undated"]),
+        ("release", "asc", ["Winter", "Summer", "Undated"]),
+        ("added", "desc", ["Winter", "Undated", "Summer"]),
+        ("title", "asc", ["Summer", "Undated", "Winter"]),
+    ]:
+        response = await api.get(f"/browse/{section}", params={"sort": sort, "order": order})
+        assert [row["title"] for row in response.json()["tiles"]] == expected
+    jumps = await api.get(f"/browse/{section}/jumps", params={"sort": "release"})
+    assert [r["label"] for r in jumps.json()["jumps"]] == ["Jul 2025", "Jan 2025", "Unknown"]

@@ -257,6 +257,8 @@ async def discover(
     year: int | None = Query(None, ge=1888, le=2100),
     language: str | None = None,
     source_id: str | None = None,
+    actor: int | None = Query(None, gt=0),
+    service: str | None = Query(None, min_length=1, max_length=128),
     include_adult: IncludeAdult = False,
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
@@ -265,9 +267,17 @@ async def discover(
             c.db,
             p.profile_id,
             "discover",
-            (section, page, sort, year, language, source_id),
+            (section, page, sort, year, language, source_id, actor, service),
             lambda: c.catalog.discover(
-                section, p.profile_id, page=page, sort=sort, year=year, language=language, source_id=source_id
+                section,
+                p.profile_id,
+                page=page,
+                sort=sort,
+                year=year,
+                language=language,
+                source_id=source_id,
+                actor=actor,
+                service=service,
             ),
             ttl=30,
         )
@@ -285,7 +295,7 @@ async def browse(
     category: str | None = None,
     language: str | None = None,
     q: str | None = Query(None, max_length=200),
-    sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
+    sort: str | None = Query(None, pattern="^(added|title|release|year|rating)$"),
     order: str | None = Query(None, pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     include_adult: IncludeAdult = False,
@@ -325,7 +335,7 @@ async def browse_jumps(
     category: str | None = None,
     language: str | None = None,
     q: str | None = Query(None, max_length=200),
-    sort: str | None = Query(None, pattern="^(added|title|year|rating)$"),
+    sort: str | None = Query(None, pattern="^(added|title|release|year|rating)$"),
     order: str | None = Query(None, pattern="^(asc|desc)$"),
     include_adult: IncludeAdult = False,
 ) -> dict[str, Any]:

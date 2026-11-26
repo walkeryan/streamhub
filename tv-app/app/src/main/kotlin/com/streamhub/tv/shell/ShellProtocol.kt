@@ -199,6 +199,7 @@ fun capabilitiesJson(versionName: String, versionCode: Int, hdr: List<String>, v
     put("mini_player", miniPlayer)
     // The TV can listen through the remote's microphone (`voice_command` / `voice` messages).
     put("voice_search", voiceSearch)
+    put("inline_voice_search", voiceSearch)
     put("hdr", buildJsonArray { hdr.forEach { add(JsonPrimitive(it)) } })
     put("video_codecs", buildJsonArray { videoCodecs.forEach { add(JsonPrimitive(it)) } })
     put("audio_passthrough", buildJsonArray { audioPassthrough.forEach { add(JsonPrimitive(it)) } })

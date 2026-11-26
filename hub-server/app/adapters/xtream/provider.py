@@ -222,6 +222,13 @@ def _raw_extra(shown: Presented, name: str) -> dict[str, Any]:
     return {"raw_title": name, "raw_category": shown.raw_category, "kids": shown.kids}
 
 
+def _release_extra(row: dict[str, Any]) -> dict[str, str]:
+    raw = F.first(row, "releaseDate", "release_date", "releasedate", "first_air_date")
+    if isinstance(raw, str) and len(raw) >= 10:
+        return {"originally_available_at": raw[:10]}
+    return {}
+
+
 def map_vod(
     row: dict[str, Any],
     cats: dict[str, str],
@@ -253,7 +260,13 @@ def map_vod(
         genres=F.genres_from(row.get("genre")),
         added_at=F.as_epoch(row.get("added")),
         headers={"User-Agent": client.ua} if client.ua else {},
-        extra={"ext": ext, "stream_id": sid, **_raw_extra(shown, name), **provider_audio_extra(row.get("audio"))},
+        extra={
+            "ext": ext,
+            "stream_id": sid,
+            **_raw_extra(shown, name),
+            **_release_extra(row),
+            **provider_audio_extra(row.get("audio")),
+        },
         language=shown.language,
         quality=shown.quality,
         adult=shown.adult,
@@ -288,7 +301,7 @@ def map_series(
         tmdb_id=F.tmdb_from(row),
         group=shown.shelf or None,
         added_at=F.as_epoch(F.first(row, "last_modified", "added")),
-        extra={"series_id": sid, **_raw_extra(shown, name)},
+        extra={"series_id": sid, **_raw_extra(shown, name), **_release_extra(row)},
         language=shown.language,
         quality=shown.quality,
         adult=shown.adult,

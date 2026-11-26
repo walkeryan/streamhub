@@ -1,25 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { searchView, useRecordings, useSearch } from '../api/hooks'
 import { useCan } from '../api/me'
 import type { Channel, SearchProgramme, SearchResult, SearchSectionName, Tile } from '../api/types'
 import { Attribution, LogoBlock } from '../components/ui'
-import { Button, Chip, Empty, ErrorState, GlassIconButton, Icon, SectionHeader, Skeleton } from '../ds'
+import { Button, Chip, Empty, ErrorState, Icon, SectionHeader, Skeleton } from '../ds'
 import { MediaTile, openPath } from '../components/Tile'
-import { FocusGroup, Focusable, FocusableInput } from '../nav/Focusable'
+import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
 import { setFocus } from '../nav/spatial'
 import { usePhone } from '../lib/layout'
-import { MIN_QUERY, SEARCH_BOX, SEARCH_PATH, searchPath, useSearchQuery, useSlashToSearch } from '../lib/searchQuery'
+import { MIN_QUERY, SEARCH_BOX, SEARCH_PATH, searchPath } from '../lib/searchQuery'
 import { fmtTime, useNow } from '../lib/util'
 import { RecordDialog } from '../recordings/RecordDialog'
-import { useVoice, voiceSource } from '../lib/voiceSearch'
+import { SearchBox } from '../components/SearchBox'
 import { RecordingBadge } from '../recordings/RecordingBadge'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 
-const HEADINGS: Record<SearchSectionName, string> = { programmes: 'On TV', channels: 'Channels', titles: 'Movies & Shows' }
 const FIELD: Record<SearchSectionName, 'programmes' | 'channels' | 'results'> = { programmes: 'programmes', channels: 'channels', titles: 'results' }
 const itemKey = { programmes: (p: SearchProgramme) => `search-prog::${p.id}`, channels: (c: Channel) => `search-ch::${c.id}`, titles: (t: Tile) => `search::${t.id}` }
 const play = (channelId: string) => `/play/${encodeURIComponent(channelId)}`
@@ -51,11 +50,6 @@ export function Search() {
   return stale ? null : <SearchPage key={profileId} />
 }
 
-/**
- * The results of the one search box: up to three sections (On TV, Channels, Movies & Shows), each only
- * when it found something, in the order the server gives. Nothing sits above them: the box is in the
- * top bar, and on a phone, which has no top bar, at the top of this page.
- */
 function SearchPage() {
   const [params] = useSearchParams()
   const loc = useLocation()
@@ -83,7 +77,7 @@ function SearchPage() {
   const shown = asked ? (current ?? last?.view) : undefined
   const loading = !current
   const stale = loading && !!shown && last?.q !== q
-  const found = shown ? shown.results.length + shown.channels.length + shown.programmes.length : 0
+  const found = shown ? shown.results.length + shown.channels.length + shown.programmes.length + (shown.actors?.length ?? 0) + (shown.services?.length ?? 0) : 0
   // More titles may still be on their way: the page says so where they will go, and is not "empty" yet.
   const discovering = !!local.data && !!local.data.metadata_available && full.isPending
   const ready = !asked || !!shown || !!error
@@ -135,29 +129,32 @@ function SearchPage() {
     else toast(`${p.title} starts ${startLabel(p.start, now)} on ${p.channel_number} ${p.channel_name}.`)
   }
 
-  const section = (name: SearchSectionName, r: SearchResult): ReactNode => {
-    const rows = r[FIELD[name]]
-    const coming = name === 'titles' && discovering && !loading
-    if (!rows.length && !coming) return null
-    const count = visible(name, r)
-    return (
-      <section key={name} className="search-section" data-testid={`search-${name}`} aria-label={HEADINGS[name]}>
-        <SectionHeader title={HEADINGS[name]} meta={r.sections[name].count > 0 ? <span aria-hidden="true">{r.sections[name].count.toLocaleString()}</span> : undefined} />
-        {name === 'programmes' ? <FocusGroup focusKey="search:programmes" className="search-rows">
-          {r.programmes.slice(0, count).map((p) => <BroadcastRow key={p.id} p={p} live={onNow(p)} when={startLabel(p.start, now)} onEnter={() => openBroadcast(p)} />)}
-        </FocusGroup> : name === 'channels' ? <FocusGroup focusKey="search:channels" className="search-rows">
-          {r.channels.slice(0, count).map((c) => <ChannelResult key={c.id} channel={c} onEnter={() => go(play(c.id))} />)}
-        </FocusGroup> : <SearchTitles tiles={r.results} coming={coming} onOpen={(t) => go(openPath(t))} />}
-        {(count < rows.length || (r.sections[name].more && !expanded.includes(name))) && <FocusGroup focusKey={`search:more:${name}:group`} className="search-more">
-          <Button focusKey={`search:more:${name}`} className="btn-chip" icon="chevD" disabled={loading} testId={`search-more-${name}`} onEnter={() => more(name, r)}>Show more</Button>
-        </FocusGroup>}
-      </section>
-    )
+  const moreButton = (name: SearchSectionName, r: SearchResult) => (
+    visible(name, r) < r[FIELD[name]].length || (r.sections[name].more && !expanded.includes(name))
+  ) && <FocusGroup focusKey={`search:more:${name}:group`} className="search-more">
+    <Button focusKey={`search:more:${name}`} className="btn-chip" icon="chevD" disabled={loading}
+      testId={`search-more-${name}`} onEnter={() => more(name, r)}>Show more</Button>
+  </FocusGroup>
+  const movies = shown?.results.filter(t => t.kind === 'movie' || t.kind === 'vod') ?? []
+  const series = shown?.results.filter(t => t.kind === 'show' || t.kind === 'series') ?? []
+  const broadcasts = shown?.programmes.slice(0, visible('programmes', shown)) ?? []
+  const entitySection = (kind: 'actor' | 'service', matches: {id: string; name: string}[] = []) => {
+    if (!matches.length) return null
+    const heading = kind === 'actor' ? 'Actors' : 'Streaming services'
+    return <section className="search-section" aria-label={heading}>
+      <SectionHeader title={heading} />
+      <FocusGroup focusKey={`search:${kind}`} className="search-rows">
+        {matches.map(match => <Focusable key={match.id} focusKey={`search:${kind}:${match.id}`} className="search-row fx-flat"
+          label={match.name} role="link" onEnter={() => go(`/search/${kind}/${encodeURIComponent(match.id)}?name=${encodeURIComponent(match.name)}`)}>
+          <Icon name={kind === 'actor' ? 'users' : 'tv'} /><strong>{match.name}</strong><Icon name="chevR" />
+        </Focusable>)}
+      </FocusGroup>
+    </section>
   }
 
   return (
     <div className="page-pad search-page" data-testid="search">
-      {phone && <PageSearchField />}
+      {phone && <div className="search-page-field"><SearchBox label="Search" page /></div>}
       <div data-testid="search-results" aria-busy={stale || (asked && !shown && !error) || undefined} data-stale={stale || undefined}>
         {!asked ? <SearchIdle />
           : error && !shown ? <ErrorState error={error} onRetry={() => { void local.refetch(); void full.refetch() }} />
@@ -166,7 +163,29 @@ function SearchPage() {
           : !shown || (found === 0 && (loading || discovering)) ? <SearchSkeleton />
           : found === 0 ? <Empty icon="search" title={`No results for “${q}”`} hint="Check the spelling, or try fewer words. Channels are also found by number." />
           : <FocusGroup focusKey="search:results" className="search-sections">
-            {shown.order.map((name) => section(name, shown))}
+            {(shown.programmes.length > 0 || shown.channels.length > 0) && <section className="search-section" aria-label="Live TV">
+              <SectionHeader title="Live TV" />
+              {broadcasts.length > 0 && <div data-testid="search-programmes">
+                <FocusGroup focusKey="search:programmes" className="search-rows">
+                  {broadcasts.map(p => <BroadcastRow key={p.id} p={p} live={onNow(p)} when={startLabel(p.start, now)} onEnter={() => openBroadcast(p)} />)}
+                </FocusGroup>
+                {moreButton('programmes', shown)}
+              </div>}
+              {shown.channels.length > 0 && <div data-testid="search-channels">
+                <FocusGroup focusKey="search:channels" className="search-rows" label="Channels">
+                  {shown.channels.slice(0, visible('channels', shown)).map(c => <ChannelResult key={c.id} channel={c} onEnter={() => go(play(c.id))} />)}
+                </FocusGroup>
+                {moreButton('channels', shown)}
+              </div>}
+            </section>}
+            {(movies.length > 0 || series.length > 0 || discovering) && <div className="search-title-groups" data-testid="search-titles">
+              <TitleGroup title="Movies" tiles={movies} onOpen={t => go(openPath(t))} />
+              <TitleGroup title="TV series" tiles={series} onOpen={t => go(openPath(t))} />
+              {discovering && <span className="label" role="status" data-testid="search-discovering">Looking for more matches…</span>}
+              {moreButton('titles', shown)}
+            </div>}
+            {entitySection('actor', shown.actors)}
+            {entitySection('service', shown.services)}
             {shown.results.length > 0 && <Attribution text={shown.attribution} />}
           </FocusGroup>}
       </div>
@@ -175,29 +194,14 @@ function SearchPage() {
   )
 }
 
-/**
- * The poster grid of a search. A tile says where its title stands in its badge row: "In your library"
- * (or its sources) for one the household has, the state of its request for one that was asked for,
- * nothing otherwise (a green tick when the title plays here). That row is `MediaTile`'s, drawn from `sources` and `request_state`:
- * the one place to change when request status gets a component of its own. Movie or Series is said
- * only where two results share a name.
- */
-function SearchTitles({ tiles, coming, onOpen }: { tiles: Tile[]; coming: boolean; onOpen: (t: Tile) => void }) {
-  const names = new Map<string, Set<string>>()
-  const kindOf = (t: Tile) => (t.kind === 'movie' || t.kind === 'vod' ? 'Movie' : 'Series')
-  for (const t of tiles) names.set(t.title.toLowerCase(), (names.get(t.title.toLowerCase()) ?? new Set()).add(kindOf(t)))
-  return (
-    <FocusGroup focusKey="search:titles" className="grid-tiles search-grid">
-      {tiles.map((t) => (
-        <div key={t.id} className="search-tile">
-          <MediaTile tile={t} scope="search" titleAlways mark="availability" onOpen={onOpen} />
-          {names.get(t.title.toLowerCase())!.size > 1 && <span className="badge search-kind" data-testid="search-kind">{kindOf(t)}</span>}
-        </div>
-      ))}
-      {/* Where the titles only the metadata provider knows will go; the first of them takes this place. */}
-      {coming && <div className="search-tile" role="status" aria-label="Looking for more titles" data-testid="search-discovering"><Skeleton className="ds-skel-tile" style={{ aspectRatio: '2/3' }} /></div>}
+function TitleGroup({ title, tiles, onOpen }: { title: string; tiles: Tile[]; onOpen: (t: Tile) => void }) {
+  if (!tiles.length) return null
+  return <section className="search-section" aria-label={title}>
+    <SectionHeader title={title} />
+    <FocusGroup focusKey={`search:titles:${title}`} className="grid-tiles search-grid">
+      {tiles.map(t => <MediaTile key={t.id} tile={t} scope="search" titleAlways mark="availability" onOpen={onOpen} />)}
     </FocusGroup>
-  )
+  </section>
 }
 
 /** One broadcast: where it is on, its title, and "On now" or the day and time it starts. */
@@ -235,30 +239,6 @@ function ChannelResult({ channel: c, onEnter }: { channel: Channel; onEnter: () 
   )
 }
 
-/** A phone has no top bar: the same search box sits at the top of the results. */
-function PageSearchField() {
-  const box = useSearchQuery()
-  useSlashToSearch(() => { void setFocus(SEARCH_BOX.page) })
-  // Escape clears first; with nothing typed it is Back, which leaves search.
-  const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape' && box.text) { e.preventDefault(); box.clear() } }
-  const voice = useVoice()
-  const canVoice = voiceSource() !== null
-  const listening = voice.status === 'listening'
-  const seen = useRef(voice.final?.seq ?? 0)
-  useEffect(() => {
-    if (voice.final && voice.final.seq !== seen.current) { seen.current = voice.final.seq; box.setText(voice.final.text); box.submit(voice.final.text) }
-  }, [voice.final, box])
-  return (
-    <div className="search-page-field" role="search" onKeyDown={onKeyDown}>
-      <FocusableInput focusKey={SEARCH_BOX.page} label="Search" placeholder={listening ? 'Listening…' : 'Search'} value={listening && voice.heard ? voice.heard : box.text}
-        onChange={box.setText} inputMode="search" onSubmit={() => box.submit()} />
-      {box.text && <GlassIconButton focusKey="search:page:clear" icon="x" size="sm" label="Clear search" tip={false} onEnter={() => { box.clear(); void setFocus(SEARCH_BOX.page) }} testId="search-page-clear" />}
-      {canVoice && <GlassIconButton focusKey="search:page:voice" icon="mic" size="sm" label={listening ? 'Stop listening' : 'Search by voice'} tip={false}
-        pressed={listening} onEnter={() => (listening ? voice.stop() : voice.start())} testId="search-page-voice" />}
-    </div>
-  )
-}
-
 /** Before anything is typed: what was searched for lately, and the way to titles nobody has yet. */
 function SearchIdle() {
   const go = useGo()
@@ -268,7 +248,7 @@ function SearchIdle() {
     <FocusGroup focusKey="search:idle" className="search-idle" data-testid="search-idle">
       <div className="search-idle-lead">
         <span className="ds-empty-icon" aria-hidden="true"><Icon name="search" /></span>
-        <p className="muted">Movies, shows, channels and what is on TV.</p>
+        <p className="muted">Search live TV, movies, series, actors and streaming services.</p>
       </div>
       {recents.length > 0 && <div className="search-idle-block">
         <SectionHeader title="Recent searches" action={<Button focusKey="search:recent:clear" ghost icon="x" onEnter={clearSearches} testId="search-recent-clear">Clear</Button>} />

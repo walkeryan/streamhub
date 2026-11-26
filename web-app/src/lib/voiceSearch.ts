@@ -42,6 +42,13 @@ export function voiceSource(w: unknown = typeof window === 'undefined' ? undefin
   return webRecognizer(w) ? 'web' : null
 }
 
+/** Older TV shells open an external activity. Only an embedded recognizer may auto-start. */
+export function inlineVoice(): boolean {
+  const source = voiceSource()
+  if (source !== 'shell') return source === 'web'
+  try { return JSON.parse(bridgeOf(window)!.capabilities()).inline_voice_search === true } catch { return false }
+}
+
 /** The words of a browser recogniser's results so far, and whether they are final. */
 export function heardOf(results: SpeechResultList): { text: string; final: boolean } {
   let text = ''
@@ -97,6 +104,7 @@ export const useVoice = create<VoiceStore>((set, get) => ({
     else set({ status: 'idle', heard: '' })
   },
   start: () => {
+    if (get().status === 'listening') return
     const source = voiceSource()
     const { receive } = get()
     if (source === 'shell') {
