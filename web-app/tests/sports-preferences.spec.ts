@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openMore, signIn } from './helpers'
+import { signIn } from './helpers'
 
 test('Sports waits for saved filters, reloads them, and isolates another profile', async ({ page }) => {
   const docs: Record<string, Record<string, unknown>> = {
@@ -38,7 +38,7 @@ test('Sports waits for saved filters, reloads them, and isolates another profile
     }
   })
   await signIn(page)
-  await openMore(page, 'Sports')
+  await page.getByRole('navigation').getByRole('link', { name: 'Sports', exact: true }).click()
   // Language lives in the search panel, sport on the chips: both are this profile's saved filters.
   await page.getByTestId('sports-filters').click()
   await page.getByRole('button', { name: 'All languages', exact: true }).click()

@@ -63,7 +63,7 @@ export function Rail() {
   const [menu, setMenu] = useState(false)
   const [joinRoom, setJoinRoom] = useState(false)
   // Back from the bar returns focus to where it was in the screen content.
-  useBackHandler(() => { void setFocus('MAIN') }, hasFocus)
+  useBackHandler(() => { void setFocus('MAIN') }, hasFocus && !menu && !joinRoom)
   const here = (d: Destination) => (d.to === '/' ? loc.pathname === '/' : [d.to, ...(d.at ?? [])].some((p) => loc.pathname.startsWith(p)))
   // Recordings: offered to who may use them once the server says recording is on. While it is off only
   // a holder of system.manage sees the entry, to learn why.
