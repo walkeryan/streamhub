@@ -18,6 +18,7 @@ class ShellBridge(
     private val capabilities: () -> String,
     /** Main thread. Whether the page that called is the paired server's (see [mayLoad]). */
     private val pageAllowed: () -> Boolean,
+    private val onCast: (CastAction) -> Unit = {},
     private val onPlay: (ShellPlay) -> Unit,
     private val onSignedOut: (reason: String?) -> Unit,
     /** Main thread. A mini player bar button; true when a player in picture-in-picture took it. */
@@ -66,6 +67,16 @@ class ShellBridge(
         }
         Log.w(TAG, "message() refused")
         return false
+    }
+
+    @JavascriptInterface
+    fun castState(): String = CastReceiver.snapshot()
+
+    @JavascriptInterface
+    fun castCommand(payload: String?): Boolean {
+        val command = parseCastAction(payload) ?: return false
+        main.post { if (pageAllowed()) onCast(command) }
+        return true
     }
 
     @JavascriptInterface

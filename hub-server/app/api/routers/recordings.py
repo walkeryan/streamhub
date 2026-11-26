@@ -31,9 +31,28 @@ async def list_recordings(c: C, p: P, state: str | None = Query(None, max_length
     tags=["recordings"],
 )
 async def create_recording(body: S.RecordingCreate, response: Response, c: C, p: P) -> dict[str, Any]:
-    row, created = await c.recorder.schedule_or_get(p, body.programme_id, body.channel_id, body.start)
+    row, created = await c.recorder.schedule_or_get(
+        p, body.programme_id, body.channel_id, body.start, body.priority, body.confirmed_conflicts
+    )
     if not created:
         response.status_code = 200
+    return (await c.recorder.to_api([row]))[0]
+
+
+@router.post("/recordings/preview", response_model=S.RecordingPlan, tags=["recordings"])
+async def preview_recording(body: S.RecordingCreate, c: C, p: P) -> dict[str, Any]:
+    return await c.recorder.preview(p, body.programme_id, body.channel_id, body.start, body.priority)
+
+
+@router.get("/recordings/{id}/plan", response_model=S.RecordingPlan, tags=["recordings"])
+async def recording_plan(id: str, c: C, p: P) -> dict[str, Any]:
+    c.recorder._require_view(p)
+    return await c.recorder.planner.plan(p, await c.recorder._owned(p, id))
+
+
+@router.patch("/recordings/{id}", response_model=S.Recording, tags=["recordings"])
+async def change_recording(id: str, body: S.RecordingChange, c: C, p: P) -> dict[str, Any]:
+    row = await c.recorder.planner.change(p, id, body.model_dump(exclude_unset=True))
     return (await c.recorder.to_api([row]))[0]
 
 

@@ -29,6 +29,596 @@ components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:
+    RoomAction:
+      properties:
+        action:
+          type: string
+          enum:
+          - suggest
+          - remove
+          - advance
+          - offer
+          - accept
+          - decline
+          title: Action
+        id:
+          type: string
+          maxLength: 256
+          title: Id
+          default: ''
+      type: object
+      required:
+      - action
+      title: Action
+    CastDelivery:
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          title: Session Id
+        request_id:
+          type: string
+          format: uuid
+          title: Request Id
+        action:
+          type: string
+          enum:
+          - load
+          - play
+          - pause
+          - seek
+          - stop
+          title: Action
+        id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Id
+        variant_id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Variant Id
+        source_id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Source Id
+        position_ms:
+          anyOf:
+          - type: integer
+            maximum: 604800000.0
+            minimum: 0.0
+          - type: 'null'
+          title: Position Ms
+        audio_track:
+          anyOf:
+          - type: integer
+            maximum: 1024.0
+            minimum: 0.0
+          - type: 'null'
+          title: Audio Track
+        catchup_programme_id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Catchup Programme Id
+        rewind_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Rewind At
+        buffer_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Buffer At
+        seq:
+          type: integer
+          title: Seq
+      additionalProperties: false
+      type: object
+      required:
+      - session_id
+      - request_id
+      - action
+      - seq
+      title: CastDelivery
+    CastDisplay:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        name:
+          type: string
+          title: Name
+      type: object
+      required:
+      - id
+      - name
+      title: CastDisplay
+    CastSequence:
+      properties:
+        seq:
+          type: integer
+          title: Seq
+      type: object
+      required:
+      - seq
+      title: CastSequence
+    CastSession:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+        target_id:
+          type: string
+          format: uuid
+          title: Target Id
+        target_name:
+          type: string
+          title: Target Name
+        status:
+          type: string
+          enum:
+          - pending
+          - connected
+          title: Status
+        playback:
+          $ref: '#/components/schemas/CastPlayback'
+        last_ack:
+          type: integer
+          title: Last Ack
+        last_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Error
+      type: object
+      required:
+      - id
+      - target_id
+      - target_name
+      - status
+      - playback
+      - last_ack
+      - last_error
+      title: CastSession
+    CastState:
+      properties:
+        session:
+          anyOf:
+          - $ref: '#/components/schemas/CastSession'
+          - type: 'null'
+      type: object
+      required:
+      - session
+      title: CastState
+    CastTargets:
+      properties:
+        targets:
+          items:
+            $ref: '#/components/schemas/CastDisplay'
+          type: array
+          title: Targets
+      type: object
+      required:
+      - targets
+      title: CastTargets
+    CastCommand:
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          title: Session Id
+        request_id:
+          type: string
+          format: uuid
+          title: Request Id
+        action:
+          type: string
+          enum:
+          - load
+          - play
+          - pause
+          - seek
+          - stop
+          title: Action
+        id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Id
+        variant_id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Variant Id
+        source_id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Source Id
+        position_ms:
+          anyOf:
+          - type: integer
+            maximum: 604800000.0
+            minimum: 0.0
+          - type: 'null'
+          title: Position Ms
+        audio_track:
+          anyOf:
+          - type: integer
+            maximum: 1024.0
+            minimum: 0.0
+          - type: 'null'
+          title: Audio Track
+        catchup_programme_id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Catchup Programme Id
+        rewind_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Rewind At
+        buffer_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Buffer At
+      additionalProperties: false
+      type: object
+      required:
+      - session_id
+      - request_id
+      - action
+      title: Command
+    CastConnect:
+      properties:
+        target_id:
+          type: string
+          format: uuid
+          title: Target Id
+      additionalProperties: false
+      type: object
+      required:
+      - target_id
+      title: Connect
+    CastDecision:
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          title: Session Id
+        accept:
+          type: boolean
+          title: Accept
+      additionalProperties: false
+      type: object
+      required:
+      - session_id
+      - accept
+      title: Decision
+    TogetherFilters:
+      properties:
+        max_minutes:
+          anyOf:
+          - type: integer
+            maximum: 600.0
+            minimum: 10.0
+          - type: 'null'
+          title: Max Minutes
+        language:
+          anyOf:
+          - type: string
+            maxLength: 20
+            minLength: 2
+          - type: 'null'
+          title: Language
+      type: object
+      title: Filters
+    PersonalFeed:
+      properties:
+        new_episodes:
+          items:
+            $ref: '#/components/schemas/Tile'
+          type: array
+          title: New Episodes
+        coming_up:
+          items:
+            $ref: '#/components/schemas/UpcomingEpisode'
+          type: array
+          title: Coming Up
+        movies:
+          items:
+            $ref: '#/components/schemas/Tile'
+          type: array
+          title: Movies
+        series:
+          items:
+            $ref: '#/components/schemas/Tile'
+          type: array
+          title: Series
+        feedback:
+          additionalProperties:
+            type: string
+            enum:
+            - up
+            - down
+          type: object
+          title: Feedback
+        reason:
+          type: string
+          title: Reason
+        history_used:
+          type: boolean
+          title: History Used
+      type: object
+      required:
+      - new_episodes
+      - coming_up
+      - movies
+      - series
+      - feedback
+      - reason
+      - history_used
+      title: PersonalFeed
+    CastPlayback:
+      properties:
+        id:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+            pattern: ^[^\s/?#\\]+$
+          - type: 'null'
+          title: Id
+        title:
+          type: string
+          maxLength: 512
+          title: Title
+          default: ''
+        poster:
+          anyOf:
+          - type: string
+            maxLength: 2048
+          - type: 'null'
+          title: Poster
+        playing:
+          type: boolean
+          title: Playing
+          default: false
+        position_ms:
+          type: integer
+          maximum: 604800000.0
+          minimum: 0.0
+          title: Position Ms
+          default: 0
+        duration_ms:
+          anyOf:
+          - type: integer
+            maximum: 604800000.0
+            minimum: 0.0
+          - type: 'null'
+          title: Duration Ms
+        live:
+          type: boolean
+          title: Live
+          default: false
+      additionalProperties: false
+      type: object
+      title: Playback
+    QueueItem:
+      properties:
+        id:
+          type: string
+          title: Id
+        title:
+          type: string
+          title: Title
+      type: object
+      required:
+      - id
+      - title
+      title: QueueItem
+    RecommendationRating:
+      properties:
+        id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Id
+        vote:
+          anyOf:
+          - type: string
+            enum:
+            - up
+            - down
+          - type: 'null'
+          title: Vote
+      type: object
+      required:
+      - id
+      - vote
+      title: Rating
+    ReceiverState:
+      properties:
+        session:
+          anyOf:
+          - $ref: '#/components/schemas/CastSession'
+          - type: 'null'
+        controller_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Controller Name
+        command:
+          anyOf:
+          - $ref: '#/components/schemas/CastDelivery'
+          - type: 'null'
+      type: object
+      required:
+      - session
+      - controller_name
+      - command
+      title: ReceiverState
+    RoomControls:
+      properties:
+        queue:
+          items:
+            $ref: '#/components/schemas/QueueItem'
+          type: array
+          title: Queue
+        members:
+          items:
+            $ref: '#/components/schemas/RoomMember'
+          type: array
+          title: Members
+        member_id:
+          type: string
+          title: Member Id
+        is_host:
+          type: boolean
+          title: Is Host
+        offered_to:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Offered To
+        revision:
+          type: integer
+          title: Revision
+      type: object
+      required:
+      - queue
+      - members
+      - member_id
+      - is_host
+      - offered_to
+      - revision
+      title: RoomControls
+    CastSync:
+      properties:
+        enabled:
+          type: boolean
+          title: Enabled
+        name:
+          anyOf:
+          - type: string
+            maxLength: 128
+          - type: 'null'
+          title: Name
+        playback:
+          anyOf:
+          - $ref: '#/components/schemas/CastPlayback'
+          - type: 'null'
+        ack:
+          anyOf:
+          - type: integer
+            minimum: 1.0
+          - type: 'null'
+          title: Ack
+        error:
+          anyOf:
+          - type: string
+            maxLength: 512
+          - type: 'null'
+          title: Error
+        session_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Session Id
+      additionalProperties: false
+      type: object
+      required:
+      - enabled
+      title: Sync
+    TogetherPicks:
+      properties:
+        code:
+          type: string
+          title: Code
+        member_count:
+          type: integer
+          title: Member Count
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+        tiles:
+          items:
+            $ref: '#/components/schemas/Tile'
+          type: array
+          title: Tiles
+      type: object
+      required:
+      - code
+      - member_count
+      - expires_at
+      - tiles
+      title: TogetherPicks
+    UpcomingEpisode:
+      properties:
+        show:
+          $ref: '#/components/schemas/Tile'
+        season:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Season
+        episode:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Episode
+        title:
+          type: string
+          title: Title
+        air_date:
+          type: string
+          title: Air Date
+      type: object
+      required:
+      - show
+      - season
+      - episode
+      - title
+      - air_date
+      title: UpcomingEpisode
     Error:
       type: object
       required: [code, message]
@@ -522,6 +1112,26 @@ components:
           description: "In listing order. Labels: A-Z and # (title), a year (year), 9+ ... 0+ and Unrated (rating), 'Nov 2026' (added); Unknown when a title has no value."
           items: {type: object, required: [label, offset], properties: {label: {type: string}, offset: {type: integer}}}
 
+    ActorCredit:
+      type: object
+      required: [id, title, kind, roles]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        kind: {type: string, enum: [movie, tv]}
+        year: {type: integer, nullable: true}
+        poster: {type: string, nullable: true}
+        roles: {type: array, items: {type: string}}
+    ActorFilmography:
+      type: object
+      required: [name, known_for, credits, page, has_more]
+      properties:
+        name: {type: string}
+        photo: {type: string, nullable: true}
+        known_for: {type: array, items: {$ref: '#/components/schemas/ActorCredit'}}
+        credits: {type: array, items: {$ref: '#/components/schemas/ActorCredit'}}
+        page: {type: integer}
+        has_more: {type: boolean}
     DiscoveryPage:
       type: object
       required: [tiles, page, page_size, total, has_more, coverage_note]
@@ -719,6 +1329,30 @@ components:
         output_width: {type: integer, nullable: true, description: Width of the picture as delivered.}
         output_height: {type: integer, nullable: true, description: Height of the picture as delivered.}
         max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "The quality cap in force for this stream (PlaybackRequest.max_height); left out when none was asked for or the file is no taller than it."}
+    SavedScene:
+      type: object
+      required: [id, name, ref_id, variant_id, edition_id, position_ms]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        ref_id: {type: string}
+        variant_id: {type: string}
+        edition_id: {type: string}
+        position_ms: {type: integer}
+        preview: {type: string, nullable: true, description: A small JPEG in base64}
+    OfflineCopy:
+      type: object
+      required: [id, ref_id, profile_id, session_id, title, mime, size, expires_at]
+      properties:
+        id: {type: string}
+        ref_id: {type: string}
+        profile_id: {type: string}
+        session_id: {type: string}
+        title: {type: string}
+        mime: {type: string}
+        size: {type: integer}
+        duration_ms: {type: integer, nullable: true}
+        expires_at: {type: string, format: date-time}
     PlaybackOption:
       type: object
       required: [variant_id, source_id, source_name, provider_label, audio_languages, audio_verified, audio_evidence, preferred_audio_available]
@@ -727,6 +1361,9 @@ components:
         source_id: {type: string}
         source_name: {type: string}
         provider_label: {type: string}
+        edition_id: {type: string}
+        edition_label: {type: string}
+        runtime_ms: {type: integer, nullable: true}
         kind: {type: string}
         year: {type: integer, nullable: true}
         audio_languages: {type: array, items: {type: string}}
@@ -752,6 +1389,7 @@ components:
       type: object
       required: [id]
       properties:
+        preview_only: {type: boolean, default: false}
         id: {type: string, description: "tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for \"<title> <year> trailer\" (supports_title_link false). Also rec:<recording id> for a recording that has a file (state done, or failed with what it kept): android_tv gets mode=proxy, the Matroska file itself with Range support; web gets the file probed and served as restart-at-offset HLS like any VOD file a browser cannot decode. Needs recordings.view and a recording the caller's /recordings list shows; anything else is 404. Progress is reported under the same id."}
         source_id: {type: string, nullable: true, description: "pick a specific source when a title has several"}
         variant_id: {type: string, nullable: true}
@@ -859,6 +1497,11 @@ components:
       type: object
       required: [mode, id]
       properties:
+        variant_id: {type: string, nullable: true}
+        edition_id: {type: string, nullable: true}
+        edition_label: {type: string, nullable: true}
+        download_next_id: {type: string, nullable: true}
+        progress_session_id: {type: string, nullable: true}
         canvas: {type: boolean, description: HLS packed audio carrying timed JPEG pictures.}
         preferred_audio_languages: {type: array, items: {type: string}, description: Profile preferences retained even after exact-variant consent.}
         audio_language_required: {type: boolean, description: False only for All Languages or current server-validated exact-variant consent; exposed contradictory runtime tracks still require a current track choice.}
@@ -947,6 +1590,8 @@ components:
         position >= 95% of duration also counts as watched.
       required: [id, position_ms, state]
       properties:
+        progress_session_id: {type: string, nullable: true}
+        variant_id: {type: string, nullable: true}
         watched: {type: boolean, nullable: true, description: Explicit watched or unwatched action independent of a known duration.}
         expected_profile_id: {type: string, nullable: true, maxLength: 128, description: Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes.}
         id: {type: string}
@@ -1109,8 +1754,54 @@ components:
         error: {type: string, nullable: true, description: "why it failed or was missed"}
         size_bytes: {type: integer, nullable: true, description: "what the capture wrote. Not whether it can be played: see has_file"}
         has_file: {type: boolean, description: "There is a file that POST /playback/resolve {id: \"rec:<id>\"} would play now: the recording is done, or failed and kept what it had captured, and that file is still on the server. False while scheduled or recording, and for a file since removed. Always sent."}
+        priority: {type: integer, minimum: -1, maximum: 1}
+        protected: {type: boolean}
+        guide_review: {type: boolean}
+        captured_from: {type: string, format: date-time, nullable: true}
+        captured_until: {type: string, format: date-time, nullable: true}
+        replacement_for: {type: string, nullable: true}
+        recovered_at: {type: string, format: date-time, nullable: true}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
+    DvrAiring:
+      type: object
+      required: [programme_id, title, channel_id, channel_name, start, stop]
+      properties:
+        programme_id: {type: string}
+        title: {type: string}
+        channel_id: {type: string}
+        channel_name: {type: string}
+        start: {type: string, format: date-time}
+        stop: {type: string, format: date-time}
+    RecordingPlan:
+      type: object
+      required: [source_name, overlapping_titles, conflict_count, connection_limit, alternates, evictions, free_bytes, reserve_bytes, estimated_bytes]
+      properties:
+        source_name: {type: string, nullable: true}
+        overlapping_titles: {type: array, items: {type: string}}
+        conflict_count: {type: integer}
+        connection_limit: {type: integer, nullable: true}
+        alternates: {type: array, items: {$ref: '#/components/schemas/DvrAiring'}}
+        evictions: {type: array, items: {type: string}}
+        free_bytes: {type: integer, nullable: true}
+        reserve_bytes: {type: integer}
+        estimated_bytes: {type: integer, nullable: true}
+    RecordingSchedule:
+      type: object
+      required: [programme_id]
+      properties:
+        programme_id: {type: string}
+        channel_id: {type: string, nullable: true}
+        start: {type: string, format: date-time, nullable: true}
+        priority: {type: integer, minimum: -1, maximum: 1}
+        confirmed_conflicts: {type: integer, minimum: 0, nullable: true}
+    RecordingChange:
+      type: object
+      properties:
+        priority: {type: integer, minimum: -1, maximum: 1, nullable: true}
+        protected: {type: boolean, nullable: true}
+        keep_original_time: {type: boolean}
+        airing: {$ref: '#/components/schemas/DvrAiring'}
     RecordingRule:
       type: object
       required: [id, profile_id, kind, match, new_only, enabled, created_at]
@@ -1156,6 +1847,7 @@ components:
     RoomJoin:
       type: object
       properties:
+        expected_id: {type: string, nullable: true, maxLength: 256, description: "Room title shown when this viewer agreed to play."}
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_hls: {type: boolean, default: false}
         recovery_generation: {type: string, nullable: true, maxLength: 64, description: "As in PlaybackRequest. Required for web clients."}
@@ -1283,6 +1975,7 @@ components:
         missed `state`) asks GET /rooms/{code}/descriptor for its descriptor as it is now, or joins
         again with its `member_token`; neither changes its seat.
       properties:
+        title_revision: {type: integer, default: 0, description: "Title revision used to resolve this seat."}
         member_token: {type: string, description: "valid 2 h, for this room and member only"}
         member_id: {type: string}
         expires_in_seconds: {type: integer}
@@ -1469,6 +2162,310 @@ components:
             channels_with_sports_schedule: {type: integer}
 
 paths:
+  /cast/targets:
+    get:
+      tags:
+      - cast
+      summary: Targets
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CastTargets'
+      security:
+      - HTTPBearer: []
+  /cast/connect:
+    post:
+      tags:
+      - cast
+      summary: Connect
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CastConnect'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CastState'
+      security:
+      - HTTPBearer: []
+  /cast/session:
+    get:
+      tags:
+      - cast
+      summary: Get Session
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CastState'
+      security:
+      - HTTPBearer: []
+  /cast/commands:
+    post:
+      tags:
+      - cast
+      summary: Command
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CastCommand'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CastSequence'
+      security:
+      - HTTPBearer: []
+  /cast/receiver/sync:
+    post:
+      tags:
+      - cast
+      summary: Sync
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CastSync'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverState'
+      security:
+      - HTTPBearer: []
+  /cast/receiver/decision:
+    post:
+      tags:
+      - cast
+      summary: Decide
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CastDecision'
+        required: true
+      responses:
+        '204':
+          description: Successful Response
+      security:
+      - HTTPBearer: []
+  /cast/session/{session_id}:
+    delete:
+      tags:
+      - cast
+      summary: Disconnect
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Session Id
+      responses:
+        '204':
+          description: Successful Response
+  /for-you:
+    get:
+      tags:
+      - catalog
+      summary: Personal
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: timezone
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 80
+          default: UTC
+          title: Timezone
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonalFeed'
+  /for-you/feedback:
+    put:
+      tags:
+      - catalog
+      summary: Feedback
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendationRating'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationRating'
+      security:
+      - HTTPBearer: []
+  /for-you/together:
+    post:
+      tags:
+      - catalog
+      summary: Invite
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TogetherFilters'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TogetherPicks'
+      security:
+      - HTTPBearer: []
+  /for-you/together/{code}/join:
+    post:
+      tags:
+      - catalog
+      summary: Join
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Code
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TogetherPicks'
+  /for-you/together/{code}:
+    get:
+      tags:
+      - catalog
+      summary: Picks
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Code
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TogetherPicks'
+    delete:
+      tags:
+      - catalog
+      summary: Leave
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Code
+      responses:
+        '204':
+          description: Successful Response
+  /rooms/{code}/controls:
+    get:
+      tags:
+      - rooms
+      summary: Controls
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Code
+      - name: X-Room-Seat
+        in: header
+        required: true
+        schema:
+          type: string
+          maxLength: 2048
+          title: X-Room-Seat
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomControls'
+    post:
+      tags:
+      - rooms
+      summary: Control
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Code
+      - name: X-Room-Seat
+        in: header
+        required: true
+        schema:
+          type: string
+          maxLength: 2048
+          title: X-Room-Seat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomAction'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomControls'
   /auth/config:
     get:
       security: []
@@ -1880,6 +2877,46 @@ paths:
       parameters:
         - {name: id, in: query, required: true, schema: {type: string, maxLength: 512}, description: "ch:<source>:<channel>"}
       responses: {'200': {description: Alternate feeds, possibly none, content: {application/json: {schema: {$ref: '#/components/schemas/PlaybackAlternates'}}}}}
+  /viewing/bookmarks:
+    get:
+      operationId: getSavedScenes
+      parameters: [{in: query, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: Private scenes for this title, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/SavedScene'}}}}}}
+    post:
+      operationId: saveScene
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [session, position_ms, name], properties: {session: {type: string}, name: {type: string, maxLength: 100}, position_ms: {type: integer}, preview: {type: string, nullable: true, maxLength: 90000}}}}}}
+      responses: {'201': {description: Saved, content: {application/json: {schema: {$ref: '#/components/schemas/SavedScene'}}}}}
+  /viewing/bookmarks/{bookmark_id}:
+    parameters: [{in: path, name: bookmark_id, required: true, schema: {type: string}}]
+    delete:
+      operationId: deleteScene
+      responses: {'204': {description: Removed}}
+  /viewing/bookmarks/{bookmark_id}/restore:
+    parameters: [{in: path, name: bookmark_id, required: true, schema: {type: string}}]
+    get:
+      operationId: restoreScene
+      responses: {'200': {description: Authorized scene location, content: {application/json: {schema: {type: object, required: [id, variant_id, position_ms], properties: {id: {type: string}, variant_id: {type: string}, position_ms: {type: integer}}}}}}}
+  /viewing/downloads:
+    post:
+      operationId: acquireOfflineEpisode
+      parameters: [{in: query, name: id, required: true, schema: {type: string}}, {in: query, name: max_bytes, required: true, schema: {type: integer}}]
+      responses: {'201': {description: Time-limited offline copy, content: {application/json: {schema: {$ref: '#/components/schemas/OfflineCopy'}}}}}
+  /viewing/downloads/{grant}:
+    parameters: [{in: path, name: grant, required: true, schema: {type: string}}]
+    get:
+      operationId: checkOfflineEpisode
+      responses: {'200': {description: Current download authorization, content: {application/json: {schema: {$ref: '#/components/schemas/OfflineCopy'}}}}}
+  /viewing/downloads/{grant}/content:
+    parameters: [{in: path, name: grant, required: true, schema: {type: string}}]
+    get:
+      operationId: fetchOfflineEpisode
+      responses: {'200': {description: Authorized source file, content: {application/octet-stream: {schema: {type: string, format: binary}}}}}
+  /viewing/downloads/{grant}/progress:
+    parameters: [{in: path, name: grant, required: true, schema: {type: string}}]
+    post:
+      operationId: syncOfflineProgress
+      parameters: [{in: query, name: position_ms, required: true, schema: {type: integer}}, {in: query, name: duration_ms, required: true, schema: {type: integer}}]
+      responses: {'204': {description: Saved}, '409': {description: A newer online session owns this timeline}}
   /playback/preference:
     put:
       operationId: rememberPlaybackEdition
@@ -1910,6 +2947,18 @@ paths:
       description: Cached like other metadata answers; empty without metadata or for an adult title. The rating ceiling applies as on every listing.
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SimilarTitles' } } } } }
+  /people/{person_id}/credits:
+    get:
+      tags: [catalog]
+      operationId: actorCredits
+      parameters:
+        - {name: person_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: kind, in: query, schema: {type: string, enum: [all, movie, tv], default: all}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, maximum: 500}}
+      responses:
+        '200':
+          description: Profile-visible acting credits and known-for titles
+          content: {application/json: {schema: {$ref: '#/components/schemas/ActorFilmography'}}}
   /discover/{section}:
     get:
       summary: Paged metadata discovery independent of available sources
@@ -2064,7 +3113,7 @@ paths:
         - {in: query, name: date, schema: {type: string, format: date}}
         - {in: query, name: timezone, schema: {type: string, default: America/New_York}, description: "The viewer's zone: it decides which calendar day date means."}
         - {in: query, name: days, schema: {type: integer, minimum: 1, maximum: 7, default: 1}, description: Calendar days listed, from date}
-        - {in: query, name: status, schema: {type: string, enum: [all, active, current, upcoming, replay], default: all}, description: "active = current, upcoming and game channels (everything but ended)"}
+        - {in: query, name: status, schema: {type: string, enum: [all, active, current, live, upcoming, replay], default: all}, description: "active = current, upcoming and game channels (everything but ended)"}
         - {in: query, name: language, schema: {type: string}}
         - {in: query, name: sport, schema: {type: string, maxLength: 80}, description: "A name from the page's sports list; an unknown one matches nothing."}
         - {in: query, name: q, schema: {type: string, maxLength: 200}}
@@ -2461,7 +3510,7 @@ paths:
     post:
       summary: Record one programme
       description: Programme ids change whenever the guide is refreshed. Send channel_id and start as shown on the guide and the server finds the programme by those if the id no longer names it.
-      requestBody: { content: { application/json: { schema: { type: object, required: [programme_id], properties: { programme_id: {type: string}, channel_id: {type: string, nullable: true, description: "omitted = the lowest-numbered channel carrying the programme"}, start: {type: string, format: date-time, nullable: true} } } } } }
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecordingSchedule'}}}}
       responses:
         '201': { description: scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
         '200': { description: this programme was already scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
@@ -2473,7 +3522,22 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [category, position_ms], properties: {category: {type: string, enum: [wrong_programme, missing_start, missing_end, picture, audio]}, position_ms: {type: integer, minimum: 0, maximum: 604800000}}}}}}
       responses: { '204': {description: Report received} }
+  /recordings/preview:
+    post:
+      summary: Preview tuner conflicts, possible later airings and estimated space
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecordingSchedule'}}}}
+      responses: {'200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/RecordingPlan'}}}}}
+  /recordings/{id}/plan:
+    get:
+      summary: Review an existing timer, its retention and guide changes
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/RecordingPlan'}}}}}
   /recordings/{id}:
+    patch:
+      summary: Change DVR priority, protection or resolve a revised guide listing
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecordingChange'}}}}
+      responses: {'200': {description: saved, content: {application/json: {schema: {$ref: '#/components/schemas/Recording'}}}}}
     delete: { summary: Cancel an upcoming or running recording; delete a finished one and its file, parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: { '204': { description: ok }, '409': { description: recording_unavailable } } }
   /recording-rules:
     get: { summary: The current profile's rules (everyone's for a holder of users.manage), responses: { '200': { description: ok, content: { application/json: { schema: { type: object, required: [enabled, rules], properties: { enabled: {type: boolean}, can_schedule: {type: boolean}, rules: { type: array, items: { $ref: '#/components/schemas/RecordingRule' } } } } } } } } }

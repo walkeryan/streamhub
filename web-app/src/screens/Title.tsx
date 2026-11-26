@@ -8,6 +8,8 @@ import { api, ok } from '../api/client'
 import type { EpisodeTile, PlaybackOption, Room, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Modal, ProgressBar, Skeleton } from '../components/ui'
 import { GlassIconButton, HRow, Icon, OverflowMenu, Section, SectionHeader, type OverflowItem } from '../ds'
+import { SavedScenes } from '../components/ViewingScenes'
+import { OfflineEpisodeAction } from '../components/OfflineEpisodes'
 import { SafeImg } from '../components/SafeImg'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { FocusGroup, Focusable } from '../nav/Focusable'
@@ -20,7 +22,7 @@ import { useSession } from '../store/session'
 import { audioDescription } from '../player/channelAudio'
 import { initialTrack, trackLabel } from '../player/audioTracks'
 import { usePhone } from '../lib/layout'
-import { languageName } from '../lib/util'
+import { fmtDuration, languageName } from '../lib/util'
 import { isOpenRequest, requestOf, tmdbRef } from '../lib/requests'
 import { RequestStatus } from '../components/RequestStatus'
 import { useUi } from '../store/ui'
@@ -388,6 +390,8 @@ function TitleDetails({ id }: { id: string }) {
           </div>
         </div>
 
+        {t.kind === 'episode' && t.sources.some(s => s.source_type === 'jellyfin') && <OfflineEpisodeAction id={id} />}
+        {(t.kind === 'movie' || t.kind === 'vod' || t.kind === 'episode') && <SavedScenes id={id} />}
         {(seasons.length > 0 || episodes.length > 0) && (
           <Section className="tp-section" label="Seasons and episodes" testId="episodes">
             {seasons.length > 1 ? (
@@ -433,6 +437,7 @@ function TitleDetails({ id }: { id: string }) {
               <Button disabled={savingEdition || (rememberEdition && !option.audio_verified)} focusKey={`pick:${i}`} className="source-choice" onEnter={() => chooseVariant(option)}
               label={`${option.source_name} · ${audioDescription(option)}${option.provider_label ? ` · ${option.provider_label}` : ''}`}>
               <span className="truncate"><strong>{option.source_name}</strong>{option.provider_label && option.provider_label !== option.source_name ? ` · ${option.provider_label}` : ''}</span>
+              {option.edition_label && <span className="label truncate">{option.edition_label}{option.runtime_ms ? ` · ${fmtDuration(option.runtime_ms / 1000)}` : ''}{(audio.data?.options.filter(copy => copy.edition_id === option.edition_id).length ?? 0) > 1 ? ' · Same cut, alternate encode' : ''}</span>}
               <span className="label truncate">{audioDescription(option)}{!option.audio_verified && option.language_hint ? ` · Listed as ${languageName(option.language_hint)}` : ''}</span>
             </Button></div>)}
             {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}

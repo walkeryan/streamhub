@@ -1,3 +1,4 @@
+import { dispatchCastPlay } from '../cast/controller'
 import { useEffect, useRef } from 'react'
 import { useGo } from '../nav/back'
 import { playbackOptions } from '../api/hooks'
@@ -16,6 +17,7 @@ export function usePlayAction() {
   const toast = useUi((s) => s.toast)
   return async (t: Pick<Tile, 'id' | 'kind'>, source?: SourceBadge | null, opts?: { catchup?: string; variantId?: string; allowUnverifiedAudio?: boolean; audioTrack?: number | null }) => {
     if (source && !source.playable_in_app) {
+      if (dispatchCastPlay('/play/' + encodeURIComponent(t.id) + '?' + new URLSearchParams({ source: source.source_id }))) return
       // Inside the Android TV app the TV opens the service's own app (it resolves the hand-off itself).
       if (inShell()) { handOff({ v: 1, kind: 'title', id: t.id, source_id: source.source_id }); return }
       try {

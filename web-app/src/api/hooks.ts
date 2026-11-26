@@ -482,7 +482,7 @@ export function useScheduleRecording() {
   const qc = useQueryClient()
   return useMutation({
     // All three: programme ids change with every guide refresh, channel and start find it again.
-    mutationFn: (body: { programme_id: string; channel_id: string; start: string }) => unwrap<Recording>(api.POST('/recordings', { body })),
+    mutationFn: (body: { programme_id: string; channel_id: string; start: string; priority?: number; confirmed_conflicts?: number }) => unwrap<Recording>(api.POST('/recordings', { body })),
     onSettled: () => refreshRecordings(qc),
   })
 }

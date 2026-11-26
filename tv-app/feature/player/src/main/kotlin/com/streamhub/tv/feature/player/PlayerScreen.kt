@@ -681,6 +681,9 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
     var resumeAfterReport by remember { mutableStateOf(false) }
     var sendingReport by remember { mutableStateOf(false) }
     var reportError by remember { mutableStateOf<String?>(null) }
+    var sceneAt by remember(s.descriptor?.progressSessionId) { mutableStateOf<Long?>(null) }
+    var roomTools by remember { mutableStateOf(false) }
+    if (roomTools) RoomQueueDialog(vm) { roomTools = false }
     val closeReport: () -> Unit = {
         reportAt = null
         if (resumeAfterReport) vm.resumePlayback()
@@ -705,6 +708,7 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             roomLocked = room?.controlsLocked == true,
             roomHost = room?.isHost == true,
             channel = isChannel,
+            canSaveScene = !inRoom && s.descriptor?.progressSessionId != null,
             recording = !inRoom && s.descriptor?.id?.startsWith("rec:") == true,
             hasBufferWindow = s.bufferWindow != null,
             bufferedSeconds = s.bufferWindow?.bufferedSeconds?.toInt(),
@@ -729,6 +733,7 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             onToggleRoomLock = vm::toggleRoomLock,
             onInvite = { invite = true },
             onLeaveRoom = vm::askLeaveRoom,
+            onRoomControls = { roomTools = true },
             onRewind = vm::openRewind,
             onGoLive = vm::goLive,
             onAudio = { tr, opener ->
@@ -744,6 +749,7 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             onSleep = vm::setSleep,
             onWatchTogether = vm::startWatchTogether,
             onStreamInfo = { streamInfo = true },
+            onSaveScene = { sceneAt = s.titlePositionMs(ps.positionMs) },
             onReport = {
                 reportError = null
                 reportAt = s.titlePositionMs(vm.player.exoPlayer.currentPosition).coerceAtLeast(0)
@@ -757,6 +763,36 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
         streamInfoOpener = infoOpener,
         inviteOpener = inviteOpener,
     )
+    sceneAt?.let { at ->
+        var name by remember { mutableStateOf("") }
+        var saving by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf<String?>(null) }
+        val dismiss = { if (!saving) sceneAt = null }
+        Dialog(onDismissRequest = dismiss) {
+            GlassPanel(Modifier.width(520.dp)) {
+                DialogTitle("Save a scene")
+                DialogText("Playback position · %d:%02d".format(at / 60000, at / 1000 % 60))
+                com.streamhub.tv.core.ui.components.ShTextField(name, { name = it.take(100) }, "Scene name")
+                error?.let { DialogText(it) }
+                ShButton("Save scene", {
+                    val token = s.descriptor?.progressSessionId
+                    if (token != null && !saving && name.isNotBlank()) {
+                        saving = true
+                        menuScope.launch {
+                            try {
+                                vm.saveScene(token, name.trim(), at)
+                                sceneAt = null
+                                vm.flashMessage("Scene saved.")
+                            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                            catch (e: Exception) { error = e.message ?: "Could not save the scene." }
+                            finally { saving = false }
+                        }
+                    }
+                })
+                ShButton("Cancel", dismiss)
+            }
+        }
+    }
     reportAt?.let { at ->
         val recording = s.descriptor?.id?.removePrefix("rec:")
         val dismiss: () -> Unit = { if (!sendingReport) closeReport() }

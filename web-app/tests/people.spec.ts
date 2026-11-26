@@ -44,19 +44,19 @@ test.describe('permissions', () => {
     await expect(page.getByTestId('home')).toBeVisible()
     // Sports is a place to watch: named in the top bar, not under More.
     await expect(page.getByTestId('nav-sports')).toBeVisible()
-    await expect(await more(page)).toHaveText(['Requests', 'Recordings', 'Settings'])
+    await expect(await more(page)).toHaveText(['For You', 'Requests', 'Recordings', 'Settings'])
     const owner = await second(context)
     await enter(owner, '/')
-    await expect(await more(owner)).toHaveText(['Requests', 'Recordings', 'Sources', 'Users', 'Settings'])
+    await expect(await more(owner)).toHaveText(['For You', 'Requests', 'Recordings', 'Sources', 'Users', 'Settings'])
   })
 
   test('a server without /auth/me falls back to the admin flag and offers no Users screen', async ({ page, context }) => {
     await enter(page, '/', { who: 'owner', mode: 'legacy' })
     await expect(page.getByTestId('home')).toBeVisible()
-    await expect(await more(page)).toHaveText(['Requests', 'Sources', 'Settings'])
+    await expect(await more(page)).toHaveText(['For You', 'Requests', 'Sources', 'Settings'])
     const guest = await second(context)
     await enter(guest, '/', { who: 'guest', mode: 'legacy' })
-    await expect(await more(guest)).toHaveText(['Requests', 'Settings'])
+    await expect(await more(guest)).toHaveText(['For You', 'Requests', 'Settings'])
   })
 
   test('a suspended user is signed out and told why', async ({ page }) => {
@@ -272,7 +272,7 @@ test.describe('signing in', () => {
     expect(await asOwner(page, 'POST', `/users/${pending}/approve`, { role_id: 'friend' })).toBe(200)
     await expect(page.getByTestId('home')).toBeVisible({ timeout: 12_000 })
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem('sh.session.v1')!).profile.name)).toBe('Nell Vance')
-    await expect(await more(page)).toHaveText(['Requests', 'Settings'])
+    await expect(await more(page)).toHaveText(['For You', 'Requests', 'Settings'])
   })
 
   test('a declined request says so; Sign out returns to the sign-in page', async ({ page }) => {
@@ -392,7 +392,7 @@ test.describe('the Users screen', () => {
   test('a role change reaches the other person\'s app on their next request', async ({ page, context }) => {
     await enter(page, '/', { who: 'guest' })
     await expect(page.getByTestId('home')).toBeVisible()
-    await expect(await more(page)).toHaveText(['Requests', 'Recordings', 'Settings'])
+    await expect(await more(page)).toHaveText(['For You', 'Requests', 'Recordings', 'Settings'])
     await page.keyboard.press('Escape')
 
     const owner = await second(context)
@@ -406,7 +406,7 @@ test.describe('the Users screen', () => {
 
     // Guest's token is now out of date: their next call is refused once, refreshed, and /auth/me is read again.
     await page.getByTestId('nav-live-tv').click()
-    await expect(await more(page)).toHaveText(['Requests', 'Recordings', 'Users', 'Settings'])
+    await expect(await more(page)).toHaveText(['For You', 'Requests', 'Recordings', 'Users', 'Settings'])
     await page.getByTestId('more-menu').getByRole('link', { name: 'Users', exact: true }).click()
     await expect(page.getByTestId('users')).toBeVisible()
 

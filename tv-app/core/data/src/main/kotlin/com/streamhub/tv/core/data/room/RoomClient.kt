@@ -21,6 +21,7 @@ enum class RoomConnection { Connecting, Connected, Reconnecting, Closed }
 /** What the player shows of the room. */
 data class RoomUiState(
     val members: List<RoomMember> = emptyList(),
+    val titleRevision: Long? = null,
     /** The member the room is paused for while they buffer. */
     val waitingFor: String? = null,
     /** Only the host's play, pause and seek apply. */
@@ -136,7 +137,7 @@ class RoomClient(
                         when (val m = RoomProtocol.decode(text)) {
                             is RoomMessage.Pong -> clock.onPong(m.t, nowMs(), m.serverMs)
                             // Any state clears a waiting notice.
-                            is RoomMessage.State -> _state.update { it.copy(clock = m.clock, stream = m.stream, controlsLocked = m.controlsLocked, waitingFor = null) }
+                            is RoomMessage.State -> _state.update { it.copy(clock = m.clock, titleRevision = m.revision, stream = m.stream, controlsLocked = m.controlsLocked, waitingFor = null) }
                             is RoomMessage.Members -> _state.update { st ->
                                 st.copy(members = m.members, isHost = m.members.firstOrNull { it.id == memberId }?.host ?: st.isHost)
                             }

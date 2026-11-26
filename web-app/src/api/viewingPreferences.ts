@@ -7,6 +7,11 @@ type ArtSize = typeof artSizes[number]
 const artSize = (raw: unknown) => artSizes.find((size) => size === raw) ?? null
 export const useArtSize = () => useProfilePreference<ArtSize>('posterSize.v1', 'standard', artSize)
 
+export const readingSizes = ['standard', 'large', 'largest'] as const
+type ReadingSize = typeof readingSizes[number]
+const readingSize = (raw: unknown) => readingSizes.find(size => size === raw) ?? null
+export const useReadingSize = () => useProfilePreference<ReadingSize>('readingSize.v1', 'standard', readingSize)
+
 export const captionSizes = ['small', 'standard', 'large'] as const
 export const captionColors = ['white', 'yellow'] as const
 export const captionBackgrounds = ['solid', 'dim', 'clear'] as const
@@ -25,13 +30,15 @@ export const useCaptions = () => useProfilePreference('captions.v1', defaultCapt
 export function useViewingAppearance() {
   const { value: size } = useArtSize()
   const { value: caption } = useCaptions()
+  const { value: reading } = useReadingSize()
   useEffect(() => {
     const attrs = document.documentElement.dataset
+    attrs.readingSize = reading
     attrs.posterSize = size
     attrs.captionSize = caption.size
     attrs.captionColor = caption.color
     attrs.captionBackground = caption.background
-  }, [size, caption.size, caption.color, caption.background])
+  }, [size, reading, caption.size, caption.color, caption.background])
 }
 
 type RowPreferences = { order: string[]; hidden: string[] }

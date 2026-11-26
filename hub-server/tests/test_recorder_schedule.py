@@ -522,7 +522,7 @@ async def test_sports_recording_runs_an_hour_past_the_listed_end(env: Env) -> No
     assert (await env.get(r.id)).state == "done"
 
 
-async def test_busy_source_is_retried_each_minute_for_ten_minutes_then_missed(env: Env) -> None:
+async def test_busy_source_is_retried_until_the_programme_ends(env: Env) -> None:
     r = await scheduled(env)
     env.capture.busy = True
     await env.tick(minutes=58)
@@ -534,6 +534,8 @@ async def test_busy_source_is_retried_each_minute_for_ten_minutes_then_missed(en
         await env.tick(seconds=30)
     assert len(env.capture.attempts) == 10 and (await env.get(r.id)).state == "scheduled"
     await env.tick(minutes=1)
+    assert (await env.get(r.id)).state == "scheduled"
+    await env.tick(hours=1)
     missed = await env.get(r.id)
     assert len(env.capture.attempts) == 11
     assert missed.state == "missed" and "connection" in (missed.error or "")
@@ -555,7 +557,7 @@ async def test_missed_recording_is_recovered_from_the_archive_after_the_programm
     env.capture.busy = True
     await env.tick(minutes=58)
     await env.tick(minutes=10)
-    assert (await env.get(r.id)).state == "missed"
+    assert (await env.get(r.id)).state == "scheduled"
     env.capture.archive[r.id] = CaptureResult(path="archive.mkv", size_bytes=9000)
     await env.tick(minutes=30)  # still on air: nothing to fetch yet
     assert env.capture.recover_calls == []
@@ -819,7 +821,7 @@ async def test_rules_and_scheduling_respect_the_profiles_content_policy(api: Api
 
 # ---------------------------------------------------------------------- wiring
 async def test_rules_follow_each_guide_refresh_and_the_tick_runs_every_thirty_seconds(api: Api) -> None:
-    assert api.c.sync.after_epg_refresh == api.c.recorder.apply_rules
+    assert api.c.sync.after_epg_refresh == api.c.recorder.refreshed
     assert isinstance(api.c.recorder.capture, NullCapture) and not api.c.recorder.enabled
     ticks: list[int] = []
 
@@ -846,3 +848,139 @@ async def test_run_tick_uses_the_injected_clock(env: Env) -> None:
     env.clock.advance(minutes=58)
     await env.svc.run_tick()
     assert (await env.get(r.id)).state == "recording"
+
+
+async def test_guide_moves_one_off_and_requires_choice_for_ambiguous_shifts(env: Env) -> None:
+    bbc = await env.channel("bbc1.uk")
+    start = NOW + timedelta(hours=2)
+    uid = await env.programme(bbc, "Harbour Lights S02E05 The Storm", start)
+    original = await env.svc.schedule_programme(env.admin, uid)
+    async with env.api.c.db.session() as session:
+        await session.execute(delete(Programme).where(Programme.title == "Harbour Lights S02E05 The Storm"))
+        await session.commit()
+    await env.programme(bbc, "Harbour Lights S02E05 The Storm", start + timedelta(minutes=45))
+    await env.svc.refreshed()
+    moved = await env.get(original.id)
+    assert moved.starts_at == start + timedelta(minutes=45)
+    assert moved.programme_key == programme_key(hub(bbc), moved.starts_at) and not moved.guide_review
+    async with env.api.c.db.session() as session:
+        await session.execute(delete(Programme).where(Programme.title == "Harbour Lights S02E05 The Storm"))
+        await session.commit()
+    for delta in (60, 150):
+        await env.programme(bbc, "Harbour Lights S02E05 The Storm", start + timedelta(minutes=delta))
+    await env.svc.refreshed()
+    review = await env.get(original.id)
+    assert review.guide_review
+    plan = await env.svc.planner.plan(env.admin, review)
+    assert len(plan["alternates"]) == 2
+    await env.tick(hours=2, minutes=45)
+    assert not env.capture.attempts
+    fixed = await env.svc.planner.change(env.admin, original.id, {"keep_original_time": True})
+    assert not fixed.guide_review and not fixed.follow_guide
+    await env.svc.refreshed()
+    await env.tick()
+    assert env.capture.attempts == [original.id]
+
+
+async def test_recovery_verifies_actual_rerun_and_keeps_partial_until_swap(env: Env) -> None:
+    import asyncio
+    import shutil
+
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("requires ffmpeg and ffprobe")
+    ch = await env.channel("bbc1.uk")
+    title = "Lights S01E02"
+    start = NOW + timedelta(minutes=10)
+    original = await env.svc.schedule_programme(env.admin, await env.programme(ch, title, start, 1))
+    await env.tick(minutes=10)
+    env.capture.running.clear()
+    (env.root / f"{original.id}.mkv").write_bytes(b"original partial")
+    await env.tick(seconds=30)
+    assert (await env.get(original.id)).state == "failed"
+    for minute in (60, 120):
+        await env.programme(ch, title, start + timedelta(minutes=minute), 1)
+    await env.tick(minutes=1)
+    children = [r for r in await env.recordings() if r.replacement_for]
+    assert len(children) == 1 and children[0].starts_at == start + timedelta(hours=1)
+    await env.svc.planner.change(env.admin, original.id, {"protected": True})
+
+    async def try_rerun(child: Recording, duration: int) -> None:
+        path = env.root / f"{child.id}.mkv"
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=32x32:r=1",
+            "-t",
+            str(duration),
+            "-threads",
+            "1",
+            "-c:v",
+            "mpeg4",
+            str(path),
+        )
+        assert await process.wait() == 0
+        env.clock.at = child.starts_at
+        await env.tick()
+        assert (await env.get(child.id)).state == "recording"
+        await env.tick(minutes=6)
+
+    await try_rerun(children[0], 5)
+    assert (await env.get(children[0].id)).state == "failed"
+    assert (env.root / f"{original.id}.mkv").read_bytes() == b"original partial"
+    await env.svc.refreshed()
+    await env.tick()
+    remaining = [r for r in await env.recordings() if r.replacement_for and r.state == "scheduled"]
+    assert len(remaining) == 1
+    await try_rerun(remaining[0], 60)
+    restored = await env.get(original.id)
+    assert restored.state == "done" and restored.protected and restored.recovered_at
+    assert restored.path == f"{remaining[0].id}.mkv" and env.svc.playable_file(restored)
+    assert not (env.root / f"{original.id}.mkv").exists()
+
+
+async def test_retention_forecast_protects_kept_files_and_predicts_next_eviction(env: Env) -> None:
+    ch = await env.channel("bbc1.uk")
+    for hour in range(1, 5):
+        await env.programme(ch, f"Harbour Lights S01E0{hour}", NOW + timedelta(hours=hour))
+    rule = await env.svc.add_rule(env.admin, "series", "Harbour Lights", None, False, 2)
+    a, b, c, upcoming = await env.recordings()
+    for row in (a, b, c):
+        path = f"{row.id}.mkv"
+        (env.root / path).write_bytes(b"file")
+        await env.svc._transition(row, ("scheduled",), "done", path=path, size_bytes=1000)
+    await env.svc.planner.change(env.admin, a.id, {"protected": True})
+    plan = await env.svc.planner.plan(env.admin, upcoming)
+    assert plan["estimated_bytes"] == 1000 and plan["free_bytes"] == env.free["bytes"]
+    assert plan["evictions"] == [b.title]
+    await env.svc._transition(upcoming, ("scheduled",), "done", path="new.mkv", size_bytes=1000)
+    await env.svc._prune(env.clock())
+    assert {row.id for row in await env.recordings() if row.rule_id == rule.id} == {a.id, c.id, upcoming.id}
+    assert (env.root / f"{a.id}.mkv").exists() and not (env.root / f"{b.id}.mkv").exists()
+
+
+async def test_priority_uses_the_source_budget_across_profiles_and_recovers_after_end(env: Env) -> None:
+    from app.infra.models import Source
+
+    async with env.api.c.db.session() as s:
+        source = await s.get(Source, env.source["id"])
+        assert source
+        source.hints = {"max_connections": 1}
+        await s.commit()
+    bbc, tf1 = await env.channel("bbc1.uk"), await env.channel("tf1.fr")
+    start = NOW + timedelta(hours=1)
+    low, _ = await env.svc.schedule_or_get(
+        await env.viewer(), await env.programme(bbc, "Late Show", start, 90), priority=-1
+    )
+    high, _ = await env.svc.schedule_or_get(env.admin, await env.programme(tf1, "Short Show", start, 15), priority=1)
+    await env.tick(minutes=58)
+    assert env.capture.running == {high.id}
+    assert (await env.get(low.id)).state == "scheduled"
+    await env.tick(minutes=22)
+    assert env.capture.running == {low.id}
+    await env.tick(hours=2)
+    late = await env.get(low.id)
+    assert late.state == "failed" and late.captured_from == start + timedelta(minutes=20) and late.path

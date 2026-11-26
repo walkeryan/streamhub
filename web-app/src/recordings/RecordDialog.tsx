@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useCreateRecordingRule, useDeleteRecording, useRecordings, useScheduleRecording } from '../api/hooks'
+import { useCreateRecordingRule, useDeleteRecording, useRecordings } from '../api/hooks'
 import type { Channel, Programme, RecordingRule } from '../api/types'
 import { Button, Chip, Modal } from '../components/ui'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
@@ -7,6 +7,7 @@ import { setFocus } from '../nav/spatial'
 import { recordingOf, seriesTitle } from '../lib/recordings'
 import { fmtTime } from '../lib/util'
 import { useUi } from '../store/ui'
+import { DvrSchedule } from './DvrPlan'
 import { LiveAlternatives } from '../player/LiveAlternatives'
 import { automaticPadding, RulePadding } from './RulePadding'
 import { RecordingBadge } from './RecordingBadge'
@@ -23,7 +24,6 @@ export interface RecordTarget { channel: Pick<Channel, 'id' | 'name'>; programme
 export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarget | null; onClose: () => void; onWatch?: (p: Programme) => void }) {
   const toast = useUi((s) => s.toast)
   const recordings = useRecordings(!!target, false)
-  const schedule = useScheduleRecording()
   const cancel = useDeleteRecording()
   const createRule = useCreateRecordingRule()
   const [index, setIndex] = useState(0)
@@ -39,7 +39,7 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
   useEffect(() => { setTeam('') }, [p?.id])
   if (!target || !p) return null
 
-  const busy = schedule.isPending || createRule.isPending || cancel.isPending
+  const busy = createRule.isPending || cancel.isPending
   const existing = recordingOf(recordings.data?.recordings, p)
   const active = p.recording_state === 'scheduled' || p.recording_state === 'recording'
   const onAir = Date.parse(p.start) <= Date.now() && Date.parse(p.stop) > Date.now()
@@ -48,11 +48,6 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
   const everyGame = (name: string) => rule('team', name, {}, 'Every game for {match} will be recorded.')
   const failed = (e: Error) => { setError(e.message); void setFocus(active ? 'rec:cancel' : 'rec:one') }
   const done = (text: string) => { toast(text, 'success'); onClose() }
-  const one = () => {
-    if (busy) return
-    setError(null)
-    schedule.mutate({ programme_id: p.id, channel_id: p.channel_id, start: p.start }, { onSuccess: (r) => done(r.state === 'recording' ? `Recording ${r.title} now.` : `${r.title} will be recorded at ${fmtTime(r.starts_at)}.`), onError: failed })
-  }
   const rule = (kind: RecordingRule['kind'], match: string, body: { channel_id?: string | null; new_only?: boolean }, said: string) => {
     const text = match.trim()
     if (busy || !text) return
@@ -78,7 +73,8 @@ export function RecordDialog({ target, onClose, onWatch }: { target: RecordTarge
         {onWatch && onAir && <LiveAlternatives channel={p.channel_id} start={p.start} scope="rec:entry" onClose={onClose} />}
         {active
           ? <Button focusKey="rec:cancel" danger icon="x" disabled={busy || !existing} onEnter={stop} testId="record-cancel">{p.recording_state === 'recording' ? 'Stop recording' : 'Do not record this programme'}</Button>
-          : <Button focusKey="rec:one" primary={!(onWatch && onAir)} icon="record" disabled={busy} onEnter={one} testId="record-one">Record this programme</Button>}
+          : <DvrSchedule key={p.id} target={{ programme_id: p.id, channel_id: p.channel_id, start: p.start }} focusKey="rec:one" primary={!(onWatch && onAir)} disabled={busy} testId="record-one" label="Record this programme"
+              onSuccess={r => done(r.state === 'recording' ? `Recording ${r.title} now.` : `${r.title} will be recorded at ${fmtTime(r.starts_at)}.`)} onError={failed} />}
         <Button focusKey="rec:window" ghost pressed={paddingOpen} onEnter={() => setPaddingOpen(!paddingOpen)}>Rule recording window</Button>
         {paddingOpen && <RulePadding value={padding} update={setPadding} example={{ start: p.start, stop: p.stop, sport }} />}
         <Button focusKey="rec:series" className="rec-choice" disabled={busy} onEnter={() => rule('series', seriesTitle(p.title), { channel_id: p.channel_id, new_only: true }, 'Every new episode of {match} will be recorded.')} testId="record-series">

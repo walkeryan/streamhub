@@ -433,6 +433,24 @@ class ShelfList(_M):
     shelves: list[Shelf]
 
 
+class ActorCredit(_M):
+    id: str
+    title: str
+    kind: Literal["movie", "tv"]
+    year: int | None = None
+    poster: str | None = None
+    roles: list[str]
+
+
+class ActorFilmography(_M):
+    name: str
+    photo: str | None = None
+    known_for: list[ActorCredit]
+    credits: list[ActorCredit]
+    page: int
+    has_more: bool
+
+
 class DiscoveryPage(_M):
     tiles: list[Tile]
     page: int
@@ -567,6 +585,7 @@ class SearchResults(_M):
 
 
 class PlaybackRequest(_M):
+    preview_only: bool = False
     id: str
     variant_id: str | None = Field(default=None, max_length=512)
     allow_unverified_audio: bool = False
@@ -742,6 +761,11 @@ class Thumbnails(_M):
 
 
 class PlaybackDescriptor(_M):
+    download_next_id: str | None = None
+    variant_id: str | None = None
+    edition_id: str | None = None
+    edition_label: str | None = None
+    progress_session_id: str | None = None
     canvas: bool = False
     media_info: MediaInfo | None = None
     audio_tracks: list[AudioTrack] = Field(default_factory=list)
@@ -788,6 +812,8 @@ class MultiviewDescriptor(_M):
 
 
 class ProgressReport(_M):
+    progress_session_id: str | None = Field(default=None, max_length=40)
+    variant_id: str | None = None
     watched: bool | None = None
     expected_profile_id: str | None = Field(default=None, max_length=128)
     id: str
@@ -1402,6 +1428,7 @@ class RoomUpdate(_M):
 
 
 class RoomJoin(_M):
+    expected_id: str | None = Field(default=None, max_length=256)
     client: Literal["android_tv", "web"] = "web"
     prefer_hls: bool = False
     recovery_generation: str | None = Field(default=None, max_length=64)
@@ -1459,6 +1486,7 @@ class RoomList(_M):
 
 
 class RoomJoined(_M):
+    title_revision: int = 0
     member_token: str
     member_id: str
     expires_in_seconds: int
@@ -1490,6 +1518,42 @@ class Recording(_M):
     created_at: datetime
     updated_at: datetime
 
+    priority: int = 0
+    protected: bool = False
+    guide_review: bool = False
+    captured_from: datetime | None = None
+    captured_until: datetime | None = None
+    replacement_for: str | None = None
+    recovered_at: datetime | None = None
+
+
+class DvrAiring(_M):
+    programme_id: str
+    title: str
+    channel_id: str
+    channel_name: str
+    start: datetime
+    stop: datetime
+
+
+class RecordingPlan(_M):
+    source_name: str | None
+    overlapping_titles: list[str]
+    conflict_count: int
+    connection_limit: int | None
+    alternates: list[DvrAiring]
+    evictions: list[str]
+    free_bytes: int | None
+    reserve_bytes: int
+    estimated_bytes: int | None
+
+
+class RecordingChange(_M):
+    priority: int | None = Field(default=None, ge=-1, le=1)
+    protected: bool | None = None
+    keep_original_time: bool = False
+    airing: DvrAiring | None = None
+
 
 class RecordingList(_M):
     enabled: bool
@@ -1503,6 +1567,8 @@ class RecordingIssue(_M):
 
 
 class RecordingCreate(_M):
+    confirmed_conflicts: int | None = Field(default=None, ge=0)
+    priority: int = Field(default=0, ge=-1, le=1)
     programme_id: str = Field(max_length=64)
     channel_id: str | None = Field(default=None, max_length=256)
     start: AwareDatetime | None = None

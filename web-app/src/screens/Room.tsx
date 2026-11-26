@@ -79,7 +79,7 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
       // Inside the Android TV app the seat is taken for the TV's player, which takes it up with its member token.
       const shell = inShell()
       // A seat this tab still holds (a reload, a connection that came back) is kept, not doubled.
-      const joined = await joinRoom(code, { client: shell ? 'android_tv' : 'web', prefer_hls: shell ? false : prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio, member_token: seatToken(code) })
+      const joined = await joinRoom(code, { expected_id: known.id, client: shell ? 'android_tv' : 'web', prefer_hls: shell ? false : prefersHls(), recovery_generation: generation, allow_unverified_audio: allowUnverifiedAudio, member_token: seatToken(code) })
       if (shell) { handOff(roomPlay(code, joined.member_token, allowUnverifiedAudio)); return }
       setSession(new RoomSession(known, joined, { generation, allowUnverifiedAudio, startAtMs }))
       setSeat((n) => n + 1)
@@ -103,7 +103,7 @@ function RoomFlow({ code, start, startAtMs }: { code: string; start: boolean; st
     return () => session.release()
   }, [session])
 
-  if (session) return <Player key={seat} room={session} onRejoin={() => { setSession(null); void join(session.room) }} />
+  if (session) return <Player key={seat} room={session} onRejoin={() => { setSession(null); void info.refetch().then(r => { if (r.data) void join(r.data) }) }} />
 
   const failed = barred ? BARRED : info.error && !room ? refusalOf(info.error) : null
   const shown = failed ?? refusal

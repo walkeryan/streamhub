@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Path, Query, Request, Response
 from pydantic import AwareDatetime
 
 from app.api import schemas as S
@@ -99,7 +99,7 @@ async def sports_event_list(
     days: int = Query(1, ge=1, le=7),
     language: str | None = None,
     sport: str | None = Query(None, max_length=80),
-    status: str = Query("all", pattern="^(all|active|current|upcoming|replay)$"),
+    status: str = Query("all", pattern="^(all|active|current|live|upcoming|replay)$"),
     q: str | None = Query(None, max_length=200),
     limit: int = Query(40, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -253,6 +253,20 @@ async def title_similar(id: str, c: C, p: P, response: Response) -> dict[str, An
     # A list like any other: adult titles stay out, whatever this session has unlocked.
     with listing_scope(p, False):
         return await c.requests.annotate(p, await extras.similar_titles(c.catalog, id, p.profile_id))
+
+
+@router.get("/people/{person_id}/credits", response_model=S.ActorFilmography, tags=["catalog"])
+async def actor_credits(
+    person_id: Annotated[int, Path(gt=0)],
+    c: C,
+    p: P,
+    response: Response,
+    kind: str = Query("all", pattern="^(all|movie|tv)$"),
+    page: int = Query(1, ge=1, le=500),
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "private, no-store"
+    with listing_scope(p, False):
+        return await c.catalog.actor_filmography(person_id, p.profile_id, kind, page)
 
 
 @router.get("/discover/{section}", response_model=S.DiscoveryPage, tags=["catalog"])

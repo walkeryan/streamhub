@@ -535,6 +535,8 @@ data class PlaybackDescriptor(
     val live: Boolean = false,
     @SerialName("resume_position_ms") val resumePositionMs: Long = 0,
     @SerialName("duration_ms") val durationMs: Long? = null,
+    @SerialName("progress_session_id") val progressSessionId: String? = null,
+    @SerialName("variant_id") val variantId: String? = null,
     val title: String = "",
     val subtitle: String? = null,
     val poster: String? = null,
@@ -634,6 +636,8 @@ data class ProgressReport(
     @SerialName("position_ms") val positionMs: Long,
     @SerialName("duration_ms") val durationMs: Long? = null,
     val state: PlaybackState,
+    @SerialName("progress_session_id") val progressSessionId: String? = null,
+    @SerialName("variant_id") val variantId: String? = null,
 )
 
 // ---- Favorites / watchlist / settings ----------------------------------------------------------

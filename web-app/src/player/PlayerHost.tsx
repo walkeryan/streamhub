@@ -43,7 +43,7 @@ export function PlayerHost() {
   // Only on arrival: minimising sets `mini` while the address is still /play, just before it goes back.
   useEffect(() => { if (onPlay && !shell && useDock.getState().mini) close() }, [loc.key]) // eslint-disable-line react-hooks/exhaustive-deps
   useMiniPlayerSpace(!shell && !onPlay && !!mini)
-  if (shell) return <ShellMiniPlayer />
+  if (shell && !(match && new URLSearchParams(loc.search).get('preview_scene') === '1')) return <ShellMiniPlayer />
   if (match) {
     return <Suspense fallback={null}><Player key={current.instance} playId={decode(match.params.id)} playSearch={loc.search} /></Suspense>
   }

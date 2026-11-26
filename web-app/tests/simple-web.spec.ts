@@ -387,7 +387,7 @@ test('More offers only what the profile may use, and closes back onto its opener
   const owner = await other(browser)
   await enter(owner.page, '/', 'owner')
   await owner.page.getByTestId('nav-more').click()
-  await expect(owner.page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Recordings', 'Sources', 'Users', 'Settings'])
+  await expect(owner.page.getByTestId('more-menu').getByRole('link')).toHaveText(['For You', 'Requests', 'Recordings', 'Sources', 'Users', 'Settings'])
   await owner.context.close()
 })
 

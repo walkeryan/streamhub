@@ -1,3 +1,4 @@
+import { dispatchCastPlay } from '../cast/controller'
 import { useEffect, useRef } from 'react'
 import { useSession } from '../store/session'
 import { useLocation, useNavigate } from 'react-router'
@@ -90,6 +91,7 @@ export function useGo() {
   // `state.from` records the screen that was left, so a screen can tell where Back would take it (see Title).
   return (to: string, opts?: { replace?: boolean; state?: Record<string, unknown> }) => {
     // Inside the Android TV app its own player plays: this screen stays as it is, focus included.
+    if (dispatchCastPlay(to)) return
     if (to.startsWith('/play/') && handOffUrl(to)) return
     memory.set(loc.key, getCurrentFocusKey())
     const session = useSession.getState()

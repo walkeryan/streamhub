@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from math import log
 from typing import Any
 
 from sqlalchemy import Integer, and_, cast, func, or_, select, tuple_
 from sqlalchemy.orm import aliased
 
-from app.infra.models import Profile, Progress, Source, Title
+from app.infra.models import Profile, Progress, RecommendationVote, Source, Title
 from app.services.adult import general_audience
 from app.services.catalog import CatalogService
 from app.services.tiles import TileContext, hub_id_for_title
@@ -105,7 +106,24 @@ async def recommendations(
         for genre in {g.strip() for g in row.genres or [] if isinstance(g, str) and g.strip()}:
             weights[genre.casefold()] += 1
             labels[genre.casefold()] = genre
-    genres = [g for g, _ in weights.most_common(3)]
+    async with catalog._db.session() as session:
+        votes = (
+            await session.scalars(select(RecommendationVote).where(RecommendationVote.profile_id == profile_id))
+        ).all()
+    liked: Counter[str] = Counter()
+    disliked: Counter[str] = Counter()
+    dismissed = {v.ref_id for v in votes if v.vote == "down"}
+    for vote in votes:
+        bucket = liked if vote.vote == "up" else disliked
+        for tag in set(vote.genres):
+            bucket[tag.casefold()] += 1
+            labels[tag.casefold()] = tag
+    # Smoothed log odds. Explicit preferences carry more weight than a viewing event.
+    affinity = {
+        g: log((1 + weights[g] + 3 * liked[g]) / (1 + 3 * disliked[g]))
+        for g in weights.keys() | liked.keys() | disliked.keys()
+    }
+    genres = [g for g in sorted(affinity, key=affinity.__getitem__, reverse=True) if affinity[g] > 0][:3]
     enabled = [s.id for s in ctx.sources.values() if s.enabled and ctx.is_in_app(s.type)]
     query = select(Title).where(
         Title.source_id.in_(enabled), Title.kind.in_(("movie", "vod", "show", "series")), general_audience()
@@ -152,11 +170,12 @@ async def recommendations(
                 await session.execute(query.order_by(Title.added_at.desc(), Title.id.desc()).limit(CANDIDATE_LIMIT))
             ).scalars()
         )
-    rows = [r for r in rows if hub_id_for_title(r) not in watched_ancestors]
-    if genres:
+    rows = [r for r in rows if hub_id_for_title(r) not in watched_ancestors | dismissed]
+    if affinity:
         rows.sort(
             key=lambda r: (
-                -sum(weights[g.casefold()] for g in r.genres or [] if isinstance(g, str)),
+                -sum(affinity.get(g.casefold(), 0.0) for g in r.genres or [] if isinstance(g, str)),
+                -(r.added_at.timestamp() if r.added_at else 0),
                 r.title.casefold(),
                 r.id,
             )
@@ -167,4 +186,6 @@ async def recommendations(
         if genres
         else "Explore your library · Not personalized"
     )
+    if votes:
+        title = "Based on your viewing and ratings" if seen else "Based on your ratings"
     return tiles, title

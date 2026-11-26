@@ -852,7 +852,13 @@ class PlayerViewModel @Inject constructor(
         return client.state.value.clock?.let { RoomSync.positionAt(it, client.serverNowMs()) }
     }
 
+    suspend fun roomControls(action: String? = null, ref: String = "") =
+        rooms.controls(requireNotNull(seat), action, ref)
+
+    suspend fun roomSuggestions(query: String) = api.search(query, false).playHere.take(6)
+
     private fun startRoom(s: RoomSeat, isHost: Boolean = false) {
+        var seenRoomRevision = s.titleRevision
         val client = rooms.client(s, isHost)
         roomClient = client
         roomJob?.cancel()
@@ -864,7 +870,15 @@ class PlayerViewModel @Inject constructor(
             carryOver?.let { carry -> launch { carryInto(client, carry) } }
             launch {
                 client.state.collect { room ->
+                    val previous = seenRoomRevision
+                    val revision = room.titleRevision
+                    if (revision != null) seenRoomRevision = revision
                     _state.update { it.copy(room = room) }
+                    if (revision != null && previous != revision) {
+                        player.pause()
+                        recoverRoom(auto = true)
+                        return@collect
+                    }
                     when {
                         room.connection == RoomConnection.Closed -> roomClosed(room.closedReason)
                         // A seek restarted the room's stream: what is playing is a start that no longer exists.
@@ -1175,6 +1189,8 @@ class PlayerViewModel @Inject constructor(
 
     fun hideOverlay() { rewindJob?.cancel(); bufferSeekJob?.cancel(); _state.update { it.copy(overlay = Overlay.None, rewindLoading = false, bufferBusy=false, audioChoice=null) } }
     fun openMiniList() { if (seat == null && _state.value.live && _state.value.channels.isNotEmpty()) _state.update { it.copy(overlay = Overlay.MiniList) } }
+    suspend fun saveScene(token: String, name: String, position: Long) = api.saveScene(token, name, position)
+
     suspend fun reportRecordingIssue(id: String, category: String, position: Long) = api.reportRecordingIssue(id, category, position)
     fun openMenu() { _state.update { it.copy(overlay = Overlay.Menu) } }
 

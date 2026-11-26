@@ -133,6 +133,7 @@ class ProgrammeInfo:
     icon: str | None = None
 
     age_evidence: dict[str, Any] = field(default_factory=dict)
+    broadcast_kind: str | None = None
 
 
 @dataclass(slots=True)

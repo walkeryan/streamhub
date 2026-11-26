@@ -9,6 +9,7 @@ import type { RoomClockState } from './roomSync.ts'
  */
 export interface RoomMember { id: string; name: string; host: boolean; buffering: boolean }
 export interface RoomStateEvent extends RoomClockState {
+  title_revision?: number
   /** the member who caused it, or null when the room did */
   by: string | null
   controls_locked: boolean
@@ -195,6 +196,7 @@ export class RoomSocket {
         if (typeof message.playing !== 'boolean' || typeof message.as_of_ms !== 'number') break
         const previous = this.current.state
         const state: RoomStateEvent = {
+          ...(typeof message.title_revision === 'number' ? { title_revision: message.title_revision } : {}),
           playing: message.playing, position_ms: typeof message.position_ms === 'number' ? message.position_ms : null, as_of_ms: message.as_of_ms,
           by: typeof message.by === 'string' ? message.by : null, controls_locked: !!message.controls_locked,
           stream_epoch: typeof message.stream_epoch === 'number' ? message.stream_epoch : null,

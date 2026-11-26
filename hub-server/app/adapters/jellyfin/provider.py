@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -279,6 +280,38 @@ class JellyfinSource:
             if it:
                 out.append((it, int(it.extra.get("resume_ms") or 0)))
         return out
+
+    async def download_info(self, ext_id: str) -> tuple[str, int, str] | None:
+        await self._ensure()
+        item = await self._json(
+            f"/Users/{self.user_id}/Items/{ext_id}", Fields="CanDownload,Etag,MediaSources,PlayAccess"
+        )
+        if item.get("Type") != "Episode" or item.get("CanDownload") is not True or item.get("PlayAccess") == "None":
+            return None
+        media: dict[str, Any] = next(iter(item.get("MediaSources") or []), {})
+        mime = {"mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm"}.get(str(media.get("Container")).lower())
+        size = media.get("Size")
+        if not mime or not isinstance(size, int) or size <= 0:
+            return None
+        return mime, size, str(item.get("Etag") or media.get("Id") or ext_id) + ":" + str(size)
+
+    async def download_bytes(self, ext_id: str, size: int) -> AsyncIterator[bytes]:
+        await self._ensure()
+        async with (
+            self._ctx.http_factory(headers=self._h()) as client,
+            client.stream("GET", f"{self.server}/Items/{ext_id}/Download", follow_redirects=False) as response,
+        ):
+            response.raise_for_status()
+            if response.headers.get("Content-Length") and int(response.headers["Content-Length"]) != size:
+                raise ValueError("Source file changed before download.")
+            read = 0
+            async for chunk in response.aiter_bytes(64 * 1024):
+                read += len(chunk)
+                if read > size:
+                    raise ValueError("Source file exceeds its declared size.")
+                yield chunk
+            if read != size:
+                raise ValueError("Source download was interrupted.")
 
     async def stream_for_item(self, item: CatalogItem) -> StreamTarget:
         await self._ensure()

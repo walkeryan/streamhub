@@ -4,6 +4,7 @@ import pytest
 
 from app.infra.models import Programme
 from app.services.sports import classify_sport, sports_events
+from tests.conftest import Api
 from tests.test_epg_integrity import add_source
 
 NOW = datetime(2026, 11, 1, 14, tzinfo=UTC)
@@ -90,7 +91,7 @@ async def test_endpoint_validation_empty_and_no_auth(api):
     assert not result.json()["truncated"]
     assert (await api.get("/sports/events", params={"date": "bad"})).status_code == 400
     assert (await api.get("/sports/events", params={"timezone": "invalid"})).status_code == 400
-    assert (await api.get("/sports/events", params={"status": "live"})).status_code == 422
+    assert (await api.get("/sports/events", params={"status": "bogus"})).status_code == 422
     assert (await api.client.get("/api/v1/sports/events")).status_code == 401
 
 
@@ -128,3 +129,63 @@ async def test_candidate_cap_is_explicit_and_filters_run_before_cap(api):
     assert not filtered["truncated"] and filtered["total"] == 1
     replay = await sports_events(api.c.channels, api.profile_id, now=NOW, language="all", status="replay")
     assert not replay["truncated"] and replay["total"] == 1
+
+
+async def test_broadcast_evidence_takes_precedence_over_the_on_air_clock(
+    api: Api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.adapters.xmltv.parser import parse_bytes
+    from app.domain.entities import EpgSourceSpec
+
+    source = await add_source(api)
+    listings = [
+        ("Soccer replay", "", ""),
+        ("Soccer encore", "", ""),
+        ("Soccer highlights", "<live/>", ""),
+        ("Live: Soccer classic", "<live/><previously-shown start='20240201170000 +0000'/>", ""),
+        ("Live: Soccer from the archive", "<live/>", "Originally broadcast in 2019."),
+        ("Soccer unlabelled", "", ""),
+        ("Soccer fixture", "<live/>", ""),
+        ("Live: Soccer championship", "", ""),
+    ]
+    clock = datetime.now(UTC)
+    start, stop = clock - timedelta(minutes=30), clock + timedelta(minutes=30)
+    xml = (
+        "<tv>"
+        + "".join(
+            f'<programme channel="bbc1.uk" start="{start:%Y%m%d%H%M%S} +0000" '
+            f'stop="{stop:%Y%m%d%H%M%S} +0000"><title>{title}</title><category>Soccer</category>'
+            f"<desc>{desc}</desc>{flags}</programme>"
+            for title, flags, desc in listings
+        )
+        + "</tv>"
+    )
+    parsed = parse_bytes(xml.encode())
+    assert [p.broadcast_kind for p in parsed][2:7] == ["live", "replay", "live", None, "live"]
+
+    class Provider:
+        async def epg_sources(self):
+            return [EpgSourceSpec(url="https://fixture.invalid/sports.xml")]
+
+    class Epg:
+        async def iter_programmes(self, spec, wanted):
+            yield parsed
+
+    monkeypatch.setattr(api.c.sources, "provider", lambda row: Provider())
+    monkeypatch.setattr(api.c.sync, "_epg", Epg())
+    assert await api.c.sync.refresh_epg(source["id"]) == len(parsed)
+    current = await sports_events(api.c.channels, api.profile_id, now=clock, status="current", language="all")
+    assert current["total"] == len(listings)
+    by_title = {e["title"]: e for e in current["events"]}
+    for title, *_ in listings[:5]:
+        assert by_title[title]["replay"] and not by_title[title]["live_evidence"]
+    assert not by_title["Soccer unlabelled"]["replay"] and not by_title["Soccer unlabelled"]["live_evidence"]
+    live = await sports_events(api.c.channels, api.profile_id, now=clock, status="live", language="all", limit=1)
+    assert live["total"] == 2 and len(live["events"]) == 1
+    replays = await sports_events(api.c.channels, api.profile_id, now=clock, status="replay", language="all")
+    assert {e["title"] for e in replays["events"]} == {title for title, *_ in listings[:5]}
+    response = await api.get("/sports/events", params={"status": "live", "language": "all", "timezone": "UTC"})
+    assert response.status_code == 200 and {e["title"] for e in response.json()["events"]} == {
+        listings[-2][0],
+        listings[-1][0],
+    }

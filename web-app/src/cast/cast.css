@@ -1,0 +1,13 @@
+.cast-bar { min-width: 0; }
+.cast-target { display: inline-flex; min-height: 2.75rem; align-items: center; gap: .45rem; padding: .35rem .65rem; border-radius: var(--r-pill); background: var(--t-surface); color: var(--t-text); font-size: var(--fs-meta); }
+.cast-target > span, .cast-target > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cast-target > small { max-width: 12ch; color: var(--t-text-muted); }
+.cast-now { display: flex; gap: .8rem; align-items: center; min-width: 0; }
+.cast-now img { width: 3.5rem; aspect-ratio: 2/3; object-fit: cover; border-radius: .35rem; }
+.cast-now div { min-width: 0; overflow-wrap: anywhere; }
+.cast-now p { font-variant-numeric: tabular-nums; color: var(--t-text-muted); }
+@media (min-width: 721px) and (max-width: 1350px) { .rail .cast-target > span, .rail .cast-target > small { display: none; } }
+@media (max-width: 720px) {
+ .cast-bar { display: flex; justify-content: flex-end; padding: .2rem var(--page-x); background: var(--t-bg); }
+ .cast-target > small { max-width: 36vw; }
+}

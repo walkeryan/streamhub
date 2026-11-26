@@ -20,7 +20,7 @@ sealed interface RoomMessage {
      * The room clock. [by] is the member who caused it, or null when the room did. [stream] is set
      * only in a room that plays one shared stream: which start of it the room is on now.
      */
-    data class State(val clock: RoomClock, val by: String?, val controlsLocked: Boolean, val stream: RoomStream? = null) : RoomMessage
+    data class State(val clock: RoomClock, val by: String?, val controlsLocked: Boolean, val stream: RoomStream? = null, val revision: Long = 0) : RoomMessage
     data class Members(val members: List<RoomMember>) : RoomMessage
     /** The room is paused for this member while they buffer. */
     data class Waiting(val name: String) : RoomMessage
@@ -57,6 +57,7 @@ object RoomProtocol {
                 by = string("by"),
                 controlsLocked = bool("controls_locked") ?: false,
                 // Both or neither: an epoch without its time zero cannot position anything.
+                revision = long("title_revision") ?: 0,
                 stream = long("stream_epoch")?.let { epoch -> long("stream_start_ms")?.let { start -> RoomStream(epoch.toInt(), start.coerceAtLeast(0)) } },
             )
             "members" -> RoomMessage.Members(

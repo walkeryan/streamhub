@@ -10,6 +10,7 @@ import { AWAY_FROM_HOME, busyHeading, parseSourceBusy, streamRefusal, type Sourc
 export type PlayState = 'resolving' | 'loading' | 'buffering' | 'playing' | 'paused' | 'reconnecting' | 'error' | 'handoff'
 
 export interface PlaybackReq {
+  previewOnly?: boolean
   id: string; variantId?: string; allowUnverifiedAudio?: boolean; sourceId?: string | null; catchupProgrammeId?: string | null; rewindAt?: string | null
   bufferAt?: string | null
   /** Index into the file's probed audio tracks; the server encodes that one track (web VOD). */
@@ -35,7 +36,7 @@ export async function resolve(req: PlaybackReq, generation?: string): Promise<Pl
   const recoveryGeneration = generation ?? await playbackGeneration()
   return unwrap<PlaybackDescriptor>(
     api.POST('/playback/resolve', {
-      body: { id: req.id, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), prefer_canvas: req.preferCanvas ?? false, rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null, replaces: req.replaces ?? null },
+      body: { id: req.id, preview_only: !!req.previewOnly, variant_id: req.variantId, allow_unverified_audio: req.allowUnverifiedAudio ?? false, source_id: req.sourceId ?? null, client: 'web', recovery_generation: recoveryGeneration, prefer_hls: prefersHls(), prefer_canvas: req.preferCanvas ?? false, rewind_at: req.rewindAt ?? null, catchup_programme_id: req.catchupProgrammeId ?? null, audio_track: req.audioTrack ?? null, start_position_ms: req.startPositionMs == null ? null : Math.max(0, Math.floor(req.startPositionMs)), max_height: (req.maxHeight ?? null) as 480 | 720 | 1080 | null, replaces: req.replaces ?? null },
     }),
   )
 }
@@ -475,7 +476,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
       const carried = restart.current.startMs
       if (carried != null) restart.current = { ...restart.current, startMs: undefined }
       const at = carried ?? req?.startPositionMs ?? d.resume_position_ms
-      if (at > 0 && v.currentTime < 1) v.currentTime = at / 1000
+      if (at > 0 && v.currentTime < 1 && (!Number.isFinite(v.duration) || at < v.duration * 1000)) v.currentTime = at / 1000
     }
     // The source can drop mid-film and ffmpeg then closes the stream as if it had ended. Carry on from there.
     const onEnded = () => {
@@ -538,6 +539,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
       const finished = state === 'stopped' && completed.current === key && duration != null
       const progress = {
         id: req.id, source_id: req.sourceId ?? null, state, expected_profile_id: profileId,
+        progress_session_id: d.progress_session_id, variant_id: d.variant_id,
         // Stopped at its length is watched to the end (the contract's ProgressReport).
         position_ms: finished ? duration : titlePositionMs(),
         duration_ms: duration,

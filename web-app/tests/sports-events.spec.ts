@@ -118,7 +118,7 @@ test('sport chips keep every sport and its count while one is chosen', async ({ 
   await expect(page.getByRole('button', { name: 'Tennis · 1', exact: true })).toHaveAttribute('aria-pressed', 'true')
   // Nothing live in that sport: the screen says so and names what is next.
   await page.getByRole('button', { name: 'Football · 1', exact: true }).click()
-  await expect(page.getByTestId('sports-live')).toContainText(/No games are live right now\. Next: Upcoming matchup from guide (tomorrow )?at \d/)
+  await expect(page.getByTestId('sports-live')).toContainText(/No confirmed live games right now\. Next: Upcoming matchup from guide (tomorrow )?at \d/)
   await page.getByRole('button', { name: 'All · 3', exact: true }).click()
   await expect(page.getByTestId('sports-listing')).toHaveCount(3)
 })

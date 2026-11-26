@@ -246,7 +246,18 @@ def test_join_gives_a_member_token_and_a_descriptor(rig: Rig) -> None:
         "POST", "/playback/resolve", json={"id": rig.film, "recovery_generation": rig.c.proxy.recovery_epoch}
     ).json()
     joined = rig.join(code)
-    assert joined["descriptor"] == resolved and joined["descriptor"]["url"] == FILM_URL
+    # Same media, independent viewing ownership. Refreshing the seat after another player opens
+    # must retain its old token so a late room report cannot overwrite the newer timeline.
+    ours = joined["descriptor"].copy()
+    seat_token = ours.pop("progress_session_id")
+    assert seat_token and seat_token != resolved.pop("progress_session_id")
+    assert ours == resolved and ours["url"] == FILM_URL
+    independent = rig.req(
+        "POST", "/playback/resolve", json={"id": rig.film, "recovery_generation": rig.c.proxy.recovery_epoch}
+    ).json()
+    assert independent["progress_session_id"] != seat_token
+    kept = rig.join(code, member_token=joined["member_token"])
+    assert kept["member_id"] == joined["member_id"] and kept["descriptor"]["progress_session_id"] == seat_token
     assert joined["ws_path"] == f"/api/v1/rooms/{code}/ws" and joined["expires_in_seconds"] == 7200
     shown = rig.req("GET", f"/rooms/{code}").json()
     assert shown["members"] == [{"id": joined["member_id"], "name": "Admin", "host": True, "buffering": False}]
@@ -820,3 +831,57 @@ def test_member_token_is_kept_out_of_the_logs() -> None:
     line = 'WebSocket /api/v1/rooms/ABCDEF/ws?member_token=eyJhbGciOi.payload.sig" [accepted]'
     assert "eyJ" not in redact_text(line) and "ABCDEF" in redact_text(line)
     assert "eyJ" not in (redact_url("ws://hub.test/api/v1/rooms/ABCDEF/ws?member_token=eyJhbGciOi.payload.sig") or "")
+
+
+def test_room_host_consent_preserves_clock_and_queue_requires_every_member(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routers import room_tools
+    from app.services.errors import Forbidden
+    from app.services.rooms import RoomState
+
+    code = rig.room()["code"]
+    guest = rig.profile("guest", "Guest")
+    host_seat, guest_seat = rig.join(code), rig.join(code, guest)
+    host_headers = {**rig.headers, "X-Room-Seat": host_seat["member_token"]}
+    guest_headers = {**guest, "X-Room-Seat": guest_seat["member_token"]}
+    route = f"/rooms/{code}/controls"
+    room = rig.c.rooms.registry.get(code)
+    assert room
+    room.controls_locked = True
+    room.state = RoomState(True, 12000, T0)
+
+    def act(headers: dict[str, str], action: str, id: str = "") -> httpx.Response:
+        return rig.req("POST", route, headers, json={"action": action, "id": id})
+
+    assert act(guest_headers, "accept").status_code == 403
+    assert act(host_headers, "offer", guest_seat["member_id"]).is_success
+    assert room.host_profile_id == rig.admin_id
+    assert act(guest_headers, "accept").is_success
+    assert room.host_profile_id == "guest" and room.controls_locked
+    assert room.state == RoomState(True, 12000, T0)
+    assert act(host_headers, "advance", rig.film).status_code == 403
+    refused: set[str] = set()
+
+    async def playable(c: Container, p: Any, ref: str, source: str | None, variant: str | None) -> None:
+        if p.profile_id in refused:
+            raise Forbidden("Unavailable.")
+
+    monkeypatch.setattr(room_tools, "allowed_load", playable)
+    assert act(host_headers, "suggest", rig.film).is_success
+    refused.add(rig.admin_id)
+    assert act(guest_headers, "advance", rig.film).status_code == 409
+    assert room.title_revision == 0 and room.suggestions == [rig.film]
+    refused.clear()
+    assert act(guest_headers, "advance", rig.film).is_success
+    assert room.title_revision == 1 and room.suggestions == []
+    outdated = rig.req(
+        "POST",
+        f"/rooms/{code}/join",
+        json={
+            "expected_id": "lib:previous:cut",
+            "allow_unverified_audio": True,
+            "member_token": host_seat["member_token"],
+        },
+    )
+    assert outdated.status_code == 409

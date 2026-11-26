@@ -199,6 +199,7 @@ class SyncService:
                                             "description": p.description,
                                             "category": (p.category or None) and p.category[:128],
                                             "icon": p.icon,
+                                            "broadcast_kind": p.broadcast_kind,
                                             "age_evidence": {
                                                 **p.age_evidence,
                                                 "subject": {

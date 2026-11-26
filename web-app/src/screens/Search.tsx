@@ -275,17 +275,33 @@ function SearchIdle() {
   const go = useGo()
   const recents = useUi((s) => s.recentSearches)
   const clearSearches = useUi((s) => s.clearSearches)
+  const [removed, setRemoved] = useState<{ term: string; index: number } | null>(null)
+  const forget = (term: string, index: number) => {
+    useUi.getState().removeSearch(term)
+    setRemoved({ term, index })
+    requestAnimationFrame(() => void setFocus('search:recent:undo'))
+  }
+  const undo = () => {
+    if (!removed) return
+    useUi.getState().restoreSearch(removed.term, removed.index)
+    setRemoved(null)
+    requestAnimationFrame(() => void setFocus(`search:recent:${removed.term}`))
+  }
   return (
     <FocusGroup focusKey="search:idle" className="search-idle" data-testid="search-idle">
       <div className="search-idle-lead">
         <span className="ds-empty-icon" aria-hidden="true"><Icon name="search" /></span>
         <p className="muted">Search live TV, movies, series, actors and streaming services.</p>
       </div>
-      {recents.length > 0 && <div className="search-idle-block">
-        <SectionHeader title="Recent searches" action={<Button focusKey="search:recent:clear" ghost icon="x" onEnter={clearSearches} testId="search-recent-clear">Clear</Button>} />
+      {(recents.length > 0 || removed) && <div className="search-idle-block">
+        <SectionHeader title="Recent searches" action={recents.length > 0 && <Button focusKey="search:recent:clear" ghost icon="x" onEnter={() => { setRemoved(null); clearSearches() }} testId="search-recent-clear">Clear</Button>} />
         <FocusGroup focusKey="search:recent" className="lib-chips" role="group" label="Recent searches">
-          {recents.map((r) => <Chip key={r} focusKey={`search:recent:${r}`} onEnter={() => go(searchPath(r), { replace: true })}>{r}</Chip>)}
+          {recents.map((r, index) => <div key={r} className="recent-term">
+            <Chip focusKey={`search:recent:${r}`} onEnter={() => go(searchPath(r), { replace: true })}>{r}</Chip>
+            <Focusable focusKey={`search:forget:${r}`} className="recent-forget fx-flat" label={`Remove ${r} from recent searches`} onEnter={() => forget(r, index)}><Icon name="x" /></Focusable>
+          </div>)}
         </FocusGroup>
+        {removed && <div className="recent-undo"><span role="status">Removed “{removed.term}”.</span><Button focusKey="search:recent:undo" ghost onEnter={undo}>Undo</Button></div>}
       </div>}
       <FocusGroup focusKey="search:discover" className="lib-chips">
         <Button focusKey="search:discover:movies" className="btn-chip" icon="film" onEnter={() => go('/discover/movies')}>Popular movies</Button>

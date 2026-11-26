@@ -196,7 +196,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         db, channels, recordings_dir=settings.recordings_dir, min_free_gb=settings.recordings_min_free_gb
     )
     recorder.content_policy = content_policy
-    sync.after_epg_refresh = recorder.apply_rules
+    sync.after_epg_refresh = recorder.refreshed
     classifier = ClassificationJob(db, tmdb, app_settings)
     scheduler = SyncScheduler(
         sync, requests.reconcile, recorder.run_tick, classifier.run_batch, poll_requests=requests.poll_due
@@ -237,6 +237,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         dvr=DvrManager(settings.dvr_dir, enabled=settings.dvr_enabled, reserve_root=settings.dvr_reserve_dir),
     )
     playback.probe = MediaProbe(settings.ffprobe_path)
+    recorder.probe = playback.probe
     playback.probe_slot = proxy.probe_slot
     playback.pin = proxy.pin
     playback.recorder = recorder

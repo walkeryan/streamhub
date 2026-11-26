@@ -571,3 +571,39 @@ async def test_recording_issue_and_actual_live_entry(api: Api) -> None:
     async with api.c.db.session() as s:
         receipt = await s.scalar(select(AuditLog).where(AuditLog.action == "recording.issue"))
         assert receipt and receipt.detail == {"recording_id": rid, **body}
+
+
+async def test_conflict_preview_priority_alternate_and_other_profile_privacy(api: Api) -> None:
+    from app.infra.models import Source
+
+    src = await add_source(api)
+    async with api.c.db.session() as s:
+        source = await s.get(Source, src["id"])
+        assert source
+        source.hints = {**(source.hints or {}), "max_connections": 1}
+        await s.commit()
+    bbc, second = await channel(api, src), await channel(api, src, "tf1.fr")
+    start = soon(3)
+    first = await programme(api, bbc, "Other household member's title", start)
+    main = await programme(api, second, "Harbour Lights S02E05 The Storm", start)
+    repeat = await programme(api, second, "Harbour Lights S02E05 The Storm", start + timedelta(hours=3))
+    await programme(api, second, "Harbour Lights S02E05 Highlights", start + timedelta(hours=5), minutes=10)
+    await programme(api, second, "Harbour Lights S02E06", start + timedelta(hours=6))
+    other = await login(api, "Other")
+    reserved = await api.client.post("/api/v1/recordings", headers=other, json={"programme_id": first})
+    assert reserved.status_code == 201
+    request = {"programme_id": main, "confirmed_conflicts": 0}
+    plan = (await api.post("/recordings/preview", json=request)).json()
+    assert (plan["connection_limit"], plan["conflict_count"], plan["overlapping_titles"]) == (1, 1, [])
+    assert [a["programme_id"] for a in plan["alternates"]] == [repeat]
+    assert (await api.post("/recordings", json=request)).status_code == 409
+    made = await api.post("/recordings", json={**request, "confirmed_conflicts": 1, "priority": 1})
+    assert made.status_code == 201 and made.json()["priority"] == 1
+    url = "/recordings/" + made.json()["id"]
+    shifted = await api.client.patch("/api/v1" + url, headers=api.headers, json={"airing": plan["alternates"][0]})
+    assert shifted.status_code == 200 and datetime.fromisoformat(shifted.json()["starts_at"]) == start + timedelta(
+        hours=3
+    )
+    assert (await api.get(url + "/plan")).json()["conflict_count"] == 0
+    forbidden = await api.client.patch("/api/v1" + url, headers=other, json={"priority": -1})
+    assert forbidden.status_code in (403, 404)

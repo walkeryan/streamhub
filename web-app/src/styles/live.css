@@ -281,7 +281,9 @@
 /* Football matchup card: generated art (or the two team colours split on the diagonal until it exists)
    under the teams, a big VS., the clock and the win probability. Sizes follow the card's own width
    (cqi, with rem fallbacks); a name in a dark team colour stays legible through its white outline. */
-.sports-grid-wide { grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr)); }
+.sports { --sports-tile-w: clamp(17rem, 28vw, 27rem); }
+.sports-event-grid { grid-template-columns: repeat(auto-fill, min(100%, var(--sports-tile-w))); }
+.sports-event-grid > .sports-card { width: 100%; aspect-ratio: 16 / 9; min-height: 0; overflow: hidden; }
 .sports-card.sports-matchup, .sports-tile.sports-matchup, .sports-sheet-card {
   position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 0;
   aspect-ratio: 16 / 9; min-height: 0; padding: 0; overflow: hidden; container-type: inline-size;
@@ -335,7 +337,7 @@
 .sports-row.sports-row-matchup { grid-template-columns: 5.25rem 4.5rem minmax(0, 1fr) auto; }
 /* Rows of tiles, Home-style (HRow): each sport scrolls sideways out to the window's edges; the band keeps room
    for a focused tile's lift and ring above and below. */
-.sports-tiles { --sports-tile-w: clamp(17rem, 28vw, 27rem); padding-top: 0.6rem; padding-bottom: 0.9rem; }
+.sports-tiles { padding-top: 0.6rem; padding-bottom: 0.9rem; }
 .sports-tile { position: relative; flex: none; width: var(--sports-tile-w); aspect-ratio: 16 / 9; border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--glass-line); box-shadow: var(--shadow-card); }
 .sports-tile.fx[data-focused='true'] { outline-offset: 0.15rem; }
 .sports-tile-plain {
@@ -349,10 +351,10 @@
 /* "See all" closes a row as Home's rows close: a glass card with a chevron (.tile-more), in the row's shape. */
 .sports-more { gap: 0.3rem; box-shadow: none; }
 .sports-more-text { font-size: var(--fs-section); font-weight: 750; }
-.sports-chan-row > .sports-chan { flex: none; width: 18rem; }
+.sports-tiles > .sports-tile, .sports-chan-row > .sports-chan { flex: 0 0 var(--sports-tile-w); width: var(--sports-tile-w); height: auto; aspect-ratio: 16 / 9; align-self: flex-start; }
 .sports-sheet-card { display: flex; width: 100%; border-radius: var(--r-lg); box-shadow: var(--shadow-card); }
 @media (max-width: 720px) {
-  .sports-tiles { --sports-tile-w: min(82vw, 20rem); }
+  .sports { --sports-tile-w: min(82vw, 20rem); }
   .sports-chan-row > .sports-chan { width: 15rem; }
 }
 .matchup-thumb { position: relative; width: 4.5rem; aspect-ratio: 16 / 9; border-radius: var(--r-sm); overflow: hidden; }

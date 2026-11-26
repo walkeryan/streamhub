@@ -105,6 +105,13 @@ def iter_file(
                     title=_text(el, "title") or "",
                     description=_text(el, "desc"),
                     category=_text(el, "category"),
+                    broadcast_kind=(
+                        "replay"
+                        if el.find("previously-shown") is not None
+                        else "live"
+                        if el.find("live") is not None
+                        else None
+                    ),
                     age_evidence=xmltv_age_evidence(
                         [(rating.get("system"), _text(rating, "value") or "") for rating in el.findall("rating")]
                     ),

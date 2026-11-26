@@ -79,12 +79,14 @@ internal data class SettingsModel(
     val watchTogether: Boolean = false,
     val canRetry: Boolean = false,
     val recording: Boolean = false,
+    val canSaveScene: Boolean = false,
 )
 
 internal class SettingsActions(
     val onToggleRoomLock: () -> Unit = {},
     val onInvite: () -> Unit = {},
     val onLeaveRoom: () -> Unit = {},
+    val onRoomControls: () -> Unit = {},
     val onRewind: () -> Unit = {},
     val onGoLive: () -> Unit = {},
     /** An audio track was chosen; [opener] is its row, for focus to come back to after a confirmation. */
@@ -98,6 +100,7 @@ internal class SettingsActions(
     val onWatchTogether: () -> Unit = {},
     val onStreamInfo: () -> Unit = {},
     val onReport: () -> Unit = {},
+    val onSaveScene: () -> Unit = {},
     val onRetry: () -> Unit = {},
     val onClose: () -> Unit = {},
 )
@@ -151,6 +154,7 @@ internal fun SettingsDrawer(
                         color = g.muted, fontSize = 15.sp, lineHeight = 21.sp, maxLines = 2,
                     )
                 }
+                GlassRow("Room queue and host", a.onRoomControls, row, icon = GlassIcons.People)
                 if (m.roomHost) {
                     GlassRow(
                         if (m.roomLocked) "Let everyone control playback" else "Only I control playback", a.onToggleRoomLock,
@@ -215,6 +219,7 @@ internal fun SettingsDrawer(
             // A room for whatever is playing, with this TV as its host (the web player's "Watch together").
             if (m.watchTogether) GlassRow("Watch together", a.onWatchTogether, row, icon = GlassIcons.People)
             // What is playing and how it gets here: the server's facts and the player's own numbers.
+            if (m.canSaveScene) GlassRow("Save a scene", a.onSaveScene, row, icon = GlassIcons.Info)
             if (m.recording) GlassRow("Report a recording issue", a.onReport, row, icon = GlassIcons.Info)
             GlassRow("Stream info", a.onStreamInfo, row.focusRequester(streamInfoOpener), icon = GlassIcons.Info)
             GlassRow("Controls and shortcuts", { shortcutsOpen = true }, row.focusRequester(shortcutsOpener), icon = GlassIcons.Info)
@@ -262,4 +267,72 @@ private fun Note(text: String, color: Color = glass.muted) {
 @Composable
 private fun Divider() {
     Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 12.dp).height(1.dp).background(glass.line))
+}
+
+@Composable
+internal fun RoomQueueDialog(vm: PlayerViewModel, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var controls by remember { mutableStateOf<com.streamhub.tv.core.data.model.RoomControls?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
+    var titles by remember { mutableStateOf<List<com.streamhub.tv.core.data.model.Tile>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    fun change(action: String, id: String = "") {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { controls = vm.roomControls(action, id); error = null }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { error = e.message ?: "Could not update the room." }
+            finally { busy = false }
+        }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            try { if (!busy) controls = vm.roomControls() }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { error = "Could not reach the room." }
+            kotlinx.coroutines.delay(3500)
+        }
+    }
+    LaunchedEffect(query) {
+        titles = emptyList()
+        if (query.trim().length >= 2) {
+            kotlinx.coroutines.delay(300)
+            try { titles = vm.roomSuggestions(query.trim()) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { error = "Search is unavailable." }
+        }
+    }
+    Dialog(onDismissRequest = onClose) {
+        GlassPanel(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            DialogTitle("Room queue and host")
+            DialogText("Find a title to suggest")
+            androidx.compose.foundation.text.BasicTextField(value = query, onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.DarkGray).padding(12.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(color = androidx.compose.ui.graphics.Color.White), singleLine = true)
+            titles.forEach { ShButton("Suggest " + it.title, { change("suggest", it.id) }) }
+            error?.let { DialogText(it) }
+            controls?.let { state ->
+                if (state.queue.isEmpty()) DialogText("The queue is empty.")
+                state.queue.forEach { item ->
+                    DialogText(item.title)
+                    if (state.isHost) {
+                        ShButton("Play for everyone", { change("advance", item.id) })
+                        ShButton("Remove", { change("remove", item.id) })
+                    }
+                }
+                if (state.isHost) state.members.filterNot { it.host }.forEach { other ->
+                    ShButton(if (state.offeredTo == other.id) "Waiting for " + other.name else "Offer host to " + other.name,
+                        { change("offer", other.id) })
+                }
+                if (state.offeredTo == state.memberId) {
+                    DialogText("Take over as host?")
+                    ShButton("Accept", { change("accept") })
+                    ShButton("Decline", { change("decline") })
+                }
+            }
+            ShButton("Done", onClose)
+        }
+    }
 }

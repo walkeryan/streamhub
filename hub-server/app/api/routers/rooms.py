@@ -14,7 +14,7 @@ from app.services import ids, room_policy
 from app.services.adult import require_adult
 from app.services.auth import Principal
 from app.services.context import is_https
-from app.services.errors import Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
+from app.services.errors import Conflict, Forbidden, NotFound, PermissionDenied, ServiceError, Unauthorized
 from app.services.room_hub import CLOSE_NOT_FOUND, CLOSE_UNAUTHORIZED, LEAVE_CODES, Connection, RoomHub
 from app.services.rooms import MAX_MEMBERS, Member, Room
 
@@ -146,13 +146,21 @@ async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
     room = _room(c, code)
     if not room_policy.can_join(p):
         raise PermissionDenied(["rooms.join"])
+    revision = room.title_revision
+    room.require_revision(revision)
     await _require_rated(c, p, room.ref)
     # A caller who presents the token of a seat they hold keeps it; anything else is a new seat.
     seat = _seat(c, room, body.member_token, p) if body.member_token else None
+    if body.expected_id is not None and body.expected_id != room.ref:
+        raise Conflict("The room changed titles. Check the new title before joining.")
+    consent = body.allow_unverified_audio and (
+        seat is None or revision == 0 or body.expected_id == room.ref or seat.consented_ref == room.ref
+    )
     if seat is None:
         room.require_space()
     # The member token outlives this request, so it is only minted for a session that is valid now.
     profile = await c.auth.session_valid(p.profile_id, p.token_version, p.session_id)
+    room.require_revision(revision)
     descriptor = await c.room_playback.descriptor_for(
         room,
         p,
@@ -160,25 +168,52 @@ async def join_room(code: str, body: S.RoomJoin, c: C, p: P) -> dict[str, Any]:
         now_ms=c.rooms.clock(),
         prefer_hls=body.prefer_hls,
         recovery_generation=body.recovery_generation,
-        allow_unverified_audio=body.allow_unverified_audio,
+        allow_unverified_audio=consent,
         https_site=is_https.get(),
         member_id=seat.id if seat is not None else None,
     )
     if room.closed:  # closed while the title was being resolved
         raise NotFound("This room no longer exists.", code="room_not_found")
+    room.require_revision(revision)
     if seat is not None and seat.id in room.members:
         member = seat
         room.touch(member, c.rooms.clock())
     else:
         member = c.rooms.join(room, p.profile_id, profile.name)
+    member.session_id = p.session_id
+    member.token_version = p.token_version
+    member.consented_ref = room.ref if consent else None
+    await attach_progress_session(c, room, revision, member, descriptor)
+    room.require_revision(revision)
     c.room_playback.seated(room, member.id, descriptor)
     return {
+        "title_revision": revision,
         "member_token": c.rooms.tokens.issue(room.code, member.id, p),
         "member_id": member.id,
         "expires_in_seconds": c.rooms.tokens.ttl_s,
         "ws_path": f"{API_PREFIX}/rooms/{room.code}/ws",
         "descriptor": descriptor,
     }
+
+
+async def attach_progress_session(c: C, room: Room, revision: int, member: Member, descriptor: dict[str, Any]) -> None:
+    variant, edition = descriptor.get("variant_id"), descriptor.get("edition_id")
+    if not variant or not edition:
+        return
+    # Refreshing a room descriptor must not steal progress ownership from a newer independent player.
+    async with member.progress_lock:
+        room.require_revision(revision)
+        key = (revision, variant, edition)
+        if member.progress_key != key:
+            h = ids.parse(variant)
+            row = await c.catalog.title_row(h.a, h.b)
+            if not row:
+                raise NotFound("The room edition is unavailable.")
+            member.progress_session = await c.progress.start_edition(
+                member.profile_id, c.catalog.item_hub_id(row), edition, variant
+            )
+            member.progress_key = key
+        descriptor["progress_session_id"] = member.progress_session
 
 
 def _seat(c: Container, room: Room, member_token: str, p: Principal) -> Member | None:
@@ -216,8 +251,11 @@ async def room_descriptor(
         raise NotFound("This seat is no longer in the room; join again.", code="not_a_member")
     if not room_policy.can_join(p):
         raise PermissionDenied(["rooms.join"])
+    revision = room.title_revision
+    room.require_revision(revision)
     async with acting_as(c, p):
         await _require_rated(c, p, room.ref)
+        room.require_revision(revision)
         descriptor = await c.room_playback.descriptor_for(
             room,
             p,
@@ -225,13 +263,17 @@ async def room_descriptor(
             now_ms=c.rooms.clock(),
             prefer_hls=prefer_hls,
             recovery_generation=recovery_generation,
-            allow_unverified_audio=allow_unverified_audio,
+            allow_unverified_audio=allow_unverified_audio
+            and (room.title_revision == 0 or member.consented_ref == room.ref),
             https_site=is_https.get(),
             member_id=member.id,
         )
     if room.closed or member.id not in room.members:  # ended while the title was being resolved
         raise NotFound("This room no longer exists.", code="room_not_found")
+    room.require_revision(revision)
     room.touch(member, c.rooms.clock())
+    await attach_progress_session(c, room, revision, member, descriptor)
+    room.require_revision(revision)
     c.room_playback.seated(room, member.id, descriptor)
     return descriptor
 

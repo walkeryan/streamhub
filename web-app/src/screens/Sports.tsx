@@ -1,12 +1,13 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 import { useProfilePreference } from '../api/profilePreferences'
 import { api, unwrap } from '../api/client'
-import { useCreateRecordingRule, useDeleteRecording, useRecordings, useScheduleRecording } from '../api/hooks'
+import { useCreateRecordingRule, useDeleteRecording, useRecordings } from '../api/hooks'
 import { useCan } from '../api/me'
 import type { components } from '../api/schema'
 import type { Recording } from '../api/types'
+import { DvrSchedule } from '../recordings/DvrPlan'
 import { LiveAlternatives } from '../player/LiveAlternatives'
 import { Button, Chip, ErrorState, GlassIconButton, HRow, Icon, Modal, PageHeader, SectionHeader, SkeletonRow } from '../ds'
 import { LogoBlock } from '../components/ui'
@@ -85,6 +86,7 @@ function SportsScreen() {
   const [page, setPage] = useHistoryState('sports:page', 0)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [picker, setPicker] = useState<Event | null>(null)
+  const opener = useRef<string | null>(null)
   const [sheet, setSheet] = useState<Event | null>(null)
   const [interacted, setInteracted] = useState(false)
   useEffect(() => {
@@ -124,7 +126,7 @@ function SportsScreen() {
     queryKey: ['sports', profile?.id, 'live-row', `${profile?.id}|${languages}|${date}`],
     enabled: saved.ready && !!profile && rowsView && date === today,
     queryFn: ({ signal }) => unwrap<EventsPage>(api.GET('/sports/events', { signal, params: { query: {
-      date, timezone: ZONE, days: 1, status: 'current', language: languages, limit: ROW, offset: 0,
+      date, timezone: ZONE, days: 1, status: 'live', language: languages, limit: ROW, offset: 0,
     } } })),
     staleTime: 15_000, refetchInterval: 30_000,
   })
@@ -141,16 +143,19 @@ function SportsScreen() {
   const recordable = !!recordings.data?.enabled && recordings.data.can_schedule !== false
   const data = q.data
   const events = data?.events ?? []
-  const live = date === today ? events.filter((event) => isLive(event, now)) : []
+  const onAir = date === today ? events.filter((event) => isLive(event, now)) : []
+  const confirmed = (event: Event) => !!event.live_evidence && !event.replay && isLive(event, now)
+  const live = onAir.filter(confirmed)
+  const unconfirmed = onAir.filter(event => !confirmed(event))
   // Until its own answer comes, Live now shows what the day's page already knows to be live.
-  const liveTiles = liveRow.data ? liveRow.data.events.filter((event) => isLive(event, now)) : live
+  const liveTiles = liveRow.data ? liveRow.data.events.filter(confirmed) : live
   // Another day's page still overlaps a late game of the evening before; that game belongs to its own day.
   const ahead = events.filter((event) => isAhead(event, now) && dayOf(event.start) >= date)
   const gameChannels = date === today ? events.filter((event) => event.kind === 'channel') : []
   const days = [...new Set(ahead.map((event) => dayOf(event.start)))].sort()
-  const first = (rowsView ? liveTiles[0] : live[0]) ?? ahead[0] ?? gameChannels[0]
+  const first = (rowsView ? liveTiles[0] : live[0]) ?? unconfirmed[0] ?? ahead[0] ?? gameChannels[0]
   // Where focus goes when nothing else claims it: the first game, or the sport chips.
-  const fallback = first ? cardKey(first) : 'sports:sport:all'
+  const fallback = first && first === unconfirmed[0] ? `${cardKey(first)}:airing` : first ? cardKey(first) : 'sports:sport:all'
   useEffect(() => {
     if (!saved.ready || data || interacted) return
     const frame = requestAnimationFrame(() => setFocus('sports:sport:all'))
@@ -162,7 +167,7 @@ function SportsScreen() {
   const watch = async (channelId: string, from?: Event) => {
     // Back from the player returns to the game that was chosen, not to a row of a closed picker.
     // Navigation remembers the focused key, and a focus change is queued: wait for it.
-    if (from) { setPicker(null); await setFocus(cardKey(from)) }
+    if (from) { setPicker(null); await setFocus(opener.current && doesFocusableExist(opener.current) ? opener.current : cardKey(from)) }
     go(`/play/${encodeURIComponent(channelId)}`)
   }
   // A game that ends while its channels are being chosen is no longer offered.
@@ -179,6 +184,7 @@ function SportsScreen() {
     return () => window.clearTimeout(id)
   })
   const open = (event: Event) => {
+    opener.current = getCurrentFocusKey() ?? null
     if (isAhead(event, Date.now())) setSheet(event)
     else if (event.feeds.length === 1) void watch(event.feeds[0]!.channel_id)
     else if (event.feeds.length > 1) setPicker(event)
@@ -221,8 +227,14 @@ function SportsScreen() {
           <SectionHeader title="Live now" />
           {liveTiles.length ? <HRow focusKey="sports:live" className="sports-tiles" label="Live games">
             {liveTiles.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} />)}
-          </HRow> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
+          </HRow> : <p className="sports-quiet" role="status">No confirmed live games right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
         </section>}
+        {unconfirmed.length > 0 && <section className="sports-section" aria-label="Also on now" data-testid="sports-also-on">
+        <SectionHeader title="Also on now" />
+        <HRow focusKey="sports:airing" className="sports-tiles" label="Also on now">
+          {unconfirmed.map(event => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} row="airing" />)}
+        </HRow>
+      </section>}
         {rowSports.map((name, i) => {
           const row = rows[i]?.data
           const games = (row?.events ?? []).filter((event) => (date === today && isLive(event, now)) || (isAhead(event, now) && dayOf(event.start) >= date)).sort(rowOrder(now))
@@ -246,9 +258,9 @@ function SportsScreen() {
       </> : <>
       {date === today && <section className="sports-section" aria-label="Live now" data-testid="sports-live">
         <SectionHeader title="Live now" />
-        {live.length ? <FocusGroup focusKey="sports:live" className={cn('sports-grid', live.some((event) => event.matchup) && 'sports-grid-wide')} label="Live games">
+        {live.length ? <FocusGroup focusKey="sports:live" className="sports-grid sports-event-grid" label="Live games">
           {live.map((event) => {
-            const badge = <span className={event.live_evidence ? 'badge ds-pill-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
+            const badge = <span className={event.live_evidence && !event.replay ? 'badge ds-pill-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
             const where = event.feeds.length === 1 ? `on ${event.feeds[0]!.channel_name}` : `${event.feeds.length} channels`
             const state = event.replay ? 'replay' : event.live_evidence ? 'live' : 'on now'
             // A football game with both sides known is a matchup card; the remote moves over it like any other card.
@@ -269,7 +281,13 @@ function SportsScreen() {
                 <span className="label">Started {fmtTime(event.start)}</span>
               </Focusable>
           })}
-        </FocusGroup> : <p className="sports-quiet" role="status">No games are live right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
+        </FocusGroup> : <p className="sports-quiet" role="status">No confirmed live games right now.{ahead[0] ? ` Next: ${ahead[0].title} ${dayOf(ahead[0].start) === today ? '' : `${dayLabel(dayOf(ahead[0].start), today).toLowerCase()} `}at ${fmtTime(ahead[0].start)}.` : ''}</p>}
+      </section>}
+      {unconfirmed.length > 0 && <section className="sports-section" aria-label="Also on now" data-testid="sports-also-on">
+        <SectionHeader title="Also on now" />
+        <HRow focusKey="sports:airing" className="sports-tiles" label="Also on now">
+          {unconfirmed.map(event => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} row="airing" />)}
+        </HRow>
       </section>}
       <section className="sports-section" aria-label="Coming up" data-testid="sports-upcoming">
         <SectionHeader title="Coming up" />
@@ -360,7 +378,7 @@ function GameTile({ event, now, today, recordings, onOpen, row }: { event: Event
   const quality = event.feeds.find((feed) => feed.quality)?.quality
   const badge: ReactNode = <span className="sports-tile-badges">
     {on
-      ? <span className={event.live_evidence ? 'badge ds-pill-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
+      ? <span className={event.live_evidence && !event.replay ? 'badge ds-pill-live' : 'badge'}>{event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now'}</span>
       : <span className="badge sports-when">{day}</span>}
     {quality && <span className="badge sports-when">{quality}</span>}
     <RecordingBadge state={recordingFor(recordings, event)?.state} short />
@@ -371,7 +389,7 @@ function GameTile({ event, now, today, recordings, onOpen, row }: { event: Event
     ? `Watch ${event.matchup ? matchupSpeech(event, event.matchup) : event.title}, ${event.sport}, ${event.replay ? 'replay' : event.live_evidence ? 'live' : 'on now'}, ${where}`
     : `${event.matchup ? matchupTitle(event.matchup) : event.title}, ${event.sport}, ${day} at ${fmtTime(event.start)}, ${where}`
   return <Focusable focusKey={row ? `${cardKey(event)}:${row}` : cardKey(event)} className={cn('sports-tile fx-flat', event.matchup ? 'sports-matchup' : 'sports-tile-plain')} data-testid="sports-listing"
-    data={{ kind: on ? 'live' : 'upcoming', matchup: !!event.matchup }} label={label} onEnter={() => onOpen(event)}
+    data={{ kind: on ? event.replay ? 'replay' : event.live_evidence ? 'live' : 'current' : 'upcoming', matchup: !!event.matchup }} label={label} onEnter={() => onOpen(event)}
     style={event.matchup ? undefined : { '--sport-hue': hueOf(event.sport) } as CSSProperties}>
     {event.matchup ? <MatchupCard event={event} matchup={event.matchup} badge={badge} channel={channel} /> : <>
       <span className="matchup-top">{badge}<span className="matchup-channel truncate">{channel}</span></span>
@@ -386,7 +404,6 @@ function EventSheet({ event, today, now, recordable, recordings, onClose, onWatc
   event: Event; today: string; now: number; recordable: boolean; recordings: Recording[] | undefined; onClose: () => void; onWatch: () => void
 }) {
   const toast = useUi((s) => s.toast)
-  const schedule = useScheduleRecording()
   const cancel = useDeleteRecording()
   const createRule = useCreateRecordingRule()
   const [error, setError] = useState<string | null>(null)
@@ -394,16 +411,11 @@ function EventSheet({ event, today, now, recordable, recordings, onClose, onWatc
   const existing = recordingFor(recordings, event)
   const active = existing?.state === 'scheduled' || existing?.state === 'recording'
   const started = isLive(event, now)
-  const busy = schedule.isPending || cancel.isPending || createRule.isPending
+  const busy = cancel.isPending || createRule.isPending
   // Sides in the order the title names them.
   const sides = [event.away, event.home].filter((side): side is string => !!side).sort((a, b) => event.title.indexOf(a) - event.title.indexOf(b))
   const done = (text: string) => { toast(text, 'success'); onClose() }
   const failed = (e: Error) => setError(e.message)
-  const one = () => {
-    if (busy || !feed) return
-    setError(null)
-    schedule.mutate({ programme_id: feed.programme_id, channel_id: feed.channel_id, start: event.start }, { onSuccess: (r) => done(r.state === 'recording' ? `Recording ${r.title} now.` : `${r.title} will be recorded at ${fmtTime(r.starts_at)}.`), onError: failed })
-  }
   const stop = () => {
     if (busy || !existing) return
     setError(null)
@@ -417,17 +429,18 @@ function EventSheet({ event, today, now, recordable, recordings, onClose, onWatc
   const first = started ? 'sports:sheet:watch' : !recordable || !feed ? 'sports:sheet:close' : active ? 'sports:sheet:cancel' : 'sports:sheet:record'
   return <Modal open onClose={onClose} title={event.title} firstFocusKey={first} variant="sheet" testId="sports-sheet">
     {event.matchup && <span className="sports-sheet-card sports-matchup" data-testid="sports-sheet-card">
-      <MatchupCard event={event} matchup={event.matchup} badge={<span className="badge">{started ? 'On now' : dayLabel(dayOf(event.start), today)}</span>} channel={channelLine(event.feeds)} />
+      <MatchupCard event={event} matchup={event.matchup} badge={<span className="badge">{started ? event.replay ? 'Replay' : event.live_evidence ? 'LIVE' : 'On now' : dayLabel(dayOf(event.start), today)}</span>} channel={channelLine(event.feeds)} />
     </span>}
     <p className="sports-sheet-when">{started ? `Started ${fmtTime(event.start)}` : `${dayLabel(dayOf(event.start), today)} · ${fmtTime(event.start)}`}<RecordingBadge state={existing?.state} /></p>
     <p className="ds-meta sports-sheet-meta"><span className="truncate">{event.sport} · {channelLine(event.feeds)}</span></p>
     {error && <p role="alert" data-testid="sports-sheet-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
     <FocusGroup focusKey="sports:sheet" className="flex flex-col gap-2">
-      {started && <Button focusKey="sports:sheet:watch" className="fx-flat" primary icon="play" onEnter={onWatch}>Join live</Button>}
+      {started && <Button focusKey="sports:sheet:watch" className="fx-flat" primary icon="play" onEnter={onWatch}>{event.live_evidence && !event.replay ? 'Join live' : event.replay ? 'Watch replay' : 'Watch channel'}</Button>}
       {started && event.feeds.length === 1 && event.kind !== 'channel' && <LiveAlternatives channel={event.feeds[0]!.channel_id} start={event.start} scope="sports:entry" onClose={onClose} />}
       {recordable && feed && (active
         ? <Button focusKey="sports:sheet:cancel" className="fx-flat" danger icon="x" disabled={busy} onEnter={stop} testId="sports-record-cancel">{existing?.state === 'recording' ? 'Stop recording' : 'Do not record this game'}</Button>
-        : <Button focusKey="sports:sheet:record" className="fx-flat" primary={!started} icon="record" disabled={busy} onEnter={one} testId="sports-record">Record this game</Button>)}
+        : <DvrSchedule target={{ programme_id: feed.programme_id, channel_id: feed.channel_id, start: event.start }} focusKey="sports:sheet:record" primary={!started} disabled={busy} testId="sports-record" label="Record this game"
+            onSuccess={r => done(r.state === 'recording' ? `Recording ${r.title} now.` : `${r.title} will be recorded at ${fmtTime(r.starts_at)}.`)} onError={failed} />)}
       {recordable && sides.map((team, i) => <Button key={team} focusKey={`sports:sheet:team:${i}`} className="fx-flat" disabled={busy} label={`Record every game for ${team}`} onEnter={() => everyGame(team)} testId="sports-record-team">
         <span className="truncate">Record every {team} game</span>
       </Button>)}

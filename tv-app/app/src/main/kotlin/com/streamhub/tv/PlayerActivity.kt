@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import com.streamhub.tv.core.data.auth.SessionStore
 import com.streamhub.tv.core.data.auth.ShellEntry
 import com.streamhub.tv.core.data.auth.shellEntry
+import com.streamhub.tv.core.data.repo.PlaybackCoordinator
 import com.streamhub.tv.core.ui.theme.StreamHubTheme
 import com.streamhub.tv.core.ui.theme.ThemeRepository
 import com.streamhub.tv.feature.player.MiniPlayerCommand
@@ -27,6 +28,7 @@ import com.streamhub.tv.feature.player.PlayerScreen
 import com.streamhub.tv.feature.player.PlayerViewModel
 import com.streamhub.tv.feature.player.miniPlayerInfo
 import com.streamhub.tv.shell.NativePlayer
+import com.streamhub.tv.shell.CastReceiver
 import com.streamhub.tv.shell.PlayerLink
 import com.streamhub.tv.shell.PxRect
 import com.streamhub.tv.shell.pipAspect
@@ -63,6 +65,7 @@ import javax.inject.Inject
 class PlayerActivity : ComponentActivity() {
     @Inject lateinit var themes: ThemeRepository
     @Inject lateinit var sessions: SessionStore
+    @Inject lateinit var coordinator: PlaybackCoordinator
 
     private val vm: PlayerViewModel by viewModels()
     private val pip = MutableStateFlow(false)
@@ -75,8 +78,26 @@ class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // PlayerViewModel reads the key from its SavedStateHandle, which an activity fills from its extras.
-        if (intent.getStringExtra(EXTRA_KEY) == null) { finish(); return }
+        val key = intent.getStringExtra(EXTRA_KEY) ?: run { finish(); return }
+        CastReceiver.attach(coordinator.requestFor(key)?.id)
         PlayerLink.attach(this)
+        PlayerLink.registerCast(this) { command ->
+            val shown = CastReceiver.info
+            if (shown == null || command.id != shown.id || vm.state.value.room != null) false
+            else {
+                vm.userInteracted()
+                when (command.action) {
+                    "play" -> vm.resumePlayback()
+                    "pause" -> vm.pausePlayback()
+                    "seek" -> if (!shown.live && shown.durationMs != null)
+                        vm.scrubBy(command.position!!.coerceAtMost(shown.durationMs!!) - shown.positionMs)
+                        else return@registerCast false
+                    "stop" -> close()
+                    else -> return@registerCast false
+                }
+                true
+            }
+        }
         setContent {
             val selected by themes.selectedThemeId.collectAsStateWithLifecycle(ThemeRepository.DEFAULT_THEME)
             val inPip by pip.collectAsStateWithLifecycle()
@@ -90,7 +111,9 @@ class PlayerActivity : ComponentActivity() {
         // How this player is shown, for the shell: about once a second (positions are whole seconds) and on every change.
         lifecycleScope.launch {
             combine(vm.state, vm.player.state, pip, pipBounds) { s, ps, mini, bounds ->
-                if (mini) NativePlayer.Mini(miniPlayerInfo(s, ps, vm.player.wantsToPlay), bounds) else NativePlayer.FullScreen
+                val info = miniPlayerInfo(s, ps, vm.player.wantsToPlay)
+                if (PlayerLink.owns(this@PlayerActivity)) CastReceiver.info = info?.copy(playing = ps.isPlaying)
+                if (mini) NativePlayer.Mini(info, bounds) else NativePlayer.FullScreen
             }.distinctUntilChanged().collect { PlayerLink.publish(this@PlayerActivity, it) }
         }
         // The window's shape follows the picture: a new video size (another title, another stream) updates it.
@@ -205,6 +228,11 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /** Stops playback and leaves; a player in a task of its own takes that task with it. */
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        CastReceiver.interactionAt = System.currentTimeMillis()
+    }
+
     private fun close() {
         if (isFinishing) return
         if (isTaskRoot) finishAndRemoveTask() else finish()

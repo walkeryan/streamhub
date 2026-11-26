@@ -13,6 +13,7 @@ import type { RoomSnapshot } from './RoomSocket.ts'
 import { decide, liveSkip, LIVE_LAG_MS, positionAt, streamRestarted } from './roomSync.ts'
 import { bufferedAhead, LIVE_CUSHION_S } from '../player/liveCushion.ts'
 import type { RoomSession } from './session'
+import { RoomControls } from './RoomControls'
 import { ShareSheet } from './ShareSheet'
 
 /** What the room needs of the player it steers. */
@@ -69,7 +70,18 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
   const [ending, setEnding] = useState<null | 'ask' | 'busy'>(null)
   const link = useRef(player)
   link.current = player
-  const isHost = !!room?.room.is_host
+  const [tools, setTools] = useState(false)
+  const isHost = snapshot.members.find(m => m.id === room?.memberId)?.host ?? !!room?.room.is_host
+  const seenRevision = useRef(room?.titleRevision)
+  useEffect(() => {
+    if (!room || !snapshot.state) return
+    const rev = snapshot.state.title_revision ?? 0
+    if (seenRevision.current !== undefined && seenRevision.current !== rev) {
+      link.current.pause()
+      onRejoin?.()
+    }
+    seenRevision.current = rev
+  }, [room, snapshot.state, onRejoin])
 
   // One line of explanation at a time, however often a locked control is pressed.
   const lastNotice = useRef(0)
@@ -186,7 +198,7 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
     const now = room.socket.snapshot
     if (now.closed) return false
     if (now.status !== 'open') { notice('Reconnecting to the room…'); return false }
-    if (now.controlsLocked && !room.room.is_host) { notice('Only the host can control playback in this room.'); return false }
+    if (now.controlsLocked && !(now.members.find(m => m.id === room.memberId)?.host ?? room.room.is_host)) { notice('Only the host can control playback in this room.'); return false }
     return true
   }, [room, notice])
   const toggle = useCallback(() => {
@@ -266,11 +278,13 @@ export function useRoomPlayer(room: RoomSession | undefined, videoRef: RefObject
   const named = (text: string) => (phone ? { iconOnly: true, label: text, title: text } : { children: text })
   const bar: ReactNode = <>
     {isHost && <Button focusKey="pb:lock" ghost icon="lock" pressed={snapshot.controlsLocked} onEnter={() => { if (!room.socket.lock(!snapshot.controlsLocked)) notice('Reconnecting to the room…') }} testId="room-lock" {...named('Only I can control')} />}
+    <Button focusKey="pb:queue" ghost icon="people" onEnter={() => setTools(true)} {...named('Room queue and host')} />
     <Button focusKey="pb:invite" ghost icon="people" onEnter={() => setSharing(true)} testId="room-invite" {...named('Invite')} />
     <Button focusKey="pb:leave" ghost icon="exit" onEnter={() => setLeaving(true)} testId="room-leave" {...named('Leave room')} />
   </>
   const ended = closed ? CLOSED[closed] ?? { text: 'The room has closed.' } : null
   const layers: ReactNode = <>
+    {tools && <RoomControls code={room.code} onClose={() => setTools(false)} />}
     {snapshot.waiting && !closed && (
       <div className="room-waiting" role="status" aria-live="polite" data-testid="room-waiting">
         <i aria-hidden="true" />Waiting for {snapshot.waiting}…

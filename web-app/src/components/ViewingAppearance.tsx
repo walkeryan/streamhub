@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useHome } from '../api/hooks'
-import { artSizes, captionBackgrounds, captionColors, captionSizes, useArtSize, useCaptions } from '../api/viewingPreferences'
+import { readingSizes, useReadingSize, artSizes, captionBackgrounds, captionColors, captionSizes, useArtSize, useCaptions } from '../api/viewingPreferences'
 import { GlassPanel, SectionHeader } from '../ds'
 import { Focusable, FocusGroup } from '../nav/Focusable'
 import { Button } from './ui'
@@ -19,6 +19,7 @@ function Choices<T extends string>({ label, items, value, change, disabled }: {
 }
 
 export function ViewingAppearance() {
+  const reading = useReadingSize()
   const art = useArtSize()
   const captions = useCaptions()
   const [draft, setDraft] = useState<typeof captions.value | null>(null)
@@ -36,6 +37,12 @@ export function ViewingAppearance() {
     if (track) track.mode = 'showing'
   }, [])
   return <>
+    <GlassPanel as="section" className="acct-group">
+      <SectionHeader title="Reading size" />
+      <Choices label="Text size" items={readingSizes} value={reading.value} disabled={!reading.ready} change={reading.update} />
+      <p className="reading-sample">Preview programme descriptions, navigation labels and viewing details at this size.</p>
+      {reading.error && <p role="alert">{reading.error} <Button onEnter={() => void reading.retry()}>Retry</Button></p>}
+    </GlassPanel>
     <GlassPanel as="section" className="acct-group">
       <SectionHeader title="Box art" />
       <Choices label="Box art size" items={artSizes} value={art.value} disabled={!art.ready} change={art.update} />

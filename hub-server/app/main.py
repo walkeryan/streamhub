@@ -17,15 +17,19 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.deps import playback_watch_gate
 from app.api.routers import (
     auth,
+    cast,
     catalog,
+    discovery,
     owner_pin,
     playback,
     recordings,
     requests,
+    room_tools,
     rooms,
     sources,
     system,
     users,
+    viewing,
 )
 from app.container import Container, build_container, shutdown, startup
 from app.infra.logging import configure_logging
@@ -181,11 +185,15 @@ def create_app(
         owner_pin.router,
         sources.router,
         catalog.router,
+        discovery.router,
+        cast.router,
         system.router,
         requests.router,
         users.router,
         rooms.router,
+        room_tools.router,
         recordings.router,
+        viewing.router,
     ):
         app.include_router(r, prefix=API_PREFIX)
     # The resolver knows nothing of permissions: what a caller may play is settled before it runs.

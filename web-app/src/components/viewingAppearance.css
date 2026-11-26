@@ -19,3 +19,20 @@
 .caption-preview[data-caption-size=small] video::cue { font-size: 3cqw; }
 .caption-preview[data-caption-size=standard] video::cue { font-size: 4.5cqw; }
 .caption-preview[data-caption-size=large] video::cue { font-size: 6cqw; }
+:root[data-reading-size=large] { --reading-scale: 1.25; }
+:root[data-reading-size=largest] { --reading-scale: 1.55; }
+:root:is([data-reading-size=large], [data-reading-size=largest]) {
+  --fs-body: calc(1rem * var(--reading-scale)); --fs-meta: calc(.875rem * var(--reading-scale));
+  --fs-small: calc(.8125rem * var(--reading-scale)); --fs-micro: calc(.75rem * var(--reading-scale));
+  --text-body: var(--fs-body); --text-label: var(--fs-meta); --text-caption: var(--fs-small);
+}
+[data-reading-size]:not([data-reading-size=standard]) :is(.rail .lbl, .chip, .btn, .appearance-field, .reading-sample, .acct-note) { font-size: var(--fs-meta); }
+.reading-sample { font-size: var(--fs-body); }
+@media (max-width: 720px) {
+  .acct-body, .acct-group, .glass-panel, .lib-page > [role=tabpanel] { min-width: 0; max-width: 100%; }
+  .appearance-field, .acct-actions, .tp-actions, .recent-undo { flex-wrap: wrap; }
+  .appearance-options, .appearance-poster-preview, .caption-preview, .chip-scroll, .search-page-field, .lib-search { max-width: 100%; min-width: 0; }
+  .acct-group, .lib-page > [role=tabpanel] { overflow-wrap: anywhere; }
+  .search-page-field .search-mobile-input input { min-width: 0; }
+  [data-reading-size=largest] .rail .lbl { font-size: .95rem; }
+}

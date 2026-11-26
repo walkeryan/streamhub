@@ -84,6 +84,19 @@ data class RoomJoined(
     /** /api/v1/rooms/<code>/ws */
     @SerialName("ws_path") val wsPath: String,
     val descriptor: PlaybackDescriptor,
+    @SerialName("title_revision") val titleRevision: Long = 0,
 ) {
     override fun toString(): String = "RoomJoined(memberToken=[REDACTED], memberId=$memberId, wsPath=$wsPath, descriptor=${descriptor.id})"
 }
+
+@Serializable
+data class RoomQueueItem(val id: String, val title: String)
+
+@Serializable
+data class RoomControls(
+    val queue: List<RoomQueueItem> = emptyList(),
+    val members: List<RoomMember> = emptyList(),
+    @SerialName("member_id") val memberId: String,
+    @SerialName("is_host") val isHost: Boolean,
+    @SerialName("offered_to") val offeredTo: String? = null,
+)

@@ -298,6 +298,7 @@ class PlexSource:
             added_at=datetime.fromtimestamp(int(added), UTC) if added else None,
             extra={
                 **audio_extra,
+                "edition_title": m.get("editionTitle"),
                 "part_key": part_key,
                 "part_available": part_available,
                 "originally_available_at": original_date,
