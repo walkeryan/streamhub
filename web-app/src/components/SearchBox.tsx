@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { flushSync } from 'react-dom'
 import { useLocation } from 'react-router'
 import { useTextEntry } from '../nav/textEntry'
 import { useFocusable } from '@noriginmedia/norigin-spatial-navigation-react'
@@ -32,11 +33,17 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
   const canVoice = inlineVoice()
   const listening = voice.status === 'listening'
   const key = page ? SEARCH_BOX.page : SEARCH_BOX.bar
-  const typeQuery = () => { voice.stop(); entry.start() }
+  const voiceAttempted = useRef(false)
+  const typeQuery = () => {
+    voiceAttempted.current = true
+    if (voice.status === 'listening') flushSync(() => voice.stop())
+    if (input.current?.readOnly || document.activeElement !== input.current) entry.start()
+  }
   const activate = () => {
     if (!box.onSearch) box.submit()
-    if (canVoice && !entry.editing) {
-      if (!entry.shell) input.current?.focus({ preventScroll: true })
+    if (canVoice && !voiceAttempted.current && !listening && !entry.editing) {
+      voiceAttempted.current = true
+      input.current?.focus({ preventScroll: true })
       voice.start()
     } else typeQuery()
   }
@@ -44,14 +51,17 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
     focusKey: key,
     onEnterPress: activate,
     onFocus: (_layout, _props, details) => {
-      if (!entry.shell && !(details?.event instanceof window.KeyboardEvent && details.event.key.startsWith('Arrow'))) input.current?.focus({ preventScroll: true })
+      if (entry.shell || !(details?.event instanceof window.KeyboardEvent && details.event.key.startsWith('Arrow'))) input.current?.focus({ preventScroll: true })
     },
     onBlur: entry.stop,
   })
   useSlashToSearch(() => { void setFocus(key); typeQuery() })
   useBackHandler(() => { if (listening) voice.stop(); else box.clear(); return true }, listening || (focused && !!box.text))
   useEffect(() => {
-    if (!box.onSearch) useVoice.getState().stop()
+    if (!box.onSearch) {
+      voiceAttempted.current = false
+      useVoice.getState().stop()
+    }
   }, [box.onSearch, location.pathname])
   const profileId = useSession(s => s.profile?.id)
   useEffect(() => () => useVoice.getState().stop(), [profileId])
@@ -74,11 +84,20 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
   const clear = () => { voice.stop(); box.clear(); void setFocus(key) }
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     const el = e.currentTarget
+    // A real keyboard can type immediately while the remote microphone owns the field.
+    // Unlock it before the browser inserts the first character, including an IME composition.
+    if ((e.key.length === 1 || e.key === 'Process' || e.key === 'Dead') && !e.altKey && !e.ctrlKey && !e.metaKey &&
+        (listening || (entry.shell && el.readOnly))) typeQuery()
     const atStart = el.selectionStart === 0 && el.selectionEnd === 0
     const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length
     // Inside the text Left and Right move the caret; at its ends they move along the bar.
     if ((e.key === 'ArrowLeft' && !atStart) || (e.key === 'ArrowRight' && !atEnd) || e.key === 'Backspace') e.nativeEvent.stopPropagation()
-    if (e.key === 'Enter') { e.nativeEvent.stopPropagation(); if (entry.editing) entry.stop(); box.submit() }
+    if (e.key === 'Enter') {
+      e.nativeEvent.stopPropagation()
+      if (e.nativeEvent.isComposing) return
+      if (entry.shell && !entry.editing) activate()
+      else { if (entry.editing) entry.stop(); box.submit() }
+    }
     if (e.key === 'Escape') {
       // Handled here: the page's Back must not also run.
       e.preventDefault()

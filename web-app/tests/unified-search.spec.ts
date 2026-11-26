@@ -545,7 +545,26 @@ test.describe('on a phone', () => {
   })
 })
 
-test('activating the TV search field listens inline, shows partial speech and submits the final words', async ({ page }) => {
+for (const form of ['desktop', 'phone'] as const) {
+  test(`typing a phrase while browser voice search listens on ${form}`, async ({ page }) => {
+    if (form === 'phone') await page.setViewportSize(PHONE.viewport)
+    await page.addInitScript(() => {
+      Object.assign(window, { SpeechRecognition: class { start() {} abort() {} } })
+    })
+    await enter(page)
+    if (form === 'phone') await page.getByTestId('nav-search').click()
+    await searchBox(page).click()
+    await expect(page.getByRole('button', { name: 'Stop listening' })).toBeVisible()
+    await page.keyboard.type('Harbor')
+    await expect(page).toHaveURL(/search\?q=Harbor$/)
+    await page.keyboard.type(' Lights')
+    await expect(searchBox(page)).toHaveValue('Harbor Lights')
+    await expect(searchBox(page)).toBeFocused()
+    await expect(page).toHaveURL(/search\?q=Harbor%20Lights$/)
+  })
+}
+
+async function installVoiceBridge(page: Page) {
   await page.addInitScript(() => {
     Object.assign(window, { StreamHubTV: {
       play: () => true, signedOut() {}, deliverToken() {},
@@ -557,6 +576,51 @@ test('activating the TV search field listens inline, shows partial speech and su
       },
     } })
   })
+}
+
+test('physical typing takes over TV voice search and keeps multiword input across query updates', async ({ page }) => {
+  await installVoiceBridge(page)
+  await enter(page)
+  await expect(page.getByTestId('hero-play')).toBeVisible()
+  await focusBarEntry(page, 'nav-search')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('nav-search-voice')).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.type('Harbor')
+  await expect(searchBox(page)).toHaveValue('Harbor')
+  await expect(page).toHaveURL(/search\?q=Harbor$/)
+  await page.evaluate(() => {
+    const shell = window.streamhubShell as unknown as { message: (json: string) => boolean }
+    shell.message(JSON.stringify({ v: 1, kind: 'voice', state: 'final', text: 'stale speech' }))
+  })
+  await page.keyboard.type(' Lights')
+  await expect(searchBox(page)).toHaveValue('Harbor Lights')
+  await expect(page).toHaveURL(/search\?q=Harbor%20Lights$/)
+})
+
+test('a hardware keyboard can type on the focused TV search field before activating the microphone', async ({ page }) => {
+  await installVoiceBridge(page)
+  await enter(page)
+  await focusBarEntry(page, 'nav-search')
+  await page.keyboard.type('Sunday League')
+  await expect(page).toHaveURL(/search\?q=Sunday%20League$/)
+  await expect(searchBox(page)).toHaveValue('Sunday League')
+  expect(await page.evaluate(() => sessionStorage.getItem('test.voice'))).toBeNull()
+})
+
+test('a second activation of the TV search field opens typing and keeps the keyboard focused', async ({ page }) => {
+  await installVoiceBridge(page)
+  await enter(page)
+  await searchBox(page).click()
+  await expect(page.getByTestId('nav-search-voice')).toHaveAttribute('aria-pressed', 'true')
+  await searchBox(page).click()
+  await expect(searchBox(page)).toBeEditable()
+  await expect(searchBox(page)).toBeFocused()
+  await page.keyboard.type('Harbor Lights')
+  await expect(searchBox(page)).toHaveValue('Harbor Lights')
+})
+
+test('activating the TV search field listens inline, shows partial speech and submits the final words', async ({ page }) => {
+  await installVoiceBridge(page)
   await enter(page)
   await expect(page.getByTestId('hero-play')).toBeVisible()
   await focusBarEntry(page, 'nav-search')
@@ -573,7 +637,8 @@ test('activating the TV search field listens inline, shows partial speech and su
   await say('final', 'harbor')
   await expect(page).toHaveURL(/search\?q=harbor$/)
   await expect(page.getByTestId('search-results').getByRole('region', { name: 'Movies', exact: true }).getByTestId('tile')).toContainText('Harbor Lights')
-  await searchBox(page).click()
+  await page.getByRole('button', { name: 'Search by voice' }).click()
+  await expect(page.getByTestId('nav-search-voice')).toHaveAttribute('aria-pressed', 'true')
   await page.getByRole('button', { name: 'Type search' }).click()
   expect(await page.evaluate(() => sessionStorage.getItem('test.voice'))).toBe('stop')
   await searchBox(page).fill('Netflix')
