@@ -179,14 +179,47 @@ class TmdbClient:
                 break
         return out
 
+    async def search_actors(self, query: str) -> list[dict[str, str]]:
+        data = await self._get("/search/person", TTL_SEARCH, query=query, include_adult="false")
+        if data is None:
+            raise RuntimeError("Actor search unavailable")
+        return [
+            {"id": str(row["id"]), "name": row["name"]}
+            for row in data.get("results", [])
+            if row.get("known_for_department") == "Acting"
+            and not row.get("adult")
+            and row.get("id")
+            and row.get("name")
+        ][:12]
+
+    async def actor_titles(self, actor: int, media_type: str, page: int) -> tuple[list[MetaTitle], int]:
+        data = await self._get(f"/person/{actor}/{media_type}_credits", TTL_SEARCH)
+        if data is None:
+            raise RuntimeError("Credits unavailable")
+        titles = {}
+        for row in data.get("cast", []):
+            if not row.get("adult") and (meta := to_meta(row, media_type)):
+                titles[meta.tmdb_id] = meta
+        ranked = sorted(titles.values(), key=lambda m: (-m.popularity, m.title, m.tmdb_id))
+        return ranked[(page - 1) * 20 : page * 20], len(ranked)
+
     async def discover(
-        self, media_type: str, page: int = 1, sort: str = "popular", year: int | None = None
+        self,
+        media_type: str,
+        page: int = 1,
+        sort: str = "popular",
+        year: int | None = None,
+        *,
+        providers: list[int] | None = None,
+        region: str = "US",
     ) -> tuple[list[MetaTitle], int]:
         if media_type not in ("movie", "tv") or sort not in ("popular", "rating", "newest"):
             raise ValueError("Unsupported discovery type or sort")
         date_field = "primary_release_date" if media_type == "movie" else "first_air_date"
         order = {"popular": "popularity.desc", "rating": "vote_average.desc", "newest": f"{date_field}.desc"}[sort]
         params: dict[str, Any] = {"page": page, "sort_by": order, "include_adult": "false"}
+        if providers:
+            params.update(with_watch_providers="|".join(map(str, providers)), watch_region=region)
         if sort == "rating":
             params["vote_count.gte"] = 100
         if sort == "newest":

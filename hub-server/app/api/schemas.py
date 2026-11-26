@@ -530,7 +530,14 @@ class SearchSections(_M):
 SearchSectionL = Literal["programmes", "channels", "titles"]
 
 
+class SearchMatch(_M):
+    id: str
+    name: str
+
+
 class SearchResults(_M):
+    actors: list[SearchMatch] = Field(default_factory=list)
+    services: list[SearchMatch] = Field(default_factory=list)
     results: list[Tile] = Field(default_factory=list)
     metadata_available: bool = False
     discovery_note: str = ""

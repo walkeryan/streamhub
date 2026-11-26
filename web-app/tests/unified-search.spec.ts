@@ -43,21 +43,11 @@ test('the top bar has one search control; typing in it shows results and keeps t
   await expect(page.getByRole('textbox')).toHaveCount(1)
   await expect(bar.getByRole('link', { name: 'Search', exact: true })).toHaveCount(0)
   const box = searchBox(page)
-  // A short field beside the magnifier, at the far end before More and the profile.
   const field = await rect(page.getByTestId('nav-search'))
-  const rem = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))
-  expect(Math.abs(field.width - 14 * rem)).toBeLessThan(2)
-  expect(field.x).toBeGreaterThan((await rect(page.getByTestId('nav-my-list'))).x)
-  expect(field.x + field.width).toBeLessThanOrEqual((await rect(page.getByTestId('nav-more'))).x)
-  await expect(page.getByTestId('nav-search').locator('svg')).toBeVisible()
-
-  // Clicking it goes nowhere: it only takes the caret, and may widen without moving the names beside it.
-  const names = await rect(page.getByTestId('nav-my-list'))
+  expect(field.x).toBeLessThan((await rect(page.getByTestId('nav-home'))).x)
   await box.click()
+  await expect(page).toHaveURL(/\/search$/)
   await expect(box).toBeFocused()
-  await expect(page).toHaveURL(/\/$/)
-  await expect.poll(async () => (await rect(page.getByTestId('nav-search'))).width).toBeGreaterThan(field.width)
-  expect((await rect(page.getByTestId('nav-my-list'))).x).toBe(names.x)
   expect(await fits(page)).toBe(true)
 
   // Typing asks once the viewer pauses, not on every letter, and the caret stays in the box.
@@ -102,12 +92,12 @@ test('the results page has no filters, chips or notes: sections of results and n
   expect(await fits(page)).toBe(true)
 })
 
-test('three sections in order: On TV, Channels, Movies & Shows; a channel named exactly as the query leads', async ({ page }) => {
+test('live broadcasts and channels precede movies and series', async ({ page }) => {
   await enter(page, '/search?q=harbor')
   await expect(page.getByTestId('search-titles')).toBeVisible()
-  expect(await sectionNames(page)).toEqual(['On TV', 'Channels', 'Movies & Shows'])
+  expect(await sectionNames(page)).toEqual(['Live TV', 'Movies'])
   // Each heading is the section's name, then (quieter) how many it found.
-  await expect(sections(page).locator('h2')).toHaveText([/^On TV\d/, /^Channels\d/, /^Movies & Shows\d/])
+  await expect(sections(page).locator('h2')).toHaveText(['Live TV', 'Movies'])
   // A broadcast says its title, when it is on and where; a channel its number, name and what is on.
   const broadcast = page.getByTestId('search-broadcast').first()
   await expect(broadcast).toContainText('Riverton Rovers vs Harbor City')
@@ -121,17 +111,17 @@ test('three sections in order: On TV, Channels, Movies & Shows; a channel named 
 
   await searchBox(page).fill('sunday league')
   await expect(page.getByTestId('search-titles')).toContainText('Sunday League Legends')
-  expect(await sectionNames(page)).toEqual(['Channels', 'On TV', 'Movies & Shows'])
+  expect(await sectionNames(page)).toEqual(['Live TV', 'TV series'])
   await expect(page.getByTestId('search-channel')).toHaveAttribute('aria-label', /^14 Sunday League/)
   await expect(page.getByTestId('search-broadcast')).toContainText('Sunday League Live')
   await expect(page.getByTestId('search-broadcast')).toContainText(/(Tomorrow|Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d+:00/)
 
   // A section with nothing in it is not shown at all.
   await searchBox(page).fill('metro')
-  await expect.poll(() => sectionNames(page)).toEqual(['Channels'])
+  await expect.poll(() => sectionNames(page)).toEqual(['Live TV'])
   await expect(page.getByTestId('search-channel')).toHaveAttribute('aria-label', /^2 Metro Sports 1/)
   await searchBox(page).fill('velvet')
-  await expect.poll(() => sectionNames(page)).toEqual(['Movies & Shows'])
+  await expect.poll(() => sectionNames(page)).toEqual(['Movies'])
 })
 
 test('a broadcast that is on now plays its channel; so does a channel', async ({ page }) => {
@@ -230,7 +220,6 @@ test('what the hub holds is on screen before the metadata provider answers, and 
   await expect(tiles.nth(1)).toHaveAttribute('data-focused', 'true')
   await page.waitForTimeout(400) // the focus ring's own transition
   const before = await place()
-  const slot = await rect(waiting)
   const scrolled = await page.evaluate(() => window.scrollY)
 
   // The provider's answer adds the title no source has, after the library's, where the placeholder was.
@@ -238,8 +227,7 @@ test('what the hub holds is on screen before the metadata provider answers, and 
   await expect(waiting).toHaveCount(0)
   expect(await tiles.evaluateAll((all) => all.map((tile) => tile.getAttribute('aria-label')))).toEqual([...names, 'The Tollgate Tapes'])
   expect(await place()).toEqual(before)
-  const added = await rect(tiles.nth(3))
-  expect([Math.round(added.x), Math.round(added.y)]).toEqual([Math.round(slot.x), Math.round(slot.y)])
+  await expect(page.getByRole('region', { name: 'TV series' }).getByTestId('tile').last()).toContainText('The Tollgate Tapes')
   await expect(tiles.nth(1)).toHaveAttribute('data-focused', 'true')
   expect(await page.evaluate(() => window.scrollY)).toBe(scrolled)
   const asked = await searches(page)
@@ -257,7 +245,7 @@ test('what the hub holds is on screen before the metadata provider answers, and 
   await expect(page.getByText('The Understudy')).toHaveCount(0)
 })
 
-test('Movie or Series is said only on results that share a name; an older server answering titles alone still shows them', async ({ page }) => {
+test('movies and series with the same name have separate groups on older servers too', async ({ page }) => {
   await page.addInitScript(() => {
     const source = { source_id: 'lib', source_type: 'plex', name: 'Library', playable_in_app: true, kind: 'library' }
     const tile = (id: string, kind: string, title: string, year: number) => ({ id, kind, title, year, sources: [source], is_favorite: false })
@@ -270,14 +258,9 @@ test('Movie or Series is said only on results that share a name; an older server
     }
   })
   await enter(page, '/search?q=harbour%20lights')
-  const tiles = page.getByTestId('search-titles').locator('.search-tile')
-  await expect(tiles).toHaveCount(3)
-  expect(await sectionNames(page)).toEqual(['Movies & Shows'])
-  await expect(tiles.nth(0).getByTestId('search-kind')).toHaveText('Movie')
-  await expect(tiles.nth(1).getByTestId('search-kind')).toHaveText('Series')
-  await expect(tiles.nth(2).getByTestId('search-kind')).toHaveCount(0)
-  // Title and year are on every poster.
-  await expect(tiles.nth(1)).toContainText('Harbour Lights (2005)')
+  await expect(page.getByRole('region', { name: 'Movies', exact: true }).getByTestId('tile')).toHaveCount(2)
+  await expect(page.getByRole('region', { name: 'TV series' }).getByTestId('tile')).toContainText('Harbour Lights')
+  expect(await sectionNames(page)).toEqual(['Movies', 'TV series'])
   await expect(page.getByTestId('search-more-titles')).toHaveCount(0)
 })
 
@@ -403,22 +386,22 @@ test('arrows: Down from the box into the first result, through every section, Up
 test('Tab walks the bar into the results in page order, and types in the box when it lands there', async ({ page }) => {
   await enter(page, '/search?q=sunday%20league')
   await expect(page.getByTestId('search-titles')).toBeVisible()
-  await expect(page.getByTestId('search-channel')).toHaveAttribute('data-focused', 'true')
+  await expect(page.getByTestId('search-broadcast')).toHaveAttribute('data-focused', 'true')
+  await expect(page.getByTestId('search-titles').getByTestId('tile')).toBeVisible()
   const stops: string[] = []
   for (let i = 0; i < 12; i++) {
     await page.keyboard.press('Tab')
     stops.push((await focused(page).getAttribute('data-testid')) ?? '')
+    if (stops.at(-1) === 'nav-search') break
   }
-  expect(stops).toEqual(['search-broadcast', 'tile', 'nav-home', 'nav-live-tv', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-search', 'nav-more', 'nav-profile', 'search-channel', 'search-broadcast'])
-  // Shift+Tab back to the box: it takes the caret, so the next keys are text.
-  for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+Tab')
+  expect(stops).toEqual(['search-channel', 'tile', 'nav-search'])
   await expect(page.getByTestId('nav-search')).toHaveAttribute('data-focused', 'true')
   await expect(searchBox(page)).toBeFocused()
   await page.keyboard.press('Control+a')
   await page.keyboard.type('metro')
   await expect(page.getByTestId('search-channel')).toHaveAttribute('aria-label', /Metro Sports 1/)
   await page.keyboard.press('Tab')
-  await expect(page.getByTestId('nav-more')).toHaveAttribute('data-focused', 'true')
+  await expect(focused(page)).toHaveAttribute('data-testid', 'nav-search-clear')
   await expect(searchBox(page)).not.toBeFocused()
 })
 
@@ -471,7 +454,7 @@ test('nothing found says so with a hint; loading shows skeletons in the page, no
   await searchBox(page).fill('metro')
   await expect(results(page)).toHaveAttribute('data-stale', 'true')
   await expect(page.getByTestId('search-titles')).toBeVisible()
-  await expect.poll(() => sectionNames(page)).toEqual(['Channels'])
+  await expect.poll(() => sectionNames(page)).toEqual(['Live TV'])
   await expect(results(page)).not.toHaveAttribute('data-stale', 'true')
 })
 
@@ -526,7 +509,7 @@ test.describe('on a phone', () => {
     await expect(page).toHaveURL(/\/search\?q=harbor$/)
     await expect(page.getByTestId('search-titles')).toBeVisible()
     await expect(box).toBeFocused()
-    expect(await sectionNames(page)).toEqual(['On TV', 'Channels', 'Movies & Shows'])
+    expect(await sectionNames(page)).toEqual(['Live TV', 'Movies'])
     // A phone opens the live sections on three rows each.
     await expect(page.getByTestId('search-broadcast')).toHaveCount(3)
     expect(await fits(page)).toBe(true)
@@ -551,7 +534,7 @@ test.describe('on a phone', () => {
     await page.goBack()
     await expect(page.getByTestId('home')).toBeVisible()
 
-    for (const [query, heading] of [['zzzz', 'No results for “zzzz”'], ['metro', 'Channels']] as const) {
+    for (const [query, heading] of [['zzzz', 'No results for “zzzz”'], ['metro', 'Live TV']] as const) {
       await page.getByTestId('nav-search').tap()
       await expect(page).toHaveURL(/\/search$/)
       await expect(searchBox(page)).toHaveValue('')
@@ -560,4 +543,51 @@ test.describe('on a phone', () => {
       expect(await fits(page)).toBe(true)
     }
   })
+})
+
+test('activating the TV search field listens inline, shows partial speech and submits the final words', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { StreamHubTV: {
+      play: () => true, signedOut() {}, deliverToken() {},
+      capabilities: () => JSON.stringify({ voice_search: true, inline_voice_search: true }),
+      message: (raw: string) => {
+        const m = JSON.parse(raw)
+        if (m.kind === 'voice_command') sessionStorage.setItem('test.voice', m.command)
+        return true
+      },
+    } })
+  })
+  await enter(page)
+  await expect(page.getByTestId('hero-play')).toBeVisible()
+  await focusBarEntry(page, 'nav-search')
+  expect(await page.evaluate(() => sessionStorage.getItem('test.voice'))).toBeNull()
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('nav-search-voice')).toHaveAttribute('aria-pressed', 'true')
+  expect(await page.evaluate(() => sessionStorage.getItem('test.voice'))).toBe('start')
+  const say = (state: string, text: string) => page.evaluate(({ state, text }) => {
+    const shell = window.streamhubShell as unknown as { message: (json: string) => boolean }
+    shell.message(JSON.stringify({ v: 1, kind: 'voice', state, text }))
+  }, { state, text })
+  await say('partial', 'harb')
+  await expect(searchBox(page)).toHaveValue('harb')
+  await say('final', 'harbor')
+  await expect(page).toHaveURL(/search\?q=harbor$/)
+  await expect(page.getByTestId('search-results').getByRole('region', { name: 'Movies', exact: true }).getByTestId('tile')).toContainText('Harbor Lights')
+  await searchBox(page).click()
+  await page.getByRole('button', { name: 'Type search' }).click()
+  expect(await page.evaluate(() => sessionStorage.getItem('test.voice'))).toBe('stop')
+  await searchBox(page).fill('Netflix')
+  await page.getByRole('link', { name: 'Netflix', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Netflix' })).toBeVisible()
+})
+
+test('an actor opens their movies and TV series and Back returns to the query', async ({ page }) => {
+  await enter(page, '/search?q=Casey')
+  await page.getByRole('link', { name: 'Casey Vale' }).click()
+  await expect(page.getByRole('heading', { name: 'Casey Vale' })).toBeVisible()
+  await expect(page.getByTestId('tile')).toContainText('Harbor Lights')
+  await page.getByRole('button', { name: 'TV series', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'No titles on this page' })).toBeVisible()
+  await page.goBack()
+  await expect(page.getByRole('link', { name: 'Casey Vale' })).toBeVisible()
 })

@@ -36,16 +36,16 @@ test('genre and filters persist across reload and another device without replaci
   await page.getByRole('button', { name: 'Drama (8)', exact: true }).click()
   await page.getByRole('button', { name: 'Source: All sources', exact: true }).click()
   await page.getByRole('button', { name: 'Den Plex', exact: true }).click()
-  await page.getByRole('button', { name: 'Year', exact: true }).click()
+  await page.getByRole('button', { name: 'Release date', exact: true }).click()
   await page.getByRole('button', { name: 'All languages', exact: true }).first().click()
-  await expect.poll(() => documents.p2[namespace]).toEqual({ ...defaults, source: 's_plex', genre: 'drama', sort: 'year', language: 'all' })
+  await expect.poll(() => documents.p2[namespace]).toEqual({ ...defaults, source: 's_plex', genre: 'drama', sort: 'release', language: 'all' })
   expect(documents.p2.unrelated).toEqual({ theme: 'keep-me' })
   await page.reload()
   await expect(activeFilter(page, 'Genre: Drama')).toBeVisible()
-  await expect(activeFilter(page, 'Sort: Year')).toBeVisible()
+  await expect(activeFilter(page, 'Sort: Release date')).toBeVisible()
   await openFilters(page)
   await expect(page.getByRole('button', { name: 'Genre: Drama', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Year', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'Release date', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await page.screenshot({ path: '/tmp/streamhub-browse-saved-filters.png' })
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
@@ -87,8 +87,8 @@ test('delayed previous-profile preferences never appear after switching profiles
   await expect(activeFilter(page, 'Genre: Drama')).toHaveCount(0)
   await openFilters(page)
   await expect(page.getByRole('button', { name: 'Genre: Comedy', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Year', exact: true }).click()
-  await expect.poll(() => documents.p1[namespace]).toEqual({ ...defaults, genre: 'comedy', sort: 'year' })
+  await page.getByRole('button', { name: 'Release date', exact: true }).click()
+  await expect.poll(() => documents.p1[namespace]).toEqual({ ...defaults, genre: 'comedy', sort: 'release' })
   expect(documents.p2[namespace]).toEqual({ ...defaults, genre: 'drama' })
 })
 
@@ -107,7 +107,7 @@ test('switching profiles cancels a queued preference write before PUT', async ({
   // Hydration reads preferences too. Gate the save's fresh read explicitly
   // instead of assuming it is the second overall GET.
   armed = true
-  await page.getByRole('button', { name: 'Year', exact: true }).click()
+  await page.getByRole('button', { name: 'Release date', exact: true }).click()
   await expect.poll(() => blocked).toBe(true)
   expect(documents.p2[namespace]).toEqual(defaults)
   await page.evaluate(async () => {

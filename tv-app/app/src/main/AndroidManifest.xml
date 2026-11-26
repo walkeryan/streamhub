@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Settings → About → Install: opens the system installer on an update downloaded from the paired server. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -19,7 +20,7 @@
     -->
     <queries>
         <!-- Voice search: the TV's speech recogniser (VoiceSearch.kt). -->
-        <intent><action android:name="android.speech.action.RECOGNIZE_SPEECH" /></intent>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
         <package android:name="com.netflix.ninja" />
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.hulu.livingroomplus" />

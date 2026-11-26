@@ -5,6 +5,7 @@ for (const width of [375, 540, 1280]) {
   test(`Search results fit at ${width}px: every row and poster inside the page, nothing above them but the phone's box`, async ({ page }) => {
     await signIn(page)
     await page.setViewportSize({ width, height: 844 })
+    if (width <= 720) await expect(page.getByRole('link', { name: 'Search', exact: true })).toBeVisible()
     await search(page, 'harbor')
     const results = page.getByTestId('search-results')
     await expect(results.getByTestId('tile').first()).toBeVisible()

@@ -129,7 +129,7 @@ function browseList(section: string, request: Request): Tile[] {
     : []
   let list = [...(category ? shelfTiles(kind, category) : titles), ...adult].filter((t) => t.kind === kind && (!query || t.title.toLowerCase().includes(query)) && (!source || t.sources.some((s) => s.source_id === source)))
   if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title))
-  if (sort === 'year') list = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+  if (sort === 'release' || sort === 'year') list = [...list].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
   if (sort === 'rating') list = [...list].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
   const natural = sort === 'title' ? 'asc' : 'desc'
   return order && order !== natural ? [...list].reverse() : list
@@ -289,6 +289,8 @@ export const handlers = [
     const shown = { titles: hits.slice(0, cap('titles', 40)).map(annotate), channels: chans.slice(0, cap('channels', 12)), programmes: broadcasts.slice(0, cap('programmes', 24)) }
     return HttpResponse.json({
       results: shown.titles,
+      actors: discover && 'casey vale'.includes(q) ? [{ id: '72', name: 'Casey Vale' }] : [],
+      services: 'netflix'.includes(q) ? [{ id: 'netflix', name: 'Netflix' }] : [],
       play_here: shown.titles.filter((t) => t.sources.some((s) => s.playable_in_app)),
       open_in_app: shown.titles.filter((t) => t.sources.length > 0 && !t.sources.some((s) => s.playable_in_app)),
       channels: shown.channels.map(withNowNext), programmes: shown.programmes.map(withRecordingState),
@@ -375,6 +377,8 @@ export const handlers = [
     const profile = profiles.find((p) => p.id === currentProfileId(request))
     const allowedAudio = !language || language === 'all' || language.split(',').includes('eng')
     let list = titles.filter((t) => t.kind === kind && (!year || t.year === Number(year)))
+    if (u.searchParams.has('actor')) list = list.filter(t => u.searchParams.get('actor') === '72' && t.id === 'tmdb:movie:101')
+    if (u.searchParams.has('service')) list = list.filter(t => u.searchParams.get('service') === 'netflix' && t.sources.some(s => s.source_id === 's_nf'))
     if (sort === 'rating') list = [...list].sort((a,b) => (b.rating ?? 0) - (a.rating ?? 0))
     if (sort === 'newest') list = [...list].sort((a,b) => (b.year ?? 0) - (a.year ?? 0))
     // Unclassified fixtures are not a parental-policy bypass.
@@ -403,7 +407,7 @@ export const handlers = [
     const sort = u.searchParams.get('sort') ?? 'added'
     const list = browseList(String(params.section), request)
     const label = (t: Tile) => sort === 'title' ? (/^[a-z]/i.test(t.title) ? t.title[0]!.toUpperCase() : '#')
-      : sort === 'year' ? (t.year ? String(t.year) : 'Unknown') : sort === 'rating' ? (t.rating != null ? `${Math.floor(t.rating)}+` : 'Unrated') : 'Recently'
+      : (sort === 'year' || sort === 'release') ? (t.year ? String(t.year) : 'Unknown') : sort === 'rating' ? (t.rating != null ? `${Math.floor(t.rating)}+` : 'Unrated') : 'Recently'
     const jumps: Array<{ label: string; offset: number }> = []
     list.forEach((t, offset) => { const l = label(t); if (!jumps.some((j) => j.label === l)) jumps.push({ label: l, offset }) })
     return HttpResponse.json({ sort, page_size: 60, jumps })

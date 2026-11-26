@@ -513,7 +513,7 @@ components:
       type: object
       required: [sort, page_size, jumps]
       properties:
-        sort: {type: string, enum: [added, title, year, rating]}
+        sort: {type: string, enum: [added, title, release, year, rating]}
         page_size: {type: integer}
         jumps:
           type: array
@@ -581,10 +581,19 @@ components:
         teams: {type: array, items: {type: string}, description: "The two sides, in title order, when is_sport and the title spells out a matchup (A vs B, A v B, A versus B, A at B, A @ B; a league prefix and trailing notes are dropped). Empty otherwise: nothing is guessed."}
         recording_state: { oneOf: [{ $ref: '#/components/schemas/RecordingState' }, { type: 'null' }], description: "State of the household's recording of this programme, if there is one. Null when recording is off." }
 
+    SearchMatch:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+
     SearchResults:
       type: object
       required: [results, play_here, open_in_app, channels, programmes, sections, order, attribution]
       properties:
+        actors: {type: array, items: {$ref: '#/components/schemas/SearchMatch'}}
+        services: {type: array, items: {$ref: '#/components/schemas/SearchMatch'}}
         results: {type: array, items: {$ref: '#/components/schemas/Tile'}, description: "Titles, best first: exact title, title prefix, word prefix, contains, then every word in any order; at equal rank what plays here comes before what opens in another app, and that before a title known from metadata alone."}
         metadata_available: {type: boolean}
         discovery_note: {type: string}
@@ -1812,7 +1821,7 @@ paths:
       summary: "One search across everything the caller may watch: titles (movies and shows; a series by its name, never a row per episode), live channels, and guide broadcasts that are on now or start within 48 hours. Each section is capped and counted. A query shorter than two characters returns every list empty."
       parameters:
         - { name: q, in: query, schema: {type: string, default: ""}, description: "Diacritics, punctuation, case and a leading article are ignored, and \"&\" is \"and\". A year after the title (\"the mill 2023\") narrows titles to that year. A number also finds the channel with that number." }
-        - { name: kinds, in: query, schema: {type: string, description: "csv of MediaKind, plus programme for guide broadcasts. Omitted = movies, shows, channels and broadcasts; episodes only when asked for."} }
+        - { name: kinds, in: query, schema: {type: string, description: "Comma-separated media kinds, programme, actor or service. By default searches movies, series, channels, broadcasts, actors and streaming services. Episodes require an explicit kind."} }
         - { name: limit, in: query, schema: {type: integer, default: 40}, description: "Cap of the titles section." }
         - { name: language, in: query, schema: {type: string, description: "Omitted = profile languages first: a section that finds nothing in them is answered from every language instead. all = all; und = unknown; a language named here is taken at its word."} }
         - { name: source_id, in: query, schema: {type: string} }
@@ -1875,6 +1884,8 @@ paths:
         - {name: section, in: path, required: true, schema: {type: string, enum: [movies, shows]}}
         - {name: page, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 1}}
         - {name: sort, in: query, schema: {type: string, enum: [popular, rating, newest], default: popular}}
+        - {name: actor, in: query, schema: {type: integer, minimum: 1}, description: "Cast credits, ordered by popularity."}
+        - {name: service, in: query, schema: {type: string, maxLength: 128}, description: "Streaming service registry key."}
         - {name: year, in: query, schema: {type: integer, minimum: 1888, maximum: 2100}}
         - {name: language, in: query, schema: {type: string, description: "Availability only; omitted = profile languages; all = all languages."}}
         - {name: source_id, in: query, schema: {type: string, description: "Availability only; never suppresses metadata identities."}}
@@ -1889,7 +1900,7 @@ paths:
         - { name: section, in: path, required: true, schema: {type: string} }
         - { name: source_id, in: query, schema: {type: string} }
         - { name: genre, in: query, schema: {type: string, description: "Actual genre metadata; combines with category."} }
-        - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
+        - { name: sort, in: query, schema: {type: string, enum: [added, title, release, year, rating]} }
         - { name: order, in: query, schema: {type: string, enum: [asc, desc], description: "Omitted = the sort's natural direction: added, year and rating newest/best first; title A to Z. Titles without the sort's value stay last either way."} }
         - { name: page, in: query, schema: {type: integer, default: 1} }
         - { name: category, in: query, schema: {type: string, description: "Exact provider category; combines with genre."} }
@@ -1908,7 +1919,7 @@ paths:
         - { name: category, in: query, schema: {type: string} }
         - { name: language, in: query, schema: {type: string} }
         - { name: q, in: query, schema: {type: string} }
-        - { name: sort, in: query, schema: {type: string, enum: [added, title, year, rating]} }
+        - { name: sort, in: query, schema: {type: string, enum: [added, title, release, year, rating]} }
         - { name: order, in: query, schema: {type: string, enum: [asc, desc]} }
         - { name: include_adult, in: query, schema: {type: boolean, default: false} }
       responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/BrowseJumps' } } } } }
