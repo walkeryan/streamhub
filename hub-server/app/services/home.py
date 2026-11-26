@@ -13,7 +13,7 @@ from app.services.adult import adult_included, adult_scope
 from app.services.availability import AvailabilityService
 from app.services.catalog import NEW_RELEASES, CatalogService, is_replay_shelf, shelf_path
 from app.services.channels import ChannelService
-from app.services.errors import Forbidden, NotFound
+from app.services.errors import Conflict, Forbidden, NotFound
 from app.services.playback import PlaybackResolver
 from app.services.recommendations import recommendations
 from app.services.sources import SourceService
@@ -243,14 +243,22 @@ class HomeService:
                 candidates = await watchlist.availability_candidates(profile_id, saved, SHELF_TILES)
                 slots = asyncio.Semaphore(4)
 
-                async def describe(ref: str) -> tuple[str, str | None]:
+                async def describe(ref: str) -> tuple[str, str | None] | None:
                     async with slots:
-                        description = await watchlist.cached_audio(
-                            profile_id, ref, lambda: self.watchlist_audio(profile_id, ref)
-                        )
+                        try:
+                            description = await watchlist.cached_audio(
+                                profile_id, ref, lambda: self.watchlist_audio(profile_id, ref)
+                            )
+                        except Conflict as exc:
+                            if exc.code != "catalog_changed":
+                                raise
+                            # Another catalog commit invalidated both reads. Leave this title's
+                            # availability history intact and retry on its next watchlist scan.
+                            return None
                         return ref, description
 
-                descriptions = dict(await asyncio.gather(*(describe(ref) for ref in candidates)))
+                checks = await asyncio.gather(*(describe(ref) for ref in candidates))
+                descriptions = dict(check for check in checks if check is not None)
                 ready = await watchlist.newly_available(
                     profile_id, {ref: value is not None for ref, value in descriptions.items()}
                 )

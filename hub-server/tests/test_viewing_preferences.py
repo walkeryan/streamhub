@@ -133,3 +133,37 @@ async def test_hidden_ready_shelf_avoids_playback_checks_and_old_saved_entries_r
     monkeypatch.setattr(api.c.playback, "options", options)
     assert (await api.get("/home")).status_code == 200
     options.assert_not_awaited()
+
+
+async def test_home_survives_catalog_churn_without_changing_saved_availability(api: Api, monkeypatch) -> None:
+    from app.infra.models import Watchlist
+
+    await seed(api)
+    await api.c.watchlist.put(api.profile_id, REF, playable=False)
+    original = api.c.home.watchlist_audio
+    attempts = 0
+
+    async def catalog_changes_while_checking(profile_id: str, ref: str) -> str | None:
+        nonlocal attempts
+        result = await original(profile_id, ref)
+        attempts += 1
+        api.c.db.catalog_revisions.catalog += 1
+        return result
+
+    monkeypatch.setattr(api.c.home, "watchlist_audio", catalog_changes_while_checking)
+    response = await api.req("GET", "/home")
+    assert response.status_code == 200, response.text
+    assert attempts == 2
+    assert any(row["id"] == "watchlist" and row["tiles"] for row in response.json()["rows"])
+    assert not any(row["id"] == "ready_to_watch" and row["tiles"] for row in response.json()["rows"])
+    async with api.c.db.session() as session:
+        saved = await session.scalar(
+            select(Watchlist).where(Watchlist.profile_id == api.profile_id, Watchlist.ref_id == REF)
+        )
+        assert saved and saved.last_playable is False and saved.playable_since is None
+
+    monkeypatch.setattr(api.c.home, "watchlist_audio", original)
+    recovered = await api.req("GET", "/home")
+    assert recovered.status_code == 200
+    ready = next(row for row in recovered.json()["rows"] if row["id"] == "ready_to_watch")
+    assert [tile["id"] for tile in ready["tiles"]] == [REF]
