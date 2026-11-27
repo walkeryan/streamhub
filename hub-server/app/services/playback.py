@@ -1252,7 +1252,7 @@ class PlaybackResolver:
         if room is None:
             # A watch room plays on together: no skipping or moving on by one member.
             desc.update(await self._player_extras(profile_id, row, src, prov))
-        if vod is not None and desc["audio_track"] is not None:
+        if vod is not None and vod.tracks and desc["audio_track"] is not None:
             # The server encodes exactly one track, so that track is the whole answer.
             track = vod.tracks[desc["audio_track"]]
             known = track["language"] != "und"

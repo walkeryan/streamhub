@@ -8944,9 +8944,9 @@ export interface components {
              * @default false
              */
             prefer_hls: boolean;
-            /** @description Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself. */
+            /** @description Audio track index for web playback and compatible TV replay. Direct TV playback switches tracks on the device. */
             audio_track?: number | null;
-            /** @description Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced). */
+            /** @description Title position in milliseconds for a restart-at-offset stream on the web or TV. */
             start_position_ms?: number | null;
             /**
              * @description Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height.

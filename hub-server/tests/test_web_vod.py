@@ -446,7 +446,10 @@ async def test_unprobeable_film_is_transcoded_and_android_tv_is_untouched(api: A
     assert len(fake.calls) == calls
 
 
-async def test_selected_plex_tv_file_retries_with_compatible_video_and_keeps_audio_and_position(api: Api) -> None:
+@pytest.mark.parametrize("probe_available", [True, False])
+async def test_selected_plex_tv_file_retries_with_compatible_video_and_keeps_audio_and_position(
+    api: Api, probe_available: bool
+) -> None:
     await api.accept_disclaimer()
     key = "lib:library:7"
     async with api.c.db.session() as session:
@@ -464,6 +467,8 @@ async def test_selected_plex_tv_file_retries_with_compatible_video_and_keeps_aud
         await session.commit()
     fake = api.c.playback.probe = FakeProbe(
         {**probe(), "video": {"codec": "hevc", "width": 3840, "height": 2160, "pix_fmt": "yuv420p10le"}}
+        if probe_available
+        else None
     )
     request = {"id": key, "client": "android_tv", "variant_id": key, "source_id": "library"}
     direct = (await api.post("/playback/resolve", json=request)).json()
@@ -482,7 +487,7 @@ async def test_selected_plex_tv_file_retries_with_compatible_video_and_keeps_aud
         "android_tv",
         "transcode",
         0,
-        1080,
+        1080 if probe_available else None,
     )
     await add_film(api)
     rejected = await api.post(
