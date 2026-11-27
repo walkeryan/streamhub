@@ -217,7 +217,7 @@ class TmdbClient:
                     "id": key,
                     "title": title,
                     "kind": kind,
-                    "year": _year(row.get("release_date") or row.get("first_air_date")),
+                    "year": release_year(row.get("release_date") or row.get("first_air_date")),
                     "poster": image_url(row.get("poster_path"), "w185"),
                     "roles": [],
                 },
