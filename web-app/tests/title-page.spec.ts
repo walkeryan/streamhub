@@ -44,9 +44,27 @@ test('an episode names its show and season, and Back climbs to the season, then 
 
 test('from the show, an episode opens its page and Back returns to the show; the links lead up too', async ({ page }) => {
   await enter(page, SHOW)
-  await page.getByTestId('episodes').getByTestId('episode').nth(2).click()
+  const third = page.getByTestId('episodes').getByTestId('episode').nth(2)
+  await expect(third).toHaveAttribute('href', '/title/tmdb%3Aepisode%3A201%3A1%3A3')
+  const tabOpened = page.context().waitForEvent('page')
+  await third.click({ modifiers: ['Control'] })
+  const tab = await tabOpened
+  await expect(tab).toHaveURL(/tmdb%3Aepisode%3A201%3A1%3A3$/)
+  await tab.close()
+  await expect(page).toHaveURL(new RegExp(`${SHOW}$`))
+  await third.click()
   await expect(page).toHaveURL(/tmdb%3Aepisode%3A201%3A1%3A3$/)
   await expect(page.getByTestId('title-detail').locator('.tp-sub')).toHaveText('What the Net Held')
+  await third.click()
+  await page.keyboard.press('ArrowUp')
+  const opener = third.locator('..').getByTestId('media-card-actions')
+  await expect(opener).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('menuitem', { name: 'Thumbs up', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(opener).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(third).toBeFocused()
   // Along the strip: the next episode replaces this one, so Back still returns to the show.
   await page.getByTestId('episodes').getByTestId('episode').nth(3).click()
   await expect(page).toHaveURL(/tmdb%3Aepisode%3A201%3A1%3A4$/)

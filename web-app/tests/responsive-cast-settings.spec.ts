@@ -47,9 +47,11 @@ test('title actions fit phones while a portrait keeps its normal poster size', a
 test('Search, My List and Settings reflow at 200% text', async ({ page }) => {
   await signedIn(page)
   await page.setViewportSize({ width: 390, height: 844 })
+  await page.addInitScript(() => localStorage.setItem('sh.recentSearches.v1:p1', JSON.stringify(['Star Wars'])))
   for (const route of ['/search', '/favorites', '/settings?tab=profiles']) {
     await page.goto(route)
     await page.locator('main').waitFor()
+    if (route === '/search') await expect(page.getByTestId('search-recent-clear')).toBeVisible()
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%' })
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   }
