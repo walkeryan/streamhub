@@ -116,6 +116,7 @@ fun parseShellPlay(json: String): ParsedPlay {
                         sourceId = root.optId("source_id"),
                         catchupProgrammeId = catchup,
                         variantId = variant,
+                        audioTrack = root.optLong("audio_track")?.also { if (it !in 0..255) throw Invalid("audio_track out of range") }?.toInt(),
                         // Consent belongs to one chosen variant; without one there is nothing it applies to.
                         allowUnverifiedAudio = variant != null && root.optBoolean("allow_unverified_audio") == true,
                         rewindAt = rewindAt,

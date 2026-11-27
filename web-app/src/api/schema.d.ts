@@ -8940,7 +8940,7 @@ export interface components {
              */
             prefer_canvas: boolean;
             /**
-             * @description Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.
+             * @description Prefer HLS for live web playback or retry the selected Plex file in a TV-compatible format.
              * @default false
              */
             prefer_hls: boolean;
@@ -9079,6 +9079,11 @@ export interface components {
             };
             /** @default false */
             live: boolean;
+            /**
+             * @description The TV can retry this file as H.264 and AAC if its decoder rejects direct playback.
+             * @default false
+             */
+            tv_compatible_available: boolean;
             /** @default false */
             buffer_available: boolean;
             /** Format: date-time */

@@ -294,6 +294,19 @@ class PlayerViewModel @Inject constructor(
         }
         showOsd()
         viewModelScope.launch { player.state.map { it.refusal }.distinctUntilChanged().collect { refusal -> if (refusal != null) streamRefused(refusal) } }
+        if (seat == null) viewModelScope.launch {
+            player.state.map { it.incompatibleVariant }.distinctUntilChanged().collect { variant ->
+                val descriptor = _state.value.descriptor
+                val request = currentRequest
+                if (variant != null && descriptor?.variantId == variant && descriptor.tvCompatibleAvailable &&
+                    request != null && !request.preferHls && !currentStopped && seat == null) {
+                    // Retry the file the server actually selected (including the exact episode).
+                    currentRequest = request.copy(id = descriptor.id, variantId = variant, preferHls = true,
+                        audioTrack = request.audioTrack ?: descriptor.audioTrack, replaces = descriptor.id)
+                    retry()
+                }
+            }
+        }
         // A room plays one stream for everyone: it never moves to another feed on its own.
         if (seat == null) viewModelScope.launch { watchFeeds() }
         viewModelScope.launch { player.state.map { it.isPlaying }.distinctUntilChanged().collect { if (it) { reauthorized = false; pausedRetry.reset() } } }
@@ -377,7 +390,7 @@ class PlayerViewModel @Inject constructor(
             return
         }
         // A film resumes where it stopped; live and archive streams restart where the server puts them.
-        val resumeAt = if (stale != null && !stale.live) player.exoPlayer.currentPosition.takeIf { it > 0 } else null
+        val resumeAt = if (stale != null && !stale.live) playbackPosition(stale) else null
         val mine = ++recoverySeq
         _state.update { it.copy(failure = null, retrying = true, roomCatchUp = false, message = null) }
         attachJob = viewModelScope.launch {
@@ -388,7 +401,11 @@ class PlayerViewModel @Inject constructor(
                     else {
                         // Give back this player's own connection first: a one-stream source would answer source_busy.
                         releaseCurrentBuffer()
-                        val fresh = coordinator.resolveAgain(checkNotNull(request).copy(recoveryGeneration = generation))
+                        val accepted = checkNotNull(request)
+                        val fresh = coordinator.resolveAgain(accepted.copy(
+                            recoveryGeneration = generation,
+                            startPositionMs = if (accepted.preferHls) resumeAt else accepted.startPositionMs,
+                        ))
                         currentCoroutineContext().ensureActive()
                         if (sessions.current().catalogScope() != owner) throw CancellationException("Playback scope changed")
                         start(fresh, resumeAt)
@@ -469,7 +486,12 @@ class PlayerViewModel @Inject constructor(
                 player.play(d.copy(url = result.url), reportOwner)
                 lastBufferSeek = requested
                 _state.update { it.copy(bufferWindow = result.window, bufferTimeshift = true) }
-            } else if (startPositionMs != null) player.play(d, reportOwner, startPositionMs) else player.play(d, reportOwner)
+            } else {
+                val origin = d.startPositionMs?.takeIf { d.mode == PlaybackMode.HLS && !d.live }
+                _state.update { it.copy(streamStartMs = origin ?: 0, titleDurationMs = d.durationMs?.takeIf { origin != null }) }
+                val position = ((startPositionMs ?: d.resumePositionMs) - (origin ?: 0)).coerceAtLeast(0)
+                player.play(d, reportOwner, position)
+            }
             _state.update { it.copy(bufferWindow=buffer.window,bufferBusy=false) }
             if(lease != null) bufferHeartbeat=viewModelScope.launch {
                 try {
@@ -656,18 +678,23 @@ class PlayerViewModel @Inject constructor(
         scrubJob = viewModelScope.launch {
             delay(SCRUB_SETTLE_MS)
             // The room's answer (a state message) moves every member, this one included.
-            if (client != null) client.seek(target) else player.seekTo(target)
+            if (client != null) client.seek(target) else seekTitle(target)
             // Keep showing the target until the player's position ticker has caught up with it.
             delay(SCRUB_RELEASE_MS)
             _state.update { it.copy(scrubTargetMs = null) }
         }
     }
 
+    private fun seekTitle(positionMs: Long) {
+        if (currentRequest?.preferHls == true) retryAt(positionMs)
+        else player.seekTo(positionMs)
+    }
+
     fun startOver() {
         dismissUpNext()
         scrubJob?.cancel()
         _state.update { it.copy(scrubTargetMs = null) }
-        if (seat != null) roomControl { it.seek(0) } else player.seekTo(0)
+        if (seat != null) roomControl { it.seek(0) } else seekTitle(0)
     }
 
     // ---- Skip intro / credits, Up next, Still watching (UpNextFlow) -----------------------------
@@ -767,7 +794,7 @@ class PlayerViewModel @Inject constructor(
         val target = _state.value.skipIntroTo ?: return
         scrubJob?.cancel()
         _state.update { it.copy(scrubTargetMs = null, skipIntroTo = null) }
-        player.seekTo(target)
+        seekTitle(target)
     }
 
     /** Skip credits: the next episode, or (a film, the last episode) the end of playback, reported watched. */
@@ -1471,7 +1498,12 @@ class PlayerViewModel @Inject constructor(
      * has usually expired by the time playback fails, so the accepted request is resolved again
      * through the coordinator. A failed channel change repeats that change instead.
      */
-    fun retry() {
+    private fun playbackPosition(descriptor: PlaybackDescriptor): Long =
+        player.exoPlayer.currentPosition.takeIf { it > 0 }?.let(_state.value::titlePositionMs) ?: descriptor.resumePositionMs
+
+    fun retry() = retryAt(null)
+
+    private fun retryAt(positionMs: Long?) {
         val zap = failedRequest
         if (zap != null) {
             failedRequest = null
@@ -1483,7 +1515,9 @@ class PlayerViewModel @Inject constructor(
         val stale = _state.value.descriptor
         val request = currentRequest ?: stale?.let { PlaybackRequest(it.id) } ?: return
         // A film resumes where it failed; live and archive streams restart where the server puts them.
-        val resumeAt = if (stale != null && !stale.live) player.exoPlayer.currentPosition.takeIf { it > 0 } else null
+        val resumeAt = if (stale != null && !stale.live) {
+            positionMs ?: playbackPosition(stale)
+        } else null
         attachJob?.cancel(); rewindJob?.cancel()
         _state.update { it.copy(failure = null, retrying = true, message = null) }
         attachJob = viewModelScope.launch {
@@ -1491,7 +1525,7 @@ class PlayerViewModel @Inject constructor(
             try {
                 // Give back this player's own connection first: a one-stream source would answer source_busy.
                 releaseCurrentBuffer()
-                val fresh = coordinator.resolveAgain(request)
+                val fresh = coordinator.resolveAgain(if (request.preferHls) request.copy(startPositionMs = resumeAt) else request)
                 currentCoroutineContext().ensureActive()
                 if (sessions.current().catalogScope() != owner) return@launch
                 start(fresh, resumeAt)

@@ -784,6 +784,7 @@ class PlaybackDescriptor(_M):
     mime: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     live: bool = False
+    tv_compatible_available: bool = False
     buffer_available: bool = False
     archive_start: datetime | None = None
     archive_end: datetime | None = None

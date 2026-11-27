@@ -46,7 +46,10 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
             raise Forbidden(
                 "This playback attempt was stopped. Start playback again manually.", code="playback_stopped"
             )
-    if body.client == "web" and body.replaces == body.id and "prefer_canvas" in body.model_fields_set:
+    tv_compatible = body.client == "android_tv" and body.prefer_hls and bool(body.variant_id)
+    if body.replaces == body.id and (
+        tv_compatible or (body.client == "web" and "prefer_canvas" in body.model_fields_set)
+    ):
         # The same viewer is switching renderers. Release its old source connection before
         # the new producer starts, including a VOD encode when returning to direct play.
         await c.proxy.release_replaced(p.profile_id, p.session_id, body.id, include_vod=True)
@@ -69,6 +72,8 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         allow_unverified_audio=body.allow_unverified_audio,
         client=("web_canvas" if body.prefer_canvas else "web_hls" if body.prefer_hls else "web")
         if body.client == "web"
+        else "android_tv_compatible"
+        if tv_compatible
         else body.client,
         catchup_programme_id=body.catchup_programme_id,
         rewind_at=body.rewind_at,

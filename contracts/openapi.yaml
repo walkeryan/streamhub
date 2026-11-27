@@ -1398,7 +1398,7 @@ components:
         companion_id: {type: string, nullable: true, deprecated: true, description: Legacy sequential admission is rejected; use /playback/multiview.}
         client: {type: string, enum: [android_tv, web], default: web}
         prefer_canvas: {type: boolean, default: false, description: Request server-decoded pictures for browser playback.}
-        prefer_hls: {type: boolean, default: false, description: Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.}
+        prefer_hls: {type: boolean, default: false, description: Prefer HLS for live web playback or retry the selected Plex file in a TV-compatible format.}
         audio_track: {type: integer, nullable: true, minimum: 0, maximum: 255, description: "Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself."}
         start_position_ms: {type: integer, nullable: true, minimum: 0, description: "Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced)."}
         max_height: {type: integer, nullable: true, enum: [480, 720, 1080], description: "Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height."}
@@ -1520,6 +1520,7 @@ components:
         mime: {type: string, nullable: true, description: "video/mp2t, application/x-mpegURL, video/mp4, application/dash+xml"}
         headers: { type: object, additionalProperties: {type: string} }
         live: {type: boolean, default: false}
+        tv_compatible_available: {type: boolean, default: false, description: The TV can retry this file as H.264 and AAC if its decoder rejects direct playback.}
         buffer_available: {type: boolean, default: false}
         archive_start: {type: string, format: date-time, nullable: true}
         archive_end: {type: string, format: date-time, nullable: true}

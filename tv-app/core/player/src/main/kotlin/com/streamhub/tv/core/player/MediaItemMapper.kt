@@ -72,7 +72,7 @@ object MediaItemMapper {
      * position, the first frame included, and played at 1×. Its media time zero is [timeZeroMs] into
      * the title.
      */
-    fun pinsPosition(d: PlaybackDescriptor): Boolean = d.streamEpoch != null && !d.live
+    fun pinsPosition(d: PlaybackDescriptor): Boolean = !d.live && (d.streamEpoch != null || (d.mode == PlaybackMode.HLS && d.startPositionMs != null))
 
     /** Where in the title the stream's media time zero is: `start_position_ms` for a room's shared stream, 0 otherwise. */
     fun timeZeroMs(d: PlaybackDescriptor): Long = if (pinsPosition(d)) (d.startPositionMs ?: 0).coerceAtLeast(0) else 0
