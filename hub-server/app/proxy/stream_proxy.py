@@ -448,6 +448,7 @@ def canvas_args(
     *,
     live: bool,
     vod: VodPlan | None,
+    retained_segments: int | None = None,
     silent: bool = False,
 ) -> list[str]:
     from app.proxy.canvas import COLUMNS, FPS, ROWS
@@ -515,7 +516,7 @@ def canvas_args(
         "-hls_time",
         "2",
         "-hls_list_size",
-        "6" if live else "0",
+        str(retained_segments or 6) if live else "0",
         *([] if live else ["-hls_playlist_type", "event"]),
         "-hls_flags",
         "temp_file+program_date_time" + ("+delete_segments" if live else ""),
@@ -1525,11 +1526,12 @@ class StreamProxy:
         def attempts_for(target: str, outdir: Path) -> list[tuple[str, list[str]]]:
             if transcode == "canvas" or (vod is not None and vod.video == "canvas"):
                 canvas_plan = vod or VodPlan(video="canvas", max_height=canvas_height)
+                retain = (WATCHED_SEGMENTS if self.dvr.watched_session else MAX_SEGMENTS) if buffered else None
                 return [
-                    ("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan)),
+                    ("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan, retained_segments=retain)),
                     (
                         "canvas-silent",
-                        canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan, silent=True),
+                        canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan, silent=True, retained_segments=retain),
                     ),
                 ]
             if vod is not None:
@@ -1586,7 +1588,7 @@ class StreamProxy:
                 if not full:
                     name = sid or self.session_id(key)
                     if buffered:
-                        if not live or transcode == "canvas" or vod is not None:
+                        if not live or vod is not None:
                             raise Conflict("DVR requires a live HLS stream.", code="buffer_unsupported")
                         workdir = self.buffer_state(key).reserve(key, name)
                     else:
@@ -1670,7 +1672,10 @@ class StreamProxy:
                         log.warning(
                             "transcode fallback", extra={"from": sess.label, "to": sess.fallbacks[0][0], "code": code}
                         )
-                        sess.workdir.mkdir(parents=True, exist_ok=True)
+                        if buffered:
+                            self.buffer_state(key).reserve(key, sess.sid)
+                        else:
+                            sess.workdir.mkdir(parents=True, exist_ok=True)
                         watching, seen = sess.viewers, sess.watchers
                         sess = await self._spawn_hls(
                             key,
@@ -1678,6 +1683,7 @@ class StreamProxy:
                             sess.workdir,
                             sess.fallbacks,
                             source_id=source_id,
+                            buffered=buffered,
                             family=sess.family,
                             pin_key=pin_key,
                         )
@@ -1770,6 +1776,7 @@ class StreamProxy:
         viewer: Viewer | None = None,
         channel_id: str | None = None,
         transcode: str = "none",
+        canvas_height: int | None = None,
     ) -> dict[str, Any]:
         if not self.dvr.enabled:
             raise Conflict("Local recording is disabled.", code="recording_disabled")
@@ -1796,6 +1803,7 @@ class StreamProxy:
                 max_connections=max_connections,
                 generation=generation,
                 buffered=True,
+                canvas_height=canvas_height,
                 viewer=viewer,
             )
             lease = state.join(key, profile, tuned_at)

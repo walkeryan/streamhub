@@ -23,7 +23,7 @@ FFMPEG = os.environ.get("STREAMHUB_TEST_FFMPEG") or shutil.which("ffmpeg")
 pytestmark = pytest.mark.skipif(not FFMPEG, reason="explicit local ffmpeg fixture tool is unavailable")
 
 
-async def generate_clip(clip):
+async def generate_clip(clip, *, audio=False):
     generated = await asyncio.create_subprocess_exec(
         FFMPEG,
         "-hide_banner",
@@ -33,9 +33,9 @@ async def generate_clip(clip):
         "lavfi",
         "-i",
         "testsrc=size=160x90:rate=5",
+        *(["-f", "lavfi", "-i", "sine=frequency=440", "-c:a", "aac"] if audio else ["-an"]),
         "-t",
         "12",
-        "-an",
         "-c:v",
         "mpeg2video",
         "-g",
@@ -129,10 +129,35 @@ async def test_real_ffmpeg_archive_window_and_seek(api, tmp_path, monkeypatch, p
     assert not api.c.proxy._hls and not list(root.iterdir())
 
 
-@pytest.mark.parametrize("client", ["web", "android_tv"])
+async def assert_canvas_decodable(payload, tmp_path, *, sound):
+    import io
+
+    from PIL import Image
+    from app.proxy.canvas import PICTURE_OWNER
+
+    assert payload.startswith(b"ID3")
+    first = payload.index(PICTURE_OWNER + b"\0") + len(PICTURE_OWNER) + 5
+    end = 10 + sum(b << shift for b, shift in zip(payload[6:10], (21, 14, 7, 0), strict=True))
+    with Image.open(io.BytesIO(payload[first:end])) as sheet:
+        sheet.load()
+        assert sheet.size == (160 * 4, 90 * 6)
+        assert sheet.crop((0, 0, 160, 90)).tobytes() != sheet.crop((0, 90, 160, 180)).tobytes()
+    served = tmp_path / "rewound.aac"
+    served.write_bytes(payload)
+    decoder = await asyncio.create_subprocess_exec(
+        FFMPEG, "-v", "error", "-f", "aac", "-i", str(served), "-f", "s16le", "-",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    pcm, stderr = await decoder.communicate()
+    assert decoder.returncode == 0, stderr.decode(errors="replace")
+    assert len(pcm) > 100_000 and bool(any(pcm)) == sound
+
+
+@pytest.mark.parametrize("client", ["web", "android_tv", "canvas", "canvas-silent"])
 async def test_watched_tune_scrub_live_then_change_channel(api, tmp_path, client):
     clip = tmp_path / "signal.ts"
-    await generate_clip(clip)
+    canvas = client.startswith("canvas")
+    await generate_clip(clip, audio=client == "canvas")
     http = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path)))
     server = Thread(target=http.serve_forever, daemon=True)
     server.start()
@@ -161,7 +186,14 @@ async def test_watched_tune_scrub_live_then_change_channel(api, tmp_path, client
             capability = await api.get("/playback/rewind", params={"id": channel_id})
             assert capability.json()["mode"] == provider_mode
             tune_time = datetime.now(UTC)
-            resolve = await api.post("/playback/resolve", json={"id": channel_id, "client": client})
+            request = {"id": channel_id, "client": "web" if canvas else client, "prefer_canvas": canvas}
+            if canvas:
+                preview = (await api.post("/playback/resolve", json={**request, "preview_only": True})).json()
+                assert preview["canvas"] and not preview["buffer_available"]
+                preview_token = preview["url"].split("/stream/", 1)[1].split("/", 1)[0]
+                assert (await api.post("/playback/buffer/lease", json={"stream_token": preview_token})).status_code == 403
+                assert not list(root.iterdir())
+            resolve = await api.post("/playback/resolve", json=request)
             assert resolve.status_code == 200, resolve.text
             descriptor = resolve.json()
             assert descriptor["live"] and descriptor["mode"] == "hls" and descriptor["buffer_available"]
@@ -191,7 +223,11 @@ async def test_watched_tune_scrub_live_then_change_channel(api, tmp_path, client
             href = next(line for line in manifest.text.splitlines() if line and not line.startswith("#"))
             part = await api.client.get(href)
             assert part.status_code == 200
-            await assert_decodable(part.content, tmp_path)
+            if canvas:
+                assert descriptor["canvas"] and href.endswith(".aac") and part.headers["content-type"] == "audio/aac"
+                await assert_canvas_decodable(part.content, tmp_path, sound=client == "canvas")
+            else:
+                await assert_decodable(part.content, tmp_path)
             live = await api.post("/playback/buffer/seek", json=viewer)
             assert live.status_code == 200, live.text
             edge = await api.client.get(live.json()["url"])

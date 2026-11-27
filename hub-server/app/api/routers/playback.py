@@ -81,8 +81,7 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
     c.proxy.ensure_running(generation)
     result["buffer_available"] = False
     if (
-        not result.get("canvas")
-        and c.proxy.dvr.enabled
+        c.proxy.dvr.enabled
         and result.get("mode") == "hls"
         and result.get("live")
         and body.id.startswith("ch:")
@@ -204,7 +203,7 @@ async def _buffer_grant(token: str, c: C, p: P) -> tuple[Any, str, Any]:
     g = await _grant(c, token)
     if g.pair_lease_id:
         raise Conflict("Multiview does not support buffered recording.", code="buffer_unsupported")
-    if g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or g.canvas or g.room:
+    if g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or (g.canvas and not g.canvas_rewind) or g.room:
         raise Forbidden("DVR requires this profile's authorized live HLS playback grant.")
     # This shared channel gate is also the integration point for current parental policy.
     channel = await c.playback._authorized_channel(p.profile_id, "ch:" + g.channel_key)
@@ -230,6 +229,7 @@ async def buffer_lease(body: S.BufferLeaseRequest, c: C, p: P) -> dict[str, Any]
             viewer=_viewer(g),
             channel_id="ch:" + g.channel_key,
             transcode=_hls_session_key(c, g)[1],
+            canvas_height=g.max_height if g.canvas else None,
         )
     except HlsSourceBusy as exc:
         raise await _source_busy(c, g) from exc
