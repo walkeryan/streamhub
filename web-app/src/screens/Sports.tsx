@@ -153,15 +153,28 @@ function SportsScreen() {
   const ahead = events.filter((event) => isAhead(event, now) && dayOf(event.start) >= date)
   const gameChannels = date === today ? events.filter((event) => event.kind === 'channel') : []
   const days = [...new Set(ahead.map((event) => dayOf(event.start)))].sort()
-  const first = (rowsView ? liveTiles[0] : live[0]) ?? unconfirmed[0] ?? ahead[0] ?? gameChannels[0]
-  // Where focus goes when nothing else claims it: the first game, or the sport chips.
-  const fallback = first && first === unconfirmed[0] ? `${cardKey(first)}:airing` : first ? cardKey(first) : 'sports:sport:all'
+  const sportRows = rowSports.map((name, index) => {
+    const result = rows[index]?.data
+    const games = (result?.events ?? []).filter(event =>
+      date === today && isLive(event, now) || isAhead(event, now) && dayOf(event.start) >= date
+    ).sort(rowOrder(now))
+    return { name, games, total: result?.total ?? 0 }
+  })
+  const firstLive = rowsView ? liveTiles[0] : live[0]
+  const firstRow = sportRows.find(row => row.games.length)
+  const firstOther = !rowsView ? ahead[0] : undefined
+  const fallback = firstLive ? cardKey(firstLive)
+    : unconfirmed[0] ? `${cardKey(unconfirmed[0])}:airing`
+    : firstRow ? `${cardKey(firstRow.games[0]!)}:${firstRow.name}`
+    : firstOther ? cardKey(firstOther)
+    : gameChannels[0] ? cardKey(gameChannels[0]) : 'sports:sport:all'
+  const waitingForFirstRow = rowsView && !firstLive && !unconfirmed.length && !firstRow && rows.some(row => row.isPending)
   useEffect(() => {
     if (!saved.ready || data || interacted) return
     const frame = requestAnimationFrame(() => setFocus('sports:sport:all'))
     return () => cancelAnimationFrame(frame)
   }, [saved.ready, data, interacted])
-  useRestoreFocus(saved.ready && !!data && !interacted, fallback)
+  useRestoreFocus(saved.ready && !!data && !waitingForFirstRow && !interacted, fallback)
   if (data && page > Math.max(0, Math.ceil(data.total / PAGE) - 1)) setPage(Math.max(0, Math.ceil(data.total / PAGE) - 1))
 
   const watch = async (channelId: string, from?: Event) => {
@@ -235,19 +248,17 @@ function SportsScreen() {
           {unconfirmed.map(event => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} row="airing" />)}
         </HRow>
       </section>}
-        {rowSports.map((name, i) => {
-          const row = rows[i]?.data
-          const games = (row?.events ?? []).filter((event) => (date === today && isLive(event, now)) || (isAhead(event, now) && dayOf(event.start) >= date)).sort(rowOrder(now))
+        {sportRows.map(({ name, games, total }) => {
           if (!games.length) return null
           const label = sportLabel(name)
           return <section key={name} className="sports-section" aria-label={label} data-testid="sports-row" data-sport={name}>
             <SectionHeader title={label} />
             <HRow focusKey={`sports:row:${name}`} className="sports-tiles" label={label}>
               {games.map((event) => <GameTile key={event.id} event={event} now={now} today={today} recordings={recordings.data?.recordings} onOpen={open} row={name} />)}
-              {(row?.total ?? 0) > games.length && <Focusable focusKey={`sports:more:${name}`} className="sports-tile sports-more tile-more fx-flat" data-testid="sports-see-all" label={`See all ${label}`} onEnter={() => setSport(name)}>
+              {total > games.length && <Focusable focusKey={`sports:more:${name}`} className="sports-tile sports-more tile-more fx-flat" data-testid="sports-see-all" label={`See all ${label}`} onEnter={() => setSport(name)}>
                 <Icon name="chevR" />
                 <span className="sports-more-text">See all</span>
-                <span className="label">{row!.total} {label.toLowerCase()} listings</span>
+                <span className="label">{total} {label.toLowerCase()} listings</span>
               </Focusable>}
             </HRow>
           </section>

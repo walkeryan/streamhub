@@ -19,3 +19,17 @@ test('only confirmed live games appear in Live now while on-air replays and unkn
   await expect(other.getByRole('button', { name: /Cup encore/ })).toContainText('Replay')
   await expect(other.getByRole('button', { name: /Cup studio/ })).toContainText('On now')
 })
+
+test('an upcoming-only day initially focuses the first visible game and returns there from details', async ({ page }) => {
+  await stubSports(page, [
+    { id: 'later', title: 'Evening City Cup', sport: 'Soccer', startMin: 90, feeds: [{ id: '1' }] },
+  ])
+  await signIn(page)
+  await page.goto('/sports')
+  const first = page.getByTestId('sports-row').getByRole('button', { name: /Evening City Cup/ })
+  await expect(first).toHaveAttribute('data-focused', 'true')
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('sports-sheet')).toContainText('Evening City Cup')
+  await page.keyboard.press('Escape')
+  await expect(first).toHaveAttribute('data-focused', 'true')
+})

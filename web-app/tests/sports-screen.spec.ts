@@ -140,7 +140,7 @@ test('the owner records a coming game or every game of a side from its sheet', a
   await expect(sheet.getByRole('heading')).toHaveText('Oakdale at Port Linden')
   await expect(sheet).toContainText(/(Today|Tomorrow) · \d{1,2}:\d{2}/)
   await expect(sheet).toContainText("Men's Soccer · VANTIX+ 003 · Ch 903")
-  await expect(sheet.getByRole('button')).toHaveText(['Record this game', 'Record every Oakdale game', 'Record every Port Linden game', 'Close'])
+  await expect(sheet.getByRole('button')).toHaveText(['Record this game', 'Recording details', 'Record every Oakdale game', 'Record every Port Linden game', 'Close'])
   await expect(sheet.getByTestId('sports-record')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
   await expect(page.getByRole('status').filter({ hasText: 'Oakdale at Port Linden will be recorded at' })).toBeVisible()

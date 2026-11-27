@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openMore, signIn } from './helpers'
+import { signIn } from './helpers'
 import { fits, listing, stubSports, type StubEvent } from './sports-helpers'
 
 const MANY: StubEvent[] = Array.from({ length: 501 }, (_, i) => ({
@@ -11,18 +11,17 @@ test('a large day is paged, narrowed by sport and search, and one press plays th
   page.on('pageerror', (e) => errors.push(e.message))
   await stubSports(page, [...MANY].reverse())
   await signIn(page)
-  await openMore(page, 'Sports')
+  await page.getByTestId('nav-sports').click()
   await expect(page).toHaveURL(/\/sports$/)
-  await expect(page.getByTestId('sports-listing')).toHaveCount(100)
+  await expect(page.getByTestId('sports-live').getByTestId('sports-listing')).toHaveCount(40)
   await expect(page.getByTestId('sports-chip')).toHaveText(['All · 501', 'Basketball · 251', 'Tennis · 250'])
-  await expect(page.getByText('Page 1 of 6', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Next', exact: true }).click()
-  await expect(page.getByText('Page 2 of 6', { exact: true })).toBeVisible()
-  await expect(page.getByTestId('sports-listing')).toHaveCount(100)
-  await expect(listing(page, 'Fixture game 400')).toHaveCount(1)
-  await page.getByRole('button', { name: 'Tennis · 250', exact: true }).click()
+  await page.getByRole('button', { name: 'See all Tennis', exact: true }).click()
   await expect(page.getByText('Page 1 of 3', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('sports-live').getByTestId('sports-listing')).toHaveCount(100)
   await expect(listing(page, 'Fixture game 499')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
+  await expect(page.getByText('Page 2 of 3', { exact: true })).toBeVisible()
+  await expect(listing(page, 'Fixture game 299')).toHaveCount(1)
   await expect(listing(page, 'Fixture game 500')).toHaveCount(0)
   await page.getByTestId('sports-filters').click()
   await page.getByLabel('Search games, teams or channels').fill('game 499')
@@ -42,7 +41,7 @@ test('a large day is paged, narrowed by sport and search, and one press plays th
 test('an empty day says what is true and offers no dead end', async ({ page }) => {
   await stubSports(page, [])
   await signIn(page)
-  await openMore(page, 'Sports')
+  await page.getByTestId('nav-sports').click()
   await expect(page.getByTestId('sports-live')).toContainText('No confirmed live games right now.')
   await expect(page.getByTestId('sports-live')).not.toContainText('Next:')
   await expect(page.getByTestId('sports-upcoming')).toContainText('Nothing more is listed for today or tomorrow.')
