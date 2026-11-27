@@ -173,7 +173,7 @@ test.describe('on a phone', () => {
     await enter(page)
     await page.getByTestId('nav-more').tap()
     const menu = page.getByTestId('more-menu')
-    await expect(menu.getByRole('link')).toHaveText(['My List', 'Sports', 'Requests', 'Recordings', 'Settings', /Guest$/])
+    await expect(menu.getByRole('link')).toHaveText(['My List', 'Sports', 'For You', 'Requests', 'Recordings', 'Settings', /Guest$/])
     const box = (await menu.boundingBox())!
     expect([box.x, box.width, Math.round(box.y + box.height)]).toEqual([0, 390, 844])
     await menu.getByRole('link', { name: 'My List', exact: true }).tap()
@@ -367,14 +367,14 @@ test('More offers only what the profile may use, and closes back onto its opener
   await page.getByTestId('nav-more').click()
   const menu = page.getByTestId('more-menu')
   // Family may use recordings, and recording is on; Sources and Users are the owner's.
-  await expect(menu.getByRole('link')).toHaveText(['Requests', 'Recordings', 'Settings'])
-  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Requests')
+  await expect(menu.getByRole('link')).toHaveText(['For You', 'Requests', 'Recordings', 'Settings'])
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('For You')
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/requests$/)
+  await expect(page).toHaveURL(/\/for-you$/)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('aria-current', 'page')
   await page.getByTestId('nav-more').click()
   // Back belongs to the menu once it has taken focus.
-  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('Requests')
+  await expect(page.locator('.fx[data-focused="true"]')).toHaveText('For You')
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await expect(page.getByTestId('nav-more')).toHaveAttribute('data-focused', 'true')

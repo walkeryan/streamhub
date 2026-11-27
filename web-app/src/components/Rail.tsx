@@ -108,7 +108,7 @@ export function Rail() {
         <Icon name="menu" />
         {phone && <span className="lbl">More</span>}
       </Focusable>
-      {!phone && <CastPanel />}
+      <CastPanel />
       {!phone && <Focusable focusKey="rail:profile" className="rail-item rail-icon fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`} title={profile?.name}
         data-testid="nav-profile" onEnter={openProfile}>
         {face('1.75rem')}
@@ -135,6 +135,6 @@ export function Rail() {
       </FocusGroup>
     </Modal>
     <JoinRoomDialog open={joinRoom} onClose={() => setJoinRoom(false)} />
-    {phone && <><CastPanel /><SlashOpensSearch /></>}
+    {phone && <SlashOpensSearch />}
   </>
 }
