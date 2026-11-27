@@ -650,3 +650,74 @@ async def history(c: C, p: P, include_adult: IncludeAdult = False) -> list[dict[
 
 def _bad(msg: str) -> ServiceError:
     return ServiceError(msg)
+
+
+async def require_library_owner(c: C, p: Principal) -> None:
+    from app.infra.models import User
+    from app.services.permissions import OWNER_ROLE
+
+    async with c.db.session() as session:
+        owner = await session.get(User, p.user_id)
+        if owner is None or owner.role_id != OWNER_ROLE:
+            raise Forbidden("Only a household owner can change the shared library.")
+
+
+@router.delete("/library/media", status_code=204, tags=["catalog"])
+async def remove_library_media(c: C, p: P, id: str = Query(min_length=1, max_length=256)) -> Response:
+    from sqlalchemy.dialects.sqlite import insert
+
+    from app.infra.models import LibraryRemoval
+    from app.services import ids
+    from app.services.tiles import hub_id_for_title
+
+    await require_library_owner(c, p)
+    await require_watch(c.db, p.permissions, id)
+    await require_adult(c.db, p, id)
+    if c.content_policy.applies_to(p):
+        await c.content_policy.require(p.profile_id, id)
+    try:
+        ref = ids.parse(id)
+    except ValueError as exc:
+        raise NotFound("Unknown library title") from exc
+    key = id
+    aliases = {id}
+    rows = []
+    if ref.scheme == "lib":
+        row = await c.catalog.title_row(ref.a, ref.b)
+        if row is None:
+            raise NotFound("Title is not in the library")
+        rows = [row]
+        key = hub_id_for_title(row)
+        ref = ids.parse(key)
+    if ref.scheme == "tmdb" and ref.a in ("movie", "tv") and ref.b.isdigit():
+        rows = await c.catalog.rows_for_tmdb(ref.a, int(ref.b))
+    if ref.scheme == "ch":
+        await c.channels.channel_by_hub_id(id)
+    elif not rows:
+        raise NotFound("Title is not in the library")
+    aliases.update(ids.lib_id(r.source_id, r.ext_id) for r in rows)
+    async with c.db.session() as session:
+        await session.execute(
+            insert(LibraryRemoval).values(ref_id=key, aliases=sorted(aliases)).on_conflict_do_nothing()
+        )
+        await session.commit()
+    return Response(status_code=204)
+
+
+@router.put("/library/media", status_code=204, tags=["catalog"])
+async def restore_library_media(c: C, p: P, id: str = Query(min_length=1, max_length=256)) -> Response:
+    from sqlalchemy import delete, select
+
+    from app.infra.models import LibraryRemoval
+
+    await require_library_owner(c, p)
+    async with c.db.session() as session:
+        keys = [
+            row.ref_id
+            for row in (await session.scalars(select(LibraryRemoval))).all()
+            if row.ref_id == id or id in row.aliases
+        ]
+        if keys:
+            await session.execute(delete(LibraryRemoval).where(LibraryRemoval.ref_id.in_(keys)))
+            await session.commit()
+    return Response(status_code=204)

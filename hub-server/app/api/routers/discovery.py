@@ -1,5 +1,6 @@
 """Personal recommendations and short-lived, opt-in group picks."""
 
+import hashlib
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -8,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert
 
 from app.api.deps import C, P, acting_as
@@ -16,12 +17,13 @@ from app.api.policy_route import PolicyCatalogRoute
 from app.api.routers.rooms import _require_rated
 from app.api.schemas import Tile
 from app.container import Container
-from app.infra.models import RecommendationVote, utcnow
+from app.infra.models import RecommendationVote, Watchlist, utcnow
 from app.services import ids
 from app.services.auth import Principal
 from app.services.errors import Conflict, NotFound, ServiceError
 from app.services.for_you import feed
 from app.services.recommendations import recommendations
+from app.services.tiles import hub_id_for_title
 from app.services.visibility import require_watch
 
 router = APIRouter(prefix="/for-you", tags=["catalog"], route_class=PolicyCatalogRoute)
@@ -67,15 +69,69 @@ class Rating(BaseModel):
     vote: Literal["up", "down"] | None
 
 
+async def rating_subject(c: Container, p: Principal, ref: str) -> tuple[str, list[str]]:
+    await require_watch(c.db, p.permissions, ref)
+    await _require_rated(c, p, ref)
+    try:
+        media = ids.parse(ref)
+    except ValueError as exc:
+        raise NotFound("Unknown media") from exc
+    if media.scheme == "rec":
+        c.recorder._require_view(p)
+        recording = await c.recorder._owned(p, media.a)
+        return ref, ["Sports"] if recording.is_sport else []
+    if media.scheme == "prog":
+        programme = await c.channels.programme(ref)
+        identity = repr((programme.feed, programme.epg_channel, programme.start.isoformat(), programme.title))
+        return "airing:" + hashlib.sha256(identity.encode()).hexdigest(), [
+            programme.category
+        ] if programme.category else []
+    if media.scheme == "tmdb" and media.a in {"movie", "tv"} and media.b.isdigit():
+        rows = await c.catalog.rows_for_tmdb(media.a, int(media.b))
+        if rows:
+            return ref, [tag for row in rows for tag in (row.genres or [])]
+    if media.scheme == "lib":
+        row = await c.catalog.title_row(media.a, media.b)
+        if row is None or media.a not in (await c.catalog.tile_context(p.profile_id)).sources:
+            raise NotFound("Title not found")
+        genres = list(row.genres or [])
+        ancestor = row
+        for _ in range(2):
+            if genres or not ancestor.parent_ext_id:
+                break
+            parent = await c.catalog.title_row(media.a, ancestor.parent_ext_id)
+            if parent is None:
+                break
+            genres = list(parent.genres or [])
+            ancestor = parent
+        return hub_id_for_title(row), genres
+    if media.scheme == "ch":
+        channel = await c.channels.channel_by_hub_id(ref)
+        return ref, [channel.group_name] if channel.group_name else []
+    detail = await c.catalog.detail(ref, p.profile_id)
+    return detail["id"], detail.get("genres", [])
+
+
+class MediaState(Rating):
+    saved: bool
+
+
+@router.get("/feedback", response_model=MediaState)
+async def read_feedback(id: str, c: C, p: P, response: Response) -> dict[str, Any]:
+    key, _ = await rating_subject(c, p, id)
+    async with c.db.session() as s:
+        row = await s.get(RecommendationVote, (p.profile_id, key))
+        saved = await s.scalar(
+            select(Watchlist.id).where(Watchlist.profile_id == p.profile_id, Watchlist.ref_id.in_({id, key})).limit(1)
+        )
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"id": key, "vote": row.vote if row else None, "saved": saved is not None}
+
+
 @router.put("/feedback", response_model=Rating)
 async def feedback(body: Rating, c: C, p: P) -> dict[str, Any]:
-    await require_watch(c.db, p.permissions, body.id)
-    await _require_rated(c, p, body.id)
-    detail = await c.catalog.detail(body.id, p.profile_id)
-    if detail["kind"] not in (*ids.MOVIE_KINDS, *ids.SHOW_KINDS):
-        raise Conflict("Only movies and series can be rated here.")
-    key = detail["id"]
-    genres = sorted({g.strip()[:80] for g in detail.get("genres", []) if isinstance(g, str) and g.strip()})[:32]
+    key, tags = await rating_subject(c, p, body.id)
+    genres = sorted({g.strip()[:80] for g in tags if isinstance(g, str) and g.strip()})[:32]
     async with c.db.session() as s:
         if body.vote is None:
             await s.execute(

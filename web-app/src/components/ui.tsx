@@ -162,6 +162,10 @@ export function Toasts() {
         <div key={t.id} className="toast" data-tone={t.tone} role="status">
           <Icon name={t.tone === 'error' ? 'alert' : t.tone === 'success' ? 'check' : 'info'} size={18} className="toast-icon" />
           <span>{t.text}</span>
+          {t.action && <Button ghost focusKey={'toast:action:' + t.id} onEnter={() => {
+            useUi.getState().dismissToast(t.id)
+            t.action?.onSelect()
+          }}>{t.action.label}</Button>}
         </div>
       ))}
     </div>

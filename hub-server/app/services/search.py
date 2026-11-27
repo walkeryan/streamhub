@@ -74,6 +74,58 @@ def split_year(q: str) -> tuple[str, int | None]:
     return (found.group("text"), int(found.group("year"))) if found else (q.strip(), None)
 
 
+# Free-form provider categories work with a media qualifier. These common topics also work alone.
+_TOPIC_TERMS = {
+    "christmas": ("christmas", "xmas", "yuletide", "santa claus", "holiday"),
+    "holiday": ("holiday", "christmas", "xmas", "hanukkah", "kwanzaa"),
+    "halloween": ("halloween", "all hallows"),
+    "sci fi": ("sci-fi", "sci fi", "science fiction"),
+    "science fiction": ("science fiction", "sci-fi", "sci fi"),
+    "comedies": ("comedy",),
+    "thrillers": ("thriller",),
+    "documentaries": ("documentary",),
+}
+_GENRES = {
+    "action",
+    "adventure",
+    "animation",
+    "comedy",
+    "crime",
+    "documentary",
+    "drama",
+    "family",
+    "fantasy",
+    "horror",
+    "musical",
+    "mystery",
+    "romance",
+    "thriller",
+    "western",
+}
+
+
+def category_search(query: str) -> tuple[tuple[str, ...], set[str]] | None:
+    value = " ".join(query.casefold().replace("-", " ").split())
+    kinds = r"(movies|films|tv shows|shows|tv series|series)"
+    match = re.fullmatch(r"(.+?) " + kinds, value)
+    if match:
+        topic, media = match.groups()
+    elif match := re.fullmatch(kinds + r" (?:about|in|for) (.+)", value):
+        media, topic = match.groups()
+    elif value in _TOPIC_TERMS or value in _GENRES:
+        topic, media = value, ""
+    else:
+        return None
+    if len(topic) < 2:
+        return None
+    wanted = (
+        set(ids.MOVIE_KINDS if media in {"movies", "films"} else ids.SHOW_KINDS)
+        if media
+        else set(ids.MOVIE_KINDS + ids.SHOW_KINDS)
+    )
+    return _TOPIC_TERMS.get(topic, (topic,)), wanted
+
+
 def title_rank(norm: str, tokens: list[str], title_norm: str) -> int | None:
     """Exact title, title prefix, word prefix, contains; then every word in any order, then one typo."""
     if title_norm == norm:

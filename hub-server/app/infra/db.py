@@ -51,6 +51,7 @@ class Database:
         async with self.sessionmaker() as s:
             self.catalog_revisions.observe(s.sync_session)
             from app.services.content_policy import active_policy
+            from app.services.household_library import scope_statement as library_statement
             from app.services.visibility import scope_statement as watch_statement
 
             @event.listens_for(s.sync_session, "do_orm_execute")
@@ -58,7 +59,7 @@ class Database:
                 if not state.is_select:
                     return
                 # What the caller's watch.* permissions cover, then the parental policy.
-                state.statement = watch_statement(state.statement)
+                state.statement = library_statement(watch_statement(state.statement))
                 active = active_policy.get()
                 if active is not None:
                     policy, profile = active

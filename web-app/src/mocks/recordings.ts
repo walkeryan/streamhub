@@ -223,7 +223,7 @@ export const recordingHandlers = [
     if (!r) return error(404, 'not_found', 'This recording no longer exists.')
     if (!r.has_file && r.state !== 'done') return error(409, 'recording_unavailable', 'This recording has no file to play.')
     const d: PlaybackDescriptor = {
-      id: b.id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, buffer_available: false, headers: {},
+      id: b.id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, buffer_available: false, tv_compatible_available: false, headers: {},
       title: r.title, subtitle: [r.subtitle, r.channel_name].filter(Boolean).join(' · ') || null, poster: null, resume_position_ms: 0, duration_ms: 30_000,
     }
     return HttpResponse.json(d)

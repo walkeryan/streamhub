@@ -3,9 +3,9 @@ import { delay, http, HttpResponse } from 'msw'
 import type { Channel, PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
   DISCLAIMER, EPISODE_NAMES, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf, showSeed,
-  searchBroadcasts, sources, tileOf, titles, unavailable, watch, withNowNext,
+  searchBroadcasts, sources, tileOf, titles, unavailable, withNowNext,
 } from './fixtures'
-import { viewingHandlers } from './viewing'
+import { mockWatchlist, viewingHandlers, writeMockWatchlist } from './viewing'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
@@ -101,7 +101,7 @@ function episodeDescriptor(id: string): PlaybackDescriptor | null {
     { type: 'credits' as const, start_ms: creditsAt, end_ms: 30_000 },
   ]
   return {
-    id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, headers: {}, buffer_available: false,
+    id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, headers: {}, buffer_available: false, tv_compatible_available: false,
     resume_position_ms: 0, duration_ms: 30_000, title: name(here), subtitle: `S${String(season).padStart(2, '0')}E${String(n).padStart(2, '0')} · ${series.title}`,
     poster: here.backdrop ?? null, channel_context: null, handoff: null,
     media_info: { source_name: 'Library', container: 'mov', bitrate_kbps: 9_400, video: { codec: 'h264', width: 1920, height: 1080 }, audio: { codec: 'aac', channels: 2 }, delivery: 'direct', output_width: 1920, output_height: 1080 },
@@ -551,7 +551,7 @@ export const handlers = [
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
-    const base = { id: b.id, buffer_available: false, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
+    const base = { id: b.id, buffer_available: false, tv_compatible_available: false, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
     if (handoffOnly || b.source_id === 's_nf') {
       const d: PlaybackDescriptor = {
         ...base, mode: 'handoff', url: null, live: false, resume_position_ms: 0,
@@ -606,9 +606,17 @@ export const handlers = [
   ])),
   http.put(`${B}/favorites`, async ({ request }) => { fav.add(((await request.json()) as { id: string }).id); return new HttpResponse(null, { status: 204 }) }),
   http.delete(`${B}/favorites`, ({ request }) => { fav.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
-  http.get(`${B}/watchlist`, () => HttpResponse.json(titles.filter((t) => watch.has(t.id)))),
-  http.put(`${B}/watchlist`, async ({ request }) => { watch.add(((await request.json()) as { id: string }).id); return new HttpResponse(null, { status: 204 }) }),
-  http.delete(`${B}/watchlist`, ({ request }) => { watch.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
+  http.get(`${B}/watchlist`, ({ request }) => HttpResponse.json(titles.filter((t) => mockWatchlist(currentProfileId(request)).has(t.id)))),
+  http.put(`${B}/watchlist`, async ({ request }) => {
+    const profile = currentProfileId(request), saved = mockWatchlist(profile)
+    saved.add(((await request.json()) as { id: string }).id); writeMockWatchlist(profile, saved)
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${B}/watchlist`, ({ request }) => {
+    const profile = currentProfileId(request), saved = mockWatchlist(profile)
+    saved.delete(new URL(request.url).searchParams.get('id') ?? ''); writeMockWatchlist(profile, saved)
+    return new HttpResponse(null, { status: 204 })
+  }),
   http.get(`${B}/history`, () => HttpResponse.json(Object.keys(progress).map(tileById).filter((t): t is Tile => !!t))),
   http.get(`${B}/themes`, () => HttpResponse.json([])),
   http.get(`${B}/settings`, ({ request }) => HttpResponse.json(settingsFor(request))),

@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { requestId } from '../cast/requestId'
-import { titles } from './fixtures'
+import { titles, watch } from './fixtures'
 import { annotate } from './requests'
 import type { CastCommand, CastPlayback } from '../player/castNative'
 import type { CastSession } from '../cast/controller'
@@ -9,6 +9,8 @@ const base = '/api/v1'
 const fail = (status: number) => HttpResponse.json({ message: 'Fixture resource is unavailable.' }, { status })
 const read = <T>(key: string, fallback: T): T => JSON.parse(localStorage.getItem('mock.viewing:' + key) ?? JSON.stringify(fallback)) as T
 const write = (key: string, value: unknown) => localStorage.setItem('mock.viewing:' + key, JSON.stringify(value))
+export const mockWatchlist = (profile: string): Set<string> => new Set(read<string[]>('watchlist:' + profile, [...watch]))
+export const writeMockWatchlist = (profile: string, value: Set<string>) => write('watchlist:' + profile, [...value])
 const emptyPlayback: CastPlayback = { id: null, title: '', poster: null, playing: false, position_ms: 0, duration_ms: null, live: false }
 const device = () => {
   const key = 'mock.viewing.device'
@@ -29,12 +31,32 @@ export function viewingHandlers(profile: (r: Request) => string) {
       const visible = titles.filter(t => feedback[t.id] !== 'down')
       return HttpResponse.json({ movies: visible.filter(t => t.kind === 'movie').slice(0, 8).map(annotate), series: visible.filter(t => t.kind === 'show').slice(0, 6).map(annotate), new_episodes: [], coming_up: [], history_used: false, reason: 'Popular picks. Rate a title to personalize your recommendations.', feedback })
     }),
+    http.get(base + '/for-you/feedback', ({ request }) => {
+      const id = new URL(request.url).searchParams.get('id') ?? ''
+      const viewer = profile(request)
+      const votes = read<Record<string, 'up'|'down'>>('votes:' + viewer, {})
+      return HttpResponse.json({ id, vote: votes[id] ?? null, saved: mockWatchlist(viewer).has(id) })
+    }),
     http.put(base + '/for-you/feedback', async ({ request }) => {
       const body = await request.json() as { id: string; vote: 'up'|'down'|null }
       const key = 'votes:' + profile(request), votes = read<Record<string,string>>(key, {})
       if (!titles.some(t => t.id === body.id)) return fail(404)
       if (body.vote) votes[body.id] = body.vote; else delete votes[body.id]
       write(key, votes); return HttpResponse.json(body)
+    }),
+    http.delete(base + '/library/media', ({ request }) => {
+      const id = new URL(request.url).searchParams.get('id') ?? ''
+      const tile = titles.find(t => t.id === id)
+      if (profile(request) !== 'p1') return fail(403)
+      if (!tile?.sources.some(source => source.playable_in_app)) return fail(404)
+      const removed = new Set(read<string[]>('library:removed', [])); removed.add(id); write('library:removed', [...removed])
+      return new HttpResponse(null, { status: 204 })
+    }),
+    http.put(base + '/library/media', ({ request }) => {
+      const id = new URL(request.url).searchParams.get('id') ?? ''
+      if (profile(request) !== 'p1') return fail(403)
+      const removed = new Set(read<string[]>('library:removed', [])); removed.delete(id); write('library:removed', [...removed])
+      return new HttpResponse(null, { status: 204 })
     }),
     http.post(base + '/for-you/together', ({ request }) => {
       const code = requestId().slice(0, 6).toUpperCase(), g = { members: [profile(request)], expires_at: new Date(Date.now() + 3600000).toISOString() }

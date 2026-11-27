@@ -33,6 +33,7 @@ class ShellProtocolTest {
         assertTrue(t.request.allowUnverifiedAudio)
         assertEquals("the TV resolves for itself", "android_tv", t.request.client)
         assertEquals(120_000L, t.startPositionMs)
+        assertEquals(1, t.request.audioTrack)
     }
 
     @Test fun retainedPositionIsPreservedAndCannotBeRequestedForMovies() {

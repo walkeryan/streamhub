@@ -620,3 +620,67 @@ async def test_the_number_of_queries_does_not_grow_with_the_catalog(api: Api) ->
     )
     assert large == small, (small, large)
     assert small <= 24
+
+
+async def test_category_query_finds_films_by_subject_category_or_genre(api: Api) -> None:
+    await seed(
+        api,
+        title("green", "The Grinch", overview="A grouch plans to steal Christmas."),
+        title("north", "Northern Lights", group_name="Christmas Classics"),
+        title("elf", "Elf", genres=["Christmas Comedy"]),
+        title("show", "Holiday Village", kind="series", genres=["Christmas"]),
+        title("unrelated", "March", genres=["Drama"]),
+        title("adult", "Locked", genres=["Christmas"], adult=True),
+    )
+    ids = lambda data: {t["id"] for t in data["results"]}  # noqa: E731
+    assert ids(await search(api, "Christmas movies", discover=False)) == {
+        "lib:catalog:green",
+        "lib:catalog:north",
+        "lib:catalog:elf",
+    }
+    assert ids(await search(api, "Christmas TV shows", discover=False)) == {"lib:catalog:show"}
+    assert ids(await search(api, "comedy films", discover=False)) == {"lib:catalog:elf"}
+    assert ids(await search(api, "The Grinch", discover=False)) == {"lib:catalog:green"}
+
+
+async def test_household_library_owner_can_remove_across_profiles_and_restore(api: Api) -> None:
+    await seed(api, title("same", "Shared Film", tmdb_id=6789), title("other", "Other Film"))
+    viewer = await member(api)
+    ref = {"id": "tmdb:movie:6789"}
+    assert (await viewer.req("DELETE", "/library/media", params=ref)).status_code == 403
+    assert (await api.req("DELETE", "/library/media", params=ref)).status_code == 204
+    for user in (api, viewer):
+        assert not (await search(user, "Shared Film", discover=False))["results"]
+        page = await user.get("/browse/movies", params={"language": "all"})
+        assert page.status_code == 200
+        assert ref["id"] not in page.text
+        blocked = await user.get("/playback/options", params=ref)
+        assert blocked.status_code == 404
+    # The provider still owns the file and may send a new source id for the same movie.
+    async with api.c.db.session() as s:
+        s.add(title("duplicate", "Shared Film", tmdb_id=6789))
+        await s.commit()
+    assert not (await search(api, "Shared Film", discover=False))["results"]
+    blocked = await viewer.get("/playback/options", params={"id": "lib:catalog:duplicate"})
+    assert blocked.status_code == 404 and "removed" in blocked.text
+    assert (await viewer.req("PUT", "/library/media", params=ref)).status_code == 403
+    assert (await api.req("PUT", "/library/media", params=ref)).status_code == 204
+    assert ref["id"] in {t["id"] for t in (await search(viewer, "Shared Film", discover=False))["results"]}
+
+
+async def test_removing_show_blocks_playback_of_existing_and_resynced_episodes(api: Api) -> None:
+    await seed(api, title("show", "Show", kind="show", tmdb_id=120))
+    assert (await api.req("DELETE", "/library/media", params={"id": "tmdb:tv:120"})).status_code == 204
+    async with api.c.db.session() as session:
+        session.add_all(
+            [
+                title("new-show", "Show", kind="show", tmdb_id=120),
+                title("season", "Season", kind="season", parent_ext_id="show"),
+                title("ep", "Episode", kind="episode", parent_ext_id="season"),
+                title("fresh", "Another", kind="episode", parent_ext_id="new-show"),
+            ]
+        )
+        await session.commit()
+    for item in ("ep", "fresh"):
+        blocked = await api.get("/playback/options", params={"id": f"lib:catalog:{item}"})
+        assert blocked.status_code == 404 and "removed" in blocked.text

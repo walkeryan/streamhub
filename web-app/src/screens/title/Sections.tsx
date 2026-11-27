@@ -2,7 +2,8 @@ import type { CastMember, EpisodeTile, Tile, TitleActivityEntry } from './types'
 import { Focusable } from '../../nav/Focusable'
 import { SafeImg, initialsOf } from '../../components/SafeImg'
 import { Avatar } from '../../components/Avatar'
-import { MediaTile } from '../../components/Tile'
+import { MediaCardActions } from '../../components/CardActions'
+import { MediaTile, openPath } from '../../components/Tile'
 import { ProgressBar } from '../../components/ui'
 import { HRow, Section, StillCard, nameGradient as gradient } from '../../ds'
 
@@ -100,10 +101,13 @@ export function EpisodeCard({ e, current, onOpen }: { e: EpisodeTile; current: b
   const pct = e.progress_pct ?? 0
   const name = episodeName(e)
   const number = e.episode_number != null && !/^\d+\./.test(name) ? `${e.episode_number} · ` : ''
+  const cardKey = `episodes::${e.id}`
   return (
-    <StillCard focusKey={`episodes::${e.id}`} className="tp-ep" current={current} testId="episode" onEnter={onOpen}
-      label={`${number}${name}${e.runtime_min ? `, ${e.runtime_min} min` : ''}${pct >= 100 ? ', watched' : ''}`}
-      image={e.backdrop ?? e.poster} fallbackName={name} progressPct={pct} watched={pct >= 100}
-      title={`${number}${name}`} meta={e.runtime_min ? `${e.runtime_min} min` : undefined} />
+    <MediaCardActions tile={e} className="media-card-landscape" cardKey={cardKey} menuKey={`episodes:actions:${e.id}`}>
+      <StillCard focusKey={cardKey} href={openPath(e)} className="tp-ep" current={current} testId="episode" onEnter={onOpen}
+        label={`${number}${name}${e.runtime_min ? `, ${e.runtime_min} min` : ''}${pct >= 100 ? ', watched' : ''}`}
+        image={e.backdrop ?? e.poster} fallbackName={name} progressPct={pct} watched={pct >= 100} available={e.sources.some(s => s.playable_in_app)}
+        title={`${number}${name}`} meta={e.runtime_min ? `${e.runtime_min} min` : undefined} />
+    </MediaCardActions>
   )
 }

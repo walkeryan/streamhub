@@ -308,6 +308,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/media": {
+        parameters: {
+            query: {
+                id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Restore an item removed from the household library */
+        put: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Restored */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Requires the household owner role */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        /** Remove an item from the household library as an owner */
+        delete: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Removed from the shared catalog across provider refreshes */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Requires the household owner role */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/for-you/feedback": {
         parameters: {
             query?: never;
@@ -315,7 +387,31 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read the current profile’s rating and My List state */
+        get: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Current profile media actions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecommendationRating"] & {
+                            saved: boolean;
+                        };
+                    };
+                };
+            };
+        };
         /** Feedback */
         put: {
             parameters: {
@@ -8844,13 +8940,13 @@ export interface components {
              */
             prefer_canvas: boolean;
             /**
-             * @description Prefer HLS remux for live MPEG-TS on web browsers without MPEG-TS playback support.
+             * @description Prefer HLS for live web playback or retry the selected Plex file in a TV-compatible format.
              * @default false
              */
             prefer_hls: boolean;
-            /** @description Web only: index into the file's audio_tracks to play. Naming a variant and one of its tracks is an explicit audio choice. Omitted: the first track in a preferred language, else the file's default. Ignored for android_tv, which switches tracks itself. */
+            /** @description Audio track index for web playback and compatible TV replay. Direct TV playback switches tracks on the device. */
             audio_track?: number | null;
-            /** @description Web only: start a restart-at-offset stream here instead of at the profile's resume position (a seek outside what the current stream has produced). */
+            /** @description Title position in milliseconds for a restart-at-offset stream on the web or TV. */
             start_position_ms?: number | null;
             /**
              * @description Web only: a quality cap for a film or a recording this server converts for the browser. When the file's video is taller, the stream is transcoded with the picture scaled down to this height (the shape kept) and the video held to about 5000, 2800 or 1400 kbit/s for 1080, 720 and 480, beside 160 kbit/s AAC stereo; it is then a restart-at-offset stream, so a change of quality mid-film resolves again with start_position_ms. When the file is no taller, or its height is unknown, the field changes nothing. Ignored for android_tv, for channels and in a room. The cap in force is reported as media_info.max_height.
@@ -8983,6 +9079,11 @@ export interface components {
             };
             /** @default false */
             live: boolean;
+            /**
+             * @description The TV can retry this file as H.264 and AAC if its decoder rejects direct playback.
+             * @default false
+             */
+            tv_compatible_available: boolean;
             /** @default false */
             buffer_available: boolean;
             /** Format: date-time */

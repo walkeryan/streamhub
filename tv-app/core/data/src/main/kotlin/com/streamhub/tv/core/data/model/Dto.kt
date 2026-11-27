@@ -488,7 +488,11 @@ data class PlaybackRequest(
      * generation GET /playback/generation gave just before. Left out otherwise.
      */
     @SerialName("recovery_generation") val recoveryGeneration: String? = null,
-    // No max_height: the quality cap is for the web player and is ignored for android_tv, so it is never sent.
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("prefer_hls") val preferHls: Boolean = false,
+    @SerialName("start_position_ms") val startPositionMs: Long? = null,
+    @SerialName("audio_track") val audioTrack: Int? = null,
     /**
      * Set only when the player moves on from a stalled channel to another feed of the same game: the
      * channel it leaves, whose stream the server then stops at once instead of holding the source's
@@ -544,6 +548,7 @@ data class PlaybackDescriptor(
     val handoff: Handoff? = null,
     @SerialName("archive_start") val archiveStart: String? = null,
     @SerialName("archive_end") val archiveEnd: String? = null,
+    @SerialName("tv_compatible_available") val tvCompatibleAvailable: Boolean = false,
     @SerialName("buffer_available") val bufferAvailable: Boolean = false,
     @SerialName("preferred_audio_languages") val preferredAudioLanguages: List<String> = emptyList(),
     @SerialName("audio_language_required") val audioLanguageRequired: Boolean = false,

@@ -704,3 +704,11 @@ class RecommendationVote(Base):
     vote: Mapped[str] = mapped_column(String(4))
     genres: Mapped[list[str]] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class LibraryRemoval(Base):
+    """Household catalog exclusions survive provider sync. Source media remains intact."""
+
+    __tablename__ = "library_removal"
+    ref_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    aliases: Mapped[list[str]] = mapped_column(JSON)

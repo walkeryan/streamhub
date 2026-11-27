@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
-import { searchView, useRecordings, useSearch, useToggleWatchlist, useWatchlist } from '../api/hooks'
+import { searchView, useRecordings, useSearch } from '../api/hooks'
 import { useCan } from '../api/me'
 import type { Channel, SearchProgramme, SearchResult, SearchSectionName, Tile } from '../api/types'
 import { Attribution, LogoBlock } from '../components/ui'
-import { Button, Chip, Empty, ErrorState, Icon, OverflowMenu, SectionHeader, Skeleton } from '../ds'
+import { Button, Chip, Empty, ErrorState, Icon, SectionHeader, Skeleton } from '../ds'
 import { MediaTile, openPath } from '../components/Tile'
-import { CardActions } from '../components/CardActions'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { useGo, useRestoreFocus } from '../nav/back'
 import { useHistoryState } from '../nav/historyState'
@@ -202,35 +201,11 @@ function SearchPage() {
 }
 
 function TitleGroup({ title, tiles, onOpen }: { title: string; tiles: Tile[]; onOpen: (t: Tile) => void }) {
-  const watchlist = useWatchlist()
-  const toggle = useToggleWatchlist()
-  const toast = useUi(s => s.toast)
-  const saved = new Set(watchlist.data?.map(item => item.id))
-  const save = async (tile: Tile, on: boolean) => {
-    try {
-      await toggle.mutateAsync({ id: tile.id, on })
-      toast(`${tile.title} ${on ? 'added to' : 'removed from'} My List`, 'success')
-    } catch (error) {
-      toast(error instanceof Error ? error.message : 'Could not update My List.', 'error')
-    }
-  }
   if (!tiles.length) return null
   return <section className="search-section" aria-label={title}>
     <SectionHeader title={title} />
     <FocusGroup focusKey={`search:titles:${title}`} className="grid-tiles search-grid">
-      {tiles.map(t => <CardActions key={t.id} className="search-result" cardKey={`search::${t.id}`} menuKey={`search:actions:${t.id}`}>
-        <MediaTile tile={t} scope="search" titleAlways mark="availability" onOpen={onOpen} />
-        <div className="search-result-actions">
-          <OverflowMenu focusKey={`search:actions:${t.id}`} menuKey={`search:menu:${t.id}`} title={t.title} label={`More actions for ${t.title}`} size="sm" testId="search-result-actions"
-            items={[watchlist.data ? {
-              key: 'save', icon: 'bookmark', label: saved.has(t.id) ? 'Remove from My List' : 'Add to My List',
-              disabled: watchlist.isFetching || (toggle.isPending && toggle.variables.id === t.id), onEnter: () => void save(t, !saved.has(t.id)),
-            } : {
-              key: 'save', icon: 'bookmark', label: watchlist.isError ? 'Retry loading My List' : 'Loading My List…',
-              keepOpen: true, onEnter: () => { if (watchlist.isError) void watchlist.refetch() },
-            }]} />
-        </div>
-      </CardActions>)}
+      {tiles.map(t => <MediaTile key={t.id} tile={t} scope="search" titleAlways mark="availability" onOpen={onOpen} />)}
     </FocusGroup>
   </section>
 }

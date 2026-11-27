@@ -3,13 +3,15 @@ import { Button, Modal } from '../components/ui'
 import { useSession } from '../store/session'
 import { castRequest, type ReceiverSync } from './controller'
 import { applyReceiverCommand, receiverPlayback } from '../player/castNative'
+import { useCastPanelUi } from './panelUi'
 
 type Receipt = { session: string; seq: number; error?: string }
 export function ReceiverPanel({ profile }: { profile: string }) {
   const preference = 'sh.cast.receiver:' + profile
   const receiptKey = preference + ':ack'
   const [enabled, setEnabled] = useState(() => localStorage.getItem(preference) === 'on')
-  const [menu, setMenu] = useState(false)
+  const menu = useCastPanelUi((state) => state.open)
+  const closeMenu = useCastPanelUi((state) => state.close)
   const [info, setInfo] = useState<ReceiverSync | null>(null)
   const [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0)
@@ -81,14 +83,13 @@ export function ReceiverPanel({ profile }: { profile: string }) {
   }
   const pending = info?.session?.status === 'pending'
   return <>
-    <div className="cast-bar"><Button focusKey="cast:receiver" ghost icon="tv" onEnter={() => setMenu(true)}>{info?.session?.status === 'connected' ? 'Phone connected' : 'TV controls'}</Button></div>
-    <Modal open={menu && !pending} title="TV controls" onClose={() => setMenu(false)} firstFocusKey="cast:receiver:toggle">
+    <Modal open={menu && !pending} title="TV controls" onClose={closeMenu} firstFocusKey="cast:receiver:toggle">
       <p>Allow a phone using this profile to request control of this TV. Each new connection needs your approval.</p>
       <Button focusKey="cast:receiver:toggle" onEnter={toggle}>{enabled ? 'Turn off phone control' : 'Allow phone control'}</Button>
       {enabled && <p role="status">{info?.controller_name ? 'Controlled by ' + info.controller_name : 'Available to phones using this profile.'}</p>}
       {info?.session?.status === 'connected' && <Button focusKey="cast:receiver:remove" ghost disabled={deciding} onEnter={() => void decide(false)}>Remove controller</Button>}
       {error && <p role="alert">{error}</p>}
-      <Button focusKey="cast:receiver:close" ghost onEnter={() => setMenu(false)}>Close</Button>
+      <Button focusKey="cast:receiver:close" ghost onEnter={closeMenu}>Close</Button>
     </Modal>
     <Modal open={!!pending} title="Allow this phone to control the TV?" onClose={() => void decide(false)} firstFocusKey="cast:decline">
       <p>{info?.controller_name || 'A phone'} wants to choose and control playback on this TV.</p>

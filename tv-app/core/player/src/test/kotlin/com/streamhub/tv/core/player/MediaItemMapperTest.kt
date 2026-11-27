@@ -1,6 +1,7 @@
 package com.streamhub.tv.core.player
 
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import com.streamhub.tv.core.data.model.PlaybackDescriptor
 import com.streamhub.tv.core.data.model.PlaybackMode
 import org.junit.Assert.assertEquals
@@ -21,6 +22,16 @@ class MediaItemMapperTest {
         assertEquals(true, MediaItemMapper.pinsPosition(shared))
         assertEquals(600_000L, MediaItemMapper.timeZeroMs(shared))
         assertEquals(0L, MediaItemMapper.timeZeroMs(shared.copy(startPositionMs = null)))
+    }
+
+    @Test fun compatiblePlexStreamKeepsTitleTimeAndCodecFailuresExcludeNetworkErrors() {
+        val stream = d("http://hub.test/stream/index.m3u8", mode = PlaybackMode.HLS).copy(startPositionMs = 120_000)
+        assertEquals(true, MediaItemMapper.pinsPosition(stream))
+        assertEquals(120_000L, MediaItemMapper.timeZeroMs(stream))
+        assertEquals(true, isCodecFailure(PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED))
+        assertEquals(true, isCodecFailure(PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED))
+        assertEquals(false, isCodecFailure(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS))
+        assertEquals(false, isCodecFailure(PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR))
     }
 
     @Test fun everyOtherStreamCoversItsWholeTitle() {

@@ -5,10 +5,12 @@ import { create } from 'zustand'
  * picker opens the app; it stays true across a switch. `open` is the picker asked for again from
  * the profile entry. Memory only: every start of the app asks.
  */
-export const useWho = create<{ picked: boolean; open: boolean; pick: () => void; show: () => void; hide: () => void }>((set) => ({
+export const useWho = create<{ picked: boolean; open: boolean; pick: () => void; reset: () => void; show: () => void; hide: () => void }>((set) => ({
   picked: false,
   open: false,
   pick: () => set({ picked: true, open: false }),
+  /** Lock a shared device back to its mandatory picker without discarding its paired session. */
+  reset: () => set({ picked: false, open: false }),
   show: () => set({ open: true }),
   hide: () => set({ open: false }),
 }))

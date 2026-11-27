@@ -63,6 +63,7 @@ data class PlayerUiState(
     val bufferedMs: Long = 0,
     val durationMs: Long = 0,
     val error: String? = null,
+    val incompatibleVariant: String? = null,
     val reconnectAttempt: Int = 0,
     val audioTracks: List<TrackOption> = emptyList(),
     val textTracks: List<TrackOption> = emptyList(),
@@ -185,6 +186,10 @@ class StreamHubPlayer(
                 _state.value = _state.value.copy(error = friendly(error), refusal = refusal, reconnectAttempt = 0)
                 return
             }
+            if (d?.tvCompatibleAvailable == true && allowLiveReconnect && isCodecFailure(error.errorCode)) {
+                _state.value = _state.value.copy(incompatibleVariant = d.variantId)
+                return
+            }
             if(d?.bufferAvailable == true) {
                 _state.value = _state.value.copy(error="Buffered playback interrupted. Choose Go Live or retry.")
             } else if (d?.live == true && allowLiveReconnect) {
@@ -199,6 +204,12 @@ class StreamHubPlayer(
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            val descriptor = current
+            if (!updatingMedia && descriptor?.tvCompatibleAvailable == true && allowLiveReconnect &&
+                listOf(C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO).any { tracks.containsType(it) && !tracks.isTypeSupported(it) }) {
+                _state.value = _state.value.copy(incompatibleVariant = descriptor.variantId)
+                return
+            }
             trackRevision++
             _state.value = _state.value.copy(
                 audioTracks = options(tracks, C.TRACK_TYPE_AUDIO),
@@ -262,7 +273,7 @@ class StreamHubPlayer(
             .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
             .setPreferredAudioLanguages(*d.preferredAudioLanguages.toTypedArray()).build()
         reconnectJob?.cancel()
-        _state.value = _state.value.copy(error = null, refusal = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList(),ended=false)
+        _state.value = _state.value.copy(error = null, refusal = null, incompatibleVariant = null, reconnectAttempt = 0,audioBlocked=false,audioNotice=null,audioTracks=emptyList(),ended=false)
         httpFactory.setDefaultRequestProperties(d.headers.filterKeys { !it.equals("User-Agent", true) })
         httpFactory.setUserAgent(d.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: DEFAULT_UA)
         val item = MediaItemMapper.toMediaItem(d)
@@ -535,4 +546,18 @@ class StreamHubPlayer(
         const val MAX_BACKOFF_MS = 30_000L
         const val DEFAULT_UA = "StreamHub-AndroidTV/1.0 (Media3)"
     }
+}
+
+/** Connectivity, authentication and policy errors keep their normal recovery paths. */
+internal fun isCodecFailure(code: Int): Boolean = when (code) {
+    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+    PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+    PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> true
+    else -> false
 }

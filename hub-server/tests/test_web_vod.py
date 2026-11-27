@@ -446,6 +446,57 @@ async def test_unprobeable_film_is_transcoded_and_android_tv_is_untouched(api: A
     assert len(fake.calls) == calls
 
 
+@pytest.mark.parametrize("probe_available", [True, False])
+async def test_selected_plex_tv_file_retries_with_compatible_video_and_keeps_audio_and_position(
+    api: Api, probe_available: bool
+) -> None:
+    await api.accept_disclaimer()
+    key = "lib:library:7"
+    async with api.c.db.session() as session:
+        config = api.c.crypto.encrypt_json({"server_url": MANAGER, "token": "fixture"})
+        session.add(Source(id="library", type="plex", name="Library", config_enc=config))
+        session.add(
+            Title(
+                source_id="library",
+                ext_id="7",
+                kind="movie",
+                title="The Mill",
+                extra={"part_key": "/library/parts/7/file.mkv", "container": "mkv"},
+            )
+        )
+        await session.commit()
+    fake = api.c.playback.probe = FakeProbe(
+        {**probe(), "video": {"codec": "hevc", "width": 3840, "height": 2160, "pix_fmt": "yuv420p10le"}}
+        if probe_available
+        else None
+    )
+    request = {"id": key, "client": "android_tv", "variant_id": key, "source_id": "library"}
+    direct = (await api.post("/playback/resolve", json=request)).json()
+    assert direct["mode"] in ("direct", "proxy") and direct["tv_compatible_available"] and not fake.calls
+    response = await api.post(
+        "/playback/resolve",
+        json={**request, "prefer_hls": True, "replaces": key, "audio_track": 0, "start_position_ms": 123456},
+    )
+    assert response.status_code == 200, response.text
+    d = response.json()
+    assert d["mode"] == "hls" and not d["tv_compatible_available"] and d["variant_id"] == key
+    assert d["start_position_ms"] == 120000 and d["resume_position_ms"] == 123456 and d["audio_track"] == 0
+    g = grant_of(api, d)
+    assert (g.source_id, g.client, g.vod_video, g.audio_track, g.max_height) == (
+        "library",
+        "android_tv",
+        "transcode",
+        0,
+        1080 if probe_available else None,
+    )
+    await add_film(api)
+    rejected = await api.post(
+        "/playback/resolve",
+        json={"id": "lib:iptv:7", "variant_id": "lib:iptv:7", "client": "android_tv", "prefer_hls": True},
+    )
+    assert rejected.status_code == 409
+
+
 async def test_never_proxy_policy_keeps_the_owner_decision(api: Api) -> None:
     await add_film(api, proxy="never")
     fake = api.c.playback.probe = FakeProbe(probe())

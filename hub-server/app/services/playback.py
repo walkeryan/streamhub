@@ -497,9 +497,12 @@ class PlaybackResolver:
             and self.content_policy.is_restricted(await self.content_policy.profile(profile_id))
         ):
             raise Forbidden("External trailers require owner access", code="content_restricted")
-        client = client if client in ("web", "web_hls", "web_canvas", "android_tv") else "web"
+        compatible = client == "android_tv_compatible"
+        if compatible and (room or not variant_id or not hub_id.startswith(("lib:", "tmdb:"))):
+            raise ServiceError("Compatible TV playback requires a selected file.")
+        client = client if client in ("web", "web_hls", "web_canvas", "android_tv", "android_tv_compatible") else "web"
         web = client != "android_tv"
-        if not web or room is not None:
+        if compatible or not web or room is not None:
             max_height = None
         if hub_id.startswith("rec:"):
             return await self._resolve_recording(profile_id, hub_id, client, audio_track, start_position_ms, max_height)
@@ -545,7 +548,7 @@ class PlaybackResolver:
                 allow_unverified_audio,
                 source_id,
                 audio_track=audio_track,
-                probe=web,
+                probe=web and not compatible,
                 hub_id=hub_id,
             )
             playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
@@ -1196,8 +1199,19 @@ class PlaybackResolver:
                 f" · {target.subtitle}" if target.subtitle else ""
             )
         image = self._catalog.image_fn({src.id: src})
+        can_retry = src.type == SourceType.PLEX.value and room is None and self._probe_applies(src, target)
         vod = None
-        if room is not None and self._room_shares(src, target):
+        if client == "android_tv_compatible":
+            if not can_retry:
+                raise Conflict("Compatible playback is unavailable for this file.", code="compatible_unavailable")
+            # A direct decoder already rejected this file. Even an H.264 input may have an
+            # unsupported profile or level, so emit a fresh H.264 stream with AAC audio.
+            vod = await self._web_vod(profile_id, row, src, target, audio_track, start_position_ms, max_height=1080)
+            vod.video = "transcode"
+            if audio_track is not None:
+                vod.audio_track = audio_track
+            client = "android_tv"
+        elif room is not None and self._room_shares(src, target):
             # One session for every member, whatever their client: planned as for a browser, opened
             # (and probed) as the room so the source sees a single viewer.
             vod = await self._web_vod(
@@ -1233,11 +1247,12 @@ class PlaybackResolver:
             probe=cached_probe(row.extra),
         )
 
+        desc["tv_compatible_available"] = can_retry and client == "android_tv" and vod is None
         desc.update(await self._runtime_audio(profile_id, row.extra or {}))
         if room is None:
             # A watch room plays on together: no skipping or moving on by one member.
             desc.update(await self._player_extras(profile_id, row, src, prov))
-        if vod is not None and desc["audio_track"] is not None:
+        if vod is not None and vod.tracks and desc["audio_track"] is not None:
             # The server encodes exactly one track, so that track is the whole answer.
             track = vod.tracks[desc["audio_track"]]
             known = track["language"] != "und"
@@ -1600,7 +1615,7 @@ class PlaybackResolver:
                 allow_unverified_audio,
                 source_id,
                 audio_track=audio_track,
-                probe=client != "android_tv",
+                probe=client not in ("android_tv", "android_tv_compatible"),
                 hub_id=hub_id,
             )
             playback_id = ids.lib_id(row.source_id, row.ext_id) if row.kind == "episode" else hub_id
