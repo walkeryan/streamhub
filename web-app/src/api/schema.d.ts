@@ -9675,8 +9675,13 @@ export interface components {
             quality?: "4K" | "UHD" | "FHD" | "HD" | "SD" | null;
             source_id: string;
             source_name: string;
-            /** @description Programme.id of this event on this channel; pass it with channel_id and the event's start to POST /recordings. */
+            /** @description Programme.id of this event on this channel. */
             programme_id: string;
+            /**
+             * Format: date-time
+             * @description Original guide start when a feed advertises a kickoff inside its guide block. Use this or the event start for DVR requests.
+             */
+            programme_start?: string | null;
             language?: string | null;
             language_verified: boolean;
         };

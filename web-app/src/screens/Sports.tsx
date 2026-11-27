@@ -45,7 +45,7 @@ const isAhead = (event: Event, now: number) => event.kind !== 'channel' && Date.
 const cardKey = (event: Event) => `sports:event:${event.id}`
 const channelLine = (feeds: Feed[]) => feeds.length === 1 ? `${feeds[0]!.channel_name}${feeds[0]!.channel_number ? ` · Ch ${feeds[0]!.channel_number}` : ''}` : `${feeds.length} channels`
 /** The household's recording of an event, on whichever of its channels it was scheduled. */
-const recordingFor = (recordings: Recording[] | undefined, event: Event) => event.feeds.map((feed) => recordingOf(recordings, { channel_id: feed.channel_id, start: event.start })).find(Boolean)
+const recordingFor = (recordings: Recording[] | undefined, event: Event) => event.feeds.map((feed) => recordingOf(recordings, { channel_id: feed.channel_id, start: feed.programme_start ?? event.start })).find(Boolean)
 const filterSchema = z.object({ language: z.string().max(256), sport: z.string().max(256) })
 // The classifier's names, as a row or chip reads them.
 const SPORT_LABELS: Record<string, string> = { 'American football': 'Football', Football: 'Other football', 'Combat sports': 'Boxing & UFC', Motorsport: 'Racing', Sports: 'More sports' }
@@ -447,10 +447,10 @@ function EventSheet({ event, today, now, recordable, recordings, onClose, onWatc
     {error && <p role="alert" data-testid="sports-sheet-error" style={{ color: 'var(--t-danger)' }}>{error}</p>}
     <FocusGroup focusKey="sports:sheet" className="flex flex-col gap-2">
       {started && <Button focusKey="sports:sheet:watch" className="fx-flat" primary icon="play" onEnter={onWatch}>{event.live_evidence && !event.replay ? 'Join live' : event.replay ? 'Watch replay' : 'Watch channel'}</Button>}
-      {started && event.feeds.length === 1 && event.kind !== 'channel' && <LiveAlternatives channel={event.feeds[0]!.channel_id} start={event.start} scope="sports:entry" onClose={onClose} />}
+      {started && event.feeds.length === 1 && event.kind !== 'channel' && <LiveAlternatives channel={event.feeds[0]!.channel_id} start={event.feeds[0]!.programme_start ?? event.start} scope="sports:entry" onClose={onClose} />}
       {recordable && feed && (active
         ? <Button focusKey="sports:sheet:cancel" className="fx-flat" danger icon="x" disabled={busy} onEnter={stop} testId="sports-record-cancel">{existing?.state === 'recording' ? 'Stop recording' : 'Do not record this game'}</Button>
-        : <DvrSchedule target={{ programme_id: feed.programme_id, channel_id: feed.channel_id, start: event.start }} focusKey="sports:sheet:record" primary={!started} disabled={busy} testId="sports-record" label="Record this game"
+        : <DvrSchedule target={{ programme_id: feed.programme_id, channel_id: feed.channel_id, start: feed.programme_start ?? event.start }} focusKey="sports:sheet:record" primary={!started} disabled={busy} testId="sports-record" label="Record this game"
             onSuccess={r => done(r.state === 'recording' ? `Recording ${r.title} now.` : `${r.title} will be recorded at ${fmtTime(r.starts_at)}.`)} onError={failed} />)}
       {recordable && sides.map((team, i) => <Button key={team} focusKey={`sports:sheet:team:${i}`} className="fx-flat" disabled={busy} label={`Record every game for ${team}`} onEnter={() => everyGame(team)} testId="sports-record-team">
         <span className="truncate">Record every {team} game</span>

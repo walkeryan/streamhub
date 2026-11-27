@@ -258,3 +258,75 @@ async def test_live_network_games_lead_the_live_listing(api: Api) -> None:
     # What is still to come keeps its order by time, after everything live.
     active = titles(await events(api, status="active"))
     assert active[: len(live)] == live and all(status != "current" for _, _, status in active[len(live) :])
+
+
+async def test_numbered_league_feed_uses_the_game_kickoff_inside_its_guide_block(api: Api) -> None:
+    kickoff = datetime(2026, 11, 27, 20, tzinfo=UTC)
+    guide_start = kickoff - timedelta(minutes=13)
+    src = await add_lineup(
+        api,
+        [("game", "Events", "NFL Game 05"), ("network", "Events", "League Network"), ("next", "Events", "ESPN+ 197")],
+        config={"event_timezone": "America/New_York", "event_duration_minutes": 210},
+    )
+    title = "FRI 3pm Broncos at Steelers"
+    async with api.c.db.session() as s:
+        for offset in (0, 12):
+            start = guide_start + timedelta(hours=offset)
+            s.add(
+                Programme(
+                    feed=src["id"],
+                    epg_channel="game",
+                    title=title,
+                    category="Sports",
+                    description="NFL game feed 05: " + title,
+                    start=start,
+                    stop=start + timedelta(hours=12),
+                )
+            )
+        s.add(
+            Programme(
+                feed=src["id"],
+                epg_channel="network",
+                title="NFL: Broncos at Steelers",
+                start=kickoff + timedelta(hours=4),
+                stop=kickoff + timedelta(hours=7),
+                broadcast_kind="replay",
+            )
+        )
+        s.add(
+            Programme(
+                feed=src["id"],
+                epg_channel="next",
+                title="ESPN+ 197",
+                description="Next: Football: Denver Broncos vs. Pittsburgh Steelers",
+                start=kickoff,
+                stop=kickoff + timedelta(hours=3),
+            )
+        )
+        await s.commit()
+
+    async def listing(at: datetime, status: str, **filters: Any) -> list[dict[str, Any]]:
+        return (await sports_events(api.c.channels, api.profile_id, now=at, status=status, language="all", **filters))[
+            "events"
+        ]
+
+    at = kickoff + timedelta(minutes=36)
+    for filters in ({}, {"sport": "American football"}, {"q": "Steelers"}):
+        (event,) = await listing(at, "live", **filters)
+        assert (event["title"], event["sport"], event["away"], event["home"]) == (
+            "Broncos at Steelers",
+            "American football",
+            "Broncos",
+            "Steelers",
+        )
+        assert (
+            event["start"] == kickoff and event["stop"] == kickoff + timedelta(minutes=210) and event["live_evidence"]
+        )
+        assert (
+            event["feeds"][0]["channel_name"] == "NFL Game 05" and event["feeds"][0]["programme_start"] == guide_start
+        )
+    assert not await listing(guide_start, "live")
+    assert "Broncos at Steelers" in [e["title"] for e in await listing(guide_start, "upcoming")]
+    assert not await listing(kickoff + timedelta(hours=4), "live")
+    assert (await listing(kickoff + timedelta(hours=4), "replay"))[0]["feeds"][0]["channel_name"] == "League Network"
+    assert not await listing(kickoff + timedelta(hours=13), "current")

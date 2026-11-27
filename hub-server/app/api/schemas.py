@@ -979,6 +979,7 @@ class SportsRecordingsPage(_M):
 
 class SportsFeed(_M):
     programme_id: str
+    programme_start: datetime | None = None
     channel_id: str
     channel_name: str
     channel_number: int | None = None
