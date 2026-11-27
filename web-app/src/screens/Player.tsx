@@ -32,7 +32,7 @@ import { chosenQuality, loadQuality, qualityOptions, saveQuality, savingData, ty
 import { busyHeading, busyLines } from '../player/sourceBusy'
 import { RecordingIssueDialog } from '../recordings/RecordingIssueDialog'
 import { saveLiveBookmark } from '../player/liveBookmark'
-import { LocalBufferControls } from '../player/LocalBufferControls'
+import { LocalBufferControls, type LiveSeek } from '../player/LocalBufferControls'
 import { RewindControls } from '../player/RewindControls'
 import type { RoomSession } from '../room/session'
 import { ShareSheet } from '../room/ShareSheet'
@@ -137,7 +137,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const dataSaver = useMemo(() => savingData((navigator as Navigator & { connection?: Parameters<typeof savingData>[0] }).connection), [])
   const [quality, setQualityState] = useState<QualityHeight | null>(() => loadQuality(dataSaver))
   const canvas = useUi(s => s.canvasPlayback)
-  const pb = usePlayback(pictureRef, audio.request, { report: !previewScene, canvasAudio: canvas && !tv && !room ? canvasAudioRef : undefined, buffer: !room, descriptor: room?.descriptor, maxHeight: quality })
+  const pb = usePlayback(pictureRef, audio.request, { report: !previewScene, canvasAudio: canvas && !tv && !room ? canvasAudioRef : undefined, buffer: !room && !previewScene, descriptor: room?.descriptor, maxHeight: quality })
   useEffect(() => {
     reportPlayerActivity(pb.state === 'playing')
     return () => reportPlayerActivity(false)
@@ -256,6 +256,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const locked = lockId === id && !mini
   useEffect(() => { if (locked) void setFocus('pt:unlock') }, [locked])
   useEffect(() => { setLockId(null) }, [id, mini])
+  const liveSeek = useRef<LiveSeek | null>(null)
   const zappable = isChannel && !room
   // Someone holding a game controller is shown its buttons beside the controls.
   const padRecent = useControllerRecent()
@@ -652,7 +653,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
         // A second row of the bar (a phone, a channel's archive controls) is left by spatial navigation.
         if (row === 'lower') return
         handled()
-        if (row === 'first' && a.canSeek) void setFocus('pb:scrub'); else setOverlay(null)
+        if (row === 'first' && (a.canSeek || liveSeek.current?.available)) void setFocus('pb:scrub'); else setOverlay(null)
         return
       }
       const visible = chromeRef.current
@@ -672,6 +673,11 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
           if (c) apiRef.current.zapTo(c.id); else apiRef.current.toast(`No channel ${n}.`)
         }, 2000)
         return
+      }
+      if (a.live && liveSeek.current?.available && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (['j', 'J', 'MediaRewind', 'l', 'L', 'MediaFastForward'].includes(e.key)) {
+          handled(); liveSeek.current.step(['j', 'J', 'MediaRewind'].includes(e.key) ? -10 : 10); return
+        }
       }
       const action = shortcutFor(e, { live: a.titleLive, room: a.inRoom, navigating: inBar, scrubbing: inBar && getCurrentFocusKey() === 'pb:scrub' })
       if (action) {
@@ -859,6 +865,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     const at = performance.now()
     const again = lastTap.current.side === side && at - lastTap.current.at < DOUBLE_TAP_MS
     lastTap.current = { side, at }
+    if (again && liveSeek.current?.available) { liveSeek.current.step(side * 10); return }
     if (again && canSeek) { seek.step(side); return }
     if (pointer.current.shown && !paused) hideChrome(); else poke()
   }
@@ -976,6 +983,9 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
           </FocusGroup>
         </div>
         <div className="bottom" ref={bottomRef} onPointerEnter={() => { overChrome.current = true }} onPointerLeave={() => { overChrome.current = false }}>
+          {zappable && live && !previewScene && desc?.id === id && !pb.audioBlocked && state !== 'error' &&
+            <LocalBufferControls key={desc.url ?? id} window={pb.bufferWindow} media={videoRef} programmeTime={pb.programmeTime}
+              playbackAt={pb.bufferPlaybackAt} seekServer={pb.seekBuffer} resume={pb.resume} control={liveSeek} />}
           {!live && (
             <Scrubber position={position} duration={duration} loaded={loaded} target={seek.pending?.target ?? null} hint={hint}
               busy={seek.heading !== null} disabled={!canSeek} onSeek={seek.seekNow} onStep={(dir) => seek.step(dir)}
@@ -1026,8 +1036,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
             </div>
             {(pb.bufferWindow || pb.bufferIssue || zappable) && (
               <div className="pbar-extra">
-                {pb.bufferWindow && <LocalBufferControls window={pb.bufferWindow} issue={pb.bufferIssue} onSeek={pb.seekBuffer} />}
-                {pb.bufferIssue && !pb.bufferWindow && <span role="status">{pb.bufferIssue}</span>}
+                {pb.bufferIssue && <span role="status">{pb.bufferIssue}</span>}
                 {zappable && !pb.bufferWindow && <RewindControls key={id} id={id} archived={!live} onSeek={(at) => {
                   const next = new URLSearchParams(sp); next.delete("catchup");
                   if (at) next.set("rewind", at); else next.delete("rewind");

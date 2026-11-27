@@ -236,6 +236,8 @@ class PlayerViewModel @Inject constructor(
     private var sleepJob: Job? = null
     private var rewindJob: Job? = null
     private var attachJob: Job? = null
+    private var tunedAtElapsedMs: Long? = null
+    private var lastBufferSeek: Instant? = null
     private var bufferHeartbeat: Job? = null
     private var bufferSeekJob: Job? = null
     private var scrubJob: Job? = null
@@ -404,6 +406,10 @@ class PlayerViewModel @Inject constructor(
     }
 
     private suspend fun releaseCurrentBuffer() {
+        lastBufferSeek = null
+        tunedAtElapsedMs = null
+        _state.update { it.copy(bufferWindow = null, bufferTimeshift = false, bufferError = null,
+            overlay = if (it.overlay == Overlay.Buffer) Overlay.None else it.overlay) }
         bufferHeartbeat?.cancel(); bufferHeartbeat=null
         bufferSeekJob?.cancel(); bufferSeekJob=null
         player.stop(); currentStopped=true
@@ -431,11 +437,17 @@ class PlayerViewModel @Inject constructor(
         _state.update { it.copy(descriptor=d, live=d.live, message=null, bufferError=null, bufferBusy=d.bufferAvailable, upNext=plan, skipIntroTo=null, skipCredits=false, upNextCard=null, stillWatching=false) }
         var acquiredLeaseId: String? = null
         try {
-            val lease=if(d.bufferAvailable) buffer.open(d) else null
+            val lease = if (d.bufferAvailable) try {
+                buffer.open(d)
+            } catch (error: Exception) {
+                if (currentRequest?.bufferAt != null || !optionalBufferUnavailable(error)) throw error
+                null
+            } else null
             acquiredLeaseId=lease?.leaseId
             currentCoroutineContext().ensureActive()
             if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
             currentStopped=false
+            if (d.live && !inRoom) tunedAtElapsedMs = SystemClock.elapsedRealtime()
             if (inRoom) {
                 // One shared stream: its time zero is start_position_ms into the title, so the player starts
                 // at the room's position minus that. A member's own stream covers the whole title.
@@ -450,23 +462,22 @@ class PlayerViewModel @Inject constructor(
                 if (roomClient?.state?.value?.clock?.playing != true) player.pause()
             } else if (currentRequest?.bufferAt != null) {
                 check(lease != null) { "Buffered position expired." }
-                val result = buffer.seek(Instant.parse(currentRequest!!.bufferAt))
+                val requested = Instant.parse(currentRequest!!.bufferAt)
+                val result = buffer.seek(requested)
                 currentCoroutineContext().ensureActive()
                 check(sessions.current().catalogScope() == owner) { "Playback scope changed." }
                 player.play(d.copy(url = result.url), reportOwner)
+                lastBufferSeek = requested
                 _state.update { it.copy(bufferWindow = result.window, bufferTimeshift = true) }
             } else if (startPositionMs != null) player.play(d, reportOwner, startPositionMs) else player.play(d, reportOwner)
-            _state.update { it.copy(bufferWindow=lease?.window,bufferBusy=false) }
+            _state.update { it.copy(bufferWindow=buffer.window,bufferBusy=false) }
             if(lease != null) bufferHeartbeat=viewModelScope.launch {
                 try {
                     while(true) {
                         delay(30_000)
                         if(sessions.current().catalogScope()!=owner) throw CancellationException("Playback scope changed")
                         val exo = player.exoPlayer
-                        val timeline = exo.currentTimeline
-                        val origin = if (_state.value.bufferTimeshift && !timeline.isEmpty)
-                            timeline.getWindow(exo.currentMediaItemIndex, androidx.media3.common.Timeline.Window()).windowStartTimeMs else androidx.media3.common.C.TIME_UNSET
-                        val at = if (origin == androidx.media3.common.C.TIME_UNSET) null else Instant.ofEpochMilli(origin + exo.currentPosition)
+                        val at = bufferPlayhead()
                         val window=buffer.heartbeat(paused=!exo.playWhenReady, positionAt=at)
                         currentCoroutineContext().ensureActive()
                         if(sessions.current().catalogScope()!=owner || buffer.leaseId!=lease.leaseId) return@launch
@@ -484,18 +495,50 @@ class PlayerViewModel @Inject constructor(
             }
         } catch(e:CancellationException) {
             acquiredLeaseId?.let { id -> withContext(NonCancellable) { buffer.close(id) } }; throw e
-        } catch(_:Exception) {
+        } catch(error:Exception) {
             acquiredLeaseId?.let { id -> withContext(NonCancellable) { buffer.close(id) } }
             currentCoroutineContext().ensureActive()
             if(sessions.current().catalogScope()!=owner) return
-            _state.update { it.copy(bufferBusy=false,bufferError="Buffer unavailable. Nothing was attached. Retry or choose live without buffering.",overlay=Overlay.Buffer) }
+            if (error is ApiException && error.status in setOf(401, 403)) {
+                _state.update { it.copy(bufferBusy = false) }
+                streamRefused(error)
+            }
+            else _state.update { it.copy(bufferBusy=false, bufferError="Could not open the selected playback position. Retry playback.", overlay=Overlay.Buffer) }
         }
     }
 
-    fun playWithoutBuffer() {
-        val descriptor=_state.value.descriptor ?: return
-        currentRequest = currentRequest?.copy(bufferAt = null)
-        attachJob?.cancel(); attachJob=viewModelScope.launch { start(descriptor.copy(bufferAvailable=false)); showOsd() }
+    internal fun localRewindRange(): WatchedTimeline? {
+        val tune = tunedAtElapsedMs ?: return null
+        val shown = _state.value
+        if (seat != null || !shown.live || shown.bufferTimeshift || shown.failure != null || shown.audioChoice != null ||
+            player.state.value.audioBlocked || currentStopped) return null
+        val exo = player.exoPlayer
+        if (!exo.isCurrentMediaItemSeekable || exo.currentTimeline.isEmpty) return null
+        val window = exo.currentTimeline.getWindow(exo.currentMediaItemIndex, androidx.media3.common.Timeline.Window())
+        return localTuneWindow(window.positionInFirstPeriodMs, exo.duration, SystemClock.elapsedRealtime() - tune)
+    }
+
+    internal fun localPlayhead(range: WatchedTimeline): Instant =
+        range.clamp(range.end.minusMillis((player.exoPlayer.duration - player.exoPlayer.currentPosition).coerceAtLeast(0)))
+
+    internal fun seekLocal(tune: String?, at: Instant?) {
+        if (tune == null || tune != _state.value.descriptor?.url) return
+        val range = localRewindRange() ?: return
+        if (at == null) player.exoPlayer.seekToDefaultPosition()
+        else player.seekTo(player.exoPlayer.duration - java.time.Duration.between(range.clamp(at), range.end).toMillis())
+        hideOverlay()
+        showOsd()
+    }
+
+    /** A timestamp on this tune's media timeline. A playing live edge follows the growing buffer. */
+    internal fun bufferPlayhead(): Instant? {
+        val exo = player.exoPlayer
+        if (buffer.leaseId == null || (!_state.value.bufferTimeshift && exo.playWhenReady)) return null
+        val timeline = exo.currentTimeline
+        val start = if (!timeline.isEmpty) timeline.getWindow(exo.currentMediaItemIndex,
+            androidx.media3.common.Timeline.Window()).windowStartTimeMs else androidx.media3.common.C.TIME_UNSET
+        return if (start != androidx.media3.common.C.TIME_UNSET) Instant.ofEpochMilli(start + exo.currentPosition)
+            else lastBufferSeek
     }
 
     fun openBuffer() { _state.update { it.copy(overlay=Overlay.Buffer) }; refreshBuffer() }
@@ -506,7 +549,7 @@ class PlayerViewModel @Inject constructor(
         bufferSeekJob=viewModelScope.launch {
             val owner=sessions.current().catalogScope()
             try {
-                val window=buffer.heartbeat(paused=!player.exoPlayer.playWhenReady)
+                val window=buffer.heartbeat(paused=!player.exoPlayer.playWhenReady, positionAt=bufferPlayhead())
                 currentCoroutineContext().ensureActive()
                 if(buffer.leaseId==lease && sessions.current().catalogScope()==owner) _state.update { it.copy(bufferWindow=window,bufferError=null) }
             } catch(e:CancellationException) { throw e }
@@ -527,6 +570,7 @@ class PlayerViewModel @Inject constructor(
                 val result=buffer.seek(at)
                 currentCoroutineContext().ensureActive()
                 if(buffer.leaseId!=lease || sessions.current().catalogScope()!=owner) return@launch
+                lastBufferSeek = at
                 player.play(descriptor.copy(url=result.url),reportOwner)
                 _state.update { it.copy(bufferWindow=result.window,bufferBusy=false,bufferTimeshift=at!=null,overlay=Overlay.Osd) }
                 showOsd()
@@ -1196,7 +1240,7 @@ class PlayerViewModel @Inject constructor(
 
     fun openRewind() {
         if(seat != null) return
-        if(buffer.leaseId != null) { openBuffer(); return }
+        if(buffer.leaseId != null || localRewindRange() != null) { openBuffer(); return }
         val id = _state.value.descriptor?.id?.takeIf { it.startsWith("ch:") } ?: return
         rewindJob?.cancel()
         _state.update { it.copy(overlay = Overlay.Rewind, rewind = null, rewindLoading = true, rewindError = null) }

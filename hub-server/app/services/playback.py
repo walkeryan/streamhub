@@ -384,6 +384,7 @@ class PlaybackResolver:
         meta: MetadataProvider,
         tokens: StreamTokens,
         active: ActiveStreams,
+        buffer_live_channels: bool = False,
     ) -> None:
         self._sources = sources
         self._catalog = catalog
@@ -395,6 +396,7 @@ class PlaybackResolver:
         self._meta = meta
         self.tokens = tokens
         self.active = active
+        self._buffer_live_channels = buffer_live_channels
         self._probing: dict[str, asyncio.Future[dict[str, Any] | None]] = {}
         self._probe_retry: dict[str, float] = {}
         self._recording_probes: dict[str, tuple[tuple[str, int], dict[str, Any]]] = {}
@@ -1708,6 +1710,15 @@ class PlaybackResolver:
             active_on_source=self.active.count(src.id),
             cors_ok=self._sources.decrypt_config(src).get("cors", True) is not False,
         )
+        if (
+            self._buffer_live_channels
+            and target.live
+            and channel_key
+            and "never"
+            not in (self._sources.proxy_policy(src).lower(), str(self._settings.get("proxy_mode") or "").lower())
+        ):
+            # Produce one seekable HLS feed for the full tune, including remotely hosted HLS sources.
+            mode = PlaybackMode.HLS
         if self._governed():
             # Only what this server serves itself is checked again while it plays.
             if target.live:
@@ -1755,7 +1766,7 @@ class PlaybackResolver:
                     headers=target.headers,
                     mode=mode.value,
                     live=target.live,
-                    channel_key=channel_key if mode == PlaybackMode.PROXY else None,
+                    channel_key=channel_key,
                     transcode=transcode,
                     canvas=canvas,
                     vod_video=plan.video if plan else None,

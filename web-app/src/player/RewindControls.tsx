@@ -29,7 +29,7 @@ export function RewindControls({ id, archived, onSeek }: { id: string; archived:
         onArrow={(direction) => { if (direction === 'left' || direction === 'right') { setMinutes((m) => Math.max(1, Math.min(60, m + (direction === 'left' ? 1 : -1)))); return false } return true }}
         onEnter={seek} className="chip">Try {minutes} min ago</Focusable>
       <Button focusKey="rewind:later" onEnter={() => setMinutes((m) => Math.max(1, m - 1))}>1 min later</Button>
-    </> : <span className="label">{capability.isPending ? 'Checking archive capability…' : capability.error ? 'Archive capability unavailable.' : 'Rewind unavailable · recording disabled'}</span>}
+    </> : <span className="label">{capability.isPending ? 'Checking archive capability…' : capability.error ? 'Archive capability unavailable.' : 'Provider archive unavailable'}</span>}
     {archived && <Button focusKey="rewind:live" primary onEnter={() => onSeek(null)}>Go Live</Button>}
   </FocusGroup>
 }

@@ -97,6 +97,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
   const [refused, setRefused] = useState(false)
   const [requiresEdition, setRequiresEdition] = useState<string | null>(null)
   // Watching back in the local buffer rather than at the live edge.
+  const [bufferPlaybackAt, setBufferPlaybackAt] = useState<string | null>(null)
   const [timeshifted, setTimeshifted] = useState(false)
   const plays = useRef(0)
   const [attempt, setAttempt] = useState(0)
@@ -262,7 +263,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
     setBusy(null)
     setRefused(false)
     setRequiresEdition(null)
-    setTimeshifted(false)
+    setTimeshifted(false); setBufferPlaybackAt(null)
     ;(async () => {
       try {
         await pendingRelease.current
@@ -372,7 +373,8 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
               try {
                 const result = await lease.seek(at)
                 if (cancelled) return
-                setBufferWindow(result.window); setBufferIssue(null); setTimeshifted(at !== null)
+                setBufferWindow(result.window); setBufferIssue(null); setTimeshifted(at !== null); setBufferPlaybackAt(at)
+                if (at === null) { wantsPlayback.current = true; pausedByViewer.current = false }
                 await attach({ ...d, url: result.url })
               } catch (failure) {
                 if (!cancelled && !(failure instanceof DOMException && failure.name === 'AbortError')) setBufferIssue(bufferError(failure))
@@ -381,12 +383,21 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
             if (req.bufferAt) {
               const result = await lease.seek(req.bufferAt)
               if (cancelled) return
-              setTimeshifted(true); setBufferWindow(result.window)
+              setTimeshifted(true); setBufferPlaybackAt(req.bufferAt); setBufferWindow(result.window)
               await attach({ ...d, url: result.url })
               return
             }
           } catch (failure) {
             if (cancelled) return
+            // Capacity is optional; the original descriptor has already authorized this live tune.
+            const optionalBufferFailure = failure instanceof ApiError
+              && [409, 422, 503].includes(failure.status)
+              && ['buffer_busy', 'buffer_session_active', 'buffer_unsupported', 'buffer_storage_full', 'recording_disabled', 'buffer_storage_unverified'].includes(failure.code ?? '')
+            if (!lease && !req.bufferAt && optionalBufferFailure) {
+              setBufferIssue('Server rewind is unavailable. You can rewind media retained on this device.')
+              await attach(d)
+              return
+            }
             // Access/recovery failures must never fall back to an unleased stream.
             terminal.current = true
             setState('error'); setError(bufferError(failure))
@@ -573,7 +584,7 @@ export function usePlayback(pictureRef: RefObject<HTMLVideoElement | null>, req:
     resume: () => { wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
     consentToCurrentAudio: () => { consent.current = audioSelection(handle.current?.audioTracks() ?? []); wantsPlayback.current = true; pausedByViewer.current = false; checkAudio.current() },
     programmeTime: () => handle.current?.programmeTime?.(),
-    bufferWindow, bufferIssue, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
+    bufferWindow, bufferIssue, bufferPlaybackAt, seekBuffer: (at: string | null) => seekBufferRef.current?.(at),
     setAudio: (i: number) => {
       if (!handle.current?.audioTracks().some(t => t.id === i)) return
       const video = videoRef.current

@@ -77,7 +77,8 @@ export class BufferSession {
         if (!this.closed) { onFailure(error); void this.release() }
       } finally { this.heartbeatPending = false }
     }
-    this.timer = window.setInterval(() => void heartbeat(), 30_000)
+    // Publish the first sealed segment promptly and keep the live timeline close to the edge.
+    this.timer = window.setInterval(() => void heartbeat(), 5000)
     return () => { void heartbeat() }
   }
 

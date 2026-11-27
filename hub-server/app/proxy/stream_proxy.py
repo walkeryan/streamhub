@@ -58,7 +58,7 @@ import httpx
 
 from app.infra.http import pin_upstream_session
 from app.infra.logging import redact_url
-from app.proxy.dvr import MAX_SEGMENTS, DvrManager
+from app.proxy.dvr import MAX_SEGMENTS, WATCHED_SEGMENTS, DvrManager
 from app.services.errors import Conflict, Forbidden, ServiceError
 from app.services.media_info import QUALITY_KBPS, output_size
 
@@ -535,6 +535,7 @@ def ffmpeg_args(
     transcode: str,
     vaapi_device: str,
     buffered: bool = False,
+    segment_limit: int = MAX_SEGMENTS,
 ) -> list[str]:
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
     if transcode == "vaapi":
@@ -572,7 +573,7 @@ def ffmpeg_args(
         "-hls_time",
         "2",
         "-hls_list_size",
-        str(MAX_SEGMENTS) if buffered else "6" if live else "0",
+        str(segment_limit) if buffered else "6" if live else "0",
         "-hls_flags",
         flags,
         "-hls_segment_filename",
@@ -684,7 +685,8 @@ class StreamProxy:
     ) -> None:
         self._client_factory = client_factory
         self.dvr = dvr or DvrManager()
-        self._buffer_channel: tuple[str, str] | None = None
+        self._channel_buffers: dict[str, DvrManager] = {}
+        self._buffer_channels: dict[str, str] = {}
         self._clock = clock
         self._sleep = sleep
         self._shared: dict[str, SharedUpstream] = {}
@@ -849,15 +851,15 @@ class StreamProxy:
                         with contextlib.suppress(Exception):
                             await self._release_pair_locked(lease_id)
                 for key, sess in list(self._hls.items()):
-                    buffered = self.dvr.key == key
-                    held = self.dvr.held(key) if buffered else False
+                    buffered = self.buffer_state(key).key == key
+                    held = self.buffer_state(key).held(key) if buffered else False
                     if buffered:
                         try:
-                            self.dvr.refresh(key)
+                            self.buffer_state(key).refresh(key)
                         except (ServiceError, OSError, ValueError):
                             await self._stop_hls(key, expected=sess)
                             continue
-                    abandoned = buffered and self.dvr.ever_leased and not held
+                    abandoned = buffered and self.buffer_state(key).ever_leased and not held
                     held = held or key in self._kept
                     idle = VOD_DONE_IDLE_S if sess.complete else HLS_IDLE_S
                     if (
@@ -1039,7 +1041,7 @@ class StreamProxy:
                     (sess.family is not None and not include_vod)
                     or key in self._kept
                     or key in reserved
-                    or self.dvr.key == key
+                    or self.buffer_state(key).key == key
                 ):
                     continue
                 entry = sess.watchers.get(me)
@@ -1122,7 +1124,7 @@ class StreamProxy:
                             grace = max(grace, float(line.split(":", 1)[1]) + 2)
                         break
             reserved = peer_key in self._kept or any(peer_key in lease.members for lease in self._pairs.values())
-            if not reserved and not self.dvr.held(peer_key) and now - peer.last_access >= grace:
+            if not reserved and not self.buffer_state(peer_key).held(peer_key) and now - peer.last_access >= grace:
                 await self._stop_hls(peer_key, expected=peer)
                 self._forget_pin(peer)
                 full = self._source_use(source_id) >= capacity
@@ -1479,7 +1481,7 @@ class StreamProxy:
                 created = await spawn
             except Exception:
                 if buffered:
-                    self.dvr.stopped(key)
+                    self._buffer_stopped(key)
                     shutil.rmtree(workdir)
             else:
                 # Failure to confirm termination retains the occupied slot.
@@ -1541,6 +1543,7 @@ class StreamProxy:
                 transcode=transcode,
                 vaapi_device=self.vaapi_device,
                 buffered=buffered,
+                segment_limit=WATCHED_SEGMENTS if self.dvr.watched_session else MAX_SEGMENTS,
             )
             return [("", legacy)]
 
@@ -1564,7 +1567,7 @@ class StreamProxy:
                             await self._stop_hls(other_key, expected=other)
                 sess = self._hls.get(key)
                 if sess is not None and (sess.proc.returncode is None or sess.complete):
-                    if buffered and self.dvr.key != key:
+                    if buffered and self.buffer_state(key).key != key:
                         raise Conflict(
                             "Live session already started without a buffer; restart it explicitly.",
                             code="buffer_session_active",
@@ -1583,11 +1586,9 @@ class StreamProxy:
                 if not full:
                     name = sid or self.session_id(key)
                     if buffered:
-                        if not live or transcode != "none":
-                            raise Conflict(
-                                "DVR requires an existing live codec-copy HLS grant.", code="buffer_unsupported"
-                            )
-                        workdir = self.dvr.reserve(key, name)
+                        if not live or transcode == "canvas" or vod is not None:
+                            raise Conflict("DVR requires a live HLS stream.", code="buffer_unsupported")
+                        workdir = self.buffer_state(key).reserve(key, name)
                     else:
                         workdir = self.transcode_dir / name
                         shutil.rmtree(workdir, ignore_errors=True)
@@ -1744,7 +1745,17 @@ class StreamProxy:
         except OSError:
             self._cleanup_pending.add(sess.workdir)
         finally:
-            self.dvr.stopped(key)
+            self._buffer_stopped(key)
+
+    def buffer_state(self, key: str) -> DvrManager:
+        return self._channel_buffers.get(key, self.dvr)
+
+    def _buffer_stopped(self, key: str) -> None:
+        state = self.buffer_state(key)
+        state.stopped(key)
+        self._buffer_channels.pop(key, None)
+        if not state.pending:
+            self._channel_buffers.pop(key, None)
 
     async def buffer_lease(
         self,
@@ -1758,12 +1769,20 @@ class StreamProxy:
         generation: int | None,
         viewer: Viewer | None = None,
         channel_id: str | None = None,
+        transcode: str = "none",
     ) -> dict[str, Any]:
         if not self.dvr.enabled:
             raise Conflict("Local recording is disabled.", code="recording_disabled")
-        if self.dvr.pending >= 16:
+        if sum(state.pending for state in set(self._channel_buffers.values())) >= 16:
             raise Conflict("DVR admission limit reached.", code="buffer_busy")
-        self.dvr.pending += 1
+        state = self._channel_buffers.get(key)
+        if state is None:
+            state = self.dvr
+            if self.dvr.watched_session and self.dvr in self._channel_buffers.values():
+                state = self.dvr.another_channel()
+            self._channel_buffers[key] = state
+        tuned_at = state.now()
+        state.pending += 1
         acquired = False
         lease = None
         try:
@@ -1772,58 +1791,66 @@ class StreamProxy:
                 url,
                 headers,
                 live=True,
-                transcode="none",
+                transcode=transcode,
                 source_id=source_id,
                 max_connections=max_connections,
                 generation=generation,
                 buffered=True,
                 viewer=viewer,
             )
-            lease = self.dvr.join(key, profile)
-            window = self.dvr.window(key)
+            lease = state.join(key, profile, tuned_at)
+            window = state.window(key, state.tuned_at.get(lease))
             if channel_id is not None:
-                self._buffer_channel = (key, channel_id)
+                self._buffer_channels[key] = channel_id
             acquired = True
             return {"lease_id": lease, "session_id": sess.sid, "window": window}
         except BaseException:
             if lease is not None:
-                self.dvr.leave(key, profile, lease)
+                state.leave(key, profile, lease)
             raise
         finally:
-            self.dvr.pending -= 1
-            if not acquired and not self.dvr.pending and not self.dvr.leases and self.dvr.key == key:
+            state.pending -= 1
+            if not acquired and not state.pending and not state.held(key):
                 async with self._hls_lock:
-                    await self._stop_hls(key)
+                    if state.key == key:
+                        await self._stop_hls(key)
+                    if state.key != key:
+                        self._channel_buffers.pop(key, None)
 
     async def buffer_release(self, key: str, profile: str, lease: str) -> None:
         async with self._hls_lock:
-            self.dvr.leave(key, profile, lease)
-            if self.dvr.key == key and not self.dvr.held(key):
+            self.buffer_state(key).leave(key, profile, lease)
+            if self.buffer_state(key).key == key and not self.buffer_state(key).held(key):
                 await self._stop_hls(key)
 
     async def retained_positions(self, channel_id: str, positions: list[Any]) -> list[bool]:
         async with self._hls_lock:
-            key = self.dvr.key
-            if key is None or self._buffer_channel != (key, channel_id) or not self.dvr.held(key):
-                return [False] * len(positions)
-            try:
-                self.dvr.refresh(key)
-            except (OSError, ValueError, ServiceError):
-                return [False] * len(positions)
-            return [at is not None and any(s.start <= at < s.end for s in self.dvr.segments) for at in positions]
+            candidates = [key for key, channel in self._buffer_channels.items() if channel == channel_id]
+            segments = []
+            for key in candidates:
+                state = self.buffer_state(key)
+                if state.held(key):
+                    try:
+                        state.refresh(key)
+                    except (OSError, ValueError, ServiceError):
+                        continue
+                    segments.extend(state.segments)
+            return [at is not None and any(s.start <= at < s.end for s in segments) for at in positions]
 
-    async def buffer_window(self, key: str) -> dict[str, Any]:
+    async def buffer_window(self, key: str, lease: str | None = None) -> dict[str, Any]:
         async with self._hls_lock:
             try:
-                return self.dvr.window(key)
+                state = self.buffer_state(key)
+                return state.window(key, state.tuned_at.get(lease) if lease else None)
             except (ServiceError, OSError, ValueError):
                 await self._stop_hls(key)
                 raise
 
-    async def buffer_manifest(self, key: str, at: Any = None) -> str:
+    async def buffer_manifest(self, key: str, at: Any = None, lease: str | None = None) -> str:
         async with self._hls_lock:
             try:
-                return self.dvr.manifest(key, at)
+                state = self.buffer_state(key)
+                return state.manifest(key, at, state.tuned_at.get(lease) if lease else None)
             except ServiceError as exc:
                 if exc.code != "buffer_expired":
                     await self._stop_hls(key)

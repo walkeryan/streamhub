@@ -216,7 +216,7 @@ fun PlayerScreen(onExit: () -> Unit, vm: PlayerViewModel = hiltViewModel(), onMi
                 // Every press counts as activity for the control row's 5 s idle timer, and shows somebody is
                 // watching (Still watching? counts autoplays with no press between).
                 if (e.type == KeyEventType.KeyDown) { vm.touchControls(); vm.userInteracted() }
-                fun resolve(longPress: Boolean = false) = PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress, inRoom)
+                fun resolve(longPress: Boolean = false) = PlayerKeyMap.resolve(code, live, menuOpen, controls, longPress, inRoom, s.bufferWindow != null || vm.localRewindRange() != null)
                 if (resolve() == PlayerCommand.Back) {
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
                     val action = PlayerKeyMap.back(BackContext(
@@ -430,6 +430,7 @@ private fun Osd(s: PlayerScreenState, ps: PlayerUiState) {
         Text(
             when {
                 s.roomCode != null && s.live -> "OK play/pause for everyone · ▶ menu · Back to leave the room"
+                s.live && !s.bufferTimeshift && (s.bufferWindow != null || ps.seekable && ps.durationMs > 0) -> "◀ Rewind this channel · ▲▼ change channel · OK channel list"
                 s.live && !s.bufferTimeshift -> "▲▼ zap · OK list · ◀ archive · ▶ menu · Back×2 last channel"
                 else -> "OK or ▼ for playback controls"
             },
@@ -457,7 +458,7 @@ private fun controlsModel(s: PlayerScreenState, ps: PlayerUiState, vm: PlayerVie
         when {
             room != null && room.controlsLocked && !room.isHost -> "Only the host can control playback"
             room != null -> "Play, pause and seek move everyone in the room"
-            s.bufferTimeshift -> "Buffered history · Go Live is in Settings"
+            s.bufferTimeshift -> "Watching behind live · Open channel rewind to scan or go live"
             d?.archiveStart != null -> "Provider archive · Go Live is in Settings"
             !seekable -> "This stream can't be seeked"
             else -> null
@@ -491,6 +492,7 @@ private fun controlsModel(s: PlayerScreenState, ps: PlayerUiState, vm: PlayerVie
 private fun controlsActions(vm: PlayerViewModel, s: PlayerScreenState, onExit: () -> Unit, onMinimise: (() -> Unit)?) = ControlsActions(
     onClose = onExit,
     onScrub = vm::scrubBy,
+    onChannelRewind = vm::openBuffer.takeIf { s.roomCode == null && s.bufferWindow != null },
     onTogglePlay = vm::togglePlayPause,
     onBack10 = { vm.scrubBy(-PlayerKeyMap.SEEK_STEP_MS) },
     onForward30 = { vm.scrubBy(PlayerKeyMap.MEDIA_SEEK_STEP_MS) },
@@ -710,7 +712,7 @@ private fun PlayerMenu(vm: PlayerViewModel, s: PlayerScreenState, ps: PlayerUiSt
             channel = isChannel,
             canSaveScene = !inRoom && s.descriptor?.progressSessionId != null,
             recording = !inRoom && s.descriptor?.id?.startsWith("rec:") == true,
-            hasBufferWindow = s.bufferWindow != null,
+            hasBufferWindow = s.bufferWindow != null || vm.localRewindRange() != null,
             bufferedSeconds = s.bufferWindow?.bufferedSeconds?.toInt(),
             rewindError = s.rewindError,
             bufferError = s.bufferError,

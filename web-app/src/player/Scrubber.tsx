@@ -15,6 +15,8 @@ const pct = (seconds: number, duration: number) => `${duration > 0 ? Math.min(10
  */
 export function Scrubber(p: {
   /** Seconds into the title. */
+  label?: string
+  format?: (seconds: number) => string
   position: number
   duration: number
   /** What can be played without asking the server again, in title seconds. */
@@ -45,11 +47,12 @@ export function Scrubber(p: {
   const ghost = drag !== null ? drag * p.duration : p.target
   const bubble = drag !== null ? drag * p.duration : p.target ?? (hover !== null ? hover * p.duration : null)
   // The bubble slides along with its own width (left edge at the start, right edge at the end), so it never leaves the bar.
-  const text = `${fmtDuration(p.position)} of ${fmtDuration(p.duration)}`
+  const format = p.format ?? fmtDuration
+  const text = p.format ? format(p.position) : `${format(p.position)} of ${format(p.duration)}`
   return (
     <Focusable focusKey="pb:scrub" role="slider" className="scrub fx-none" disabled={!usable} scroll={false}
-      label={usable ? `Seek. ${text}. Left and right move ten seconds, hold to move faster, OK goes there.` : 'This stream has not supplied a seekable range.'}
-      aria={{ valuemin: 0, valuemax: Math.round(p.duration), valuenow: Math.round(ghost ?? p.position), valuetext: ghost !== null ? `${fmtDuration(ghost)} of ${fmtDuration(p.duration)}` : text, orientation: 'horizontal' }}
+      label={p.label ?? (usable ? `Seek. ${text}. Left and right move ten seconds, hold to move faster, OK goes there.` : 'This stream has not supplied a seekable range.')}
+      aria={{ valuemin: 0, valuemax: Math.round(p.duration), valuenow: Math.round(ghost ?? p.position), valuetext: ghost !== null ? (p.format ? format(ghost) : `${format(ghost)} of ${format(p.duration)}`) : text, orientation: 'horizontal' }}
       onArrow={(direction) => { if (direction === 'left' || direction === 'right') { p.onStep(direction === 'left' ? -1 : 1); return false } return true }}
       onEnter={p.onEnter}>
       <div ref={track} className="scrub-hit" data-testid="scrub-track" data-busy={p.busy} data-dragging={drag !== null} data-position={Math.round(p.position)} data-target={ghost === null ? undefined : Math.round(ghost)}
@@ -91,7 +94,7 @@ export function Scrubber(p: {
         {usable && bubble !== null && (
           <span className="scrub-bubble" data-testid="scrub-bubble" data-preview={!!p.preview} style={{ left: pct(bubble, p.duration), transform: `translateX(-${pct(bubble, p.duration)})` }}>
             {p.preview && <img className="scrub-preview" src={p.preview(bubble)} alt="" data-testid="scrub-preview" onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} onLoad={(e) => { e.currentTarget.style.visibility = '' }} />}
-            <span className="scrub-time">{fmtDuration(bubble)}{drag === null && p.target !== null && p.hint ? <b>{p.hint}</b> : null}</span>
+            <span className="scrub-time">{format(bubble)}{drag === null && p.target !== null && p.hint ? <b>{p.hint}</b> : null}</span>
           </span>
         )}
       </div>

@@ -283,3 +283,33 @@ async def test_cancel_racing_process_creation_reconciles_owned_child(dvr_harness
         await task
     assert processes[0].stopped and not proxy._hls and manager.key is None
     assert not list(manager.root.iterdir())
+
+
+async def test_watched_tunes_share_only_their_channel_and_reset_on_zap(dvr_harness):
+    proxy, manager, _, processes, _, now = dvr_harness
+    manager.watched_session = True
+    key = "source:https://fixture.invalid/live:none"
+    first = await lease(proxy)
+    second_key = "source:https://fixture.invalid/other:none"
+    other = await proxy.buffer_lease(
+        second_key,
+        "second-viewer",
+        "https://fixture.invalid/other",
+        {},
+        source_id="source",
+        max_connections=2,
+        generation=proxy.generation,
+    )
+    assert len(processes) == 2
+    assert first["session_id"] != other["session_id"]
+    assert len(list(manager.root.iterdir())) == 2
+    # The fixture's first sealed segment predates this viewer. It cannot appear as watched history.
+    assert first["window"]["start"] is None
+    with pytest.raises(Gone, match="precedes this channel tune"):
+        await proxy.buffer_manifest(key, now - timedelta(seconds=1), first["lease_id"])
+    await proxy.buffer_release(key, "owner", first["lease_id"])
+    assert processes[0].stopped and not processes[1].stopped
+    assert len(list(manager.root.iterdir())) == 1
+    await proxy.buffer_release(second_key, "second-viewer", other["lease_id"])
+    assert not list(manager.root.iterdir())
+    await proxy.shutdown()

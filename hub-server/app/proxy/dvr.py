@@ -27,6 +27,8 @@ HEADROOM = 256 * 1024**2
 # A full sealed hour plus bounded segment/edge rounding, never a larger quota.
 RETENTION_SECONDS = 3660
 MAX_SEGMENTS = 1862
+# Bound playlist memory even on a very low-bitrate channel. Disk space usually binds first.
+WATCHED_SEGMENTS = 43200
 
 
 @dataclass(frozen=True)
@@ -72,10 +74,14 @@ class DvrManager:
         enabled: bool = False,
         verify: Callable[[Path], VolumeProof] | None = None,
         reserve_root: Path | None = None,
+        watched_session: bool = False,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.root, self.enabled, self.clock, self.now = root, enabled, clock, now
+        self.watched_session = watched_session
+        self.owned_directories: set[Path] = set()
+        self.tuned_at: dict[str, datetime] = {}
         self.verify = verify or (lambda path: verify_volume(path, reserve_root))
         self.key: str | None = None
         self.directory: Path | None = None
@@ -84,6 +90,13 @@ class DvrManager:
         self.bookmarks: dict[str, datetime] = {}
         self.ever_leased = False
         self.pending = 0
+
+    def another_channel(self) -> DvrManager:
+        other = DvrManager(
+            self.root, enabled=self.enabled, verify=self.verify, watched_session=True, clock=self.clock, now=self.now
+        )
+        other.owned_directories = self.owned_directories
+        return other
 
     def reserve(self, key: str, sid: str) -> Path:
         if not self.enabled or self.root is None:
@@ -95,14 +108,15 @@ class DvrManager:
             raise Conflict("The one-channel DVR is occupied.", code="buffer_busy")
         if self.directory is None:
             # Refuse unknown/orphan content. No broad startup deletion on this mount.
-            if any(self.root.iterdir()):
+            if any(path not in self.owned_directories for path in self.root.iterdir()):
                 raise Conflict("DVR volume needs owned-orphan reconciliation.", code="buffer_storage_unverified")
             directory = self.root / ("dvr-" + sid)
             directory.mkdir(mode=0o700)
             self.key, self.directory = key, directory
+            self.owned_directories.add(directory)
         return self.directory
 
-    def join(self, key: str, profile: str) -> str:
+    def join(self, key: str, profile: str, tuned_at: datetime | None = None) -> str:
         if key != self.key or self.directory is None:
             raise Gone("Buffered session is unavailable.", code="buffer_expired")
         self.expire()
@@ -111,6 +125,8 @@ class DvrManager:
         lease = secrets.token_urlsafe(24)
         self.leases[lease] = ViewerLease(profile, self.clock() + 90)
         self.ever_leased = True
+        if self.watched_session:
+            self.tuned_at[lease] = tuned_at or self.now()
         return lease
 
     def check(self, key: str, profile: str, lease: str) -> ViewerLease:
@@ -139,11 +155,13 @@ class DvrManager:
             return
         self.check(key, profile, lease)
         del self.leases[lease]
+        self.tuned_at.pop(lease, None)
 
     def expire(self) -> None:
         for lease, value in list(self.leases.items()):
             if value.expires <= self.clock():
                 del self.leases[lease]
+                self.tuned_at.pop(lease, None)
 
     def held(self, key: str) -> bool:
         self.expire()
@@ -159,7 +177,7 @@ class DvrManager:
         if not playlist.exists():
             self.segments = []
             return
-        if playlist.stat().st_size > 2 * 1024**2:
+        if playlist.stat().st_size > (8 if self.watched_session else 2) * 1024**2:
             raise ServiceError("DVR manifest exceeds its bound.")
         start: datetime | None = None
         duration = 0.0
@@ -190,7 +208,7 @@ class DvrManager:
                     segments.append(DvrSegment(int(match.group(1)), line, start, end, size))
                 start, duration = end, 0
         past = [segment for segment in segments if segment.end <= now]
-        if past:
+        if past and not self.watched_session:
             cutoff = past[-1].end - timedelta(seconds=RETENTION_SECONDS)
             retained = []
             for segment in segments:
@@ -200,7 +218,13 @@ class DvrManager:
                     retained.append(segment)
             segments = retained
         used = sum(segment.size for segment in segments)
-        while segments and (used > proof.capacity - HEADROOM or len(segments) > MAX_SEGMENTS):
+        budget = proof.capacity - HEADROOM
+        count_limit = MAX_SEGMENTS
+        if self.watched_session:
+            # Leave space for incoming segments for each active channel on the shared capped volume.
+            budget = min(budget // max(1, len(self.owned_directories)), used + proof.available - HEADROOM)
+            count_limit = WATCHED_SEGMENTS
+        while segments and (used > budget or len(segments) > count_limit):
             # Startup bursts must not evict actual past history in favour of
             # future media. Storage bounds remain authoritative in both cases.
             old = segments.pop(-1 if segments[-1].end > now else 0)
@@ -210,20 +234,28 @@ class DvrManager:
         # on disk, but expose only complete past segments; never invent history.
         self.segments = [segment for segment in segments if segment.end <= now]
 
-    def window(self, key: str) -> dict[str, Any]:
+    def window(self, key: str, since: datetime | None = None) -> dict[str, Any]:
         self.refresh(key)
+        segments = self.segments if since is None else [s for s in self.segments if s.end > since]
+        start = segments[0].start if segments else None
+        if start and since:
+            start = max(start, since)
         return {
             "mode": "local_buffer",
-            "start": self.segments[0].start if self.segments else None,
-            "end": self.segments[-1].end if self.segments else None,
-            "buffered_seconds": sum((s.end - s.start).total_seconds() for s in self.segments),
+            "start": start,
+            "end": segments[-1].end if segments else None,
+            "buffered_seconds": sum((s.end - max(s.start, since or s.start)).total_seconds() for s in segments),
             "target_seconds": 3600,
             "recording_enabled": True,
         }
 
-    def manifest(self, key: str, at: datetime | None = None) -> str:
+    def manifest(self, key: str, at: datetime | None = None, since: datetime | None = None) -> str:
         self.refresh(key)
-        segments = self.segments
+        if since and at and at < since:
+            raise Gone("Position precedes this channel tune.", code="buffer_expired")
+        segments = self.segments if since is None else [s for s in self.segments if s.end > since]
+        if self.watched_session and at is None:
+            segments = segments[-6:]  # Start at the live edge without transferring the whole history.
         offset = None
         if at is not None:
             if at.tzinfo is None:
@@ -256,6 +288,9 @@ class DvrManager:
     def stopped(self, key: str) -> None:
         if key == self.key:
             # Producer termination and owned-directory cleanup belong to StreamProxy.
+            if self.directory:
+                self.owned_directories.discard(self.directory)
+            self.tuned_at.clear()
             self.key = self.directory = None
             self.bookmarks.clear()
             self.leases.clear()

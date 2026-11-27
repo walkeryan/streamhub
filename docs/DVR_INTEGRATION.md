@@ -1,6 +1,6 @@
-# Opt-in DVR producer integration — disabled until approved storage activation
+# Live rewind on a quota-backed buffer
 
-This integration reuses StreamProxy's existing codec-copy HLS producer and source connection budget. It never starts a second recorder for the same key. A profile-owned **already resolved** live HLS grant is mandatory; raw channel IDs cannot start recording. Existing normal HLS sessions cannot be silently upgraded: `buffer_session_active` requires an explicit restart. At most one channel is buffered; up to 16 profile-bound viewer leases share it.
+Full live playback leases a buffer as soon as a viewer tunes in. Each active channel reuses its HLS producer and upstream connection. Several viewers of the same stream share media segments while each viewer's seek range starts at their own tune time. Changing channels or releasing the last lease frees that channel's files. The buffer shares the dedicated volume across simultaneous channels and evicts older segments under storage pressure.
 
 ## Fail-closed storage activation
 
@@ -14,7 +14,7 @@ The mounted filesystem's capacity is the hard bound, including FFmpeg's unsealed
 
 ## Lifecycle and client contract
 
-1. Resolve playback through existing authentication/audio/source checks. `buffer_available=true` is offered only when configured, the result is live HLS, and provider archive metadata does not already supply a supported archive route.
+1. Resolve playback through existing authentication/audio/source checks. `buffer_available=true` is offered for eligible full live HLS streams when buffering is configured, including channels that also offer a provider archive. Previews never request a buffer.
 2. Before attaching media, extract the stream token from the original descriptor `/stream/{token}/index.m3u8` URL. POST `/playback/buffer/lease` with `{stream_token}` and normal bearer authentication. Response: `{lease_id, session_id, window}`. If admission fails, explain that buffering is unavailable; ordinary live playback may use its original URL, without claiming rewind history.
 3. Renew every 30 seconds with POST `/playback/buffer/heartbeat` `{stream_token,lease_id,paused}`. Response is the window object directly. Leases last 90 seconds; continuous pause is capped at one hour. No heartbeat restarts a stopped producer. A profile cannot use another profile's grant or lease.
 4. POST `/playback/buffer/seek` `{stream_token,lease_id,at}` where `at` is aware UTC, or null for Go Live. Response `{url,window}` supplies an absolute authorized HLS playlist URL. Keep using the **original** stream token for lifecycle calls. Expired/gap seeks return `buffer_expired` and do not kill other viewers or restart a stream.
@@ -44,7 +44,9 @@ fixture tests validate controls/ownership, not production provider seek support 
 60 minutes of retained live media. Production activation and real-device/provider
 acceptance remain separate gates.
 
-## Sixty-minute capacity admission gate
+## Historical one-hour capacity benchmark
+
+The November 1 measurements below describe the earlier fixed one-hour mode. Current watched-channel sessions retain up to 43,200 sealed segments, subject to the shared volume’s 12 GiB quota and available space. Clients display the actual time range for their tune.
 
 The 60-minute value is a retention target, not a guaranteed history claim. A 12 GiB
 volume less 256 MiB producer headroom holds at most approximately 28.04 Mbit/s for
@@ -71,9 +73,9 @@ larger resource plan), unknown-rate feeds remain archive-only under the proposed
 activation policy. A full retained hour and provider/device behavior must also be
 verified before claiming the requested guarantee is complete.
 
-## Approved defaults, release still held
+### November 1 defaults and tests
 
-On November 1 the owner approved the bounded 12 GiB watched-channel buffer and cleanup after the last viewer leaves, with a 60-minute target and explicit high-bitrate capacity limits. This approves the proposed defaults; no storage has been created or recording enabled. Complete integration, verified quota/mount mapping, resource admission and actual acceptance remain release gates. The implementation remains disabled by default.
+On November 1 the owner approved the bounded 12 GiB watched-channel buffer and cleanup after the last viewer leaves, with a 60-minute target and explicit high-bitrate capacity limits. At the time of that approval, storage provisioning and production verification were pending. The implementation remains disabled by default.
 
 Retention correction: retain the actual sealed live edge minus 60 minutes with up
 to 60 seconds plus one segment of rounding margin (under 62 minutes for accepted
