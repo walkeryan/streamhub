@@ -23,7 +23,7 @@ FFMPEG = os.environ.get("STREAMHUB_TEST_FFMPEG") or shutil.which("ffmpeg")
 pytestmark = pytest.mark.skipif(not FFMPEG, reason="explicit local ffmpeg fixture tool is unavailable")
 
 
-async def generate_clip(clip, *, audio=False):
+async def generate_clip(clip, *, audio=False, seconds=12):
     generated = await asyncio.create_subprocess_exec(
         FFMPEG,
         "-hide_banner",
@@ -35,7 +35,7 @@ async def generate_clip(clip, *, audio=False):
         "testsrc=size=160x90:rate=5",
         *(["-f", "lavfi", "-i", "sine=frequency=440", "-c:a", "aac"] if audio else ["-an"]),
         "-t",
-        "12",
+        str(seconds),
         "-c:v",
         "mpeg2video",
         "-g",
@@ -133,6 +133,7 @@ async def assert_canvas_decodable(payload, tmp_path, *, sound):
     import io
 
     from PIL import Image
+
     from app.proxy.canvas import PICTURE_OWNER
 
     assert payload.startswith(b"ID3")
@@ -145,8 +146,18 @@ async def assert_canvas_decodable(payload, tmp_path, *, sound):
     served = tmp_path / "rewound.aac"
     served.write_bytes(payload)
     decoder = await asyncio.create_subprocess_exec(
-        FFMPEG, "-v", "error", "-f", "aac", "-i", str(served), "-f", "s16le", "-",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        FFMPEG,
+        "-v",
+        "error",
+        "-f",
+        "aac",
+        "-i",
+        str(served),
+        "-f",
+        "s16le",
+        "-",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     pcm, stderr = await decoder.communicate()
     assert decoder.returncode == 0, stderr.decode(errors="replace")
@@ -157,7 +168,7 @@ async def assert_canvas_decodable(payload, tmp_path, *, sound):
 async def test_watched_tune_scrub_live_then_change_channel(api, tmp_path, client):
     clip = tmp_path / "signal.ts"
     canvas = client.startswith("canvas")
-    await generate_clip(clip, audio=client == "canvas")
+    await generate_clip(clip, audio=client == "canvas", seconds=30 if canvas else 12)
     http = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path)))
     server = Thread(target=http.serve_forever, daemon=True)
     server.start()
@@ -187,12 +198,11 @@ async def test_watched_tune_scrub_live_then_change_channel(api, tmp_path, client
             assert capability.json()["mode"] == provider_mode
             tune_time = datetime.now(UTC)
             request = {"id": channel_id, "client": "web" if canvas else client, "prefer_canvas": canvas}
-            if canvas:
-                preview = (await api.post("/playback/resolve", json={**request, "preview_only": True})).json()
-                assert preview["canvas"] and not preview["buffer_available"]
-                preview_token = preview["url"].split("/stream/", 1)[1].split("/", 1)[0]
-                assert (await api.post("/playback/buffer/lease", json={"stream_token": preview_token})).status_code == 403
-                assert not list(root.iterdir())
+            preview = (await api.post("/playback/resolve", json={**request, "preview_only": True})).json()
+            assert bool(preview["canvas"]) == canvas and not preview["buffer_available"]
+            preview_token = preview["url"].split("/stream/", 1)[1].split("/", 1)[0]
+            assert (await api.post("/playback/buffer/lease", json={"stream_token": preview_token})).status_code == 403
+            assert not list(root.iterdir())
             resolve = await api.post("/playback/resolve", json=request)
             assert resolve.status_code == 200, resolve.text
             descriptor = resolve.json()
@@ -201,14 +211,19 @@ async def test_watched_tune_scrub_live_then_change_channel(api, tmp_path, client
             opened = await api.post("/playback/buffer/lease", json={"stream_token": token})
             assert opened.status_code == 200, opened.text
             viewer = {"stream_token": token, "lease_id": opened.json()["lease_id"]}
-            async with asyncio.timeout(15):
+            # The first full Canvas tune must survive beyond the ordinary six-segment live playlist.
+            required = 15 if client == "canvas" and name == "Archive channel" else 1
+            async with asyncio.timeout(35 if required == 15 else 15):
                 while True:
                     beat = await api.post("/playback/buffer/heartbeat", json=viewer)
                     assert beat.status_code == 200, beat.text
                     window = beat.json()
-                    if window["buffered_seconds"] >= 1:
+                    if window["buffered_seconds"] >= required:
                         break
                     await asyncio.sleep(0.25)
+            if required == 15:
+                assert len(api.c.proxy._hls) == 1
+                assert len(list(root.rglob("seg_*.ts"))) > 6
             start = datetime.fromisoformat(window["start"])
             assert tune_time <= start < datetime.fromisoformat(window["end"]) <= datetime.now(UTC)
             selected = start + timedelta(seconds=0.5)

@@ -134,8 +134,8 @@ class StreamGrant:
     # session (``RoomPlayback``), whatever the fields above say about start and audio.
     room: str | None = None
     canvas: bool = False
-    # Only standalone live Canvas tunes may allocate DVR storage; older and preview grants cannot.
-    canvas_rewind: bool = False
+    # Older ordinary HLS tokens predate this grant. Their existing behavior is preserved.
+    buffer_allowed: bool | None = None
 
 
 @dataclass(slots=True)
@@ -213,7 +213,7 @@ class StreamTokens:
                 "t": grant.transcode,
                 "vv": grant.vod_video,
                 "canvas": grant.canvas,
-                "canvas_rewind": grant.canvas_rewind,
+                "buffer_allowed": grant.buffer_allowed,
                 "vc": grant.vod_codec,
                 "vw": grant.vod_width,
                 "vh": grant.vod_height,
@@ -256,7 +256,7 @@ class StreamTokens:
             transcode=bool(d.get("t")),
             vod_video=d.get("vv"),
             canvas=bool(d.get("canvas")),
-            canvas_rewind=bool(d.get("canvas_rewind")),
+            buffer_allowed=d.get("buffer_allowed"),
             vod_codec=d.get("vc"),
             vod_width=d.get("vw"),
             vod_height=d.get("vh"),
@@ -532,7 +532,7 @@ class PlaybackResolver:
                 rewind_at,
                 bool(variant_id and allow_unverified_audio),
                 max_height=max_height,
-                canvas_rewind=client == "web_canvas" and not preview_only and room is None,
+                buffer_allowed=not preview_only and room is None,
             )
         if h.scheme == "lib":
             row = await self._catalog.title_row(h.a, h.b)
@@ -1021,7 +1021,7 @@ class PlaybackResolver:
         rewind_at: datetime | None = None,
         audio_consent: bool = False,
         max_height: int | None = None,
-        canvas_rewind: bool = False,
+        buffer_allowed: bool = False,
     ) -> dict[str, Any]:
         policy_at = rewind_at
         if catchup_programme_id:
@@ -1088,7 +1088,7 @@ class PlaybackResolver:
             policy_until=archive_end,
             kind="channel",
             canvas_height=max_height if client == "web_canvas" else None,
-            canvas_rewind=canvas_rewind and target.live and not catchup_programme_id and rewind_at is None,
+            buffer_allowed=buffer_allowed and target.live and not catchup_programme_id and rewind_at is None,
         )
         # A channel is never held for its audio: the preferred languages only steer the track choice.
         desc.update(await self._runtime_audio(profile_id, ch.data or {}))
@@ -1694,7 +1694,7 @@ class PlaybackResolver:
         private: bool = False,
         room: str | None = None,
         canvas_height: int | None = None,
-        canvas_rewind: bool = False,
+        buffer_allowed: bool = False,
         probe: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if client == "web_canvas" and "never" in (
@@ -1777,7 +1777,7 @@ class PlaybackResolver:
                     channel_key=channel_key,
                     transcode=transcode,
                     canvas=canvas,
-                    canvas_rewind=canvas_rewind,
+                    buffer_allowed=buffer_allowed,
                     vod_video=plan.video if plan else None,
                     vod_codec=plan.codec if plan else None,
                     vod_width=plan.width if plan else None,

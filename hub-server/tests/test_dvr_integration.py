@@ -143,7 +143,8 @@ async def test_existing_normal_process_is_not_duplicated_or_upgraded(dvr_harness
     await proxy.shutdown()
 
 
-async def test_api_lease_requires_profile_owned_live_grant_and_stop_revokes(api, dvr_harness):
+@pytest.mark.parametrize("canvas", [False, True])
+async def test_api_lease_requires_profile_owned_live_grant_and_stop_revokes(api, dvr_harness, canvas):
     proxy, manager, _, processes, _, _ = dvr_harness
     source = await add_source(api)
     api.c.proxy.dvr = manager
@@ -158,8 +159,20 @@ async def test_api_lease_requires_profile_owned_live_grant_and_stop_revokes(api,
         True,
         channel["id"][3:],
         False,
+        canvas=canvas,
+        buffer_allowed=True if canvas else None,
         **api.identity(),
     )
+    for forbidden in [replace(grant, buffer_allowed=False), replace(grant, room="private-room")]:
+        denied = await api.post("/playback/buffer/lease", json={"stream_token": api.c.tokens.issue(forbidden)})
+        assert denied.status_code == 403
+    if canvas:
+        legacy = api.c.tokens.issue(replace(grant, buffer_allowed=None))
+        assert (await api.post("/playback/buffer/lease", json={"stream_token": legacy})).status_code == 403
+        paired = api.c.tokens.issue(replace(grant, pair_lease_id="fixture-multiview"))
+        denied = await api.post("/playback/buffer/lease", json={"stream_token": paired})
+        assert denied.status_code in (403, 409)
+        assert not processes
     token = api.c.tokens.issue(grant)
     body = {"stream_token": token}
     result = await api.post("/playback/buffer/lease", json=body)

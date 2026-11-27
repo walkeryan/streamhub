@@ -1528,10 +1528,24 @@ class StreamProxy:
                 canvas_plan = vod or VodPlan(video="canvas", max_height=canvas_height)
                 retain = (WATCHED_SEGMENTS if self.dvr.watched_session else MAX_SEGMENTS) if buffered else None
                 return [
-                    ("canvas", canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan, retained_segments=retain)),
+                    (
+                        "canvas",
+                        canvas_args(
+                            self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan, retained_segments=retain
+                        ),
+                    ),
                     (
                         "canvas-silent",
-                        canvas_args(self.ffmpeg, target, headers, outdir, live=live, vod=canvas_plan, silent=True, retained_segments=retain),
+                        canvas_args(
+                            self.ffmpeg,
+                            target,
+                            headers,
+                            outdir,
+                            live=live,
+                            vod=canvas_plan,
+                            silent=True,
+                            retained_segments=retain,
+                        ),
                     ),
                 ]
             if vod is not None:

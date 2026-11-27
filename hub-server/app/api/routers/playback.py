@@ -80,12 +80,7 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
     )
     c.proxy.ensure_running(generation)
     result["buffer_available"] = False
-    if (
-        c.proxy.dvr.enabled
-        and result.get("mode") == "hls"
-        and result.get("live")
-        and body.id.startswith("ch:")
-    ):
+    if c.proxy.dvr.enabled and result.get("mode") == "hls" and result.get("live") and body.id.startswith("ch:"):
         result["buffer_available"] = not body.preview_only
     return result
 
@@ -203,7 +198,9 @@ async def _buffer_grant(token: str, c: C, p: P) -> tuple[Any, str, Any]:
     g = await _grant(c, token)
     if g.pair_lease_id:
         raise Conflict("Multiview does not support buffered recording.", code="buffer_unsupported")
-    if g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or (g.canvas and not g.canvas_rewind) or g.room:
+    # Legacy HLS grants allowed DVR, but Canvas was previously confined to its rolling playlist.
+    allowed = g.buffer_allowed if g.buffer_allowed is not None else not g.canvas
+    if not allowed or g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or g.room:
         raise Forbidden("DVR requires this profile's authorized live HLS playback grant.")
     # This shared channel gate is also the integration point for current parental policy.
     channel = await c.playback._authorized_channel(p.profile_id, "ch:" + g.channel_key)
