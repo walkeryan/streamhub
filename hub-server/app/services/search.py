@@ -209,7 +209,8 @@ async def search_programmes(
     # Only a title with letters outside ASCII needs folding to be compared; few have any.
     key = func.canonical_title_key(Programme.title)
     accented = and_(Programme.title.op("GLOB")(_NON_ASCII), *(_contains(key, word) for word in typed))
-    described = and_(sport_listing_clause(), *(_contains(Programme.description, word) for word in typed))
+    # SQLite can skip the sports keyword checks for descriptions missing the search words.
+    described = and_(*(_contains(Programme.description, word) for word in typed), sport_listing_clause())
     # The source id is compared as an expression so that a channel is looked up by its guide id.
     # Left as a bare column, SQLite reaches for the (source_id, ext_id) index and walks every channel
     # of the source for each programme: seconds, for a query that matches a few thousand rows.
