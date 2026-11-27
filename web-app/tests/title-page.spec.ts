@@ -61,6 +61,17 @@ test('from the show, an episode opens its page and Back returns to the show; the
 })
 
 test('the remote reaches the show link and the season chip above the actions', async ({ page }) => {
+  // The episode is navigable while its season and show requests are in flight.
+  await page.addInitScript(() => {
+    const fetch = window.fetch.bind(window)
+    const waiting = new Promise<void>(resolve =>
+      window.addEventListener('release-season', () => resolve(), { once: true }))
+    window.fetch = async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (/\/titles\/tmdb:(season|tv):201(?:[:/?]|$)/.test(decodeURIComponent(url))) await waiting
+      return fetch(input, init)
+    }
+  })
   await enter(page, EPISODE)
   await expect(page.getByTestId('title-play')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('ArrowUp')
@@ -70,8 +81,10 @@ test('the remote reaches the show link and the season chip above the actions', a
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('ArrowDown')
   await expect(page.getByTestId('title-play')).toHaveAttribute('data-focused', 'true')
-  // Down from the actions reaches the season strip.
+  // Down from the actions reaches the season strip even when cards arrive after the keypress.
   await page.keyboard.press('ArrowDown')
+  await page.evaluate(() => window.dispatchEvent(new Event('release-season')))
+  await expect(page.getByTestId('episode').first()).toBeVisible()
   await expect(page.locator('[data-focused="true"]')).toHaveAttribute('data-focus-key', /^(season:|episodes::)/)
 })
 

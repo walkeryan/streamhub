@@ -33,6 +33,7 @@ import { ActivityRow, CastRow, EpisodeCard, SimilarRow } from './title/Sections'
 
 /** Seasons shown as chips; a series with more gets one drop-down. */
 const MAX_SEASON_CHIPS = 8
+const NO_EPISODES: EpisodeTile[] = []
 /** Audio tracks shown as chips; a file with more gets one drop-down. */
 const MAX_AUDIO_CHIPS = 4
 const titlePath = (id: string) => `/title/${encodeURIComponent(id)}`
@@ -96,7 +97,14 @@ function TitleDetails({ id }: { id: string }) {
   const inline = (t?.kind === 'season' && stripSeason === defaultSeason) || (!nested && (!seasons.length || stripSeason === seasons[0]?.id))
   const fetchSeason = inline || !t ? undefined : t.kind === 'episode' && stripSeason === defaultSeason ? pageSeason?.id : stripSeason ?? undefined
   const seasonQ = useTitle(fetchSeason)
-  const episodes: EpisodeTile[] = (inline ? t?.episodes : seasonQ.data?.episodes) ?? []
+  const episodes: EpisodeTile[] = (inline ? t?.episodes : seasonQ.data?.episodes) ?? NO_EPISODES
+  // A fast Down press can reach the strip before its cards register. Complete that
+  // move on the current episode, unless the viewer has already moved elsewhere.
+  useEffect(() => {
+    if (!episodes.length || getCurrentFocusKey() !== 'title:episodes') return
+    const card = episodes.find(e => e.id === id) ?? episodes[0]!
+    void setFocus(`episodes::${card.id}`)
+  }, [episodes, id])
 
   // The household's activity and More like this are about the series, so its episodes share one answer.
   const extrasId = t && t.kind !== 'channel' ? (showId ?? t.id) : undefined
@@ -390,8 +398,6 @@ function TitleDetails({ id }: { id: string }) {
           </div>
         </div>
 
-        {t.kind === 'episode' && t.sources.some(s => s.source_type === 'jellyfin') && <OfflineEpisodeAction id={id} />}
-        {(t.kind === 'movie' || t.kind === 'vod' || t.kind === 'episode') && <SavedScenes id={id} />}
         {(seasons.length > 0 || episodes.length > 0) && (
           <Section className="tp-section" label="Seasons and episodes" testId="episodes">
             {seasons.length > 1 ? (
@@ -413,6 +419,8 @@ function TitleDetails({ id }: { id: string }) {
           </Section>
         )}
 
+        {t.kind === 'episode' && t.sources.some(s => s.source_type === 'jellyfin') && <OfflineEpisodeAction id={id} />}
+        {(t.kind === 'movie' || t.kind === 'vod' || t.kind === 'episode') && <SavedScenes id={id} />}
         <ActivityRow entries={activity.data?.entries ?? []} />
         <CastRow cast={cast} onOpen={(name) => go(`/search?q=${encodeURIComponent(name)}`)} />
         <SimilarRow tiles={similar.data?.tiles ?? []} />
