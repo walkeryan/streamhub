@@ -101,7 +101,7 @@ function episodeDescriptor(id: string): PlaybackDescriptor | null {
     { type: 'credits' as const, start_ms: creditsAt, end_ms: 30_000 },
   ]
   return {
-    id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, headers: {}, buffer_available: false,
+    id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, headers: {}, buffer_available: false, tv_compatible_available: false,
     resume_position_ms: 0, duration_ms: 30_000, title: name(here), subtitle: `S${String(season).padStart(2, '0')}E${String(n).padStart(2, '0')} · ${series.title}`,
     poster: here.backdrop ?? null, channel_context: null, handoff: null,
     media_info: { source_name: 'Library', container: 'mov', bitrate_kbps: 9_400, video: { codec: 'h264', width: 1920, height: 1080 }, audio: { codec: 'aac', channels: 2 }, delivery: 'direct', output_width: 1920, output_height: 1080 },
@@ -551,7 +551,7 @@ export const handlers = [
     const t = tileById(b.id)
     const handoffOnly = t && t.kind !== 'channel' && !t.sources.some((s) => s.playable_in_app)
     const chan = b.id.startsWith('ch:')
-    const base = { id: b.id, buffer_available: false, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
+    const base = { id: b.id, buffer_available: false, tv_compatible_available: false, headers: {}, title: t?.title ?? b.id, subtitle: t?.subtitle ?? null, poster: t?.poster ?? null }
     if (handoffOnly || b.source_id === 's_nf') {
       const d: PlaybackDescriptor = {
         ...base, mode: 'handoff', url: null, live: false, resume_position_ms: 0,

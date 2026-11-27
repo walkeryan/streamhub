@@ -182,7 +182,7 @@ const tokenLife = () => Number(localStorage.getItem('mock.roomTokenLife')) || 72
 function descriptorFor(room: MockRoom, member: MockMember): PlaybackDescriptor {
   return {
     // One URL per seat on the shared stream, the same across its restarts; a library title is each member's own file.
-    id: room.id, mode: 'direct', url: room.shared ? `${ROOM_CLIP}?seat=${member.id}` : ROOM_CLIP, mime: 'video/webm', live: room.live, buffer_available: false, headers: {},
+    id: room.id, mode: 'direct', url: room.shared ? `${ROOM_CLIP}?seat=${member.id}` : ROOM_CLIP, mime: 'video/webm', live: room.live, buffer_available: false, tv_compatible_available: false, headers: {},
     title: room.title.title, subtitle: room.title.subtitle ?? null, poster: room.title.poster ?? null,
     resume_position_ms: Math.floor(positionNow(room) ?? 0), duration_ms: room.live ? null : room.shared ? 600_000 : 30_000,
     start_position_ms: room.shared ? room.stream_start_ms : null, stream_epoch: room.shared ? room.stream_epoch : null,
