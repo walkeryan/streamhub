@@ -309,7 +309,7 @@
 @media (max-width: 720px) { .row-scroll { padding-inline: 1rem; scroll-padding-inline: 1rem; } }
 
 /* ---------- tiles ---------- */
-.tile { flex: none; border-radius: var(--r-lg); overflow: hidden; background: var(--t-surface-alt); box-shadow: var(--shadow-card); }
+.tile { display: block; flex: none; border-radius: var(--r-lg); overflow: hidden; background: var(--t-surface-alt); box-shadow: var(--shadow-card); }
 .tile-poster { width: calc(var(--tile-poster-w) * var(--box-art-scale, 1)); height: calc(var(--tile-poster-h) * var(--box-art-scale, 1)); }
 .tile-landscape { width: var(--tile-landscape-w); height: var(--tile-landscape-h); }
 .tile-channel { width: var(--tile-channel-w); height: var(--tile-channel-h); }
@@ -334,6 +334,22 @@
 .tile-fav svg { width: 0.9rem; height: 0.9rem; }
 .tile-progress { position: absolute; left: 0.5rem; right: 0.5rem; bottom: 0.45rem; }
 .tile.fx[data-focused='true'] { outline-offset: 0.15rem; }
+/* Every piece of box art is one real link plus one sibling menu button: valid native-link
+   semantics, one compact action affordance, and no button nested inside the link. */
+.media-card { position: relative; flex: none; min-width: 0; }
+.grid-tiles > .media-card { width: 100%; }
+.grid-tiles > .media-card > .tile { width: 100%; }
+.media-card-menu { position: absolute; top: .35rem; right: .35rem; z-index: 6; }
+.media-card-menu .ds-glass { background: rgba(12, 14, 18, .85); color: white; }
+.ds-glass-status { position: absolute; right: .18rem; bottom: .18rem; width: .48rem; height: .48rem; border-radius: 50%; background: var(--t-success); box-shadow: 0 0 0 .1rem rgba(8, 10, 16, .9); }
+.ds-glass-status[data-state='busy'] { background: var(--t-accent); animation: media-status-pulse 1.2s ease-in-out infinite; }
+.ds-glass-status[data-state='pending'] { background: var(--t-accent); }
+.ds-glass-status[data-state='error'] { background: var(--t-danger); }
+@keyframes media-status-pulse { 50% { opacity: .35; } }
+.media-card .tile-check, .media-card .tile-badges, .media-card .ds-still-badge { left: .375rem; right: auto; max-width: calc(100% - 3.5rem); }
+.media-card .tile-fav { inset: auto .375rem .375rem auto; }
+.media-card .tile:has(> .tile-fav) > .cap { padding-right: 2.45rem; }
+.media-card-landscape { width: var(--still-w); }
 /* "See all" closes a row in the shape of its neighbours: a glass card with a chevron. */
 .tile-more {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.375rem; padding: 0.5rem;
@@ -341,7 +357,7 @@
 }
 .tile-more > svg { width: 2.2rem; height: 2.2rem; padding: 0.45rem; border-radius: 50%; background: var(--glass-fill); border: 1px solid var(--glass-line); box-shadow: var(--glass-sheen); }
 /* A landscape still with its words under it (StillCard): season strips, Continue Watching. */
-.ds-still { flex: none; width: var(--still-w); border-radius: var(--r-md); }
+.ds-still { display: block; flex: none; width: var(--still-w); border-radius: var(--r-md); }
 .ds-still-art { position: relative; aspect-ratio: 16 / 9; border-radius: var(--r-md); overflow: hidden; background: var(--t-surface-alt); box-shadow: 0 0 0 1px color-mix(in srgb, var(--t-text) 8%, transparent), var(--shadow-raise); }
 .ds-still-art .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .ds-still[aria-current='page'] .ds-still-art { box-shadow: 0 0 0 0.15rem var(--t-accent); }

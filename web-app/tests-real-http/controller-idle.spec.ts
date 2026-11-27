@@ -139,30 +139,68 @@ test('paired receiver accepts a phone, plays remotely, and reports transport sta
   }
 })
 
-test('an idle profile returns to login and revokes only that device session', async ({ page }) => {
+test('an idle shared TV returns to the real profile picker without forgetting its paired session or PIN', async ({ page, browser }) => {
   await page.goto('/')
-  await page.getByTestId('profile-card').filter({ hasText: 'Fixture Clean' }).click()
+  await page.getByTestId('profile-card').filter({ hasText: 'Admin' }).first().click()
+  await page.getByLabel('Password', { exact: true }).fill('fixture-only-admin-password')
+  await page.keyboard.press('Enter')
+  await page.getByRole('button', { name: 'I accept', exact: true }).click()
   await expect(page.getByTestId('home')).toBeVisible()
-  await page.goto('/settings?tab=profiles')
-  const saved = page.waitForResponse((r) => r.request().method() === 'PATCH' && r.url().includes('/prefs'))
-  await page.getByRole('textbox', { name: 'Custom idle timeout in minutes' }).fill('1')
-  await page.getByRole('button', { name: 'Set custom timeout' }).click()
-  await saved
-  await expect(page.getByText('After 1 minute')).toBeVisible()
   const auth = await page.evaluate(() => JSON.parse(localStorage.getItem('sh.session.v1')!).access)
-  const other = await page.request.post('/api/v1/auth/login', { data: { profile_id: 'fixture-clean' } })
-  const otherAccess = (await other.json()).access_token
-  // Simulate a sleeping browser waking after the configured window using its actual saved timestamp.
-  await page.evaluate(() => {
-    const key = Object.keys(localStorage).find((k) => /^sh\.idle\.v1:/.test(k))!
-    localStorage.setItem(key, String(Date.now() - 65000))
-  })
-  await page.reload()
-  await expect(page.getByTestId('profile-card').first()).toBeVisible({ timeout: 12000 })
-  expect(
-    (await page.request.get('/api/v1/auth/me', { headers: { Authorization: 'Bearer ' + auth } })).status(),
-  ).toBe(401)
-  expect(
-    (await page.request.get('/api/v1/auth/me', { headers: { Authorization: 'Bearer ' + otherAccess } })).status(),
-  ).toBe(200)
+  expect((await page.request.patch('/api/v1/profiles/fixture-clean/prefs', {
+    headers: { Authorization: 'Bearer ' + auth }, data: { 'idleSignOutMinutes.v1': 1 },
+  })).ok()).toBe(true)
+  expect((await page.request.put('/api/v1/profiles/fixture-clean/pin', {
+    headers: { Authorization: 'Bearer ' + auth }, data: { pin: '2468', kind: 'pin' },
+  })).status()).toBe(204)
+  const hello = await page.request.post('/api/v1/auth/device')
+  const code = await hello.json()
+  expect((await page.request.post('/api/v1/auth/device/approve', {
+    headers: { Authorization: 'Bearer ' + auth },
+    data: { user_code: code.user_code, profile_id: 'fixture-clean', shared_device: true },
+  })).status()).toBe(204)
+  const token = await page.request.post('/api/v1/auth/device/poll', { data: { device_code: code.device_code } })
+  expect(token.status()).toBe(200)
+  const tokens = await token.json()
+  const tv = await browser.newContext({ baseURL: 'http://127.0.0.1:5187', viewport: { width: 1920, height: 1080 } })
+  try {
+    await tv.addInitScript(({ access, refresh, profile }) => {
+      localStorage.setItem('sh.session.v1', JSON.stringify({ access, refresh, profile }))
+      Object.assign(window, { StreamHubTV: { signedOut: () => {}, deliverToken: () => {}, capabilities: () => '{}' } })
+    }, { access: tokens.access_token, refresh: tokens.refresh_token, profile: tokens.profile })
+    const receiver = await tv.newPage()
+    await receiver.goto('/')
+    const picker = receiver.getByTestId('who-is-watching')
+    const current = picker.getByTestId('who-card').filter({ hasText: 'Fixture Clean' })
+    const enterPin = async () => {
+      await current.click()
+      const pin = receiver.getByTestId('pin-dialog')
+      await expect(pin.getByRole('heading', { name: 'PIN for Fixture Clean' })).toBeVisible()
+      for (const digit of '2468') await pin.getByRole('button', { name: digit, exact: true }).click()
+      await pin.getByTestId('pin-ok').click()
+    }
+    await expect(picker).toHaveAttribute('data-mandatory', 'true')
+    await enterPin()
+    await expect(receiver.getByTestId('home')).toBeVisible()
+    await expect.poll(() => receiver.evaluate(() => localStorage.getItem(Object.keys(localStorage).find((k) => /^sh\.idle\.limit\.v1:/.test(k)) ?? ''))).toBe('1')
+    // Simulate a sleeping TV waking after the configured window using its real saved timestamp.
+    await receiver.evaluate(() => {
+      const key = Object.keys(localStorage).find((k) => /^sh\.idle\.v1:/.test(k))
+      if (!key) throw new Error('The configured receiver timeout was not loaded')
+      localStorage.setItem(key, String(Date.now() - 65_000))
+      window.dispatchEvent(new Event('pageshow'))
+      window.dispatchEvent(new Event('sh:playback-activity'))
+    })
+    await expect(picker).toHaveAttribute('data-mandatory', 'true', { timeout: 12000 })
+    await expect(receiver.getByTestId('home')).toHaveCount(0)
+    expect(await receiver.evaluate(() => !!localStorage.getItem('sh.session.v1'))).toBe(true)
+    const paired = await receiver.request.get('/api/v1/auth/me', { headers: { Authorization: 'Bearer ' + tokens.access_token } })
+    expect(paired.status()).toBe(200)
+    expect((await paired.json()).shared_device).toBe(true)
+    // The idle lock did not bypass the existing profile PIN.
+    await enterPin()
+    await expect(receiver.getByTestId('home')).toBeVisible()
+  } finally {
+    await tv.close()
+  }
 })

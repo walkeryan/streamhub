@@ -92,6 +92,35 @@ test('the results page has no filters, chips or notes: sections of results and n
   expect(await fits(page)).toBe(true)
 })
 
+test('real destinations retain browser link behavior without replacing app routing', async ({ page }) => {
+  await enter(page, '/search?q=harbor')
+  const home = page.getByTestId('nav-home')
+  const title = page.getByTestId('search-titles').getByTestId('tile').first()
+  await expect(home).toHaveAttribute('href', '/')
+  await expect(title).toHaveAttribute('href', '/title/tmdb%3Amovie%3A101')
+
+  const middleTabPromise = page.context().waitForEvent('page')
+  await title.click({ button: 'middle' })
+  const middleTab = await middleTabPromise
+  await middleTab.waitForLoadState('domcontentloaded')
+  await expect(middleTab).toHaveURL(/\/title\/tmdb%3Amovie%3A101$/)
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await middleTab.close()
+
+  const ctrlTabPromise = page.context().waitForEvent('page')
+  await home.click({ modifiers: ['Control'] })
+  const ctrlTab = await ctrlTabPromise
+  await ctrlTab.waitForLoadState('domcontentloaded')
+  await expect(ctrlTab).toHaveURL(/\/$/)
+  await expect(page).toHaveURL(/\/search\?q=harbor$/)
+  await ctrlTab.close()
+
+  await title.click()
+  await expect(page).toHaveURL(/\/title\/tmdb%3Amovie%3A101$/)
+  await page.goBack()
+  await expect(title).toHaveAttribute('data-focused', 'true')
+})
+
 test('live broadcasts and channels precede movies and series', async ({ page }) => {
   await enter(page, '/search?q=harbor')
   await expect(page.getByTestId('search-titles')).toBeVisible()
@@ -106,8 +135,8 @@ test('live broadcasts and channels precede movies and series', async ({ page }) 
   const channel = page.getByTestId('search-channel')
   await expect(channel).toHaveCount(1)
   await expect(channel).toHaveAttribute('aria-label', /^1 Harbor News 24, now /)
-  // An owned title carries its library mark.
-  await expect(page.getByTestId('search-titles').getByTestId('tile').getByTestId('tile-available')).toBeVisible()
+  // An owned title folds availability into its one card action/status control.
+  await expect(page.getByTestId('search-titles').getByTestId('media-card-actions').locator('.ds-glass-status')).toHaveAttribute('data-state', 'active')
 
   await searchBox(page).fill('sunday league')
   await expect(page.getByTestId('search-titles')).toContainText('Sunday League Legends')
@@ -174,9 +203,11 @@ test('a title that can be requested says so on its tile, and shows its request o
   await enter(page, '/search?q=velvet')
   const tile = page.getByTestId('search-titles').getByTestId('tile')
   await expect(tile).toHaveAttribute('aria-label', 'Velvet Antarctica')
-  // A title that does not play here carries no mark in search; one that does carries the tick.
+  // A title that does not play here carries no status mark in its one card control.
   await expect(tile.getByTestId('tile-available')).toHaveCount(0)
   await expect(tile.locator('.tile-badges')).toHaveCount(0)
+  const cardAction = page.getByTestId('search-titles').getByTestId('media-card-actions')
+  await expect(cardAction.locator('.ds-glass-status')).toHaveCount(0)
   // An admin connects a request manager and the viewer asks for the title, as on its page.
   const api = (who: string, method: string, path: string, body: unknown) => page.evaluate(async ({ who, method, path, body }) => {
     const res = await fetch(`/api/v1${path}`, { method, headers: { authorization: `Bearer mock-access-${who}`, 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -185,7 +216,8 @@ test('a title that can be requested says so on its tile, and shows its request o
   expect(await api('p1', 'PUT', '/settings/request_manager', { url: 'http://requests.example.test:5055', api_key: 'fixture-manager-key' })).toBe(200)
   expect(await api('p2', 'POST', '/requests', { media_type: 'movie', tmdb_id: 301 })).toBeLessThan(300)
   await page.reload()
-  await expect(tile).toContainText(/Requested|Approved|Searching/)
+  await expect(cardAction.locator('.ds-glass-status')).toHaveAttribute('data-state', 'pending')
+  await expect(cardAction.locator('..')).toContainText(/Requested|Approved|Searching/)
   // Its page is where it is asked for and followed.
   await tile.click()
   await expect(page).toHaveURL(/\/title\/tmdb%3Amovie%3A301$/)
@@ -394,7 +426,7 @@ test('Tab walks the bar into the results in page order, and types in the box whe
     stops.push((await focused(page).getAttribute('data-testid')) ?? '')
     if (stops.at(-1) === 'nav-search') break
   }
-  expect(stops).toEqual(['search-channel', 'tile', 'search-result-actions', 'nav-search'])
+  expect(stops).toEqual(['search-channel', 'tile', 'media-card-actions', 'nav-search'])
   await expect(page.getByTestId('nav-search')).toHaveAttribute('data-focused', 'true')
   await expect(searchBox(page)).toBeFocused()
   await page.keyboard.press('Control+a')
@@ -669,12 +701,14 @@ test('a result can be saved and removed without losing the query, scroll or open
   await expect(action).toBeVisible()
   const savedBefore = (await action.innerText()).startsWith('Remove')
   await action.click()
-  await expect(page.getByRole('status').filter({ hasText: savedBefore ? 'Harbor Lights removed from My List' : 'Harbor Lights added to My List' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: savedBefore ? 'Removed from My List.' : 'Added to My List.' })).toBeVisible()
+  await page.keyboard.press('Escape')
   await expect(opener).toBeFocused()
   await expect(page).toHaveURL(/search\?q=harbor$/)
   expect(await page.evaluate(() => scrollY)).toBe(top)
   await opener.press('Space')
   await menu.getByRole('menuitem', { name: savedBefore ? 'Add to My List' : 'Remove from My List' }).click()
+  await page.keyboard.press('Escape')
   await expect(opener).toBeFocused()
 })
 

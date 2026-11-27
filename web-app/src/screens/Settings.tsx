@@ -37,6 +37,7 @@ import { LANG_NAMES } from '../lib/util'
 import { themes } from '../tokens'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
+import { CastSettingsButton } from '../cast/CastPanel'
 
 const TABS = [
   ['profiles', 'Profile'], ['appearance', 'Appearance'], ['languages', 'Languages'], ['rows', 'Home rows'],
@@ -120,6 +121,13 @@ function ProfilesTab() {
         <div className="acct-actions">
           <ProfileSwitch />
         </div>
+      </GlassPanel>
+      <GlassPanel as="section" className="acct-group" testId="profile-tv-controls">
+        <SectionHeader title={inShell() ? 'Phone control for this TV' : 'Watch on a TV'} />
+        <p className="acct-note">{inShell()
+          ? 'Allow a phone using this profile to request control of this TV. You approve each new connection.'
+          : 'Choose a TV using this profile, control its playback, or connect a new TV.'}</p>
+        <div className="acct-actions"><CastSettingsButton /></div>
       </GlassPanel>
       {manages && (
         <GlassPanel as="section" className="acct-group" testId="profile-users">

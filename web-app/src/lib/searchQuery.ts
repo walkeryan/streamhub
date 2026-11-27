@@ -9,6 +9,10 @@ const DEBOUNCE_MS = 250
 /** Shorter than this the server looks nothing up, so neither does the page. */
 export const MIN_QUERY = 2
 
+// The phone results field and the wide top-bar field replace one another at the responsive
+// breakpoint. Keep words which have not reached the URL yet across that one render boundary.
+let pendingDraft: { locationKey: string; text: string } | null = null
+
 export const searchPath = (q: string) => (q.trim() ? `${SEARCH_PATH}?q=${encodeURIComponent(q.trim())}` : SEARCH_PATH)
 
 /**
@@ -21,14 +25,21 @@ export function useSearchQuery() {
   const navigate = useNavigate()
   const onSearch = loc.pathname === SEARCH_PATH
   const urlQuery = onSearch ? (new URLSearchParams(loc.search).get('q') ?? '') : ''
-  const [text, setText] = useState(urlQuery)
+  const [text, setTextState] = useState(() =>
+    onSearch && pendingDraft?.locationKey === loc.key ? pendingDraft.text : urlQuery,
+  )
+  const setText = useCallback((value: string) => {
+    pendingDraft = onSearch ? { locationKey: loc.key, text: value } : null
+    setTextState(value)
+  }, [loc.key, onSearch])
   // What the address holds because of this box. Anything else there came from another navigation.
   const sent = useRef(urlQuery)
   useEffect(() => {
     if (urlQuery === sent.current) return
     sent.current = urlQuery
-    setText(urlQuery)
-  }, [urlQuery])
+    pendingDraft = onSearch ? { locationKey: loc.key, text: urlQuery } : null
+    setTextState(urlQuery)
+  }, [loc.key, onSearch, urlQuery])
   const ask = useCallback((value: string, always = false) => {
     const q = value.trim()
     if (onSearch ? q === sent.current : !q && !always) return

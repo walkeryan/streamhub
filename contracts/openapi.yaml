@@ -2307,7 +2307,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PersonalFeed'
+  /library/media:
+    parameters:
+    - name: id
+      in: query
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 256}
+    delete:
+      tags: [catalog]
+      summary: Remove an item from the household library as an owner
+      security: [{HTTPBearer: []}]
+      responses:
+        '204': {description: Removed from the shared catalog across provider refreshes}
+        '403': {description: Requires the household owner role}
+    put:
+      tags: [catalog]
+      summary: Restore an item removed from the household library
+      security: [{HTTPBearer: []}]
+      responses:
+        '204': {description: Restored}
+        '403': {description: Requires the household owner role}
   /for-you/feedback:
+    get:
+      tags: [catalog]
+      summary: Read the current profile’s rating and My List state
+      security: [{HTTPBearer: []}]
+      parameters:
+      - name: id
+        in: query
+        required: true
+        schema: {type: string}
+      responses:
+        '200':
+          description: Current profile media actions
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/RecommendationRating'
+                - type: object
+                  required: [saved]
+                  properties: {saved: {type: boolean}}
     put:
       tags:
       - catalog

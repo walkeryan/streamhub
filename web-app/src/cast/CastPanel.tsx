@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Modal } from '../components/ui'
-import { Focusable, FocusGroup } from '../nav/Focusable'
-import { Icon } from '../components/Icon'
+import { FocusGroup } from '../nav/Focusable'
 import { useGo } from '../nav/back'
 import { castRequest, sendCastCommand, setCastSession, useCastController, type CastSession } from './controller'
 import { useSession } from '../store/session'
@@ -9,6 +8,7 @@ import { useUi } from '../store/ui'
 import { inShell } from '../shell'
 import { nativeCastAvailable } from '../player/castNative'
 import { ReceiverPanel } from './ReceiverPanel'
+import { useCastPanelUi } from './panelUi'
 import './cast.css'
 
 type Target = { id: string; name: string }
@@ -22,8 +22,19 @@ export function CastPanel() {
   return inShell() ? (nativeCastAvailable() ? <ReceiverPanel key={profile} profile={profile} /> : null) : <SenderPanel key={profile} />
 }
 
+/** The visible entry belongs with this profile's settings, not in the global navigation. */
+export function CastSettingsButton() {
+  const session = useCastController((state) => state.session)
+  const show = useCastPanelUi((state) => state.show)
+  const receiver = inShell() && nativeCastAvailable()
+  const label = receiver ? 'TV controls' : session ? `TV controls for ${session.target_name}` : 'Choose where to watch'
+  return <Button focusKey="prof:cast" ghost icon="tv" onEnter={show} testId="cast-settings">{label}</Button>
+}
+
 function SenderPanel() {
-  const [open, setOpen] = useState(false)
+  const open = useCastPanelUi((state) => state.open)
+  const panelRevision = useCastPanelUi((state) => state.revision)
+  const close = useCastPanelUi((state) => state.close)
   const [targets, setTargets] = useState<Target[]>([])
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -59,7 +70,7 @@ function SenderPanel() {
     }
     void poll()
     return () => { active = false; ac.abort(); window.clearTimeout(timer) }
-  }, [open, refresh])
+  }, [open, panelRevision, refresh])
   const change = async (target?: Target) => {
     if (busy) return
     const rev = ++revision.current
@@ -83,12 +94,7 @@ function SenderPanel() {
     if (pb?.duration_ms) void sendCastCommand({ action: 'seek', position_ms: Math.max(0, Math.min(pb.duration_ms, pb.position_ms + delta)) })
   }
   return <>
-    <div className="cast-bar">
-      <Focusable focusKey="cast:open" className="cast-target fx-flat" label={session ? 'TV controls for ' + session.target_name : 'Choose where to watch'} aria={{ haspopup: 'dialog', expanded: open }} onEnter={() => { setOpen(true); setRefresh(x => x + 1) }}>
-        <Icon name="tv" /><span>{session?.target_name ?? 'Watch on TV'}</span>{session && <small>{session.status === 'pending' ? 'Waiting for TV' : pb?.title || 'Connected'}</small>}
-      </Focusable>
-    </div>
-    <Modal open={open} title={session ? session.target_name : 'Choose where to watch'} onClose={() => setOpen(false)} firstFocusKey="cast:close" variant="sheet">
+    <Modal open={open} title={session ? session.target_name : 'Choose where to watch'} onClose={close} firstFocusKey="cast:close" variant="sheet">
       {session?.status === 'pending' && <p role="status" className="muted">Waiting for someone to accept on {session.target_name}.</p>}
       {connected && pb && <>
         <div className="cast-now">{pb.poster && <img src={pb.poster} alt="" />}<div>
@@ -110,10 +116,10 @@ function SenderPanel() {
           {targets.map(target => <Button key={target.id} focusKey={'cast:target:' + target.id} ghost icon="tv" disabled={busy} onEnter={() => void change(target)}>{target.name}</Button>)}
         </FocusGroup>
         {!loaded || restoring ? <p role="status">Looking for TVs…</p> : !targets.length && !error && <p role="status">No TVs available. Open TV controls on your TV and turn on phone control.</p>}
-        <Button focusKey="cast:pair" ghost onEnter={() => { setOpen(false); go('/pair') }}>Connect a new TV</Button>
+        <Button focusKey="cast:pair" ghost onEnter={() => { close(); go('/pair') }}>Connect a new TV</Button>
       </>}
       {session && <Button focusKey="cast:disconnect" ghost disabled={busy} onEnter={() => void change()}>{session.status === 'pending' ? 'Cancel request' : 'Disconnect phone'}</Button>}
-      <Button focusKey="cast:close" primary onEnter={() => setOpen(false)}>{connected ? 'Continue browsing' : 'Close'}</Button>
+      <Button focusKey="cast:close" primary onEnter={close}>{connected ? 'Continue browsing' : 'Close'}</Button>
     </Modal>
   </>
 }

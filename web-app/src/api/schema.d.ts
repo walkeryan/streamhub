@@ -308,6 +308,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/media": {
+        parameters: {
+            query: {
+                id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Restore an item removed from the household library */
+        put: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Restored */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Requires the household owner role */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        /** Remove an item from the household library as an owner */
+        delete: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Removed from the shared catalog across provider refreshes */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Requires the household owner role */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/for-you/feedback": {
         parameters: {
             query?: never;
@@ -315,7 +387,31 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read the current profile’s rating and My List state */
+        get: {
+            parameters: {
+                query: {
+                    id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Current profile media actions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecommendationRating"] & {
+                            saved: boolean;
+                        };
+                    };
+                };
+            };
+        };
         /** Feedback */
         put: {
             parameters: {

@@ -145,6 +145,7 @@
   background: var(--pop-bg); color: var(--t-text); border: 1px solid var(--pop-line); box-shadow: var(--shadow-pop);
   font-size: var(--text-label); font-weight: 550; animation: toast-in var(--dur-base) var(--ease);
 }
+.toast .btn { pointer-events: auto; }
 .toast-icon { flex: none; width: 1.1rem; height: 1.1rem; padding: 0.2rem; box-sizing: content-box; border-radius: 50%; color: var(--t-accent-text); background: var(--t-accent); }
 .toast[data-tone='error'] .toast-icon { background: var(--t-danger); color: #fff; }
 .toast[data-tone='success'] .toast-icon { background: var(--t-success); color: #06210f; }

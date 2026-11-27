@@ -20,6 +20,8 @@ export function GlassIconButton(p: {
   focusKey: string; icon: IconName; label: string; onEnter: () => void
   tip?: string | false; tipAt?: 'below' | 'above'; size?: GlassSize; solid?: boolean
   pressed?: boolean; disabled?: boolean; testId?: string; title?: string; className?: string
+  /** A small state mark inside the same control; never a second overlay control. */
+  status?: 'active' | 'pending' | 'busy' | 'error'
   /** Filled glyph while pressed (My List's bookmark, Favorite's heart). */
   fillWhenPressed?: boolean
   /** A button that opens a menu or a sheet: says so to assistive tech. */
@@ -32,6 +34,7 @@ export function GlassIconButton(p: {
       aria={p.expanded === undefined ? undefined : { haspopup: p.popup ?? 'menu', expanded: p.expanded }}
       className={cn('ds-glass', p.size && p.size !== 'md' && `ds-glass-${p.size}`, p.solid && 'ds-glass-solid', p.tip === false && p.className)}>
       <Icon name={p.icon} filled={p.fillWhenPressed && p.pressed ? true : undefined} />
+      {p.status && <i className="ds-glass-status" data-state={p.status} aria-hidden="true" />}
     </Focusable>
   )
   if (p.tip === false) return button

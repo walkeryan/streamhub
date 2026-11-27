@@ -14,7 +14,7 @@ from starlette.requests import HTTPConnection
 from app.container import Container
 from app.services.adult import require_adult
 from app.services.auth import Principal
-from app.services.errors import Forbidden, PermissionDenied, Unauthorized
+from app.services.errors import Forbidden, NotFound, PermissionDenied, Unauthorized
 from app.services.network import FORWARDING_HEADERS, client_address, from_home, vouched_for
 from app.services.public_address import with_public
 from app.services.sessions import SessionMeta
@@ -157,7 +157,18 @@ async def current_principal(
     principal = await resolve(request, c, creds.credentials)
     request.state.principal = principal
     async with acting_as(c, principal):
-        yield principal
+        from app.services.household_library import catalog_read, removed_media, removed_refs
+
+        if request.method != "GET" or not catalog_read(request.url.path):
+            yield principal
+            return
+        hidden = await removed_refs(c.db)
+        request.state.removed_media = hidden
+        token = removed_media.set(hidden)
+        try:
+            yield principal
+        finally:
+            removed_media.reset(token)
 
 
 P = Annotated[Principal, Depends(current_principal)]
@@ -244,7 +255,12 @@ async def playback_watch_gate(request: Request, c: C) -> None:
     policy = c.content_policy
     # Under the legacy flag the resolver makes these checks itself, with the same arguments.
     rated = not policy.enabled and policy.applies_to(principal)
+    from app.services.household_library import removed_refs
+
+    hidden = await removed_refs(c.db)
     for ref, source, judged, moment in refs:
+        if ref in hidden:
+            raise NotFound("Title removed from the household library")
         if ref:
             await require_watch(c.db, principal.permissions, ref, source)
             if rated and judged:

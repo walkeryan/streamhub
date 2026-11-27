@@ -7,6 +7,8 @@ import { useTextEntry } from './textEntry'
 
 export interface FocusableProps {
   id?: string
+  /** A real browser destination. Plain activation still uses onEnter so app history/focus are preserved. */
+  href?: string
   focusKey?: string
   className?: string
   style?: CSSProperties
@@ -61,11 +63,14 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
     accessibilityLabel: p.label,
   })
   useImperativeHandle(outer, () => ({ focus: focusSelf, el: ref.current as HTMLElement | null }), [focusSelf, ref])
+  const Tag = p.href ? 'a' : 'div'
+  const role = p.role ?? (p.href ? undefined : 'button')
   return (
-    <div
+    <Tag
       id={p.id}
+      href={p.href}
       ref={ref}
-      role={p.role ?? 'button'}
+      role={role}
       tabIndex={-1}
       aria-label={p.label}
       aria-disabled={p.disabled || undefined}
@@ -81,13 +86,20 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       style={p.style}
       onKeyDown={(e) => {
         if (e.key !== ' ' || e.target !== e.currentTarget || e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return
-        if (!['button', 'switch', 'radio', 'tab', 'menuitem'].includes(p.role ?? 'button')) return
+        if (!['button', 'switch', 'radio', 'tab', 'menuitem'].includes(role ?? '')) return
         e.preventDefault()
         e.stopPropagation()
         if (!e.repeat && !disabledRef.current) onEnterRef.current?.()
       }}
-      onClick={async () => {
-        if (disabledRef.current) return
+      onClick={async (e) => {
+        if (disabledRef.current) {
+          e.preventDefault()
+          return
+        }
+        // Real links keep the browser's modifier-click/new-tab and context-menu
+        // behavior. Only an ordinary activation is routed through the app.
+        if (p.href && (e.button !== 0 || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)) return
+        if (p.href) e.preventDefault()
         // A click (including touch or assistive activation) is deliberate, unlike
         // pointerenter caused by removing an overlay under a parked cursor.
         // Establish its opener before a dialog captures focus for restoration.
@@ -104,7 +116,7 @@ export const Focusable = forwardRef<FocusableHandle, FocusableProps>(function Fo
       }}
     >
       {typeof p.children === 'function' ? p.children({ focused }) : p.children}
-    </div>
+    </Tag>
   )
 })
 

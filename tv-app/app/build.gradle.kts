@@ -31,8 +31,8 @@ android {
         applicationId = "com.streamhub.tv"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 28
-        versionName = "1.4.7"
+        versionCode = 29
+        versionName = "1.4.8"
     }
 
     buildTypes {

@@ -68,6 +68,7 @@ class CatalogRevisions:
     """Commit-scoped revisions. Profile updates never evict unrelated profiles."""
 
     GLOBAL = {
+        "library_removal",
         "source",
         "title",
         "channel",

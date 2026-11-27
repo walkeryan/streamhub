@@ -620,3 +620,47 @@ async def test_the_number_of_queries_does_not_grow_with_the_catalog(api: Api) ->
     )
     assert large == small, (small, large)
     assert small <= 24
+
+
+async def test_category_query_finds_films_by_subject_category_or_genre(api: Api) -> None:
+    await seed(
+        api,
+        title("green", "The Grinch", overview="A grouch plans to steal Christmas."),
+        title("north", "Northern Lights", group_name="Christmas Classics"),
+        title("elf", "Elf", genres=["Christmas Comedy"]),
+        title("show", "Holiday Village", kind="series", genres=["Christmas"]),
+        title("unrelated", "March", genres=["Drama"]),
+        title("adult", "Locked", genres=["Christmas"], adult=True),
+    )
+    ids = lambda data: {t["id"] for t in data["results"]}  # noqa: E731
+    assert ids(await search(api, "Christmas movies", discover=False)) == {
+        "lib:catalog:green",
+        "lib:catalog:north",
+        "lib:catalog:elf",
+    }
+    assert ids(await search(api, "Christmas TV shows", discover=False)) == {"lib:catalog:show"}
+    assert ids(await search(api, "comedy films", discover=False)) == {"lib:catalog:elf"}
+    assert ids(await search(api, "The Grinch", discover=False)) == {"lib:catalog:green"}
+
+
+async def test_household_library_owner_can_remove_across_profiles_and_restore(api: Api) -> None:
+    await seed(api, title("same", "Shared Film", tmdb_id=6789), title("other", "Other Film"))
+    viewer = await member(api)
+    ref = {"id": "tmdb:movie:6789"}
+    assert (await viewer.req("DELETE", "/library/media", params=ref)).status_code == 403
+    assert (await api.req("DELETE", "/library/media", params=ref)).status_code == 204
+    for user in (api, viewer):
+        assert not (await search(user, "Shared Film", discover=False))["results"]
+        page = await user.get("/browse/movies", params={"language": "all"})
+        assert page.status_code == 200
+        assert ref["id"] not in page.text
+        blocked = await user.get("/playback/options", params=ref)
+        assert blocked.status_code == 404
+    # The provider still owns the file and may send a new source id for the same movie.
+    async with api.c.db.session() as s:
+        s.add(title("duplicate", "Shared Film", tmdb_id=6789))
+        await s.commit()
+    assert not (await search(api, "Shared Film", discover=False))["results"]
+    assert (await viewer.req("PUT", "/library/media", params=ref)).status_code == 403
+    assert (await api.req("PUT", "/library/media", params=ref)).status_code == 204
+    assert ref["id"] in {t["id"] for t in (await search(viewer, "Shared Film", discover=False))["results"]}

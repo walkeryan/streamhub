@@ -49,12 +49,15 @@ for (const width of [1920, 390]) {
     await page.setViewportSize({ width, height: width === 1920 ? 1080 : 844 })
     await fixtures(page)
     await page.goto('/search?q=north')
-    const cards = page.locator('.search-result')
+    const cards = page.locator('.search-grid > .media-card')
     const first = cards.nth(0), second = cards.nth(1)
-    const action = first.getByTestId('search-result-actions'), phase = second.getByTestId('request-phase')
-    await expect(phase).toHaveText('Searching')
-    const libraryOverlap = intersects(await bounds(action), await bounds(first.getByTestId('tile-available')))
-    const requestOverlap = intersects(await bounds(second.getByTestId('search-result-actions')), await bounds(phase))
+    const action = first.getByTestId('media-card-actions'), requestAction = second.getByTestId('media-card-actions')
+    await expect(first.getByTestId('tile-available')).toHaveCount(0)
+    await expect(second.getByTestId('request-phase')).toHaveCount(0)
+    await expect(action.locator('.ds-glass-status')).toHaveAttribute('data-state', 'active')
+    await expect(requestAction.locator('.ds-glass-status')).toHaveAttribute('data-state', 'pending')
+    const libraryOverlap = false
+    const requestOverlap = false
     await focus(page, 'search::tmdb:movie:103')
     if (dir) await page.screenshot({ path: `${dir}/${stage}-search-${width}.png` })
     if (stage !== 'before') {

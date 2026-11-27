@@ -97,7 +97,7 @@ export function Rail() {
       {/* A phone names each icon; the top bar has the room to say the name alone. */}
       {(phone ? BAR : nav).map((n) => (
         <Focusable key={n.label} focusKey={`rail:${n.to}`} className="rail-item fx-flat" role="link" label={n.label}
-          aria-current={here(n) ? 'page' : undefined} data-testid={testId(n.label)} onEnter={() => open(n.to)}>
+          href={n.to} aria-current={here(n) ? 'page' : undefined} data-testid={testId(n.label)} onEnter={() => open(n.to)}>
           {phone && <Icon name={n.icon} />}
           <span className="lbl">{n.label}</span>
         </Focusable>
@@ -120,7 +120,7 @@ export function Rail() {
       <FocusGroup focusKey="more:list" className="flex flex-col gap-2">
         {more.map((d) => (
           <Focusable key={d.to} focusKey={`more:${d.to}`} className="menu-item fx-flat" role="link" label={d.label}
-            aria-current={here(d) ? 'page' : undefined} data-testid={testId(d.label)} onEnter={() => open(d.to)}>
+            href={d.to} aria-current={here(d) ? 'page' : undefined} data-testid={testId(d.label)} onEnter={() => open(d.to)}>
             <Icon name={d.icon} />{d.label}
           </Focusable>
         ))}

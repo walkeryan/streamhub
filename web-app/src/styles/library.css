@@ -140,6 +140,10 @@
 
 /* ---------- My List ---------- */
 .fav-channels { display: flex; flex-wrap: wrap; gap: var(--gap-row); padding-block: 0.25rem; }
+@media (max-width: 720px) {
+  .fav-channels > .media-card { width: min(var(--tile-channel-w), 100%); max-width: 100%; }
+  .fav-channels > .media-card > .tile-channel { width: 100%; }
+}
 
 /* ---------- Requests ---------- */
 .req-poster { position: relative; flex: none; width: 3rem; aspect-ratio: 2 / 3; border-radius: var(--r-sm); overflow: hidden; background: var(--t-surface-alt);

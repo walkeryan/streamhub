@@ -3,9 +3,9 @@ import { delay, http, HttpResponse } from 'msw'
 import type { Channel, PlaybackDescriptor, Source, Tile } from '../api/types'
 import {
   DISCLAIMER, EPISODE_NAMES, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf, showSeed,
-  searchBroadcasts, sources, tileOf, titles, unavailable, watch, withNowNext,
+  searchBroadcasts, sources, tileOf, titles, unavailable, withNowNext,
 } from './fixtures'
-import { viewingHandlers } from './viewing'
+import { mockWatchlist, viewingHandlers, writeMockWatchlist } from './viewing'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
@@ -606,9 +606,17 @@ export const handlers = [
   ])),
   http.put(`${B}/favorites`, async ({ request }) => { fav.add(((await request.json()) as { id: string }).id); return new HttpResponse(null, { status: 204 }) }),
   http.delete(`${B}/favorites`, ({ request }) => { fav.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
-  http.get(`${B}/watchlist`, () => HttpResponse.json(titles.filter((t) => watch.has(t.id)))),
-  http.put(`${B}/watchlist`, async ({ request }) => { watch.add(((await request.json()) as { id: string }).id); return new HttpResponse(null, { status: 204 }) }),
-  http.delete(`${B}/watchlist`, ({ request }) => { watch.delete(new URL(request.url).searchParams.get('id') ?? ''); return new HttpResponse(null, { status: 204 }) }),
+  http.get(`${B}/watchlist`, ({ request }) => HttpResponse.json(titles.filter((t) => mockWatchlist(currentProfileId(request)).has(t.id)))),
+  http.put(`${B}/watchlist`, async ({ request }) => {
+    const profile = currentProfileId(request), saved = mockWatchlist(profile)
+    saved.add(((await request.json()) as { id: string }).id); writeMockWatchlist(profile, saved)
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${B}/watchlist`, ({ request }) => {
+    const profile = currentProfileId(request), saved = mockWatchlist(profile)
+    saved.delete(new URL(request.url).searchParams.get('id') ?? ''); writeMockWatchlist(profile, saved)
+    return new HttpResponse(null, { status: 204 })
+  }),
   http.get(`${B}/history`, () => HttpResponse.json(Object.keys(progress).map(tileById).filter((t): t is Tile => !!t))),
   http.get(`${B}/themes`, () => HttpResponse.json([])),
   http.get(`${B}/settings`, ({ request }) => HttpResponse.json(settingsFor(request))),

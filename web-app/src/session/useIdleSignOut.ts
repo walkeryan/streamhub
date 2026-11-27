@@ -5,6 +5,7 @@ import { queryClient } from '../api/queryClient'
 import { nativeCastAvailable, receiverPlayback } from '../player/castNative'
 import { useCastController } from '../cast/controller'
 import { shellBridge } from '../shell'
+import { useWho } from '../store/who'
 import { idleExpired, idleSessionId } from './idleClock'
 
 const validMinutes = (v: unknown): number | null =>
@@ -16,11 +17,12 @@ export function reportPlayerActivity(active: boolean) {
   window.dispatchEvent(new Event('sh:playback-activity'))
 }
 
-export function useIdleSignOut() {
+export function useIdleSignOut(sharedDevice = false) {
   const { value: minutes, ready } = useIdleMinutes()
   const sid = useSession((s) => idleSessionId(s.access))
+  const picked = useWho((s) => s.picked)
   useEffect(() => {
-    if (!sid) return
+    if (!sid || (sharedDevice && !picked)) return
     const limitKey = 'sh.idle.limit.v1:' + sid
     const limit = ready ? minutes : (validMinutes(Number(localStorage.getItem(limitKey))) ?? 0)
     if (ready) localStorage.setItem(limitKey, String(limit))
@@ -68,6 +70,17 @@ export function useIdleSignOut() {
       queryClient.clear()
       current.end('Signed out after inactivity. Sign in to continue.')
     }
+    const returnToPicker = (remote = false) => {
+      const current = useSession.getState()
+      if (ended || idleSessionId(current.access) !== sid) return
+      ended = true
+      if (!remote) channel?.postMessage('profile-picker')
+      // The paired session is the authority for the real shared-device picker and its PIN
+      // checks. Keep it, and give the next chosen profile a fresh idle window.
+      remember(Date.now())
+      useWho.getState().reset()
+    }
+    const expire = () => sharedDevice ? returnToPicker() : signOut()
     function expired(now: number) {
       last = Math.max(last, Number(localStorage.getItem(key)) || 0)
       return idleExpired(last, limit, now)
@@ -82,7 +95,7 @@ export function useIdleSignOut() {
       channel?.postMessage('playing?')
       probe = setTimeout(() => {
         probe = undefined
-        if (!ended && !isPlaying() && expired(Date.now())) signOut()
+        if (!ended && !isPlaying() && expired(Date.now())) expire()
       }, 650)
     }
     function activity(e: Event) {
@@ -97,6 +110,7 @@ export function useIdleSignOut() {
     if (channel)
       channel.onmessage = (e) => {
         if (e.data === 'signed-out') signOut(true)
+        if (e.data === 'profile-picker' && sharedDevice) returnToPicker(true)
         if (e.data === 'playing?' && isPlaying()) remember(Date.now())
       }
     const nativeInput = () => {
@@ -132,5 +146,5 @@ export function useIdleSignOut() {
       window.removeEventListener('pageshow', nativeInput)
       document.removeEventListener('visibilitychange', nativeInput)
     }
-  }, [sid, ready, minutes])
+  }, [sid, ready, minutes, picked, sharedDevice])
 }

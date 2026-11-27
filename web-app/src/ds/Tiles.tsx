@@ -28,7 +28,7 @@ export function AvailableTick() {
  * ("· 50 min", "S2 · E3"). Width comes from `--still-w` (rows set it; default 11.8rem, 13rem on a phone).
  */
 export function StillCard(p: {
-  focusKey: string; label: string; onEnter: () => void; onFocus?: () => void
+  focusKey: string; href?: string; label: string; onEnter: () => void; onFocus?: () => void
   image?: string | null; fallbackName: string; title: ReactNode; meta?: ReactNode
   progressPct?: number | null; watched?: boolean; current?: boolean
   /** Over the picture's top-left corner: a status chip ("On now", a request's phase). */
@@ -39,7 +39,7 @@ export function StillCard(p: {
 }) {
   const pct = p.progressPct ?? 0
   return (
-    <Focusable focusKey={p.focusKey} className={cn('ds-still', p.className)} role={p.role ?? 'link'} aria-current={p.current ? 'page' : undefined}
+    <Focusable focusKey={p.focusKey} href={p.href} className={cn('ds-still', p.className)} role={p.role ?? 'link'} aria-current={p.current ? 'page' : undefined}
       data-testid={p.testId} label={p.label} onEnter={p.onEnter} onFocus={p.onFocus ? () => p.onFocus!() : undefined}>
       <div className="ds-still-art">
         <SafeImg className="art" src={p.image} alt="" loading="lazy" draggable={false}

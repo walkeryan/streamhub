@@ -161,3 +161,19 @@ async def test_together_requires_opt_in_and_never_exposes_individual_votes(api: 
     assert (await api.req("DELETE", path, headers=guest)).status_code == 204
     assert (await api.req("GET", path, headers=guest)).status_code == 404
     assert (await api.req("GET", path)).json()["member_count"] == 1
+
+
+async def test_action_menu_reads_only_own_episode_vote_and_saved_state(api: Api) -> None:
+    from tests.people import member
+
+    await library(api)
+    viewer = await member(api)
+    ref = "lib:s:new"
+    assert (await api.req("PUT", "/for-you/feedback", json={"id": ref, "vote": "up"})).status_code == 200
+    assert (await api.req("PUT", "/watchlist", json={"id": ref})).is_success
+    assert (await api.get("/for-you/feedback", params={"id": ref})).json() == {"id": ref, "vote": "up", "saved": True}
+    assert (await viewer.get("/for-you/feedback", params={"id": ref})).json() == {
+        "id": ref,
+        "vote": None,
+        "saved": False,
+    }

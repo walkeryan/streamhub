@@ -10,8 +10,8 @@ export function IdleSetting() {
   const valid = Number.isInteger(n) && n >= 1 && n <= 1440
   return (
     <section className="set-card" aria-labelledby="idle-label">
-      <h2 id="idle-label">Idle sign-out</h2>
-      <p>Sign out of this device after inactivity. Watching a title keeps the session open.</p>
+      <h2 id="idle-label">Idle timeout</h2>
+      <p>After inactivity, shared TVs return to Who's watching; personal devices sign out. Watching a title keeps the session open.</p>
       <p aria-live="polite">
         {pref.value ? 'After ' + pref.value + (pref.value === 1 ? ' minute' : ' minutes') : 'Off'}
       </p>

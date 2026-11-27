@@ -4,12 +4,12 @@ import { SafeImg, Initials } from './SafeImg'
 import { ProgressBar } from './ui'
 
 /** A single remote target: real artwork above, persistent programme metadata below. */
-export function FeatureCard({ focusKey, label, title, eyebrow, art, logo, fallbackName, badge, progress, onEnter, onFocus, testId, children, role = 'link' }: {
-  focusKey: string; label: string; title: string; eyebrow: string; art?: string | null; logo?: string | null;
+export function FeatureCard({ focusKey, href, label, title, eyebrow, art, logo, fallbackName, badge, progress, onEnter, onFocus, testId, children, role = 'link' }: {
+  focusKey: string; href?: string; label: string; title: string; eyebrow: string; art?: string | null; logo?: string | null;
   fallbackName: string; badge?: string; progress?: number | null; onEnter: () => void; onFocus?: () => void; testId?: string; children?: ReactNode; role?: 'link' | 'button';
 }) {
   const fallback = logo ? <SafeImg className="feature-logo" src={logo} alt="" loading="lazy" fallback={<Initials name={fallbackName} />} /> : <Initials name={fallbackName} />
-  return <Focusable focusKey={focusKey} className="feature-card fx-flat" role={role} label={label} onEnter={onEnter} onFocus={onFocus} data-testid={testId}>
+  return <Focusable focusKey={focusKey} href={href} className="feature-card fx-flat" role={role} label={label} onEnter={onEnter} onFocus={onFocus} data-testid={testId}>
     <div className="feature-art">
       <SafeImg className="feature-image" src={art} alt="" loading="lazy" decoding="async" fallback={fallback} />
       {badge && <span className="feature-status">{badge}</span>}

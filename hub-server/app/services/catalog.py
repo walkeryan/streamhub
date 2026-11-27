@@ -41,6 +41,7 @@ from app.services.search import (
     CHANNEL_CAP,
     EXPANDED_CAP,
     PROGRAMME_CAP,
+    category_search,
     search_channels,
     search_programmes,
     section_order,
@@ -1563,6 +1564,52 @@ class CatalogService:
         if not task.cancelled():
             task.exception()  # looked at, so a failure nobody waited for is not reported as unhandled
 
+    async def _category_matches(
+        self,
+        terms: tuple[str, ...],
+        kinds: set[str],
+        sources: list[str],
+        languages: list[str],
+        year: int | None,
+        limit: int,
+    ) -> tuple[list[Title], dict[str, int], int]:
+        fields = (
+            Title.group_name,
+            cast(Title.genres, String),
+            Title.extra["raw_category"].as_string(),
+            Title.extra["keywords"].as_string(),
+        )
+        tags = or_(*(field.icontains(term, autoescape=True) for term in terms for field in fields))
+        # A holiday tag describes a shelf; "holiday" in a title can simply mean a vacation.
+        specific = tuple(term for term in terms if term != "holiday" or terms[0] == "holiday")
+        named = or_(*(Title.norm_title.icontains(term, autoescape=True) for term in specific))
+        evidence = [tags, named]
+        if terms[0] in {"christmas", "holiday", "halloween"}:
+            evidence.extend(Title.overview.icontains(term, autoescape=True) for term in specific if term != "holiday")
+        scoped = self._filter_title_languages(
+            select(Title).where(Title.source_id.in_(sources), Title.kind.in_(kinds), general_audience()), languages
+        )
+        if year:
+            scoped = scoped.where(Title.year == year)
+        key = self._canonical_key()
+        ranked = (
+            scoped.where(or_(*evidence))
+            .with_only_columns(key, func.count().over())
+            .group_by(key)
+            .order_by(
+                func.min(case((tags, 0), (named, 1), else_=2)),
+                func.max(Title.rating).desc(),
+                func.max(Title.year).desc(),
+                key,
+            )
+            .limit(limit)
+        )
+        async with self._db.session() as session:
+            matches = (await session.execute(ranked)).all()
+            ordering = {ref: index for index, (ref, _) in enumerate(matches)}
+            rows = list(await session.scalars(scoped.where(key.in_(ordering)).order_by(Title.id))) if matches else []
+        return rows, ordering, matches[0][1] - len(matches) if matches else 0
+
     async def _search_titles(
         self,
         q: str,
@@ -1596,7 +1643,14 @@ class CatalogService:
         words = anchors(tokens) or norm.split()[:8]
         rows: list[Title] = []
         unlisted = 0  # library matches counted but not built into tiles: beyond what a page can use
-        if norm and lib_kinds and words and enabled:
+        category_order: dict[str, int] = {}
+        category = category_search(named)
+        if category and enabled:
+            terms, requested_kinds = category
+            rows, category_order, unlisted = await self._category_matches(
+                terms, lib_kinds & requested_kinds, enabled, languages, year, limit
+            )
+        elif norm and lib_kinds and words and enabled:
             # FTS supplies candidate IDs only. The ORM scope below still enforces
             # enabled sources, profile classifications, kinds and language filters.
             match = " OR ".join('"' + word.replace('"', '""') + '"*' for word in words)
@@ -1693,7 +1747,7 @@ class CatalogService:
         note = "Metadata discovery is not configured; searching your sources only."
         if discoverable:
             note = "Metadata coverage varies. Language and source filters limit availability, not discovery."
-        if discoverable and discover:
+        if discoverable and discover and not category:
             clock = asyncio.get_running_loop().time
             deadline = clock() + DISCOVERY_BUDGET
             try:
@@ -1791,6 +1845,7 @@ class CatalogService:
             # At equal rank what can be played here leads, then what opens elsewhere, then metadata alone.
             owned = 0 if any(b["playable_in_app"] for b in tile["sources"]) else 1 if tile["sources"] else 2
             return (
+                category_order.get(tile["id"], 0),
                 8 if rank is None else rank,
                 owned,
                 0 if tile["id"].startswith("tmdb:") else 1,

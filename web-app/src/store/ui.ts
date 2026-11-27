@@ -6,6 +6,7 @@ import { lsGet, lsSet, safeJson } from '../lib/util'
 export interface Toast {
   id: number
   text: string
+  action?: { label: string; onSelect: () => void }
   tone?: 'info' | 'error' | 'success'
 }
 
@@ -16,7 +17,7 @@ interface HomePrefs {
 
 interface UiState {
   toasts: Toast[]
-  toast: (text: string, tone?: Toast['tone']) => void
+  toast: (text: string, tone?: Toast['tone'], action?: Toast['action']) => void
   dismissToast: (id: number) => void
   recentSearches: string[]
   /** Current Search text, so Back from a result returns to the same query, results and focused result. */
@@ -74,10 +75,10 @@ export const useUi = create<UiState>((set, get) => ({
     set({ canvasPlayback: enabled })
   },
   toasts: [],
-  toast: (text, tone = 'info') => {
+  toast: (text, tone = 'info', action) => {
     const id = ++toastSeq
-    set({ toasts: [...get().toasts, { id, text, tone }] })
-    window.setTimeout(() => get().dismissToast(id), 5000)
+    set({ toasts: [...get().toasts, { id, text, tone, action }] })
+    window.setTimeout(() => get().dismissToast(id), action ? 12000 : 5000)
   },
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
   recentSearches: safeJson<string[]>(lsGet(scopeKey(SEARCH_KEY)), []),
