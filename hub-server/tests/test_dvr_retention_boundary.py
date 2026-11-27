@@ -75,3 +75,14 @@ def test_only_dvr_input_is_paced_before_input(tmp_path):
         if buffered:
             assert args.index("-re") < args.index("-i")
             assert args[args.index("-hls_list_size") + 1] == "1862"
+
+
+def test_watched_session_keeps_a_long_tune_and_clips_a_later_viewer(tmp_path):
+    manager, now = fixture_manager(tmp_path, range(-7200, 0, 2))
+    manager.watched_session = True
+    joined = now - timedelta(seconds=91)
+    assert manager.window("fixture")["buffered_seconds"] == 7200
+    assert manager.window("fixture", joined)["buffered_seconds"] == 91
+    assert manager.window("fixture", joined)["start"] == joined
+    assert "TIME-OFFSET=1.000" in manager.manifest("fixture", joined, joined)
+    assert manager.manifest("fixture").count("#EXTINF:") == 6

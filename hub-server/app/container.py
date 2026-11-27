@@ -214,6 +214,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         meta=tmdb,
         tokens=tokens,
         active=active,
+        buffer_live_channels=settings.dvr_enabled,
     )
 
     home = HomeService(catalog, channels, progress, layout, sources, availability, tmdb, playback, watchlist)
@@ -234,7 +235,9 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
         vaapi_device=settings.vaapi_device,
         on_start=active.inc,
         on_stop=active.dec,
-        dvr=DvrManager(settings.dvr_dir, enabled=settings.dvr_enabled, reserve_root=settings.dvr_reserve_dir),
+        dvr=DvrManager(
+            settings.dvr_dir, enabled=settings.dvr_enabled, reserve_root=settings.dvr_reserve_dir, watched_session=True
+        ),
     )
     playback.probe = MediaProbe(settings.ffprobe_path)
     recorder.probe = playback.probe

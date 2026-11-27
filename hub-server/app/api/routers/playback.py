@@ -80,15 +80,8 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
     )
     c.proxy.ensure_running(generation)
     result["buffer_available"] = False
-    if (
-        not result.get("canvas")
-        and c.proxy.dvr.enabled
-        and result.get("mode") == "hls"
-        and result.get("live")
-        and body.id.startswith("ch:")
-    ):
-        capability = await c.playback.rewind_capability(p.profile_id, body.id)
-        result["buffer_available"] = capability["mode"] == "unavailable"
+    if c.proxy.dvr.enabled and result.get("mode") == "hls" and result.get("live") and body.id.startswith("ch:"):
+        result["buffer_available"] = not body.preview_only
     return result
 
 
@@ -143,7 +136,7 @@ async def multiview(body: S.MultiviewRequest, c: C, p: P) -> dict[str, Any]:
         if not source.enabled:
             raise NotFound("Channel source is disabled.")
         key = f"{grant.source_id}:{grant.url}:none"
-        if c.proxy.dvr.key == key:
+        if c.proxy.buffer_state(key).key == key:
             raise Conflict("Release buffered playback before multiview.", code="source_busy")
         members[key] = (grant.source_id, c.sources.max_connections(source))
         grant.audio_variant = pane.variant_id
@@ -205,14 +198,17 @@ async def _buffer_grant(token: str, c: C, p: P) -> tuple[Any, str, Any]:
     g = await _grant(c, token)
     if g.pair_lease_id:
         raise Conflict("Multiview does not support buffered recording.", code="buffer_unsupported")
-    if g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or g.transcode:
-        raise Forbidden("DVR requires this profile's authorized live codec-copy HLS playback grant.")
+    # Legacy HLS grants allowed DVR, but Canvas was previously confined to its rolling playlist.
+    allowed = g.buffer_allowed if g.buffer_allowed is not None else not g.canvas
+    if not allowed or g.profile_id != p.profile_id or g.mode != "hls" or not g.live or not g.channel_key or g.room:
+        raise Forbidden("DVR requires this profile's authorized live HLS playback grant.")
     # This shared channel gate is also the integration point for current parental policy.
     channel = await c.playback._authorized_channel(p.profile_id, "ch:" + g.channel_key)
     if channel.source_id != g.source_id:
         raise Forbidden("DVR channel does not belong to this playback source.")
     source = await c.sources.get(g.source_id)
-    return g, f"{g.source_id}:{g.url}:none", source
+    key, _, _ = _hls_session_key(c, g)
+    return g, key, source
 
 
 @router.post("/playback/buffer/lease", response_model=S.BufferLeaseResponse, tags=["playback"])
@@ -229,6 +225,8 @@ async def buffer_lease(body: S.BufferLeaseRequest, c: C, p: P) -> dict[str, Any]
             generation=g.recovery_generation,
             viewer=_viewer(g),
             channel_id="ch:" + g.channel_key,
+            transcode=_hls_session_key(c, g)[1],
+            canvas_height=g.max_height if g.canvas else None,
         )
     except HlsSourceBusy as exc:
         raise await _source_busy(c, g) from exc
@@ -237,12 +235,12 @@ async def buffer_lease(body: S.BufferLeaseRequest, c: C, p: P) -> dict[str, Any]
 @router.post("/playback/buffer/heartbeat", response_model=S.BufferWindow, tags=["playback"])
 async def buffer_heartbeat(body: S.BufferViewerRequest, c: C, p: P) -> dict[str, Any]:
     _, key, _ = await _buffer_grant(body.stream_token, c, p)
-    c.proxy.dvr.heartbeat(key, p.profile_id, body.lease_id, body.paused)
-    window = await c.proxy.buffer_window(key)
+    c.proxy.buffer_state(key).heartbeat(key, p.profile_id, body.lease_id, body.paused)
+    window = await c.proxy.buffer_window(key, body.lease_id)
     if body.position_at is not None and any(
-        segment.start <= body.position_at < segment.end for segment in c.proxy.dvr.segments
+        segment.start <= body.position_at < segment.end for segment in c.proxy.buffer_state(key).segments
     ):
-        c.proxy.dvr.bookmarks[p.profile_id] = body.position_at
+        c.proxy.buffer_state(key).bookmarks[p.profile_id] = body.position_at
     return window
 
 
@@ -251,15 +249,15 @@ async def buffer_seek(body: S.BufferSeekRequest, c: C, p: P) -> dict[str, Any]:
     g, key, _ = await _buffer_grant(body.stream_token, c, p)
     if body.at is not None and g.content_ref:
         await c.content_policy.require(p.profile_id, g.content_ref, at=body.at)
-    c.proxy.dvr.check(key, p.profile_id, body.lease_id)
-    await c.proxy.buffer_manifest(key, body.at)  # Reject expired/gap positions before changing playback.
+    c.proxy.buffer_state(key).check(key, p.profile_id, body.lease_id)
+    await c.proxy.buffer_manifest(key, body.at, body.lease_id)  # Reject expired/gap positions before changing playback.
     query = {"lease_id": body.lease_id}
     if body.at is not None:
         query["at"] = body.at.isoformat()
-        c.proxy.dvr.bookmarks[p.profile_id] = body.at
+        c.proxy.buffer_state(key).bookmarks[p.profile_id] = body.at
     return {
         "url": absolute(f"/api/v1/stream/{body.stream_token}/index.m3u8?" + urlencode(query)),
-        "window": await c.proxy.buffer_window(key),
+        "window": await c.proxy.buffer_window(key, body.lease_id),
     }
 
 
@@ -602,9 +600,9 @@ async def stream_hls(
     # A watch room's member reads the room's session; the room decides its key, start and audio.
     key, transcode, vod = ("", "none", None) if g.room else _hls_session_key(c, g)
     if at is not None or lease_id is not None:
-        if lease_id is None or g.room or c.proxy.dvr.key != key:
+        if lease_id is None or g.room or c.proxy.buffer_state(key).key != key:
             raise Gone("Buffered session expired.", code="buffer_expired")
-        c.proxy.dvr.check(key, g.profile_id, lease_id)
+        c.proxy.buffer_state(key).check(key, g.profile_id, lease_id)
     # A recording is a file of this server's: ffmpeg reads it from disk, no source and no limit.
     recording = await c.recorder.stored(str(g.content_ref)[4:]) if is_recording(g) else None
     maximum = None if recording else c.sources.max_connections(await c.sources.get(g.source_id))
@@ -641,12 +639,12 @@ async def stream_hls(
     except Exception as exc:
         log.warning("hls session failed", exc_info=True, extra={"err": type(exc).__name__})
         raise BadGateway("could not start HLS session") from exc
-    if not g.room and c.proxy.dvr.key == key:
+    if not g.room and c.proxy.buffer_state(key).key == key:
         if at is not None or lease_id is not None:
             if lease_id is None:
                 raise Forbidden("DVR seek requires a viewer lease.")
-            c.proxy.dvr.check(key, g.profile_id, lease_id)
-        text = await c.proxy.buffer_manifest(key, at)
+            c.proxy.buffer_state(key).check(key, g.profile_id, lease_id)
+        text = await c.proxy.buffer_manifest(key, at, lease_id)
     else:
         if at is not None or lease_id is not None:
             raise NotFound("Buffered session expired.")

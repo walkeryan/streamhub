@@ -547,3 +547,16 @@ def test_hls_reconnects_live_eof_but_not_vod(tmp_path: Any) -> None:
     options["live"] = False
     vod = ffmpeg_args("ffmpeg", "https://example.test/movie.ts", {}, tmp_path, **options)
     assert "-reconnect_at_eof" not in vod
+
+
+@pytest.mark.parametrize("path", ["live.M3U8?key=value", "stream?id=123", "live.mpd"])
+def test_live_manifest_can_finish_each_http_response(tmp_path: Any, path: str) -> None:
+    from app.proxy.stream_proxy import canvas_args, ffmpeg_args
+
+    url = "https://example.test/" + path
+    for args in (
+        ffmpeg_args("ffmpeg", url, {}, tmp_path, live=True, transcode="none", vaapi_device="", buffered=True),
+        canvas_args("ffmpeg", url, {}, tmp_path, live=True, vod=None, retained_segments=30),
+    ):
+        assert "-reconnect_at_eof" not in args
+        assert args[args.index("-reconnect") + 1] == "1"

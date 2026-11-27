@@ -90,3 +90,20 @@ async def test_programme_cannot_cross_channel_or_source(api):
         "/playback/resolve", json={"id": tf1["id"], "client": "android_tv", "catchup_programme_id": ref}
     )
     assert result.status_code == 404
+
+
+@pytest.mark.parametrize("client", ["web", "android_tv"])
+async def test_live_tune_issues_lease_capable_grant_even_with_provider_archive(api, client):
+    await add_m3u(api, FIXTURES / "sample.m3u")
+    channel = next(c for c in await channels(api) if c["name"] == "TF1")
+    api.c.playback._buffer_live_channels = True
+    api.c.proxy.dvr.enabled = True
+    result = await api.post("/playback/resolve", json={"id": channel["id"], "client": client})
+    assert result.status_code == 200
+    descriptor = result.json()
+    assert descriptor["buffer_available"] and descriptor["mode"] == "hls"
+    token = descriptor["url"].split("/stream/", 1)[1].split("/", 1)[0]
+    lease = await api.post("/playback/buffer/lease", json={"stream_token": token})
+    # There is no mounted buffer in this fixture. Reaching storage admission proves
+    # that the actual playback token retained its channel identity and authorization.
+    assert lease.status_code == 409 and lease.json()["code"] == "recording_disabled"

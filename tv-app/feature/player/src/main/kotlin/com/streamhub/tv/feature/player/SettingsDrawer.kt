@@ -169,7 +169,7 @@ internal fun SettingsDrawer(
             }
             if (m.channel) {
                 Section("Live")
-                GlassRow(if (m.hasBufferWindow) "Buffered rewind" else "Provider archive · unverified", a.onRewind, row.focusRequester(first), icon = GlassIcons.History)
+                GlassRow(if (m.hasBufferWindow) "Rewind this channel" else "Provider archive · unverified", a.onRewind, row.focusRequester(first), icon = GlassIcons.History)
                 GlassRow("Go Live", a.onGoLive, row, icon = GlassIcons.Live)
                 m.rewindError?.let { Note(it, t.danger) }
                 m.bufferedSeconds?.let { Note("$it seconds retained · grows while watched") }
@@ -243,7 +243,7 @@ internal fun RemoteShortcutDialog(channel: Boolean, inRoom: Boolean, onClose: ()
             DialogTitle("Controls and shortcuts")
             when {
                 inRoom -> DialogText("Use the playback controls to play or pause together when the room allows it.")
-                channel -> DialogText("Up or Down changes channel. OK opens the channel list. Left opens the archive when available.")
+                channel -> DialogText("Up or Down changes channel. OK opens the channel list. Left opens channel rewind. Use Left or Right to select a time, then OK to play.")
                 else -> DialogText("Left or Right skips 10 seconds. OK or Down opens the timeline and playback controls.")
             }
             DialogText("Hold OK or press Menu to open settings. Use the arrows to highlight a control and OK to choose it.")

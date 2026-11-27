@@ -91,14 +91,14 @@ object PlayerKeyMap {
      * @param longPress Select has been held past the long-press timeout
      * @param inRoom playing as a member of a watch room
      */
-    fun resolve(key: Int, isLive: Boolean, menuOpen: Boolean, controlsVisible: Boolean, longPress: Boolean = false, inRoom: Boolean = false): PlayerCommand {
+    fun resolve(key: Int, isLive: Boolean, menuOpen: Boolean, controlsVisible: Boolean, longPress: Boolean = false, inRoom: Boolean = false, watchedBuffer: Boolean = false): PlayerCommand {
         if (key == KeyEvent.KEYCODE_BACK) return PlayerCommand.Back
         if (menuOpen) return PlayerCommand.None
         when (key) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> return PlayerCommand.TogglePlayPause
             KeyEvent.KEYCODE_MEDIA_PLAY -> return PlayerCommand.Play
             KeyEvent.KEYCODE_MEDIA_PAUSE -> return PlayerCommand.Pause
-            KeyEvent.KEYCODE_MEDIA_REWIND -> return PlayerCommand.Seek(-MEDIA_SEEK_STEP_MS)
+            KeyEvent.KEYCODE_MEDIA_REWIND -> return if (watchedBuffer && !inRoom) PlayerCommand.OpenArchive else PlayerCommand.Seek(-MEDIA_SEEK_STEP_MS)
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> return PlayerCommand.Seek(MEDIA_SEEK_STEP_MS)
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS -> return PlayerCommand.OpenMenu
             KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_GUIDE -> return PlayerCommand.ShowInfo

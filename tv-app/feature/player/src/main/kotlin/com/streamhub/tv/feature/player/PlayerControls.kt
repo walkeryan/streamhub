@@ -149,6 +149,7 @@ class ControlsActions(
     /** Picture-in-picture; null where the TV has none. */
     val onMinimise: (() -> Unit)?,
     val onSettings: () -> Unit,
+    val onChannelRewind: (() -> Unit)? = null,
 )
 
 /** Focus targets outside the overlay that D-pad Up from the timeline reaches (the skip button, the Up next card). */
@@ -217,6 +218,7 @@ private fun ControlRow(model: ControlsModel, actions: ControlsActions, playFocus
             if (model.episodeButtons) GlassButton(GlassIcons.Next, "Next episode", actions.onNext, upToTimeline, enabled = model.hasNext)
         }
         Row(Modifier.align(Alignment.CenterEnd), horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
+            actions.onChannelRewind?.let { GlassButton(GlassIcons.History, "Rewind this channel", it, upToTimeline) }
             actions.onWatchTogether?.let { GlassButton(GlassIcons.People, "Watch together", it, upToTimeline) }
             actions.onMinimise?.let { GlassButton(GlassIcons.Minimise, "Mini player", it, upToTimeline) }
             GlassButton(GlassIcons.Settings, "Settings", actions.onSettings, upToTimeline)
