@@ -18,6 +18,7 @@ import pytest
 import respx
 
 from app.infra.http import pin_upstream_session
+from app.infra.logging import redact_url
 from app.proxy import stream_proxy
 from app.proxy.stream_proxy import StreamProxy
 from app.services.errors import Conflict
@@ -176,7 +177,7 @@ async def test_pin_keeps_the_original_url_when_there_is_nothing_to_pin(
         upstream.mock(side_effect=httpx.ConnectError("no route to host"))
         assert await pin_upstream_session(http, FILM_URL, {}) == FILM_URL
     # The one thing logged is the failure, with the credentials in the path redacted.
-    assert [record.url for record in caplog.records] == [f"{ORIGIN}/movie/***/***/7.mkv"]
+    assert [record.url for record in caplog.records] == [f"{redact_url(ORIGIN)}/movie/***/***/7.mkv"]
     assert "s3cret" not in caplog.text and "alice" not in caplog.text
 
 
