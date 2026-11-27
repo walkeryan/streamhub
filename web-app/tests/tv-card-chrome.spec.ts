@@ -57,6 +57,7 @@ for (const width of [1920, 390]) {
     await expect(second.getByTestId('tile-available')).toHaveCount(0)
     await expect(second.getByTestId('request-phase')).toHaveCount(0)
     await expect(action.locator('.ds-glass-status')).toHaveCount(0)
+    await expect(available).toHaveCSS('background-color', 'rgb(237, 155, 22)')
     await expect(available).toHaveCSS('clip-path', 'polygon(0px 0px, 100% 0px, 100% 100%)')
     const corner = await bounds(available), art = await bounds(first.getByTestId('tile'))
     expect(Math.abs(corner.x + corner.width - art.x - art.width)).toBeLessThanOrEqual(2)

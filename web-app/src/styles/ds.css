@@ -241,8 +241,11 @@
 .ds-tick { position: absolute; right: 0.4rem; top: 0.4rem; width: 1.2rem; height: 1.2rem; border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, .6); color: #7ee08a; }
 .ds-tick svg { width: 0.8rem; height: 0.8rem; stroke-width: 3; }
 .availability-corner {
-  position: absolute; top: 0; right: 0; width: clamp(16px, 1.45rem, 26px); aspect-ratio: 1;
-  background: var(--t-success); clip-path: polygon(0 0, 100% 0, 100% 100%); pointer-events: none;
+  position: absolute; top: 0; right: 0; width: clamp(14px, 18%, 36px); aspect-ratio: 1;
+  background: #ed9b16; clip-path: polygon(0 0, 100% 0, 100% 100%); pointer-events: none;
+}
+.tile:has(.availability-corner), .ds-still-art:has(.availability-corner), .feature-card:has(.availability-corner) {
+  border-top-right-radius: 2px;
 }
 .ds-still-art:has(.availability-corner) .ds-tick { inset: auto .4rem .4rem auto; }
 
