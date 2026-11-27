@@ -56,29 +56,9 @@ def scope_statement(statement: Any) -> Any:
 
 @lru_cache(maxsize=8)
 def _criteria(refs: frozenset[str]) -> tuple[Any, ...]:
-    options = []
+    predicate = _removed_titles(refs)
+    options = [with_loader_criteria(Title, ~predicate, include_aliases=True)] if predicate is not None else []
     hidden = [ids.parse(ref) for ref in refs]
-    title_clauses = []
-    for kind, kinds in (("movie", ids.MOVIE_KINDS), ("tv", ids.SHOW_KINDS)):
-        numbers = [int(h.b) for h in hidden if h.scheme == "tmdb" and h.a == kind and h.b.isdigit()]
-        if numbers:
-            title_clauses.append(and_(Title.kind.in_(kinds), Title.tmdb_id.is_not(None), Title.tmdb_id.in_(numbers)))
-    library = [(h.a, h.b) for h in hidden if h.scheme == "lib"]
-    if library:
-        title_clauses.append(tuple_(Title.source_id, Title.ext_id).in_(library))
-        title_clauses.append(
-            and_(Title.parent_ext_id.is_not(None), tuple_(Title.source_id, Title.parent_ext_id).in_(library))
-        )
-    if title_clauses:
-        parent = Title.__table__.alias("removed_parent")
-        if library:
-            parents = select(parent.c.source_id, parent.c.ext_id).where(
-                tuple_(parent.c.source_id, parent.c.parent_ext_id).in_(library)
-            )
-            title_clauses.append(
-                and_(Title.parent_ext_id.is_not(None), tuple_(Title.source_id, Title.parent_ext_id).in_(parents))
-            )
-        options.append(with_loader_criteria(Title, ~or_(*title_clauses), include_aliases=True))
     channels = [(h.a, h.b) for h in hidden if h.scheme == "ch"]
     if channels:
         options.append(
@@ -87,6 +67,59 @@ def _criteria(refs: frozenset[str]) -> tuple[Any, ...]:
             )
         )
     return tuple(options)
+
+
+@lru_cache(maxsize=8)
+def _removed_titles(refs: frozenset[str]) -> Any:
+    hidden = [ids.parse(ref) for ref in refs]
+    library = [(h.a, h.b) for h in hidden if h.scheme == "lib"]
+    # Use the underlying table for the two ancestry queries so ORM loader criteria
+    # do not filter out the very parents whose descendants we are looking for.
+    parent = Title.__table__.alias("removed_root")
+    roots = []
+    direct = []
+    for kind, kinds in (("movie", ids.MOVIE_KINDS), ("tv", ids.SHOW_KINDS)):
+        numbers = [int(h.b) for h in hidden if h.scheme == "tmdb" and h.a == kind and h.b.isdigit()]
+        if numbers:
+            direct.append(and_(Title.kind.in_(kinds), Title.tmdb_id.is_not(None), Title.tmdb_id.in_(numbers)))
+            if kind == "tv":
+                roots.append(and_(parent.c.kind.in_(kinds), parent.c.tmdb_id.in_(numbers)))
+    if library:
+        direct.append(tuple_(Title.source_id, Title.ext_id).in_(library))
+        # Include stored aliases even when synchronization has already deleted their rows.
+        roots.append(tuple_(parent.c.source_id, parent.c.ext_id).in_(library))
+    if roots:
+        root_ids = select(parent.c.source_id, parent.c.ext_id).where(or_(*roots))
+        child = Title.__table__.alias("removed_child")
+        parent_id = tuple_(Title.source_id, Title.parent_ext_id)
+        child_root = tuple_(child.c.source_id, child.c.parent_ext_id)
+        parents = [parent_id.in_(root_ids)]
+        child_parents = [child_root.in_(root_ids)]
+        if library:
+            parents.append(parent_id.in_(library))
+            child_parents.append(child_root.in_(library))
+        child_ids = select(child.c.source_id, child.c.ext_id).where(or_(*child_parents))
+        direct.append(and_(Title.parent_ext_id.is_not(None), or_(*parents, parent_id.in_(child_ids))))
+    return or_(*direct) if direct else None
+
+
+async def removed_playback(db: Any, refs: list[str], hidden: frozenset[str]) -> bool:
+    if not hidden:
+        return False
+    ids_to_check = [ref.removeprefix("trailer:") for ref in refs]
+    if not hidden.isdisjoint(ids_to_check):
+        return True
+    library = [ids.parse(ref) for ref in ids_to_check if ref.startswith("lib:") and ref.count(":") >= 2]
+    predicate = _removed_titles(hidden)
+    if not library or predicate is None:
+        return False
+    async with db.session() as session:
+        found = await session.scalar(
+            select(Title.id)
+            .where(tuple_(Title.source_id, Title.ext_id).in_([(h.a, h.b) for h in library]), predicate)
+            .limit(1)
+        )
+    return found is not None
 
 
 def filter_metadata(value: Any, hidden: frozenset[str]) -> Any:

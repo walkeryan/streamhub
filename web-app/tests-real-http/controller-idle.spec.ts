@@ -103,6 +103,12 @@ test('paired receiver accepts a phone, plays remotely, and reports transport sta
     const receiver = await tv.newPage()
     await receiver.goto('/')
     await expect(receiver.getByTestId('home')).toBeVisible()
+    const personalSettings = async () => {
+      await page.getByRole('button', { name: 'More', exact: true }).click()
+      await page.getByRole('link', { name: 'Settings', exact: true }).click()
+      await expect(page.getByTestId('profile-tv-controls')).toBeVisible()
+    }
+    await personalSettings()
     await page.getByRole('button', { name: 'Choose where to watch' }).click()
     await page.getByRole('button', { name: 'TV', exact: true }).click()
     await receiver.getByRole('button', { name: 'Allow connection' }).click()
@@ -126,6 +132,7 @@ test('paired receiver accepts a phone, plays remotely, and reports transport sta
       )
       .toBe(true)
     await expect(page).not.toHaveURL(/\/play\//)
+    await personalSettings()
     await page.getByRole('button', { name: /TV controls for/ }).click()
     await page.getByRole('button', { name: 'Pause', exact: true }).click()
     await expect
@@ -164,7 +171,18 @@ test('an idle shared TV returns to the real profile picker without forgetting it
   const tokens = await token.json()
   const tv = await browser.newContext({ baseURL: 'http://127.0.0.1:5187', viewport: { width: 1920, height: 1080 } })
   try {
+    let revoked = 0
+    tv.on('request', request => {
+      if (request.method() === 'DELETE' && request.url().includes('/auth/sessions/')) revoked++
+    })
+    await tv.route('**/api/v1/auth/me', async route => {
+      await new Promise(resolve => setTimeout(resolve, 1100))
+      await route.continue()
+    })
     await tv.addInitScript(({ access, refresh, profile }) => {
+      const sid = JSON.parse(atob(access.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).sid
+      localStorage.setItem('sh.idle.limit.v1:' + sid, '1')
+      localStorage.setItem('sh.idle.v1:' + sid, String(Date.now() - 125_000))
       localStorage.setItem('sh.session.v1', JSON.stringify({ access, refresh, profile }))
       Object.assign(window, { StreamHubTV: { signedOut: () => {}, deliverToken: () => {}, capabilities: () => '{}' } })
     }, { access: tokens.access_token, refresh: tokens.refresh_token, profile: tokens.profile })
@@ -201,7 +219,15 @@ test('an idle shared TV returns to the real profile picker without forgetting it
     // The idle lock did not bypass the existing profile PIN.
     await enterPin()
     await expect(receiver.getByTestId('home')).toBeVisible()
+    expect(revoked).toBe(0)
   } finally {
     await tv.close()
+    const headers = { Authorization: 'Bearer ' + auth }
+    expect((await page.request.put('/api/v1/profiles/fixture-clean/pin', {
+      headers, data: { pin: null, current_pin: '2468' },
+    })).status()).toBe(204)
+    expect((await page.request.patch('/api/v1/profiles/fixture-clean/prefs', {
+      headers, data: { 'idleSignOutMinutes.v1': 0 },
+    })).ok()).toBe(true)
   }
 })

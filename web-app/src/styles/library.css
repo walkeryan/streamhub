@@ -129,14 +129,15 @@
 .search-grid { padding: 0.25rem 0 0; }
 .search-result { position: relative; min-width: 0; }
 .search-result-actions { position: absolute; top: .35rem; right: .35rem; z-index: 6; }
-.search-result .tile-check, .search-result .tile-badges { left: .375rem; right: auto; max-width: calc(100% - 3.5rem); }
+.search-result .tile-badges { left: .375rem; right: auto; max-width: calc(100% - 3.5rem); }
 .search-result .tile-fav { inset: auto .375rem .375rem auto; }
 .search-result .tile:has(> .tile-fav) > .cap { padding-right: 2.45rem; }
 .search-result-actions .ds-glass { background: rgba(12, 14, 18, .85); color: white; }
 .search-more { display: flex; }
 .search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: var(--gap-lg); padding: 0.5rem 0; }
 .search-idle-lead { display: flex; align-items: center; gap: var(--gap-md); }
-.search-idle-block > .ds-section-head { margin-bottom: var(--gap-sm); }
+.search-idle-block { max-width: 100%; }
+.search-idle-block > .ds-section-head { flex-wrap: wrap; margin-bottom: var(--gap-sm); }
 
 /* ---------- My List ---------- */
 .fav-channels { display: flex; flex-wrap: wrap; gap: var(--gap-row); padding-block: 0.25rem; }

@@ -135,8 +135,8 @@ test('live broadcasts and channels precede movies and series', async ({ page }) 
   const channel = page.getByTestId('search-channel')
   await expect(channel).toHaveCount(1)
   await expect(channel).toHaveAttribute('aria-label', /^1 Harbor News 24, now /)
-  // An owned title folds availability into its one card action/status control.
-  await expect(page.getByTestId('search-titles').getByTestId('media-card-actions').locator('.ds-glass-status')).toHaveAttribute('data-state', 'active')
+  // A playable result carries the corner mark on the artwork.
+  await expect(page.getByTestId('search-titles').getByTestId('tile-available').first()).toBeVisible()
 
   await searchBox(page).fill('sunday league')
   await expect(page.getByTestId('search-titles')).toContainText('Sunday League Legends')

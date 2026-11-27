@@ -17,12 +17,12 @@ export function reportPlayerActivity(active: boolean) {
   window.dispatchEvent(new Event('sh:playback-activity'))
 }
 
-export function useIdleSignOut(sharedDevice = false) {
+export function useIdleSignOut(sharedDevice: boolean | undefined) {
   const { value: minutes, ready } = useIdleMinutes()
   const sid = useSession((s) => idleSessionId(s.access))
   const picked = useWho((s) => s.picked)
   useEffect(() => {
-    if (!sid || (sharedDevice && !picked)) return
+    if (!sid || sharedDevice === undefined || (sharedDevice && !picked)) return
     const limitKey = 'sh.idle.limit.v1:' + sid
     const limit = ready ? minutes : (validMinutes(Number(localStorage.getItem(limitKey))) ?? 0)
     if (ready) localStorage.setItem(limitKey, String(limit))
@@ -31,6 +31,7 @@ export function useIdleSignOut(sharedDevice = false) {
       localStorage.removeItem(key)
       return
     }
+    if (sharedDevice) localStorage.setItem(key, String(Date.now()))
     let last = Number(localStorage.getItem(key)) || Date.now()
     let lastWrite = 0
     let ended = false

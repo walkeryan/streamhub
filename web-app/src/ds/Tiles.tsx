@@ -16,9 +16,9 @@ export function WatchedTick({ label }: { label?: string }) {
   return <span className="ds-tick" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}><Icon name="check" /></span>
 }
 
-/** Plays here: the solid green tick (search results, More like this). */
-export function AvailableTick() {
-  return <span className="tile-check" role="img" aria-label="Available to watch" data-testid="tile-available"><Icon name="check" size={14} /></span>
+/** A folded artwork corner marks titles that can play in StreamHub. */
+export function AvailabilityCorner() {
+  return <span className="availability-corner" role="img" aria-label="Available to watch" data-testid="tile-available" />
 }
 
 /**
@@ -30,7 +30,7 @@ export function AvailableTick() {
 export function StillCard(p: {
   focusKey: string; href?: string; label: string; onEnter: () => void; onFocus?: () => void
   image?: string | null; fallbackName: string; title: ReactNode; meta?: ReactNode
-  progressPct?: number | null; watched?: boolean; current?: boolean
+  progressPct?: number | null; watched?: boolean; available?: boolean; current?: boolean
   /** Over the picture's top-left corner: a status chip ("On now", a request's phase). */
   badge?: ReactNode
   /** Over the picture's top-right corner, in place of the watched tick. */
@@ -47,6 +47,7 @@ export function StillCard(p: {
         {p.badge && <span className="ds-still-badge">{p.badge}</span>}
         {pct > 0 && pct < 100 && <ProgressBar label={`Viewing progress · ${p.label}`} pct={pct} className="ds-still-bar" />}
         {p.corner ?? (p.watched && <WatchedTick />)}
+        {p.available && <AvailabilityCorner />}
       </div>
       <p className="ds-still-cap">{p.title}{p.meta ? <small>{p.meta}</small> : null}</p>
     </Focusable>

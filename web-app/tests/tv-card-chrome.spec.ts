@@ -52,12 +52,22 @@ for (const width of [1920, 390]) {
     const cards = page.locator('.search-grid > .media-card')
     const first = cards.nth(0), second = cards.nth(1)
     const action = first.getByTestId('media-card-actions'), requestAction = second.getByTestId('media-card-actions')
-    await expect(first.getByTestId('tile-available')).toHaveCount(0)
+    const available = first.getByRole('img', { name: 'Available to watch' })
+    await expect(available).toBeVisible()
+    await expect(second.getByTestId('tile-available')).toHaveCount(0)
     await expect(second.getByTestId('request-phase')).toHaveCount(0)
-    await expect(action.locator('.ds-glass-status')).toHaveAttribute('data-state', 'active')
+    await expect(action.locator('.ds-glass-status')).toHaveCount(0)
+    await expect(available).toHaveCSS('clip-path', 'polygon(0px 0px, 100% 0px, 100% 100%)')
+    const corner = await bounds(available), art = await bounds(first.getByTestId('tile'))
+    expect(Math.abs(corner.x + corner.width - art.x - art.width)).toBeLessThanOrEqual(2)
+    expect(Math.abs(corner.y - art.y)).toBeLessThanOrEqual(2)
     await expect(requestAction.locator('.ds-glass-status')).toHaveAttribute('data-state', 'pending')
-    const libraryOverlap = false
-    const requestOverlap = false
+    const libraryOverlap = intersects(await bounds(action), corner)
+    const pending = await bounds(requestAction.locator('.ds-glass-status'))
+    const requestButton = await bounds(requestAction)
+    const requestOverlap = pending.x < requestButton.x || pending.y < requestButton.y
+      || pending.x + pending.width > requestButton.x + requestButton.width
+      || pending.y + pending.height > requestButton.y + requestButton.height
     await focus(page, 'search::tmdb:movie:103')
     if (dir) await page.screenshot({ path: `${dir}/${stage}-search-${width}.png` })
     if (stage !== 'before') {

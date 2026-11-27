@@ -65,7 +65,7 @@ function PersonalFeed({ profile }: { profile: string }) {
   return <div className="page-pad lib-page" data-testid="for-you">
     <PageHeader title={joint ? 'Together' : 'For You'} className="lib-head">
       <GlassIconButton focusKey="foryou:joint" icon="people" size="sm" disabled={busy} label={joint ? 'Leave group' : 'Find something together'}
-        tip={joint ? 'Leave group' : 'Find something together'} onEnter={() => { if (joint) void leave(); else { setError(''); setInvite(true) } }} />
+        tipAt="above" tip={joint ? 'Leave group' : 'Find something together'} onEnter={() => { if (joint) void leave(); else { setError(''); setInvite(true) } }} />
     </PageHeader>
     {joint ? <>
       {together.error && <ErrorState error={together.error} onRetry={() => void together.refetch()} />}

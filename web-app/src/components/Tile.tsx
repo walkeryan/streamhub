@@ -6,7 +6,7 @@ import { MediaCardActions } from './CardActions'
 import { ProgressBar, SourceChips } from './ui'
 import { Initials, SafeImg } from './SafeImg'
 import { cn, fmtTime, hueOf, progressOf, useNow } from '../lib/util'
-import { HRow, SectionHeader, StillCard, type OverflowItem } from '../ds'
+import { AvailabilityCorner, HRow, SectionHeader, StillCard, type OverflowItem } from '../ds'
 import { useGo } from '../nav/back'
 import type { Tile as TileT, Channel, SourceBadge } from '../api/types'
 
@@ -44,7 +44,7 @@ export const MediaTile = memo(function MediaTile(p: {
   tile: TileT; scope: string; layout?: TileLayout; onFocusTile?: (t: TileT) => void; onOpen?: (t: TileT) => void; titleAlways?: boolean
   /**
    * Search mixes what can be watched here with what is only known about. There a tile says one thing:
-   * a green tick when it plays here, nothing when it does not (a request in progress still shows itself).
+   * a green corner when it plays here, nothing when it does not (a request in progress still shows itself).
    */
   mark?: 'availability'; actions?: OverflowItem[]
   captionBelow?: boolean
@@ -70,8 +70,7 @@ export const MediaTile = memo(function MediaTile(p: {
         <div data-focused={focused} data-title={noArt || p.titleAlways ? 'always' : undefined} className={cn('tile', p.captionBelow && 'tile-poster')} style={p.captionBelow ? undefined : { position: 'absolute', inset: 0, borderRadius: 'inherit' }}>
           <SafeImg className="art" src={art} alt="" loading="lazy" decoding="async" draggable={false} reveal fallback={<Fallback title={p.tile.title} />} />
           {!p.captionBelow && <div className="cap"><span className="clamp2">{p.tile.title}{p.tile.year ? ` (${p.tile.year})` : ''}</span></div>}
-          {/* A request on its way says where it is, in place of where the title plays. */}
-          {/* Availability and request phase live in the one card menu/status control. */}
+          {p.tile.sources.some(s => s.playable_in_app) && <AvailabilityCorner />}
           {p.tile.is_favorite && <span className="tile-fav" role="img" aria-label="Favorite"><Icon name="heart" filled /></span>}
           {typeof p.tile.progress_pct === 'number' && p.tile.progress_pct > 0 && <ProgressBar label={`Viewing progress · ${p.tile.title}`} pct={p.tile.progress_pct} className="tile-progress" />}
         </div>
@@ -102,6 +101,7 @@ export function ChannelTile(p: { tile: TileT; scope: string; onFocusTile?: (t: T
       onFocus={() => p.onFocusTile?.(t)}
     >
       <div className="channel-card" style={{ background: `linear-gradient(135deg, hsl(${h} 45% 30%), hsl(${(h + 45) % 360} 50% 18%))` }}>
+        {t.sources.some(s => s.playable_in_app) && <AvailabilityCorner />}
         <div className="channel-logo"><SafeImg src={t.logo} alt="" loading="lazy" fallback={<Initials name={t.title} style={{ background: 'transparent' }} />} /></div>
         <div className="channel-copy">
           <span className="channel-name truncate">{t.subtitle ? `${t.subtitle} · ` : ''}{t.title}</span>
@@ -127,7 +127,7 @@ export function LandscapeTile(p: { tile: TileT; scope: string; onFocusTile?: (t:
     <StillCard focusKey={`${p.scope}::${t.id}`} href={openPath(t)} testId="tile" label={t.title} onEnter={() => open(t)} onFocus={() => p.onFocusTile?.(t)}
       image={t.backdrop ?? t.poster} fallbackName={t.title} title={t.title} meta={t.subtitle ?? t.year ?? undefined}
       progressPct={pct} watched={pct >= 100}
-      badge={undefined} corner={undefined} />
+      available={t.sources.some(s => s.playable_in_app)} />
   </MediaCardActions>
 }
 
@@ -144,16 +144,17 @@ function FeatureTile({ tile, scope, onFocusTile, now, actions }: { tile: TileT; 
   const programme = tile.now_playing
   const airing = programme && Date.parse(programme.start) <= now && Date.parse(programme.stop) > now
   const channel = tile.kind === 'channel'
+  const available = tile.sources.some(s => s.playable_in_app)
   const eyebrow = channel ? `${tile.title}${programme ? ` · ${fmtTime(programme.start)}–${fmtTime(programme.stop)}` : ''}` : [tile.year, tile.sources.map((s) => s.name).slice(0, 2).join(' · ')].filter(Boolean).join(' · ')
   const cardKey = `${scope}::${tile.id}`
   return <MediaCardActions tile={tile} className="media-card-feature" cardKey={cardKey} menuKey={`${scope}:actions:${tile.id}`} items={actions}>
-  <FeatureCard focusKey={cardKey} label={tile.title} title={programme?.title ?? tile.title} eyebrow={eyebrow}
+  <FeatureCard available={available} focusKey={cardKey} label={tile.title} title={programme?.title ?? tile.title} eyebrow={eyebrow}
     href={openPath(tile)}
     art={channel ? tile.backdrop : tile.backdrop ?? tile.poster} logo={tile.logo} fallbackName={tile.title}
     badge={airing ? 'On now' : channel ? 'Channel' : undefined}
     progress={airing ? progressOf(programme.start, programme.stop, now) : tile.progress_pct}
     onEnter={() => open(tile)} onFocus={() => onFocusTile?.(tile)} testId="tile">
-    {!channel && <TileBadge sources={tile.sources} />}
+    {!channel && !available && <TileBadge sources={tile.sources} />}
   </FeatureCard></MediaCardActions>
 }
 

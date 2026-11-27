@@ -127,7 +127,7 @@ export function App() {
   }, [current.data, setProfile])
   useTheme(profile?.theme_id)
   useViewingAppearance()
-  useIdleSignOut(shared)
+  useIdleSignOut(me.data === undefined || me.isPlaceholderData ? undefined : shared)
   useGlobalBack()
   // A room link opened signed out returns to the room once signed in.
   useReturnToRoom(!!profile && !googleComplete)

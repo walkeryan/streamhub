@@ -129,17 +129,19 @@ export function useRestoreFocus(ready: boolean, fallback: string): void {
 
 /** Remember the focused element before opening an overlay and put focus back when it closes. */
 export function useOverlayFocus(open: boolean, firstKey: string): void {
-  const before = useRef<string | null>(null)
   useEffect(() => {
     if (!open) return
-    before.current = getCurrentFocusKey()
-    const id = window.setTimeout(() => void setFocus(firstKey), 20)
+    // Loading or toggling an item can change firstKey while the same menu is open.
+    const opener = getCurrentFocusKey()
     return () => {
-      window.clearTimeout(id)
-      const b = before.current
       // Cleanup runs after the closing render. Restore now: a delayed restore
       // can steal focus from the user's next D-pad action after dismissal.
-      if (b && doesFocusableExist(b)) void setFocus(b)
+      if (opener && doesFocusableExist(opener)) void setFocus(opener)
     }
+  }, [open])
+  useEffect(() => {
+    if (!open) return
+    const id = window.setTimeout(() => void setFocus(firstKey), 20)
+    return () => window.clearTimeout(id)
   }, [open, firstKey])
 }

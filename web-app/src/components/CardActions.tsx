@@ -47,8 +47,7 @@ export function MediaCardActions({ tile, className, cardKey, menuKey, items = []
   }
   const available = tile.sources.some(source => source.playable_in_app)
   const status = actions.busy || (open && !actions.ready && !actions.error) ? 'busy'
-    : open && actions.error ? 'error' : request ? 'pending'
-      : available || actions.saved || actions.vote ? 'active' : undefined
+    : open && actions.error ? 'error' : request ? 'pending' : undefined
   const statusWords = [
     request && PHASE_LABEL[request.phase], available && 'Available here',
     actions.saved && 'On My List', actions.vote === 'up' && 'Liked', actions.vote === 'down' && 'Disliked',

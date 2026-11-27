@@ -661,6 +661,26 @@ async def test_household_library_owner_can_remove_across_profiles_and_restore(ap
         s.add(title("duplicate", "Shared Film", tmdb_id=6789))
         await s.commit()
     assert not (await search(api, "Shared Film", discover=False))["results"]
+    blocked = await viewer.get("/playback/options", params={"id": "lib:catalog:duplicate"})
+    assert blocked.status_code == 404 and "removed" in blocked.text
     assert (await viewer.req("PUT", "/library/media", params=ref)).status_code == 403
     assert (await api.req("PUT", "/library/media", params=ref)).status_code == 204
     assert ref["id"] in {t["id"] for t in (await search(viewer, "Shared Film", discover=False))["results"]}
+
+
+async def test_removing_show_blocks_playback_of_existing_and_resynced_episodes(api: Api) -> None:
+    await seed(api, title("show", "Show", kind="show", tmdb_id=120))
+    assert (await api.req("DELETE", "/library/media", params={"id": "tmdb:tv:120"})).status_code == 204
+    async with api.c.db.session() as session:
+        session.add_all(
+            [
+                title("new-show", "Show", kind="show", tmdb_id=120),
+                title("season", "Season", kind="season", parent_ext_id="show"),
+                title("ep", "Episode", kind="episode", parent_ext_id="season"),
+                title("fresh", "Another", kind="episode", parent_ext_id="new-show"),
+            ]
+        )
+        await session.commit()
+    for item in ("ep", "fresh"):
+        blocked = await api.get("/playback/options", params={"id": f"lib:catalog:{item}"})
+        assert blocked.status_code == 404 and "removed" in blocked.text

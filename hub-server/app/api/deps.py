@@ -255,12 +255,11 @@ async def playback_watch_gate(request: Request, c: C) -> None:
     policy = c.content_policy
     # Under the legacy flag the resolver makes these checks itself, with the same arguments.
     rated = not policy.enabled and policy.applies_to(principal)
-    from app.services.household_library import removed_refs
+    from app.services.household_library import removed_playback, removed_refs
 
-    hidden = await removed_refs(c.db)
+    if await removed_playback(c.db, [ref for ref, *_ in refs], await removed_refs(c.db)):
+        raise NotFound("Title removed from the household library")
     for ref, source, judged, moment in refs:
-        if ref in hidden:
-            raise NotFound("Title removed from the household library")
         if ref:
             await require_watch(c.db, principal.permissions, ref, source)
             if rated and judged:
