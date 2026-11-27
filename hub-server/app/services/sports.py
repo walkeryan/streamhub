@@ -74,6 +74,12 @@ _REPLAY_DESCRIPTION = re.compile(
 )
 
 
+def _is_replay(title: str, category: str | None, description: str | None, broadcast_kind: str | None) -> bool:
+    return broadcast_kind == "replay" or bool(
+        REPLAY.search(f"{title} {category or ''}") or _REPLAY_DESCRIPTION.search(description or "")
+    )
+
+
 def classify_sport(title: str, category: str | None) -> str | None:
     text = f"{category or ''} {title}"
     for sport, pattern in PATTERNS:
@@ -251,9 +257,12 @@ async def sports_on_now(
         async for row in rows:
             scheduled_channels.add(row[0])
             advertised = _advertised_game(row[3], row[7], row[9], row[10], configs.get(row[1], DEFAULT_SLOT_CONFIG))
-            if advertised and row[12] != "replay" and not REPLAY.search(f"{row[7]} {row[8] or ''}"):
-                if not advertised.start <= now < advertised.stop:
-                    continue
+            if (
+                advertised
+                and not advertised.start <= now < advertised.stop
+                and not _is_replay(row[7], row[8], row[11], row[12])
+            ):
+                continue
             kind = classify_sport(advertised.league if advertised else row[7], row[8])
             # Filler that repeats the channel's name would classify by the channel, not by a listing.
             if kind is None or is_placeholder(row[7], row[3]) or parse_event_slot(row[3]) is not None:
@@ -622,7 +631,7 @@ async def _grouped_events(
         if term and term.casefold() not in f"{row[7]} {shown}".casefold():
             continue
         label = f"{row[7]} {row[8] or ''}"
-        replay = row[14] == "replay" or bool(REPLAY.search(label) or _REPLAY_DESCRIPTION.search(row[13] or ""))
+        replay = _is_replay(row[7], row[8], row[13], row[14])
         begins, ends = row[9], row[10]
         if advertised and not replay:
             # A game feed may repeat the same title overnight. Its advertised game
