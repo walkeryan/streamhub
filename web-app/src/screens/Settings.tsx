@@ -1,3 +1,4 @@
+import { OfflineSettings } from '../components/OfflineEpisodes'
 import { useAuthCapabilities } from '../api/contentPolicy'
 import { useCan, useMe } from '../api/me'
 import { absent } from '../api/client'
@@ -17,6 +18,7 @@ import { RequestManagerSettings } from '../components/RequestManagerSettings'
 import { HomeShelvesSettings } from '../components/HomeShelvesSettings'
 import { HomeNetworkSettings } from '../components/HomeNetworkSettings'
 import { useState } from 'react'
+import { IdleSetting } from '../session/IdleSetting'
 import { ViewingAppearance } from '../components/ViewingAppearance'
 import { useHomeRows } from '../api/viewingPreferences'
 import { useProfilePreference } from '../api/profilePreferences'
@@ -58,7 +60,7 @@ export function Settings() {
         {tabs.map(([id, label]) => <Chip tab key={id} focusKey={`set:tab:${id}`} pressed={tab === id} onEnter={() => setSp({ tab: id }, { replace: true })} testId={`tab-${id}`}>{label}</Chip>)}
       </FocusGroup>
       <TabPanels tabs={tabs.map(([id]) => `set:tab:${id}`)} active={`set:tab:${tab}`} className="acct-body">
-        {tab === 'profiles' && <ProfilesTab />}
+        {tab === 'profiles' && <><ProfilesTab /><IdleSetting /></>}
         {tab === 'appearance' && <><AppearanceTab /><ViewingAppearance /></>}
         {tab === 'languages' && <LanguagesTab />}
         {tab === 'rows' && <RowsTab />}
@@ -332,6 +334,7 @@ function PlaybackTab() {
         <SectionHeader title="Player" />
         {!inShell() && <CanvasPlaybackSetting />}
         <AutoplaySetting />
+        <OfflineSettings />
         <BackMinimisesSetting />
       </GlassPanel>
       <ServerPlaybackSettings />

@@ -346,6 +346,7 @@ class Programme(Base):
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     epg_channel: Mapped[str] = mapped_column(String(256))
+    broadcast_kind: Mapped[str | None] = mapped_column(String(12))
     feed: Mapped[str] = mapped_column(String(64))  # source id that supplied this programme
     start: Mapped[datetime] = mapped_column(UTCDateTime)
     stop: Mapped[datetime] = mapped_column(UTCDateTime)
@@ -405,6 +406,51 @@ class Watchlist(Base):
     added_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_playable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     playable_since: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class EditionProgress(Base):
+    __tablename__ = "edition_progress"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), primary_key=True)
+    ref_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    edition_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    variant_id: Mapped[str] = mapped_column(String(256))
+    position_ms: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ViewingCursor(Base):
+    __tablename__ = "viewing_cursor"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), primary_key=True)
+    ref_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    token: Mapped[str] = mapped_column(String(40), unique=True)
+    edition_id: Mapped[str] = mapped_column(String(128))
+    variant_id: Mapped[str] = mapped_column(String(256))
+
+
+class OfflineCopy(Base):
+    __tablename__ = "offline_copy"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[str] = mapped_column(String(64))
+    ref_id: Mapped[str] = mapped_column(String(256))
+    edition_id: Mapped[str] = mapped_column(String(128))
+    fingerprint: Mapped[str] = mapped_column(String(128))
+    baseline: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class SceneBookmark(Base):
+    __tablename__ = "scene_bookmark"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
+    ref_id: Mapped[str] = mapped_column(String(256))
+    variant_id: Mapped[str] = mapped_column(String(256))
+    edition_id: Mapped[str] = mapped_column(String(128))
+    position_ms: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(100))
+    preview: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class PlaybackPreference(Base):
@@ -604,6 +650,16 @@ class Recording(Base):
     is_sport: Mapped[bool] = mapped_column(Boolean, default=False)
     # The guide's rating evidence for the programme, as it stood when this was scheduled.
     age_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
+    priority: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    protected: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    guide_review: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    follow_guide: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    recover_rerun: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    guide_description: Mapped[str | None] = mapped_column(Text)
+    captured_from: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    captured_until: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    replacement_for: Mapped[str | None] = mapped_column(String(16), index=True)
+    recovered_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     starts_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
     ends_at: Mapped[datetime] = mapped_column(UTCDateTime)
     pad_before_s: Mapped[int] = mapped_column(Integer, default=0)
@@ -615,3 +671,36 @@ class Recording(Base):
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)  # SQLite integers are 64-bit
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class CastTarget(Base):
+    __tablename__ = "cast_target"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    sid: Mapped[str] = mapped_column(ForeignKey("auth_session.sid", ondelete="CASCADE"), unique=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), index=True)
+    generation: Mapped[int]
+    name: Mapped[str] = mapped_column(String(128))
+    seen: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class CastConnection(Base):
+    __tablename__ = "cast_connection"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    target_id: Mapped[str] = mapped_column(ForeignKey("cast_target.id", ondelete="CASCADE"), unique=True)
+    sid: Mapped[str] = mapped_column(ForeignKey("auth_session.sid", ondelete="CASCADE"), unique=True)
+    generation: Mapped[int]
+    connected: Mapped[bool]
+    created: Mapped[datetime] = mapped_column(UTCDateTime)
+    playback: Mapped[dict[str, Any]] = mapped_column(JSON)
+    commands: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    last_ack: Mapped[int]
+    last_error: Mapped[str | None] = mapped_column(String(160))
+
+
+class RecommendationVote(Base):
+    __tablename__ = "recommendation_vote"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"), primary_key=True)
+    ref_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    vote: Mapped[str] = mapped_column(String(4))
+    genres: Mapped[list[str]] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

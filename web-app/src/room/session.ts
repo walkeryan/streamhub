@@ -46,6 +46,7 @@ type ErrorListener = (code: string, message: string) => void
  * here (`descriptor`) rather than from /playback/resolve.
  */
 export class RoomSession {
+  readonly titleRevision: number
   readonly code: string
   readonly room: Room
   readonly clock = new RoomClock()
@@ -66,6 +67,7 @@ export class RoomSession {
   private errorListeners = new Set<ErrorListener>()
 
   constructor(room: Room, joined: RoomJoined, options: { generation?: string; allowUnverifiedAudio?: boolean; startAtMs?: number | null } = {}) {
+    this.titleRevision = joined.title_revision ?? 0
     this.code = room.code
     this.room = room
     this.memberId = joined.member_id
@@ -149,6 +151,7 @@ export class RoomSession {
     if (this.socket.snapshot.closed) return
     try {
       const joined = await joinRoom(this.code, {
+        expected_id: this.room.id,
         client: 'web', prefer_hls: prefersHls(), recovery_generation: this.generation ?? null, allow_unverified_audio: this.allowUnverifiedAudio, member_token: this.memberToken,
       })
       if (this.socket.snapshot.closed) return

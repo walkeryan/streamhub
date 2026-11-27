@@ -396,6 +396,12 @@ class StreamHubApi @Inject constructor(
             parameter("client", "android_tv")
             if (allowUnverifiedAudio) parameter("allow_unverified_audio", true)
         }.ok()
+    suspend fun roomControls(code: String, token: String, action: String? = null, ref: String = ""): RoomControls {
+        val route = url("/rooms/${id(code)}/controls")
+        return if (action == null) client.get(route) { header("X-Room-Seat", token) }.ok()
+        else client.post(route) { header("X-Room-Seat", token); setBody(mapOf("action" to action, "id" to ref)) }.ok()
+    }
+
     /** Host or administrator: closes the room for everyone. */
     suspend fun deleteRoom(code: String) = client.delete(url("/rooms/${id(code)}")).unit()
 
@@ -406,6 +412,11 @@ class StreamHubApi @Inject constructor(
     /** 201 scheduled, or 200 when this programme was already scheduled: both answer with the recording. */
     suspend fun record(req: RecordRequest): Recording = client.post(url("/recordings")) { setBody(req) }.ok()
     /** Cancels an upcoming or running recording; deletes a finished one and its file. */
+    suspend fun saveScene(token: String, name: String, position: Long) =
+        client.post(url("/viewing/bookmarks")) {
+            setBody(buildJsonObject { put("session", token); put("name", name); put("position_ms", position) })
+        }.unit()
+
     suspend fun reportRecordingIssue(recordingId: String, category: String, positionMs: Long) =
         client.post(url("/recordings/${id(recordingId)}/issues")) {
             setBody(buildJsonObject { put("category", category); put("position_ms", positionMs) })

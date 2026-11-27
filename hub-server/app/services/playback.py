@@ -35,6 +35,7 @@ from app.domain.entities import (
 )
 from app.domain.ports import (
     DeeplinkProvider,
+    DownloadProvider,
     LiveProvider,
     MetadataProvider,
     PlaybackExtrasProvider,
@@ -55,6 +56,7 @@ from app.services.availability import AvailabilityService
 from app.services.catalog import CatalogService
 from app.services.channels import ChannelService
 from app.services.context import absolute
+from app.services.editions import edition_info, safe_position
 from app.services.episode_nav import EpisodeNavigator
 from app.services.errors import BadGateway, Conflict, Forbidden, NotFound, ServiceError
 from app.services.event_slots import display_name
@@ -469,6 +471,7 @@ class PlaybackResolver:
         start_position_ms: int | None = None,
         room: RoomScope | None = None,
         max_height: int | None = None,
+        preview_only: bool = False,
     ) -> dict[str, Any]:
         """``max_height`` caps the quality of a film this server converts for a browser (see
         ``capped_height``). It is not for the TV, which plays the file itself, nor for a room, whose
@@ -550,6 +553,7 @@ class PlaybackResolver:
                 start_position_ms=start_position_ms,
                 room=room,
                 max_height=max_height,
+                preview_only=preview_only,
             )
         if h.scheme == "tmdb" and h.a in ("movie", "tv") and h.b.isdigit():
             return await self._resolve_tmdb(
@@ -566,6 +570,7 @@ class PlaybackResolver:
                 start_position_ms=start_position_ms,
                 room=room,
                 max_height=max_height,
+                preview_only=preview_only,
             )
         raise NotFound("unknown id")
 
@@ -695,6 +700,7 @@ class PlaybackResolver:
                     "source_id": row.source_id,
                     "source_name": src.name,
                     "provider_label": row.title,
+                    **edition_info(row, rows),
                     "kind": row.kind,
                     "year": row.year,
                     **info,
@@ -1145,6 +1151,7 @@ class PlaybackResolver:
         start_position_ms: int | None = None,
         room: RoomScope | None = None,
         max_height: int | None = None,
+        preview_only: bool = False,
     ) -> dict[str, Any]:
         await self._require_content(profile_id, ids.lib_id(row.source_id, row.ext_id))
         await self._require_slot()
@@ -1159,15 +1166,21 @@ class PlaybackResolver:
         except Exception as exc:
             raise BadGateway("could not resolve stream from source") from exc
         lib = ids.lib_id(row.source_id, row.ext_id)
-        keys = [hub_id, lib, *(progress_ids or [])]
+        keys = [hub_id, lib, self._catalog.item_hub_id(row), *(progress_ids or [])]
         # The one user linked to the library server's account resumes where that account is, if newer.
         await self._progress.merge_account_state(profile_id, [row])
         p = await self._progress.get(profile_id, *keys)
         # Provider resume belongs to the shared source account, not this profile.
-        resume = 0
-        if p is not None:
-            resume = 0 if p.completed else p.position_ms
-        target.resume_position_ms = resume
+        canonical = self._catalog.item_hub_id(row)
+        kind = ids.tmdb_type_for_kind(row.kind)
+        peers = await self._catalog.rows_for_tmdb(kind, row.tmdb_id) if kind and row.tmdb_id else [row]
+        edition = edition_info(row, peers)
+        duration = target.duration_ms or edition["runtime_ms"]
+        resume = await self._progress.edition_resume(profile_id, canonical, edition["edition_id"], lib, duration, p)
+        target.resume_position_ms = safe_position(resume, duration)
+        if start_position_ms is not None:
+            start_position_ms = safe_position(start_position_ms, duration)
+            target.resume_position_ms = start_position_ms
         subtitle = target.subtitle
         if row.kind == "episode":
             subtitle = f"S{row.season_number or 0:02d}E{row.episode_number or 0:02d}" + (
@@ -1227,6 +1240,12 @@ class PlaybackResolver:
             )
             if audio_track is not None:
                 desc["audio_language_required"] = False
+        desc.update(edition)
+        desc["variant_id"] = lib
+        if room is None and not preview_only:
+            desc["progress_session_id"] = await self._progress.start_edition(
+                profile_id, canonical, edition["edition_id"], lib
+            )
         return desc
 
     # ------------------------------------------------------------------ player extras
@@ -1265,6 +1284,8 @@ class PlaybackResolver:
             for key, ep in (("next", near.next), ("previous", near.previous)):
                 if ep is not None and await self._may_offer(profile_id, ep, srcs):
                     out[key] = up_next(ep, image(srcs.get(ep.source_id), ep.poster, None))
+                    if key == "next" and ep.source_id == src.id and isinstance(prov, DownloadProvider) and not ep.adult:
+                        out["download_next_id"] = ids.lib_id(ep.source_id, ep.ext_id)
 
         async def bounded(part: Any, name: str) -> None:
             try:
@@ -1559,6 +1580,7 @@ class PlaybackResolver:
         start_position_ms: int | None = None,
         room: RoomScope | None = None,
         max_height: int | None = None,
+        preview_only: bool = False,
     ) -> dict[str, Any]:
         sources, meta, badges, matches = await self._tmdb_matches(media_type, tmdb_id)
         if matches and (not source_id or any(m.source_id == source_id for m in matches)):
@@ -1585,6 +1607,7 @@ class PlaybackResolver:
                 start_position_ms=start_position_ms,
                 room=room,
                 max_height=max_height,
+                preview_only=preview_only,
             )
         if not variant_id and not source_id and await self._progress.source_preference(profile_id, hub_id):
             raise Conflict(

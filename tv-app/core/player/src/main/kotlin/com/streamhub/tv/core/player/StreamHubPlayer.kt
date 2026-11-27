@@ -408,7 +408,7 @@ class StreamHubPlayer(
         // Watched: "stopped" at the full length is the server's explicit completion signal.
         val pos = if (completed && dur != null && dur > 0) dur else exoPlayer.currentPosition.coerceAtLeast(0) + MediaItemMapper.timeZeroMs(d)
         val job=scope.launch(start=CoroutineStart.LAZY) {
-            runCatching {api.reportProgress(ProgressReport(id=d.id,expectedProfileId=owner.profile?.id,positionMs=pos,durationMs=dur,state=state),owner)}
+            runCatching {api.reportProgress(ProgressReport(id=d.id,progressSessionId=d.progressSessionId,variantId=d.variantId,expectedProfileId=owner.profile?.id,positionMs=pos,durationMs=dur,state=state),owner)}
         }
         reportJobs.track(job,owner)
         job.start()

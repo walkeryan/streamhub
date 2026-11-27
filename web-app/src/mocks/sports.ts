@@ -145,7 +145,7 @@ export function sportsEvents(params: URLSearchParams, serve: (p: Programme) => u
     const live = s.start !== null && s.start <= now && now < s.start + EVENT_LENGTH
     if (s.start !== null && s.start + EVENT_LENGTH <= now) continue
     if (s.start === null ? !(from <= now && now < to) || !['all', 'active'].includes(status) : !(s.start + EVENT_LENGTH > from && s.start < to)) continue
-    if ((status === 'current' && !live) || (status === 'upcoming' && (live || s.start === null)) || (status === 'replay' && !s.replay)) continue
+    if ((status === 'live' && (!live || s.replay)) || (status === 'current' && !live) || (status === 'upcoming' && (live || s.start === null)) || (status === 'replay' && !s.replay)) continue
     if (q && !`${s.title} ${s.shown} ${s.sport}`.toLowerCase().includes(q)) continue
     const game = gameOf(s)
     const id = `${s.title}|${s.sport}|${s.start ?? 'undated'}`

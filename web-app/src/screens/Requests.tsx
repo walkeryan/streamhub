@@ -36,7 +36,9 @@ export function Requests() {
   useRestoreFocus(!!mine.data || !!mine.error, 'req:tab:mine')
   // Approve / Decline leave a row once it is decided (here or on another device): fall back to its Details button.
   useEffect(() => {
-    if (!active.data || doesFocusableExist(getCurrentFocusKey())) return
+    const key = getCurrentFocusKey()
+    // Only repair focus that belonged to this list. Initial focus is owned by useRestoreFocus.
+    if (!active.data || !key?.startsWith('req:') || doesFocusableExist(key)) return
     const row = decided.current && `req:${decided.current}:open`
     void setFocus(row && doesFocusableExist(row) ? row : `req:tab:${scope}`)
   }, [active.data, scope])

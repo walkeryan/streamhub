@@ -1,8 +1,13 @@
 package com.streamhub.tv
 
+import kotlinx.coroutines.flow.first
 import android.content.Intent
 import android.graphics.Rect
 import android.os.Build
+import android.os.SystemClock
+import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
+import com.streamhub.tv.shell.ExitConfirmation
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
@@ -47,6 +52,8 @@ import com.streamhub.tv.shell.KeepClearReport
 import com.streamhub.tv.shell.PLAYBACK_ENDED_SCRIPT
 import com.streamhub.tv.shell.ShellBridge
 import com.streamhub.tv.shell.NativePlayer
+import com.streamhub.tv.shell.CastAction
+import com.streamhub.tv.shell.CastReceiver
 import com.streamhub.tv.shell.PlayerLink
 import com.streamhub.tv.shell.PxRect
 import com.streamhub.tv.shell.miniPlayerEventJson
@@ -134,11 +141,45 @@ class MainActivity : ComponentActivity() {
     /** A player was started and has not said it is up yet. */
     private var launching = false
     private var backPending = false
+    private val exitConfirmation = ExitConfirmation()
+    private var exitPrompt: Toast? = null
+
+    private fun resetExit() {
+        exitConfirmation.reset()
+        exitPrompt?.cancel()
+        exitPrompt = null
+    }
+
+    private fun rootBack() {
+        if (exitConfirmation.press(SystemClock.elapsedRealtime())) {
+            resetExit()
+            finish()
+        } else {
+            exitPrompt?.cancel()
+            exitPrompt = Toast.makeText(this, "Press Back again to exit", Toast.LENGTH_SHORT).also { it.show() }
+        }
+    }
+
+    private fun navigateBack() {
+        if (backPending) return
+        if (speech.listening) { resetExit(); speech.stop(); return }
+        if (vm.screen.value != ShellScreen.Web || !controller.ready) { rootBack(); return }
+        backPending = true
+        webView.evaluateJavascript(BACK_SCRIPT) { answer ->
+            backPending = false
+            if (!isFinishing && !isDestroyed && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                if (backOutcome(answer) == BackOutcome.Exit) rootBack() else resetExit()
+            }
+        }
+    }
     /** What the page last asked the picture-in-picture window to stay off (its `keep_clear` message). */
     private var keepClear: KeepClearReport? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = navigateBack()
+        })
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         webView = createShellWebView(this)
         controller = ShellWebController(
@@ -155,6 +196,7 @@ class MainActivity : ComponentActivity() {
                 tokens = tokenBroker,
                 capabilities = { capabilities },
                 pageAllowed = { val s = vm.session.value?.serverUrl; val url = webView.url; s != null && url != null && mayLoad(s, url) },
+                onCast = ::receiveCast,
                 onPlay = vm::play,
                 onSignedOut = vm::signedOut,
                 onMiniPlayerCommand = PlayerLink::command,
@@ -252,21 +294,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode == KeyEvent.KEYCODE_BACK && speech.listening) {
-            if (event.action == KeyEvent.ACTION_UP) speech.stop()
-            return true
-        }
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode != KeyEvent.KEYCODE_BACK) resetExit()
         if (event.keyCode == KeyEvent.KEYCODE_BACK && vm.screen.value == ShellScreen.Web) {
-            // Back is the web app's: it closes a dialog or goes back, and on its home screen says no,
-            // and then the app is left like any TV app. Repeats while held are ignored.
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && !backPending) {
-                if (!controller.ready) { finish(); return true }
-                backPending = true
-                webView.evaluateJavascript(BACK_SCRIPT) { answer ->
-                    backPending = false
-                    if (backOutcome(answer) == BackOutcome.Exit) finish()
-                }
-            }
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) navigateBack()
             return true
         }
         // The remote's search keys, when the system passes them on: StreamHub's own voice search.
@@ -296,6 +326,7 @@ class MainActivity : ComponentActivity() {
     private fun checkForUpdate() = updatePrompt.checkIfDue(onWebApp = vm.screen.value == ShellScreen.Web, playerOpen = playerOpen)
 
     override fun onStop() {
+        resetExit()
         voice(VoiceCommand.Stop)
         // Backgrounded: the page rests. Behind the native player it keeps running, to answer token requests.
         if (!playerOpen) { webView.onPause(); webView.pauseTimers() }
@@ -307,6 +338,38 @@ class MainActivity : ComponentActivity() {
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.destroy()
         super.onDestroy()
+    }
+
+    private fun receiveCast(action: CastAction) {
+        if (!CastReceiver.begin(action)) return
+        lifecycleScope.launch {
+            val result = kotlinx.coroutines.withTimeoutOrNull(if (action.play != null) 85_000L else 6_000L) {
+                val load = action.play
+                if (load != null) {
+                    if (PlayerLink.state.value != NativePlayer.None) {
+                        PlayerLink.closeOpenPlayer()
+                        PlayerLink.state.first { it == NativePlayer.None }
+                    }
+                    vm.play(load)
+                } else if (PlayerLink.castControl?.invoke(action) != true) return@withTimeoutOrNull false
+                while (true) {
+                    val shown = CastReceiver.info
+                    val applied = when (action.action) {
+                        "load" -> CastReceiver.playingRequestedTitle(action)
+                        "stop" -> shown == null
+                        "play" -> shown?.id == action.id && shown?.playing == true
+                        "pause" -> shown?.id == action.id && shown?.playing == false
+                        "seek" -> shown != null && shown.id == action.id && kotlin.math.abs(shown.positionMs -
+                            action.position!!.coerceAtMost(shown.durationMs ?: Long.MAX_VALUE)) < 2500
+                        else -> false
+                    }
+                    if (applied) break
+                    kotlinx.coroutines.delay(120)
+                }
+                true
+            }
+            CastReceiver.result(action, if (result == true) "ok" else "error")
+        }
     }
 
     private fun openPlayer(key: String) {

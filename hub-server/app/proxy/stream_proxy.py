@@ -1145,6 +1145,11 @@ class StreamProxy:
             self._probes.pop(slot, None)
 
     # ------------------------------------------------------------------ recordings
+    def can_tap_shared(self, key: str) -> bool:
+        """A recording can join this live transport without taking another source slot."""
+        upstream = self._shared.get(key)
+        return bool(upstream and not upstream.closed and not upstream.failed and upstream.subscribers)
+
     def tap_shared(self, key: str, viewer: Viewer | None = None) -> Tap | None:
         """A recording's seat on the channel's shared upstream, when viewers have one open right now."""
         up = self._shared.get(key)

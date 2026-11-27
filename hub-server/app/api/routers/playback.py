@@ -76,6 +76,7 @@ async def resolve(body: S.PlaybackRequest, c: C, p: P) -> dict[str, Any]:
         audio_track=body.audio_track,
         start_position_ms=body.start_position_ms,
         max_height=body.max_height,
+        preview_only=body.preview_only,
     )
     c.proxy.ensure_running(generation)
     result["buffer_available"] = False
@@ -325,14 +326,15 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
                 aliases.append(hub)
     elif h.scheme == "tmdb" and h.b.isdigit():
         rows = await c.catalog.rows_for_tmdb(h.a, int(h.b))
-        pick = next((r for r in rows if r.source_id == source_id), rows[0] if rows else None)
+        pick = next((r for r in rows if ids.lib_id(r.source_id, r.ext_id) == body.variant_id), None)
+        pick = pick or next((r for r in rows if r.source_id == source_id), rows[0] if rows else None)
         if pick is not None:
             source_id = source_id or pick.source_id
             forward = pick
             aliases.append(ids.lib_id(pick.source_id, pick.ext_id))
     elif h.scheme == "ch":
         source_id = source_id or h.a
-    await c.progress.report(
+    written = await c.progress.report(
         p.profile_id,
         ref_id,
         position_ms=body.position_ms,
@@ -342,7 +344,10 @@ async def progress(body: S.ProgressReport, c: C, p: P) -> Response:
         forward_item=forward,
         aliases=aliases,
         watched=body.watched,
+        progress_session_id=body.progress_session_id,
     )
+    if body.progress_session_id and written is None:
+        return Response(status_code=204)
     # The player's own word on its stream: still playing (it counts toward the user's limit even
     # when no bytes pass through this server), or stopped (it no longer does).
     if body.state == "stopped":

@@ -82,6 +82,8 @@ export function titlePlay(to: string, consent: ConsentCheck): ShellTitlePlay | n
   const buffered = sp.get('buffer_at')
   if (buffered && id.startsWith('ch:')) { play.v = 2; play.buffer_at = buffered }
   if (id.startsWith('rec:') && sp.get('recording_start') === '1') play.start_position_ms = 0
+  const scene = sp.get('scene_ms')
+  if (variant && scene && /^\d{1,9}$/.test(scene) && Number(scene) <= 604800000) play.start_position_ms = Number(scene)
   if (source) play.source_id = source
   if (variant) play.variant_id = variant
   if (catchup) play.catchup_programme_id = catchup

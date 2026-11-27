@@ -420,23 +420,19 @@ class CatalogService:
                         )
                     ).scalars()
                 )
-                season_ids = [x.ext_id for x in seasons]
-                eps = (
-                    list(
-                        (
-                            await s.execute(
-                                select(Title)
-                                .where(
-                                    Title.source_id == row.source_id,
-                                    Title.parent_ext_id.in_(season_ids),
-                                    Title.kind == "episode",
-                                )
-                                .order_by(Title.season_number, Title.episode_number)
+                parent_ids = [row.ext_id, *(x.ext_id for x in seasons)]
+                eps = list(
+                    (
+                        await s.execute(
+                            select(Title)
+                            .where(
+                                Title.source_id == row.source_id,
+                                Title.parent_ext_id.in_(parent_ids),
+                                Title.kind == "episode",
                             )
-                        ).scalars()
-                    )
-                    if season_ids
-                    else []
+                            .order_by(Title.season_number, Title.episode_number)
+                        )
+                    ).scalars()
                 )
                 return seasons + eps
             return list(
@@ -734,6 +730,31 @@ class CatalogService:
         if not detail.get("poster") and matches:
             detail["poster"] = ctx.title_tile(matches[0])["poster"]
         return detail
+
+    async def actor_filmography(self, actor: int, profile_id: str, kind: str, page: int) -> dict[str, Any]:
+        if not self.meta.enabled:
+            raise BadGateway("Actor credits are unavailable without a metadata source.")
+        policy = self.content_policy
+        if policy is None:
+            raise Forbidden("Content policy service is unavailable.", code="content_policy_unavailable")
+        try:
+            async with asyncio.timeout(14), self._metadata_slots:
+                data = await self.meta.actor_filmography(actor)
+        except (TimeoutError, RuntimeError) as exc:
+            raise BadGateway("Actor credits are temporarily unavailable.") from exc
+        if data is None:
+            raise NotFound("Actor not found")
+        allowed = await policy.allowed_refs(profile_id, [r["id"] for r in data["credits"]], proven=True)
+        credits = [r for r in data["credits"] if r["id"] in allowed and (kind == "all" or r["kind"] == kind)]
+        start = (page - 1) * 40
+        return {
+            "name": data["name"],
+            "photo": data["photo"],
+            "known_for": [r for r in data["known_for"] if r["id"] in allowed],
+            "credits": credits[start : start + 40],
+            "page": page,
+            "has_more": len(credits) > start + 40,
+        }
 
     async def discover(
         self,

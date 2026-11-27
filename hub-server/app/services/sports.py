@@ -58,8 +58,18 @@ SPORT_RULES = [
     ("Sports", r"\b(?:sports?|sportscenter|sportscentre|athletics|olympics)\b"),
 ]
 PATTERNS = [(name, re.compile(pattern, re.IGNORECASE)) for name, pattern in SPORT_RULES]
-# The only repeat marker the guide carries: the listing says so in its title or category.
-REPLAY = re.compile(r"\b(?:replay|rerun|encore|repeat)\b", re.IGNORECASE)
+# Guide listings sometimes label a delayed broadcast in prose; replay evidence wins over live.
+REPLAY = re.compile(
+    r"\b(?:replays?|re-?runs?|encore|repeat(?:ed)?|highlights?|rebroadcast|tape[- ]delay(?:ed)?|classic game|"
+    r"originally (?:aired|broadcast)|previously (?:shown|broadcast)|recorded earlier)\b",
+    re.IGNORECASE,
+)
+
+_REPLAY_DESCRIPTION = re.compile(
+    r"\b(?:originally (?:aired|broadcast)|previously (?:shown|broadcast)|recorded earlier|"
+    r"encore presentation|highlights of|replay of)\b",
+    re.IGNORECASE,
+)
 
 
 def classify_sport(title: str, category: str | None) -> str | None:
@@ -329,7 +339,7 @@ _SPORT_TERMS = {
 }
 _LIVE_LABEL = re.compile(r"(?:^live\s*[:\-]|\(live\)|\blive coverage\b)", re.IGNORECASE)
 _MATCHUP = re.compile(r"\S.+\s(?:vs?\.?|versus|@)\s.+\S", re.IGNORECASE)
-_STATUSES = {"all", "active", "current", "upcoming", "replay"}
+_STATUSES = {"all", "active", "current", "live", "upcoming", "replay"}
 SCAN_CAP = 5000
 # "2pm Lehigh at Richmond", "MNF 8:15pm Bills at Vikings": an event channel's guide names the game by
 # its clock time, in a block that starts hours before it. Such a listing is an event channel's, not a
@@ -449,6 +459,7 @@ async def _grouped_events(
             Programme.epg_channel,
             ch.c.number,
             Programme.description,
+            Programme.broadcast_kind,
         )
         .join(Programme, (Programme.feed == ch.c.source_id) & (Programme.epg_channel == ch.c.epg_id))
         .join(Source, Source.id == ch.c.source_id)
@@ -465,8 +476,38 @@ async def _grouped_events(
     guide_sport = sport is None or sport in _SPORT_TERMS
     if sport and guide_sport:
         query = query.where(or_(*(text.like(f"%{word}%") for word in _SPORT_TERMS[sport])))
+    if status == "live":
+        query = query.where(
+            or_(
+                Programme.broadcast_kind == "live",
+                text.like("%live%"),
+                func.lower(Programme.description).like("live coverage%"),
+            )
+        )
     if status == "replay":
-        query = query.where(or_(*(text.like(f"%{word}%") for word in ("replay", "rerun", "encore", "repeat"))))
+        replay_text = func.lower(func.coalesce(Programme.description, "") + " " + text)
+        query = query.where(
+            or_(
+                Programme.broadcast_kind == "replay",
+                *(
+                    replay_text.like(f"%{word}%")
+                    for word in (
+                        "replay",
+                        "rerun",
+                        "re-run",
+                        "encore",
+                        "repeat",
+                        "highlight",
+                        "rebroadcast",
+                        "delay",
+                        "classic game",
+                        "originally",
+                        "previously",
+                        "recorded earlier",
+                    )
+                ),
+            )
+        )
     term = (q or "").strip()
     if term:
         like = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -478,7 +519,7 @@ async def _grouped_events(
                 func.lower(func.coalesce(Programme.description, "")).like(f"%{like}%", escape="\\"),
             )
         )
-    if status == "current":
+    if status in ("current", "live"):
         query = query.where(Programme.start <= now, Programme.stop > now)
     elif status == "upcoming":
         query = query.where(Programme.start > now)
@@ -525,7 +566,13 @@ async def _grouped_events(
         if term and term.casefold() not in f"{row[7]} {shown}".casefold():
             continue
         label = f"{row[7]} {row[8] or ''}"
-        replay = bool(REPLAY.search(label))
+        replay = row[14] == "replay" or bool(REPLAY.search(label) or _REPLAY_DESCRIPTION.search(row[13] or ""))
+        verified_live = not replay and (
+            row[14] == "live"
+            or (row[8] or "").strip().lower() == "live"
+            or bool(_LIVE_LABEL.search(label))
+            or (row[13] or "").strip().casefold().startswith("live coverage ")
+        )
         if status == "replay" and not replay:
             continue
         # Only explicit matchups with identical title and exact schedule are
@@ -539,6 +586,7 @@ async def _grouped_events(
             row[9].isoformat(),
             row[10].isoformat(),
             str(replay),
+            str(verified_live),
             "matchup" if matchup else f"{row[1]}:{row[11]}",
         )
         event = grouped.setdefault(
@@ -555,7 +603,7 @@ async def _grouped_events(
                 "stop": row[10],
                 "status": "upcoming" if row[9] > now else "current" if row[10] > now else "ended",
                 "replay": replay,
-                "live_evidence": not replay and bool(_LIVE_LABEL.search(label)),
+                "live_evidence": verified_live,
                 "grouping_evidence": "matching_title_and_time" if matchup else "same_source_programme",
                 "feeds": [],
             },
@@ -608,7 +656,7 @@ async def _grouped_events(
                 "stop": window[1],
                 "status": {"live": "current", "upcoming": "upcoming"}.get(state, "unscheduled"),
                 "replay": replay,
-                "live_evidence": state == "live" and not replay,
+                "live_evidence": state == "live" and not replay and bool(_LIVE_LABEL.search(slot.title)),
                 "grouping_evidence": "matching_title_and_time",
                 "feeds": [],
             },
@@ -626,7 +674,11 @@ async def _grouped_events(
         return (0, (0 if game else 2) + (event["id"] in slotted))
 
     listed = sorted(
-        grouped.values(),
+        (
+            e
+            for e in grouped.values()
+            if status != "live" or (e["status"] == "current" and e["live_evidence"] and not e["replay"])
+        ),
         key=lambda e: (e["kind"] != "event", *prominence(e), e["start"], e["title"].casefold(), e["id"]),
     )
     for event in listed:

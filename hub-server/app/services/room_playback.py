@@ -144,6 +144,8 @@ class RoomPlayback:
                     "This playback attempt was stopped. Start playback again manually.", code="playback_stopped"
                 )
         generation = self.proxy.generation
+        revision = room.title_revision
+        room.require_revision(revision)
         if self.db is not None:
             await require_watch(self.db, principal.permissions, room.ref)
         position = 0 if room.live else position_at(room.state, now_ms)
@@ -164,6 +166,7 @@ class RoomPlayback:
             room=scope,
         )
         self.proxy.ensure_running(generation)
+        room.require_revision(revision)
         if result.get("mode") == "handoff":
             # Another app plays it; there is no player here for the room to steer.
             raise Conflict("This title opens in another app and cannot be watched in a room.", code="room_unsupported")
@@ -174,15 +177,22 @@ class RoomPlayback:
         result["resume_position_ms"] = position
         if scope is None or not scope.shared or scope.vod is None:
             return result
-        return await self._seat(room, principal, scope, result, member_id)
+        return await self._seat(room, principal, scope, result, member_id, revision)
 
     async def _seat(
-        self, room: Room, principal: Principal, scope: RoomScope, result: dict[str, Any], member_id: str | None = None
+        self,
+        room: Room,
+        principal: Principal,
+        scope: RoomScope,
+        result: dict[str, Any],
+        member_id: str | None,
+        revision: int,
     ) -> dict[str, Any]:
         """Attach a resolved member to the room's session, starting it for the first one."""
         vod = scope.vod
         assert vod is not None
         async with self._lock(room.code):
+            room.require_revision(revision)
             session = self._sessions.get(room.code)
             created = session is None
             if session is None:
@@ -354,6 +364,12 @@ class RoomPlayback:
             room.stream_epoch = session.epoch
             await self.proxy.stop_hls(session.key)
             await self._start(session)
+
+    async def release_title(self, room: Room) -> None:
+        async with self._lock(room.code):
+            session = self._sessions.get(room.code)
+            if session is not None:
+                await self._drop(session)
 
     def room_changed(self, room: Room) -> None:
         session = self._sessions.get(room.code)

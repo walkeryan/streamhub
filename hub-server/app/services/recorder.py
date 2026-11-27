@@ -42,6 +42,7 @@ from app.services.auth import Principal
 from app.services.channels import ChannelService, slot_named
 from app.services.errors import Conflict, Forbidden, NotFound, ServiceError
 from app.services.event_slots import SLOT_PROGRAMME, display_name, is_placeholder, parse_event_slot
+from app.services.media_probe import MediaProbe
 from app.services.sports import REPLAY, classify_sport, split_matchup
 
 log = logging.getLogger(__name__)
@@ -208,6 +209,7 @@ def recording_filename(recording: Recording, tz: tzinfo | None = None) -> str:
 class _Candidate:
     channel_id: str
     channel_name: str
+    description: str | None
     order: tuple[int, int]  # channel number, then row id
     title: str
     category: str | None
@@ -291,6 +293,10 @@ class RecorderService:
         clock: Callable[[], datetime] = utcnow,
         free_bytes: Callable[[], int] | None = None,
     ) -> None:
+        from app.services.recording_plan import RecordingPlanner
+
+        self.planner = RecordingPlanner(self)
+        self.probe = MediaProbe()
         self._db = db
         self._channels = channels
         self.recordings_dir = Path(recordings_dir) if recordings_dir else None
@@ -306,6 +312,8 @@ class RecorderService:
         self._lock = asyncio.Lock()
         self._retry_at: dict[str, datetime] = {}
         self._archive_tried: set[str] = set()
+        self._repair_after: dict[str, datetime] = {}
+        self._schedule_lock = asyncio.Lock()
         self._recovery: asyncio.Task[None] | None = None
 
     @property
@@ -483,6 +491,13 @@ class RecorderService:
                 "error": r.error,
                 "size_bytes": r.size_bytes,
                 "has_file": r.id in files,
+                "protected": r.protected,
+                "priority": r.priority,
+                "guide_review": r.guide_review,
+                "captured_from": r.captured_from,
+                "captured_until": r.captured_until,
+                "replacement_for": r.replacement_for,
+                "recovered_at": r.recovered_at,
                 "created_at": r.created_at,
                 "updated_at": r.updated_at,
             }
@@ -730,13 +745,31 @@ class RecorderService:
             raise Conflict("The guide has changed. Refresh it and try again.", code="guide_changed")
         return game, ch
 
+    async def preview(
+        self, p: Principal, programme_id: str, channel_id: str | None, start: datetime | None, priority: int
+    ) -> dict[str, Any]:
+        self._require_schedule(p)
+        programme, channel = await self._resolve(programme_id, channel_id, start)
+        if self.content_policy and self.content_policy.applies_to(p):
+            await self.content_policy.require(
+                p.profile_id, programme_id if programme.id is None else ids.prog_id(programme.id)
+            )
+        row = self.planner.for_airing(p.profile_id, programme, channel, priority)
+        return await self.planner.plan(p, row)
+
     async def schedule_programme(
         self, p: Principal, programme_id: str, channel_id: str | None = None, start: datetime | None = None
     ) -> Recording:
         return (await self.schedule_or_get(p, programme_id, channel_id, start))[0]
 
     async def schedule_or_get(
-        self, p: Principal, programme_id: str, channel_id: str | None = None, start: datetime | None = None
+        self,
+        p: Principal,
+        programme_id: str,
+        channel_id: str | None = None,
+        start: datetime | None = None,
+        priority: int = 0,
+        confirmed_conflicts: int | None = None,
     ) -> tuple[Recording, bool]:
         """The recording for this programme and whether this call scheduled it (False: it already was)."""
         self._require_schedule(p)
@@ -760,32 +793,45 @@ class RecorderService:
             stop=programme.stop,
             evidence=programme.age_evidence,
         )
-        for _ in range(2):
-            async with self._db.session() as s:
-                existing = (
-                    await s.execute(select(Recording).where(Recording.programme_key == values["programme_key"]))
-                ).scalar_one_or_none()
-            if existing is None:
-                row = Recording(id=secrets.token_hex(8), state="scheduled", updated_at=self.clock(), **values)
-                try:
-                    async with self._db.session() as s:
-                        s.add(row)
-                        await s.commit()
-                except IntegrityError:
-                    continue  # lost a race for the key: look again
-                return row, True
-            if existing.state not in DEAD_STATES:
-                if not (recording_policy.sees_all(p) or existing.profile_id == p.profile_id):
-                    raise Conflict("This programme is already being recorded.", code="already_scheduled")
-                return existing, False
-            # A cancelled, failed or missed attempt is taken over by whoever asks again.
-            async with self._lock:
-                self._remove_file(existing.path)
-                revived = await self._transition(existing, DEAD_STATES, "scheduled", **values)
-            if revived is not None:
-                self._archive_tried.discard(revived.id)
-                return revived, True
-        raise Conflict("This programme is already being recorded.", code="already_scheduled")
+        values.update(priority=priority, guide_description=programme.description, follow_guide=programme.id is not None)
+        async with self._schedule_lock:
+            if confirmed_conflicts is not None:
+                request = Recording(id="new", **values)
+                if (await self.planner.capacity(request))[1] > confirmed_conflicts:
+                    raise Conflict(
+                        "The recording schedule changed. Review its conflicts again.", code="recording_conflict"
+                    )
+            for _ in range(2):
+                async with self._db.session() as s:
+                    existing = (
+                        await s.execute(select(Recording).where(Recording.programme_key == values["programme_key"]))
+                    ).scalar_one_or_none()
+                if existing is None:
+                    row = Recording(id=secrets.token_hex(8), state="scheduled", updated_at=self.clock(), **values)
+                    try:
+                        async with self._db.session() as s:
+                            s.add(row)
+                            await s.commit()
+                    except IntegrityError:
+                        continue  # lost a race for the key: look again
+                    return row, True
+                if existing.state not in DEAD_STATES:
+                    if not (recording_policy.sees_all(p) or existing.profile_id == p.profile_id):
+                        raise Conflict("This programme is already being recorded.", code="already_scheduled")
+                    return existing, False
+                if (
+                    existing.path
+                    or existing.protected
+                    or (existing.profile_id != p.profile_id and existing.state != "cancelled")
+                ):
+                    raise Conflict("A recording already holds this airing.", code="already_scheduled")
+                # A cancelled, failed or missed attempt is taken over by whoever asks again.
+                async with self._lock:
+                    revived = await self._transition(existing, DEAD_STATES, "scheduled", **values)
+                if revived is not None:
+                    self._archive_tried.discard(revived.id)
+                    return revived, True
+            raise Conflict("This programme is already being recorded.", code="already_scheduled")
 
     async def cancel(self, p: Principal, recording_id: str) -> None:
         """Cancel an upcoming or running recording; delete a finished one together with its file."""
@@ -793,6 +839,20 @@ class RecorderService:
         async with self._lock:
             row = await self._owned(p, recording_id)
             self._retry_at.pop(row.id, None)
+            async with self._db.session() as session:
+                if row.replacement_for:
+                    await session.execute(
+                        update(Recording).where(Recording.id == row.replacement_for).values(recover_rerun=False)
+                    )
+                children = list(await session.scalars(select(Recording).where(Recording.replacement_for == row.id)))
+                for child in children:
+                    if child.state == "scheduled":
+                        child.state = "cancelled"
+                    elif child.state == "recording":
+                        self._remove_file((await self.capture.stop(child)).path)
+                        child.state = "cancelled"
+                    child.replacement_for = None
+                await session.commit()
             if row.state == "scheduled":
                 await self._transition(row, ("scheduled",), "cancelled")
             elif row.state == "recording":
@@ -804,10 +864,10 @@ class RecorderService:
                 self._remove_file(result.path)
                 await self._transition(row, ("recording",), "cancelled", error=None, path=None, size_bytes=None)
             elif row.state != "cancelled":
-                self._remove_file(row.path)
                 async with self._db.session() as s:
                     await s.execute(delete(Recording).where(Recording.id == row.id))
                     await s.commit()
+                self._remove_file(row.path)
 
     # ------------------------------------------------------------------ rules
     def _clean_rule(self, kind: str, match: str, keep: int | None) -> str:
@@ -958,6 +1018,7 @@ class RecorderService:
                     Programme.start,
                     Programme.stop,
                     Programme.age_evidence,
+                    Programme.description,
                 )
                 .join(Programme, (Programme.feed == ch.c.source_id) & (Programme.epg_channel == ch.c.epg_id))
                 .where(Programme.start > now)
@@ -974,6 +1035,7 @@ class RecorderService:
                 start: datetime,
                 stop: datetime,
                 evidence: dict[str, Any],
+                description: str | None = None,
             ) -> None:
                 for rule in rules:
                     if rule.channel_id is not None and rule.channel_id != channel_id:
@@ -988,6 +1050,7 @@ class RecorderService:
                             _Candidate(
                                 channel_id=channel_id,
                                 channel_name=display_name(name),
+                                description=description,
                                 order=(number, pk),
                                 title=title,
                                 category=category,
@@ -1003,11 +1066,34 @@ class RecorderService:
             async with self._db.session() as s:
                 # One streamed pass over the guide for all of the profile's rules.
                 rows = await s.stream(query.execution_options(yield_per=500))
-                async for pk, source_id, ext_id, name, number, title, category, start, stop, evidence in rows:
+                async for (
+                    pk,
+                    source_id,
+                    ext_id,
+                    name,
+                    number,
+                    title,
+                    category,
+                    start,
+                    stop,
+                    evidence,
+                    description,
+                ) in rows:
                     # Filler that repeats the channel's name would match a team in every block, for weeks.
                     if is_placeholder(title, name) or parse_event_slot(name) is not None:
                         continue
-                    offer(pk, ids.channel_id(source_id, ext_id), name, number, title, category, start, stop, evidence)
+                    offer(
+                        pk,
+                        ids.channel_id(source_id, ext_id),
+                        name,
+                        number,
+                        title,
+                        category,
+                        start,
+                        stop,
+                        evidence,
+                        description,
+                    )
                 # An event slot has no guide rows worth reading: the game in its name is its one listing.
                 named = await s.execute(
                     select(Channel).where(Channel.id.in_(select(ch.c.id)), slot_named(Channel.name))
@@ -1057,6 +1143,7 @@ class RecorderService:
                     id=secrets.token_hex(8),
                     state="scheduled",
                     updated_at=now,
+                    guide_description=pick.description,
                     **self._snapshot(
                         profile_id=profile_id,
                         rule_id=rule.id,
@@ -1114,6 +1201,12 @@ class RecorderService:
             return created
 
     # ------------------------------------------------------------------ tick
+    async def refreshed(self) -> None:
+        if self.enabled:
+            self._repair_after.clear()
+            await self.planner.refreshed(self.clock())
+            await self.apply_rules()
+
     def _low_space(self) -> bool:
         try:
             if self._free_bytes is not None:
@@ -1131,26 +1224,26 @@ class RecorderService:
         return fresh if fresh is not None and fresh.state == state else None
 
     async def _start(self, row: Recording, now: datetime) -> None:
-        due = row.starts_at - timedelta(seconds=row.pad_before_s)
         async with self._lock:
             fresh = await self._fresh(row, "scheduled")
             if fresh is None:
                 return
+            if fresh.guide_review:
+                return
             try:
+                if (await self.planner.capacity(fresh, higher_only=True, now=now))[1]:
+                    raise SourceBusy("Waiting for a higher-priority recording on this source.")
                 await self.capture.start(fresh)
             except Exception as exc:
                 if not (isinstance(exc, ServiceError) and exc.code == SourceBusy.code):
                     self._retry_at.pop(row.id, None)
                     await self._transition(fresh, ("scheduled",), "failed", error=_error(exc))
-                elif now >= max(due, fresh.created_at) + RETRY_WINDOW:
-                    self._retry_at.pop(row.id, None)
-                    note = "No source connection was free when this programme started."
-                    await self._transition(fresh, ("scheduled",), "missed", error=note)
                 else:
                     self._retry_at[row.id] = now + RETRY_EVERY
+                    await self._transition(fresh, ("scheduled",), "scheduled", error="Waiting for a source connection.")
                 return
             self._retry_at.pop(row.id, None)
-            if await self._transition(fresh, ("scheduled",), "recording", error=None) is None:
+            if await self._transition(fresh, ("scheduled",), "recording", error=None, captured_from=now) is None:
                 # The row went away while the capture was starting (its profile was deleted).
                 self._remove_file((await self.capture.stop(fresh)).path)
 
@@ -1166,6 +1259,8 @@ class RecorderService:
             error = error or result.error
             if not error and early:
                 error = "The capture stopped before the programme ended."
+            if not error and fresh.captured_from and fresh.captured_from > fresh.starts_at + timedelta(seconds=30):
+                error = "Partial recording: the source became available after the programme started."
             if not error and not result.path:
                 error = "The capture produced no file."
             await self._transition(
@@ -1174,6 +1269,7 @@ class RecorderService:
                 "failed" if error else "done",
                 error=error[:ERROR_MAX] if error else None,
                 path=result.path,
+                captured_until=self.clock(),
                 size_bytes=result.size_bytes if result.path else None,
             )
 
@@ -1191,9 +1287,15 @@ class RecorderService:
             return
         if now < row.starts_at - timedelta(seconds=row.pad_before_s):
             return
-        if now >= end:
+        if now >= row.ends_at:
             note = "The programme ended before recording could start."
+            if row.guide_review:
+                note = "The guide changed and no airing was confirmed."
+            elif row.error:
+                note = f"{row.error} {note}"
             await self._transition(row, ("scheduled",), "missed", error=note)
+        elif row.guide_review:
+            return
         elif low:
             note = f"Not started: free space for recordings is below {self.min_free_gb} GB."
             await self._transition(row, ("scheduled",), "failed", error=note)
@@ -1201,37 +1303,49 @@ class RecorderService:
             await self._start(row, now)
 
     async def _prune(self, now: datetime) -> None:
-        async with self._db.session() as s:
-            # A cancelled recording only has to outlast the programme its rule would re-add.
+        async with self._lock, self._db.session() as s:
             await s.execute(delete(Recording).where(Recording.state == "cancelled", Recording.ends_at <= now))
-            await s.commit()
-            rules = list((await s.execute(select(RecordingRule).where(RecordingRule.keep.is_not(None)))).scalars())
-            extra: builtins.list[Recording] = []
+            rules = list(await s.scalars(select(RecordingRule).where(RecordingRule.keep.is_not(None))))
+            paths = []
             for rule in rules:
-                done = (
-                    await s.execute(
+                extra = list(
+                    await s.scalars(
                         select(Recording)
-                        .where(Recording.rule_id == rule.id, Recording.state == "done")
+                        .where(
+                            Recording.rule_id == rule.id,
+                            Recording.profile_id == rule.profile_id,
+                            Recording.state == "done",
+                            Recording.protected.is_(False),
+                            Recording.replacement_for.is_(None),
+                        )
                         .order_by(Recording.starts_at.desc(), Recording.id.desc())
                         .offset(rule.keep or 0)
                     )
-                ).scalars()
-                extra.extend(done)
-        for row in extra:
-            async with self._lock, self._db.session() as s:
-                self._remove_file(row.path)
-                await s.execute(delete(Recording).where(Recording.id == row.id, Recording.state == "done"))
-                await s.commit()
+                )
+                for row in extra:
+                    await s.delete(row)
+                    paths.append(row.path)
+            await s.commit()
+            for path in paths:
+                self._remove_file(path)
 
     async def _recover(self, rows: builtins.list[Recording]) -> None:
         # One at a time: an archive fetch occupies a source connection like any viewer.
         for row in rows:
+            if row.replacement_for:
+                if row.state == "done":
+                    await self.planner.promote(row)
+                continue
+            if row.state == "failed" or row.id in self._archive_tried:
+                await self.planner.schedule_repair(row, self.clock())
+                continue
             self._archive_tried.add(row.id)
             try:
                 result = await self.capture.recover_from_archive(row)
             except Exception as exc:
                 result = CaptureResult(error=_error(exc))
             if result is None:
+                await self.planner.schedule_repair(row, self.clock())
                 continue
             if result.error or not result.path:
                 note = f"{row.error or 'Missed.'} Archive: {result.error or 'no file'}"[:ERROR_MAX]
@@ -1251,7 +1365,12 @@ class RecorderService:
                     await s.execute(
                         select(Recording)
                         .where(
-                            Recording.state == "missed",
+                            (
+                                (Recording.state.in_(("missed", "failed")))
+                                & Recording.recover_rerun.is_(True)
+                                & Recording.replacement_for.is_(None)
+                            )
+                            | ((Recording.state == "done") & Recording.replacement_for.is_not(None)),
                             Recording.ends_at <= now,
                             Recording.ends_at > now - ARCHIVE_WINDOW,
                         )
@@ -1259,9 +1378,13 @@ class RecorderService:
                     )
                 ).scalars()
             )
-        pending = [row for row in missed if row.id not in self._archive_tried]
-        if pending:
-            self._recovery = asyncio.create_task(self._recover(pending))
+        active = {row.id for row in missed}
+        self._repair_after = {rid: at for rid, at in self._repair_after.items() if rid in active}
+        missed = [row for row in missed if row.replacement_for or now >= self._repair_after.get(row.id, now)]
+        for row in missed:
+            self._repair_after[row.id] = now + timedelta(minutes=30)
+        if missed:
+            self._recovery = asyncio.create_task(self._recover(missed))
 
     async def tick(self, now: datetime) -> None:
         """Start what is due, stop what has finished, retry what is waiting, enforce ``keep`` and free space."""
@@ -1275,9 +1398,14 @@ class RecorderService:
                             select(Recording)
                             .where(
                                 Recording.state.in_(("scheduled", "recording")),
-                                Recording.starts_at <= now + timedelta(seconds=PAD_BEFORE_S),
+                                Recording.starts_at <= now + timedelta(hours=6),
                             )
-                            .order_by(Recording.starts_at, Recording.id)
+                            .order_by(
+                                (Recording.state == "recording").desc(),
+                                Recording.priority.desc(),
+                                Recording.starts_at,
+                                Recording.id,
+                            )
                         )
                     ).scalars()
                 )

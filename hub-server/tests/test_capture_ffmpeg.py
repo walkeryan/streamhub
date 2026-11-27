@@ -153,6 +153,7 @@ async def test_real_capture_on_both_paths(api: Api, tmp_path: Path) -> None:
 
         watching = asyncio.create_task(watch())
         shared = await recording(api, channel, "real2", "Shared")
+        assert capture.can_share_now(shared)
         await capture.start(shared)
         assert capture.is_running(shared.id) and not api.c.proxy._captures
         await asyncio.sleep(2)

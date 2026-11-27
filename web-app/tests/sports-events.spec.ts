@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { openMore, signIn } from './helpers'
+import { signIn } from './helpers'
 import { fits, listing, stubSports, type StubEvent } from './sports-helpers'
 
 const EVENTS: StubEvent[] = [
@@ -15,7 +15,7 @@ test.beforeEach(async ({ page }) => { await stubSports(page, EVENTS) })
 test('a live game on several channels asks which one, by remote, and plays the chosen channel', async ({ page }) => {
   await signIn(page)
   await page.goto('/sports')
-  await expect(page.getByTestId('sports-listing')).toHaveCount(3)
+  await expect(page.getByTestId('sports-row').getByTestId('sports-listing')).toHaveCount(3)
   const game = listing(page, 'Blue Club vs Gold Club')
   await expect(game).toContainText('2 channels')
   await expect(game).toContainText('LIVE')
@@ -23,8 +23,6 @@ test('a live game on several channels asks which one, by remote, and plays the c
   await expect(listing(page, 'Championship Review')).toContainText('On now')
   await expect(listing(page, 'Championship Review')).not.toContainText('LIVE')
   await expect(page.getByTestId('sports').locator('img')).toHaveCount(0)
-  await expect(listing(page, 'Championship Review')).toHaveAttribute('data-focused', 'true')
-  await page.keyboard.press('ArrowRight')
   await expect(game).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
   const picker = page.getByTestId('sports-picker')
@@ -62,7 +60,7 @@ test('a game still to come offers its time and nothing to watch; what is over is
   await expect(sheet.getByRole('button', { name: /Watch/ })).toHaveCount(0)
   await expect(sheet).not.toContainText(/audio|verif|scheduled for later/i)
   // The title names no two sides, so recording offers this game and no team.
-  await expect(sheet.getByRole('button')).toHaveText(['Record this game', 'Close'])
+  await expect(sheet.getByRole('button')).toHaveText(['Record this game', 'Recording details', 'Close'])
   await expect(page).not.toHaveURL(/\/play\//)
   await page.keyboard.press('Escape')
   await expect(listing(page, 'Upcoming matchup from guide')).toHaveAttribute('data-focused', 'true')
@@ -85,7 +83,7 @@ test('without a recorder the sheet of a coming game is its time and Close', asyn
 test('the day switch asks for that day in the viewer’s zone and never lists a day that has passed', async ({ page }) => {
   await signIn(page)
   await page.goto('/sports')
-  await expect(page.getByTestId('sports-listing')).toHaveCount(3)
+  await expect(page.getByTestId('sports-row').getByTestId('sports-listing')).toHaveCount(3)
   const local = (days: number) => page.evaluate((days) => { const d = new Date(); d.setDate(d.getDate() + days); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }, days)
   const asked = async () => { const q = await page.evaluate(() => sessionStorage.getItem('sports.query') ?? ''); const p = new URLSearchParams(q); return { date: p.get('date'), days: p.get('days'), status: p.get('status'), zone: p.get('timezone') } }
   const zone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)
@@ -102,7 +100,7 @@ test('the day switch asks for that day in the viewer’s zone and never lists a 
   await expect(page.getByTestId('sports-upcoming')).toContainText('No games are listed for')
   await page.getByRole('button', { name: 'Previous day', exact: true }).click()
   await page.getByRole('button', { name: 'Today', exact: true }).click()
-  await expect(page.getByTestId('sports-listing')).toHaveCount(3)
+  await expect(page.getByTestId('sports-row').getByTestId('sports-listing')).toHaveCount(3)
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await fits(page)).toBe(true)
 })
@@ -118,9 +116,9 @@ test('sport chips keep every sport and its count while one is chosen', async ({ 
   await expect(page.getByRole('button', { name: 'Tennis · 1', exact: true })).toHaveAttribute('aria-pressed', 'true')
   // Nothing live in that sport: the screen says so and names what is next.
   await page.getByRole('button', { name: 'Football · 1', exact: true }).click()
-  await expect(page.getByTestId('sports-live')).toContainText(/No games are live right now\. Next: Upcoming matchup from guide (tomorrow )?at \d/)
+  await expect(page.getByTestId('sports-live')).toContainText(/No confirmed live games right now\. Next: Upcoming matchup from guide (tomorrow )?at \d/)
   await page.getByRole('button', { name: 'All · 3', exact: true }).click()
-  await expect(page.getByTestId('sports-listing')).toHaveCount(3)
+  await expect(page.getByTestId('sports-row').getByTestId('sports-listing')).toHaveCount(3)
 })
 
 test('a game that ends while its channels are being chosen is no longer offered', async ({ page }) => {
@@ -140,7 +138,7 @@ test('a game that ends while its channels are being chosen is no longer offered'
 test('the first game has focus, and search and language are one remote press away', async ({ page }) => {
   await signIn(page)
   await page.goto('/sports')
-  const first = listing(page, 'Championship Review')
+  const first = page.getByTestId('sports-live').getByTestId('sports-listing').first()
   await expect(first).toHaveAttribute('data-focused', 'true')
   await expect(page.getByLabel('Search games, teams or channels')).toHaveCount(0)
   for (let step = 0; step < 6 && await page.getByTestId('sports-filters').getAttribute('data-focused') !== 'true'; step++) await page.keyboard.press(step < 3 ? 'ArrowUp' : 'ArrowRight')
@@ -161,13 +159,13 @@ test('the first game has focus, and search and language are one remote press awa
 test('finishing the first events request does not take focus from an opened search panel', async ({ page }) => {
   await signIn(page)
   await page.evaluate(() => { (window as unknown as { holdSports: boolean }).holdSports = true })
-  await openMore(page, 'Sports')
+  await page.getByTestId('nav-sports').click()
   await expect.poll(() => page.evaluate(() => (window as unknown as { sportsPending?: boolean }).sportsPending)).toBe(true)
   await page.getByTestId('sports-filters').click()
   const search = page.getByLabel('Search games, teams or channels')
   await expect(search).toBeFocused()
   await page.evaluate(() => (window as unknown as { releaseSports: () => void }).releaseSports())
-  await expect(page.getByTestId('sports-listing')).toHaveCount(3)
+  await expect(page.getByTestId('sports-row').getByTestId('sports-listing')).toHaveCount(3)
   await expect(search).toBeFocused()
   await expect(page.locator('.fx[data-focused="true"]')).toHaveCount(1)
 })

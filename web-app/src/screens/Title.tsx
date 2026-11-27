@@ -8,6 +8,8 @@ import { api, ok } from '../api/client'
 import type { EpisodeTile, PlaybackOption, Room, SourceBadge } from '../api/types'
 import { Attribution, Button, Chip, Crossfade, ErrorState, Modal, ProgressBar, Skeleton } from '../components/ui'
 import { GlassIconButton, HRow, Icon, OverflowMenu, Section, SectionHeader, type OverflowItem } from '../ds'
+import { SavedScenes } from '../components/ViewingScenes'
+import { OfflineEpisodeAction } from '../components/OfflineEpisodes'
 import { SafeImg } from '../components/SafeImg'
 import { CatalogPicker } from '../components/CatalogPicker'
 import { FocusGroup, Focusable } from '../nav/Focusable'
@@ -20,7 +22,7 @@ import { useSession } from '../store/session'
 import { audioDescription } from '../player/channelAudio'
 import { initialTrack, trackLabel } from '../player/audioTracks'
 import { usePhone } from '../lib/layout'
-import { languageName } from '../lib/util'
+import { fmtDuration, languageName } from '../lib/util'
 import { isOpenRequest, requestOf, tmdbRef } from '../lib/requests'
 import { RequestStatus } from '../components/RequestStatus'
 import { useUi } from '../store/ui'
@@ -31,6 +33,7 @@ import { ActivityRow, CastRow, EpisodeCard, SimilarRow } from './title/Sections'
 
 /** Seasons shown as chips; a series with more gets one drop-down. */
 const MAX_SEASON_CHIPS = 8
+const NO_EPISODES: EpisodeTile[] = []
 /** Audio tracks shown as chips; a file with more gets one drop-down. */
 const MAX_AUDIO_CHIPS = 4
 const titlePath = (id: string) => `/title/${encodeURIComponent(id)}`
@@ -94,7 +97,14 @@ function TitleDetails({ id }: { id: string }) {
   const inline = (t?.kind === 'season' && stripSeason === defaultSeason) || (!nested && (!seasons.length || stripSeason === seasons[0]?.id))
   const fetchSeason = inline || !t ? undefined : t.kind === 'episode' && stripSeason === defaultSeason ? pageSeason?.id : stripSeason ?? undefined
   const seasonQ = useTitle(fetchSeason)
-  const episodes: EpisodeTile[] = (inline ? t?.episodes : seasonQ.data?.episodes) ?? []
+  const episodes: EpisodeTile[] = (inline ? t?.episodes : seasonQ.data?.episodes) ?? NO_EPISODES
+  // A fast Down press can reach the strip before its cards register. Complete that
+  // move on the current episode, unless the viewer has already moved elsewhere.
+  useEffect(() => {
+    if (!episodes.length || getCurrentFocusKey() !== 'title:episodes') return
+    const card = episodes.find(e => e.id === id) ?? episodes[0]!
+    void setFocus(`episodes::${card.id}`)
+  }, [episodes, id])
 
   // The household's activity and More like this are about the series, so its episodes share one answer.
   const extrasId = t && t.kind !== 'channel' ? (showId ?? t.id) : undefined
@@ -409,6 +419,8 @@ function TitleDetails({ id }: { id: string }) {
           </Section>
         )}
 
+        {t.kind === 'episode' && t.sources.some(s => s.source_type === 'jellyfin') && <OfflineEpisodeAction id={id} />}
+        {(t.kind === 'movie' || t.kind === 'vod' || t.kind === 'episode') && <SavedScenes id={id} />}
         <ActivityRow entries={activity.data?.entries ?? []} />
         <CastRow cast={cast} onOpen={(name) => go(`/search?q=${encodeURIComponent(name)}`)} />
         <SimilarRow tiles={similar.data?.tiles ?? []} />
@@ -433,6 +445,7 @@ function TitleDetails({ id }: { id: string }) {
               <Button disabled={savingEdition || (rememberEdition && !option.audio_verified)} focusKey={`pick:${i}`} className="source-choice" onEnter={() => chooseVariant(option)}
               label={`${option.source_name} · ${audioDescription(option)}${option.provider_label ? ` · ${option.provider_label}` : ''}`}>
               <span className="truncate"><strong>{option.source_name}</strong>{option.provider_label && option.provider_label !== option.source_name ? ` · ${option.provider_label}` : ''}</span>
+              {option.edition_label && <span className="label truncate">{option.edition_label}{option.runtime_ms ? ` · ${fmtDuration(option.runtime_ms / 1000)}` : ''}{(audio.data?.options.filter(copy => copy.edition_id === option.edition_id).length ?? 0) > 1 ? ' · Same cut, alternate encode' : ''}</span>}
               <span className="label truncate">{audioDescription(option)}{!option.audio_verified && option.language_hint ? ` · Listed as ${languageName(option.language_hint)}` : ''}</span>
             </Button></div>)}
             {audio.data && !audio.data.options.length && <p>No playable sources are available.</p>}

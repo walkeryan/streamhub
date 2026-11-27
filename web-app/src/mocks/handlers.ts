@@ -5,6 +5,7 @@ import {
   DISCLAIMER, EPISODE_NAMES, adultShelf, channelTile, channels, episodesOf, fav, groupLevels, homeRows, profiles, programmesFor, progress, seasonsOf, seedFor, shelfTiles, shelvesOf, showSeed,
   searchBroadcasts, sources, tileOf, titles, unavailable, watch, withNowNext,
 } from './fixtures'
+import { viewingHandlers } from './viewing'
 import { annotate, requestHandlers, requestManagerConfigured, sourceSynced } from './requests'
 import { roomHandlers } from './rooms'
 import { recordingHandlers, withRecordingState, withRecordingStates } from './recordings'
@@ -143,6 +144,7 @@ function browseList(section: string, request: Request): Tile[] {
 }
 
 export const handlers = [
+  ...viewingHandlers(currentProfileId),
   // first: these also stand in for the checks the server makes on every request
   ...peopleHandlers,
   ...requestHandlers,

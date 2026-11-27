@@ -28,6 +28,7 @@ class RoomSeat internal constructor(
     internal val socketUrl: String,
     /** Valid two hours, for this room and member only: opens the socket, fetches the descriptor, keeps the seat on a rejoin. */
     internal val memberToken: String,
+    val titleRevision: Long = 0,
 ) {
     override fun toString(): String = "RoomSeat(code=$code, memberId=$memberId)"
 }
@@ -124,6 +125,9 @@ class RoomRepository internal constructor(
      * untouched. For a member that lost its place: a player error, a stream address that expired, or
      * a shared stream the room has started again since (a new `stream_epoch`).
      */
+    suspend fun controls(seat: RoomSeat, action: String?, id: String) =
+        api.roomControls(seat.code, seat.memberToken, action, id)
+
     suspend fun descriptor(seat: RoomSeat): PlaybackDescriptor =
         playable(api.roomDescriptor(seat.code, seat.memberToken, allowUnverifiedAudio = true))
 
@@ -132,7 +136,7 @@ class RoomRepository internal constructor(
         val offered = memberToken ?: lastSeat?.takeIf { it.first.equals(code, ignoreCase = true) }?.second
         val joined = api.joinRoom(code, allowUnverifiedAudio, offered)
         lastSeat = code to joined.memberToken
-        return RoomSeat(code, playable(joined.descriptor), joined.memberId, roomSocketUrl(server, joined.wsPath, joined.memberToken), joined.memberToken)
+        return RoomSeat(code, playable(joined.descriptor), joined.memberId, roomSocketUrl(server, joined.wsPath, joined.memberToken), joined.memberToken, joined.titleRevision)
     }
 
     /** A room plays inside this app or not at all: there is no handing a shared clock to another app. */

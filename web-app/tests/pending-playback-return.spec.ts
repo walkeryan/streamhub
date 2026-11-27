@@ -41,7 +41,7 @@ test('canceling delayed initial Guide audio returns to the exact Guide view and 
 
 test('canceling delayed Sports audio restores the selected event instead of the first event',async({page})=>{
   await fixture(page);await page.goto('/sports')
-  const event=page.getByTestId('sports-listing').filter({hasText:'Chosen fixture event'})
+  const event=page.getByTestId('sports-also-on').getByRole('button',{name:/Chosen fixture event/})
   await event.click()
   await pending(page);await page.getByRole('button',{name:'Cancel playback',exact:true}).click()
   await expect(page).toHaveURL(/\/sports$/)

@@ -88,7 +88,8 @@ async def test_one_game_on_two_channels_is_one_event_with_clean_feeds(api: Api) 
     game = (await events(api, status="current"))["events"][0]
     assert (game["title"], game["sport"], game["kind"]) == ("Northfield at Lakeside", "Field Hockey", "event")
     assert (game["home"], game["away"], game["league"]) == ("Lakeside", "Northfield", "VANTIX+")
-    assert game["live_evidence"] and not game["replay"]
+    # A matchup and a start time identify the game. Neither confirms this feed is live.
+    assert not game["live_evidence"] and not game["replay"]
     assert game["start"] == NOW - timedelta(minutes=30) and game["stop"] == game["start"] + timedelta(minutes=210)
     listed = (await api.get("/channels", params={"language": "all"})).json()["channels"]
     by_name = {c["name"]: c for c in listed}

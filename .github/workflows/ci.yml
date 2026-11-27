@@ -70,11 +70,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: hub-server/pyproject.toml
-      - name: Check signed-in Home, TV search and release-date browsing
+      - name: Check signed-in browsing, TV pairing and idle sign-out
         run: |
           python -m pip install -e "../hub-server[dev]"
           npx playwright install --with-deps chrome
-          npx playwright test --config playwright.real-http.config.ts home-refresh.spec.ts tv-feedback.spec.ts
+          npx playwright test --config playwright.real-http.config.ts
 
   android:
     name: Android TV debug APK

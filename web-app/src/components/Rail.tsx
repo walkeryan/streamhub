@@ -1,3 +1,4 @@
+import { CastPanel } from '../cast/CastPanel'
 import { useState } from 'react'
 import { useLocation } from 'react-router'
 import { FocusGroup, Focusable } from '../nav/Focusable'
@@ -36,6 +37,7 @@ const BAR: Destination[] = [HOME, SEARCH, LIVE, { to: '/browse/movies', label: '
 /** Everything else, each offered only to a user who may use it. Sports is a place to watch: a wide screen names it
  *  in the top bar, where a TV remote reaches it in one move; only a phone's bar of five has no room for it. */
 const MORE: Destination[] = [
+  { to: '/for-you', label: 'For You', icon: 'star' },
   { to: '/requests', label: 'Requests', icon: 'list', needs: 'requests' },
   { to: '/recordings', label: 'Recordings', icon: 'record', needs: 'recordings' },
   { to: '/sources', label: 'Sources', icon: 'source', needs: 'sources' },
@@ -106,6 +108,7 @@ export function Rail() {
         <Icon name="menu" />
         {phone && <span className="lbl">More</span>}
       </Focusable>
+      <CastPanel />
       {!phone && <Focusable focusKey="rail:profile" className="rail-item rail-icon fx-flat" role="link" label={`Profile ${profile?.name ?? ''}`} title={profile?.name}
         data-testid="nav-profile" onEnter={openProfile}>
         {face('1.75rem')}

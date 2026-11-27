@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
+import { reportPlayerActivity } from '../session/useIdleSignOut'
 import { createRoom, useChannels } from '../api/hooks'
 import type { Room } from '../api/types'
 import { Button, Chip, ProgressBar } from '../components/ui'
@@ -10,6 +11,8 @@ import { hasPlaybackEntry, useBackHandler, useOverlayFocus } from '../nav/back'
 import { getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { ChannelAudioPrompt, useChannelAudio } from '../player/channelAudio'
 import { grantAudioConsent, hasAudioConsent } from '../player/audioConsent'
+import { SaveSceneButton } from '../components/ViewingScenes'
+import { useDownloadNextEpisode } from '../components/OfflineEpisodes'
 import { usePlayback } from '../player/usePlayback'
 import { useFeedFailover } from '../player/useFeedFailover'
 import { switchNotice } from '../player/feedFailover'
@@ -86,6 +89,9 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const catchup = sp.get('catchup')
   const rewindAt = sp.get('rewind')
   const bufferAt = sp.get('buffer_at')
+  const previewScene = sp.get('preview_scene') === '1'
+  const sceneAt = sp.get('scene_ms')
+  const sceneStart = sceneAt && /^\d{1,10}$/.test(sceneAt) ? Number(sceneAt) : undefined
   const recordingStart = id.startsWith('rec:') && sp.get('recording_start') === '1' ? 0 : undefined
   const allowUnverifiedAudio = useMemo(() => !!profileId && hasAudioConsent(audioChoice, id, variantId, { sourceId, catchupProgrammeId: catchup, rewindAt }), [profileId, audioChoice, id, variantId, sourceId, catchup, rewindAt])
   const location = useLocation()
@@ -123,7 +129,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   // A feed failover's switch: the channel it left, named to the server so that channel's stream is freed first.
   const [replacing, setReplacing] = useState<{ to: string; from: string } | null>(null)
   const replaces = !room && replacing?.to === id ? replacing.from : null
-  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, bufferAt, startPositionMs: recordingStart, audioTrack, replaces }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, bufferAt, recordingStart, audioTrack, replaces])
+  const req = useMemo(() => ({ id, sourceId, variantId, allowUnverifiedAudio, catchupProgrammeId: catchup, rewindAt, bufferAt, startPositionMs: sceneStart ?? recordingStart, previewOnly: previewScene, audioTrack, replaces }), [id, sourceId, variantId, allowUnverifiedAudio, catchup, rewindAt, bufferAt, recordingStart, sceneStart, previewScene, audioTrack, replaces])
   const channelAudio = useChannelAudio(req, manualChoice === selectionKey)
   // A room's audio was settled when the member joined; its stream comes from the room, without a local rewind buffer.
   const audio = room ? { ...channelAudio, enabled: false, blocked: false, request: req } : channelAudio
@@ -131,9 +137,21 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   const dataSaver = useMemo(() => savingData((navigator as Navigator & { connection?: Parameters<typeof savingData>[0] }).connection), [])
   const [quality, setQualityState] = useState<QualityHeight | null>(() => loadQuality(dataSaver))
   const canvas = useUi(s => s.canvasPlayback)
-  const pb = usePlayback(pictureRef, audio.request, { canvasAudio: canvas && !tv && !room ? canvasAudioRef : undefined, buffer: !room, descriptor: room?.descriptor, maxHeight: quality })
+  const pb = usePlayback(pictureRef, audio.request, { report: !previewScene, canvasAudio: canvas && !tv && !room ? canvasAudioRef : undefined, buffer: !room, descriptor: room?.descriptor, maxHeight: quality })
+  useEffect(() => {
+    reportPlayerActivity(pb.state === 'playing')
+    return () => reportPlayerActivity(false)
+  }, [pb.state])
+
   const videoRef = pb.mediaRef
   const { desc, state } = pb
+  useEffect(() => {
+    const v = pictureRef.current
+    if (!v || !previewScene || sceneStart == null) return
+    const stop = () => { if ((desc?.start_position_ms ?? 0) + v.currentTime * 1000 >= sceneStart + 8000) v.pause() }
+    v.addEventListener('timeupdate', stop)
+    return () => v.removeEventListener('timeupdate', stop)
+  }, [previewScene, sceneStart, desc])
   useEffect(() => {
     if (pb.requiresEdition === id && !room && !mini && activeId.current === id && !isChannel)
       navigate(`/title/${encodeURIComponent(id)}?choose=1`, { replace: true })
@@ -444,6 +462,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
   // Only a title this player resolves itself: never in a room, on a channel, in catch-up or a recording.
   const extras = !!current && !room && !current.live && !isChannel && !isRecording && !catchup && !rewindAt
   const markers = useMemo(() => (extras && current ? current.markers ?? [] : []), [extras, current])
+  useDownloadNextEpisode(!room && !previewScene && !pb.error ? current?.download_next_id : null)
   const nextEp = extras ? current?.next ?? null : null
   const prevEp = extras ? current?.previous ?? null : null
   const episodic = !!nextEp || !!prevEp || (extras && current?.episode_number != null)
@@ -607,7 +626,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
     const onKey = (e: KeyboardEvent) => {
       const a = apiRef.current
       // Minimised, the keys are the page's: the bar is reached and used like any other control.
-      if (a.mini || a.locked || document.querySelector('[data-testid="recording-issue"]')) return
+      if (a.mini || a.locked || document.querySelector('[data-testid="recording-issue"], [data-testid="scene-editor"]')) return
       // Back keys go to the back stack (useBackHandler below) and must not re-show the controls they are hiding
       if (isBackKey(e)) return
       // A real volume key has set the device's volume already: the player's as well would count it twice.
@@ -950,6 +969,7 @@ export function Player({ room, onRejoin, playId, playSearch, mini = false }: {
           </div>
           {roomCtl?.top}
           <FocusGroup focusKey="pt" className="ptop-actions">
+            {!live && !room && !previewScene && current?.progress_session_id && <SaveSceneButton key={current.progress_session_id} session={current.progress_session_id} position={positionMs} video={pictureRef} />}
             {(phone || (!tv && navigator.maxTouchPoints > 0)) && <GlassButton focusKey="pt:lock" icon="lock" label="Lock player controls" onEnter={() => setLockId(id)} testId="player-lock" />}
             {canMinimise && <GlassButton focusKey="pt:mini" icon="minimise" label="Minimise" title="Minimise: keep playing while you browse" onEnter={minimise} testId="player-minimise" />}
             <GlassButton focusKey="pt:back" icon="x" label={room ? 'Leave room' : 'Close player'} onEnter={leaveOrExit} testId="player-close" />

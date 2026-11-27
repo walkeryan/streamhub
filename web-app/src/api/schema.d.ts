@@ -4,6 +4,554 @@
  */
 
 export interface paths {
+    "/cast/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Targets */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CastTargets"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cast/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CastConnect"];
+                };
+            };
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CastState"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cast/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Session */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CastState"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cast/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CastCommand"];
+                };
+            };
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CastSequence"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cast/receiver/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CastSync"];
+                };
+            };
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReceiverState"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cast/receiver/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CastDecision"];
+                };
+            };
+            responses: {
+                /** @description Successful Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cast/session/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Disconnect */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/for-you": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Personal */
+        get: {
+            parameters: {
+                query?: {
+                    timezone?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PersonalFeed"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/for-you/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Feedback */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecommendationRating"];
+                };
+            };
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecommendationRating"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/for-you/together": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Invite */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["TogetherFilters"];
+                };
+            };
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TogetherPicks"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/for-you/together/{code}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Join */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TogetherPicks"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/for-you/together/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Picks */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TogetherPicks"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Leave */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{code}/controls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Controls */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Room-Seat": string;
+                };
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RoomControls"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Control */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-Room-Seat": string;
+                };
+                path: {
+                    code: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RoomAction"];
+                };
+            };
+            responses: {
+                /** @description Successful Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RoomControls"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/config": {
         parameters: {
             query?: never;
@@ -2737,6 +3285,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/viewing/bookmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSavedScenes"];
+        put?: never;
+        post: operations["saveScene"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/viewing/bookmarks/{bookmark_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookmark_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteScene"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/viewing/bookmarks/{bookmark_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookmark_id: string;
+            };
+            cookie?: never;
+        };
+        get: operations["restoreScene"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/viewing/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["acquireOfflineEpisode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/viewing/downloads/{grant}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant: string;
+            };
+            cookie?: never;
+        };
+        get: operations["checkOfflineEpisode"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/viewing/downloads/{grant}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant: string;
+            };
+            cookie?: never;
+        };
+        get: operations["fetchOfflineEpisode"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/viewing/downloads/{grant}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["syncOfflineProgress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/playback/preference": {
         parameters: {
             query?: never;
@@ -2903,6 +3573,22 @@ export interface paths {
                 };
             };
         };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/people/{person_id}/credits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["actorCredits"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3663,7 +4349,7 @@ export interface paths {
                     /** @description Calendar days listed */
                     days?: number;
                     /** @description active = current, upcoming and game channels (everything but ended) */
-                    status?: "all" | "active" | "current" | "upcoming" | "replay";
+                    status?: "all" | "active" | "current" | "live" | "upcoming" | "replay";
                     language?: string;
                     /** @description A name from the page's sports list; an unknown one matches nothing. */
                     sport?: string;
@@ -6447,15 +7133,9 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
-                    "application/json": {
-                        programme_id: string;
-                        /** @description omitted = the lowest-numbered channel carrying the programme */
-                        channel_id?: string | null;
-                        /** Format: date-time */
-                        start?: string | null;
-                    };
+                    "application/json": components["schemas"]["RecordingSchedule"];
                 };
             };
             responses: {
@@ -6543,6 +7223,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/recordings/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview tuner conflicts, possible later airings and estimated space */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecordingSchedule"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingPlan"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recordings/{id}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review an existing timer, its retention and guide changes */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecordingPlan"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/recordings/{id}": {
         parameters: {
             query?: never;
@@ -6583,7 +7341,33 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        patch?: never;
+        /** Change DVR priority, protection or resolve a revised guide listing */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecordingChange"];
+                };
+            };
+            responses: {
+                /** @description saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Recording"];
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/recording-rules": {
@@ -6932,6 +7716,287 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Action */
+        RoomAction: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "suggest" | "remove" | "advance" | "offer" | "accept" | "decline";
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+        };
+        /** CastDelivery */
+        CastDelivery: {
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "load" | "play" | "pause" | "seek" | "stop";
+            /** Id */
+            id?: string | null;
+            /** Variant Id */
+            variant_id?: string | null;
+            /** Source Id */
+            source_id?: string | null;
+            /** Position Ms */
+            position_ms?: number | null;
+            /** Audio Track */
+            audio_track?: number | null;
+            /** Catchup Programme Id */
+            catchup_programme_id?: string | null;
+            /** Rewind At */
+            rewind_at?: string | null;
+            /** Buffer At */
+            buffer_at?: string | null;
+            /** Seq */
+            seq: number;
+        };
+        /** CastDisplay */
+        CastDisplay: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /** CastSequence */
+        CastSequence: {
+            /** Seq */
+            seq: number;
+        };
+        /** CastSession */
+        CastSession: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+            /** Target Name */
+            target_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "connected";
+            playback: components["schemas"]["CastPlayback"];
+            /** Last Ack */
+            last_ack: number;
+            /** Last Error */
+            last_error: string | null;
+        };
+        /** CastState */
+        CastState: {
+            session: components["schemas"]["CastSession"] | null;
+        };
+        /** CastTargets */
+        CastTargets: {
+            /** Targets */
+            targets: components["schemas"]["CastDisplay"][];
+        };
+        /** Command */
+        CastCommand: {
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "load" | "play" | "pause" | "seek" | "stop";
+            /** Id */
+            id?: string | null;
+            /** Variant Id */
+            variant_id?: string | null;
+            /** Source Id */
+            source_id?: string | null;
+            /** Position Ms */
+            position_ms?: number | null;
+            /** Audio Track */
+            audio_track?: number | null;
+            /** Catchup Programme Id */
+            catchup_programme_id?: string | null;
+            /** Rewind At */
+            rewind_at?: string | null;
+            /** Buffer At */
+            buffer_at?: string | null;
+        };
+        /** Connect */
+        CastConnect: {
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+        };
+        /** Decision */
+        CastDecision: {
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Accept */
+            accept: boolean;
+        };
+        /** Filters */
+        TogetherFilters: {
+            /** Max Minutes */
+            max_minutes?: number | null;
+            /** Language */
+            language?: string | null;
+        };
+        /** PersonalFeed */
+        PersonalFeed: {
+            /** New Episodes */
+            new_episodes: components["schemas"]["Tile"][];
+            /** Coming Up */
+            coming_up: components["schemas"]["UpcomingEpisode"][];
+            /** Movies */
+            movies: components["schemas"]["Tile"][];
+            /** Series */
+            series: components["schemas"]["Tile"][];
+            /** Feedback */
+            feedback: {
+                [key: string]: "up" | "down";
+            };
+            /** Reason */
+            reason: string;
+            /** History Used */
+            history_used: boolean;
+        };
+        /** Playback */
+        CastPlayback: {
+            /** Id */
+            id?: string | null;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /** Poster */
+            poster?: string | null;
+            /**
+             * Playing
+             * @default false
+             */
+            playing: boolean;
+            /**
+             * Position Ms
+             * @default 0
+             */
+            position_ms: number;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /**
+             * Live
+             * @default false
+             */
+            live: boolean;
+        };
+        /** QueueItem */
+        QueueItem: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+        };
+        /** Rating */
+        RecommendationRating: {
+            /** Id */
+            id: string;
+            /** Vote */
+            vote: ("up" | "down") | null;
+        };
+        /** ReceiverState */
+        ReceiverState: {
+            session: components["schemas"]["CastSession"] | null;
+            /** Controller Name */
+            controller_name: string | null;
+            command: components["schemas"]["CastDelivery"] | null;
+        };
+        /** RoomControls */
+        RoomControls: {
+            /** Queue */
+            queue: components["schemas"]["QueueItem"][];
+            /** Members */
+            members: components["schemas"]["RoomMember"][];
+            /** Member Id */
+            member_id: string;
+            /** Is Host */
+            is_host: boolean;
+            /** Offered To */
+            offered_to: string | null;
+            /** Revision */
+            revision: number;
+        };
+        /** Sync */
+        CastSync: {
+            /** Enabled */
+            enabled: boolean;
+            /** Name */
+            name?: string | null;
+            playback?: components["schemas"]["CastPlayback"] | null;
+            /** Ack */
+            ack?: number | null;
+            /** Error */
+            error?: string | null;
+            /** Session Id */
+            session_id?: string | null;
+        };
+        /** TogetherPicks */
+        TogetherPicks: {
+            /** Code */
+            code: string;
+            /** Member Count */
+            member_count: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Tiles */
+            tiles: components["schemas"]["Tile"][];
+        };
+        /** UpcomingEpisode */
+        UpcomingEpisode: {
+            show: components["schemas"]["Tile"];
+            /** Season */
+            season: number | null;
+            /** Episode */
+            episode: number | null;
+            /** Title */
+            title: string;
+            /** Air Date */
+            air_date: string;
+        };
         Error: {
             code: string;
             message: string;
@@ -7463,6 +8528,23 @@ export interface components {
                 offset: number;
             }[];
         };
+        ActorCredit: {
+            id: string;
+            title: string;
+            /** @enum {string} */
+            kind: "movie" | "tv";
+            year?: number | null;
+            poster?: string | null;
+            roles: string[];
+        };
+        ActorFilmography: {
+            name: string;
+            photo?: string | null;
+            known_for: components["schemas"]["ActorCredit"][];
+            credits: components["schemas"]["ActorCredit"][];
+            page: number;
+            has_more: boolean;
+        };
         DiscoveryPage: {
             tiles: components["schemas"]["Tile"][];
             page: number;
@@ -7677,11 +8759,36 @@ export interface components {
              */
             max_height?: 480 | 720 | 1080 | null;
         };
+        SavedScene: {
+            id: string;
+            name: string;
+            ref_id: string;
+            variant_id: string;
+            edition_id: string;
+            position_ms: number;
+            /** @description A small JPEG in base64 */
+            preview?: string | null;
+        };
+        OfflineCopy: {
+            id: string;
+            ref_id: string;
+            profile_id: string;
+            session_id: string;
+            title: string;
+            mime: string;
+            size: number;
+            duration_ms?: number | null;
+            /** Format: date-time */
+            expires_at: string;
+        };
         PlaybackOption: {
             variant_id: string;
             source_id: string;
             source_name: string;
             provider_label: string;
+            edition_id?: string;
+            edition_label?: string;
+            runtime_ms?: number | null;
             kind?: string;
             year?: number | null;
             audio_languages: string[];
@@ -7707,6 +8814,8 @@ export interface components {
             selection_required: boolean;
         };
         PlaybackRequest: {
+            /** @default false */
+            preview_only: boolean;
             /** @description tile/channel/programme id, or trailer:<title id> (e.g. trailer:tmdb:movie:603) which returns a mode=handoff descriptor to the YouTube TV app: the specific video (supports_title_link true) when TMDB has a YouTube trailer, otherwise a YouTube search for "<title> <year> trailer" (supports_title_link false). Also rec:<recording id> for a recording that has a file (state done, or failed with what it kept): android_tv gets mode=proxy, the Matroska file itself with Range support; web gets the file probed and served as restart-at-offset HLS like any VOD file a browser cannot decode. Needs recordings.view and a recording the caller's /recordings list shows; anything else is 404. Progress is reported under the same id. */
             id: string;
             /** @description pick a specific source when a title has several */
@@ -7836,6 +8945,11 @@ export interface components {
             reason: string;
         };
         PlaybackDescriptor: {
+            variant_id?: string | null;
+            edition_id?: string | null;
+            edition_label?: string | null;
+            download_next_id?: string | null;
+            progress_session_id?: string | null;
             /** @description HLS packed audio carrying timed JPEG pictures. */
             canvas?: boolean;
             /** @description Profile preferences retained even after exact-variant consent. */
@@ -7946,6 +9060,8 @@ export interface components {
         };
         /** @description Sent every 10 s while playing and on pause/stop (ordinary bearer-auth POST). state=stopped with position_ms >= duration_ms marks the item watched (resume resets to 0); position >= 95% of duration also counts as watched. */
         ProgressReport: {
+            progress_session_id?: string | null;
+            variant_id?: string | null;
             /** @description Explicit watched or unwatched action independent of a known duration. */
             watched?: boolean | null;
             /** @description Captured playback-intent profile; mismatch with the authenticated principal rejects before history or provider writes. */
@@ -8155,10 +9271,55 @@ export interface components {
             size_bytes?: number | null;
             /** @description There is a file that POST /playback/resolve {id: "rec:<id>"} would play now: the recording is done, or failed and kept what it had captured, and that file is still on the server. False while scheduled or recording, and for a file since removed. Always sent. */
             has_file?: boolean;
+            priority?: number;
+            protected?: boolean;
+            guide_review?: boolean;
+            /** Format: date-time */
+            captured_from?: string | null;
+            /** Format: date-time */
+            captured_until?: string | null;
+            replacement_for?: string | null;
+            /** Format: date-time */
+            recovered_at?: string | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        DvrAiring: {
+            programme_id: string;
+            title: string;
+            channel_id: string;
+            channel_name: string;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            stop: string;
+        };
+        RecordingPlan: {
+            source_name: string | null;
+            overlapping_titles: string[];
+            conflict_count: number;
+            connection_limit: number | null;
+            alternates: components["schemas"]["DvrAiring"][];
+            evictions: string[];
+            free_bytes: number | null;
+            reserve_bytes: number;
+            estimated_bytes: number | null;
+        };
+        RecordingSchedule: {
+            programme_id: string;
+            channel_id?: string | null;
+            /** Format: date-time */
+            start?: string | null;
+            priority?: number;
+            confirmed_conflicts?: number | null;
+        };
+        RecordingChange: {
+            priority?: number | null;
+            protected?: boolean | null;
+            keep_original_time?: boolean;
+            airing?: components["schemas"]["DvrAiring"];
         };
         RecordingRule: {
             id: string;
@@ -8206,6 +9367,8 @@ export interface components {
             rooms: components["schemas"]["Room"][];
         };
         RoomJoin: {
+            /** @description Room title shown when this viewer agreed to play. */
+            expected_id?: string | null;
             /**
              * @default web
              * @enum {string}
@@ -8355,6 +9518,11 @@ export interface components {
          *     again with its `member_token`; neither changes its seat.
          */
         RoomJoined: {
+            /**
+             * @description Title revision used to resolve this seat.
+             * @default 0
+             */
+            title_revision: number;
             /** @description valid 2 h, for this room and member only */
             member_token: string;
             member_id: string;
@@ -8564,6 +9732,200 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getSavedScenes: {
+        parameters: {
+            query: {
+                id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Private scenes for this title */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedScene"][];
+                };
+            };
+        };
+    };
+    saveScene: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    session: string;
+                    name: string;
+                    position_ms: number;
+                    preview?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Saved */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedScene"];
+                };
+            };
+        };
+    };
+    deleteScene: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookmark_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    restoreScene: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookmark_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized scene location */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: string;
+                        variant_id: string;
+                        position_ms: number;
+                    };
+                };
+            };
+        };
+    };
+    acquireOfflineEpisode: {
+        parameters: {
+            query: {
+                id: string;
+                max_bytes: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Time-limited offline copy */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfflineCopy"];
+                };
+            };
+        };
+    };
+    checkOfflineEpisode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current download authorization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfflineCopy"];
+                };
+            };
+        };
+    };
+    fetchOfflineEpisode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized source file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+        };
+    };
+    syncOfflineProgress: {
+        parameters: {
+            query: {
+                position_ms: number;
+                duration_ms: number;
+            };
+            header?: never;
+            path: {
+                grant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Saved */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A newer online session owns this timeline */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     rememberPlaybackEdition: {
         parameters: {
             query: {
@@ -8583,6 +9945,31 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    actorCredits: {
+        parameters: {
+            query?: {
+                kind?: "all" | "movie" | "tv";
+                page?: number;
+            };
+            header?: never;
+            path: {
+                person_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Profile-visible acting credits and known-for titles */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActorFilmography"];
+                };
             };
         };
     };

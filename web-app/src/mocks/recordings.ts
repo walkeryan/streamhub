@@ -32,6 +32,7 @@ function recordingFor(p: Programme, ch: Channel, state: Recording['state'], extr
   return {
     id: newId(), profile_id: 'p1', profile_name: 'Owner', rule_id: null, channel_id: ch.id, channel_name: ch.name, title: p.title, subtitle: null, season: null, episode: null,
     is_sport: isSport(p), teams: isSport(p) ? teamsOf(p.title) : [], starts_at: p.start, ends_at: p.stop, pad_before_s: 120, pad_after_s: isSport(p) ? 3600 : 300, state, error: null,
+    has_file: state === 'done', protected: false, priority: 0,
     size_bytes: state === 'done' ? Math.round(((Date.parse(p.stop) - Date.parse(p.start)) / HOUR) * 1.8e9) : null, created_at: now, updated_at: now, ...extra,
   }
 }
@@ -105,7 +106,30 @@ const dropUpcoming = (s: Store, ruleId: string) => { s.recordings = s.recordings
 const mayChange = (req: Request) => holds(req, 'recordings.schedule')
 const refuse = (req: Request) => !enabled() ? error(409, 'recording_unavailable', 'Recording is not set up on this server.') : !mayChange(req) ? error(403, 'recording_forbidden', 'This profile is not allowed to schedule recordings.') : null
 
+const plan = () => ({
+  source_name: 'Fixture feed', conflict_count: 0, connection_limit: 2, overlapping_titles: [], alternates: [], evictions: [], estimated_bytes: 1.8e9,
+  free_bytes: 500 * 1024 ** 3, reserve_bytes: 20 * 1024 ** 3,
+  ...JSON.parse(sessionStorage.getItem('mock.recordings.plan') || '{}') as object,
+})
+
 export const recordingHandlers = [
+  http.post(`${B}/recordings/preview`, ({ request }) => refuse(request) ?? HttpResponse.json(plan())),
+  http.get(`${B}/recordings/:id/plan`, ({ request, params }) => refusedWithout(request, 'recordings.view') ??
+    (load().recordings.some(r => r.id === params.id) ? HttpResponse.json(plan()) : error(404, 'not_found', 'Recording unavailable.'))),
+  http.patch(`${B}/recordings/:id`, async ({ request, params }) => {
+    const refused = refuse(request)
+    if (refused) return refused
+    const store = load()
+    const row = store.recordings.find(r => r.id === params.id)
+    if (!row) return error(404, 'not_found', 'Recording unavailable.')
+    const b = await request.json() as { priority?: number; protected?: boolean; keep_original_time?: boolean; airing?: {start: string; stop: string; channel_id: string; channel_name: string} }
+    if (b.priority != null) row.priority = b.priority
+    if (b.protected != null) row.protected = b.protected
+    if (b.airing) Object.assign(row, { starts_at: b.airing.start, ends_at: b.airing.stop, channel_id: b.airing.channel_id, channel_name: b.airing.channel_name })
+    if (b.airing || b.keep_original_time) row.guide_review = false
+    save(store)
+    return HttpResponse.json(row)
+  }),
   http.get(`${B}/recordings`, ({ request }) => {
     if (legacyServer()) return error(404, 'not_found', 'Not found')
     const barred = refusedWithout(request, 'recordings.view')
@@ -119,7 +143,7 @@ export const recordingHandlers = [
     const refused = refuse(request)
     if (refused) return refused
     const me = profileOf(request)
-    const b = (await request.json()) as { programme_id: string; channel_id?: string | null; start?: string | null }
+    const b = (await request.json()) as { programme_id: string; priority?: number; channel_id?: string | null; start?: string | null }
     const ch = [...channels, ...sportsChannels].find((c) => c.id === b.channel_id)
     // As on the server: the id first, else the same channel and start.
     const p = served.get(b.programme_id) ?? (ch && guide(ch).find((x) => Date.parse(x.start) === Date.parse(b.start ?? '')))
@@ -128,7 +152,7 @@ export const recordingHandlers = [
     const s = load()
     const existing = s.recordings.find((r) => r.channel_id === ch.id && r.state !== 'cancelled' && Date.parse(r.starts_at) === Date.parse(p.start))
     if (existing) return existing.profile_id === me.id ? HttpResponse.json(existing) : error(409, 'already_scheduled', `${existing.profile_name ?? 'Someone else'} is already recording this programme.`)
-    const created = recordingFor(p, ch, Date.parse(p.start) <= Date.now() ? 'recording' : 'scheduled', { profile_id: me.id, profile_name: me.name })
+    const created = recordingFor(p, ch, Date.parse(p.start) <= Date.now() ? 'recording' : 'scheduled', { priority: b.priority ?? 0, profile_id: me.id, profile_name: me.name })
     s.recordings.push(created)
     save(s)
     return HttpResponse.json(created, { status: 201 })
@@ -197,7 +221,7 @@ export const recordingHandlers = [
     if (!b.id?.startsWith('rec:')) return undefined
     const r = load().recordings.find((x) => x.id === b.id!.slice(4))
     if (!r) return error(404, 'not_found', 'This recording no longer exists.')
-    if (r.state !== 'done') return error(409, 'recording_unavailable', 'This recording has no file to play.')
+    if (!r.has_file && r.state !== 'done') return error(409, 'recording_unavailable', 'This recording has no file to play.')
     const d: PlaybackDescriptor = {
       id: b.id, mode: 'direct', url: '/mock/sample.webm', mime: 'video/webm', live: false, buffer_available: false, headers: {},
       title: r.title, subtitle: [r.subtitle, r.channel_name].filter(Boolean).join(' · ') || null, poster: null, resume_position_ms: 0, duration_ms: 30_000,

@@ -46,10 +46,10 @@ test('real pending Google identity, local PIN enrollment, policy grant, restrict
   expect(childSession.profile.content_restricted).toBe(true)
   const child = { Authorization: `Bearer ${childSession.access}` }
   await page.goto('/search')
-  await page.getByLabel('Search titles and channels').fill('Star Wars')
-  const results = page.getByTestId('group-relevance').getByRole('link')
+  await page.getByRole('textbox', { name: 'Search', exact: true }).fill('Star Wars')
+  const results = page.getByTestId('search-titles').getByRole('link')
   await expect(results).toHaveCount(1)
-  await expect(results.first()).toHaveAccessibleName('Star Wars')
+  await expect(results.first()).toHaveAccessibleName(/^star wars$/i)
   const denied = await page.request.post('/api/v1/playback/resolve', { headers: child, data: {
     id: 'lib:fixture-iptv:en', variant_id: 'lib:fixture-iptv:en', allow_unverified_audio: true, client: 'android_tv',
   } })

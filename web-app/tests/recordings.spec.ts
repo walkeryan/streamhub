@@ -83,7 +83,9 @@ test('a programme on the air offers Watch now first; recording it starts at once
   await dialog.getByTestId('record-cancel').click()
   await expect(page.getByText(/^Stopped recording /)).toBeVisible()
   await expect(now.getByTestId('recording-badge')).toHaveCount(0)
+  await expect(now).toHaveCount(1)
   await page.keyboard.press('Enter')
+  await expect(dialog.getByTestId('record-watch')).toHaveAttribute('data-focused', 'true')
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/play\/ch/)
 })
@@ -273,7 +275,7 @@ test('Recordings follows the permissions: with neither there is no entry and the
   await signIn(page)
   // Family may view and schedule, and recording is on.
   await page.getByTestId('nav-more').click()
-  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Recordings', 'Settings'])
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['For You', 'Requests', 'Recordings', 'Settings'])
   await page.keyboard.press('Escape')
 
   await denyGuest(page, 'recordings.schedule')
@@ -290,7 +292,7 @@ test('Recordings follows the permissions: with neither there is no entry and the
   await page.reload()
   await expect(page.getByText('Recordings are not available')).toBeVisible()
   await page.getByTestId('nav-more').click()
-  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Settings'])
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['For You', 'Requests', 'Settings'])
 })
 
 test('while recording is not set up, only a holder of system.manage sees Recordings in More', async ({ page }) => {
@@ -299,7 +301,7 @@ test('while recording is not set up, only a holder of system.manage sees Recordi
   await page.reload()
   await expect(page.getByTestId('home')).toBeVisible()
   await page.getByTestId('nav-more').click()
-  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['Requests', 'Settings'])
+  await expect(page.getByTestId('more-menu').getByRole('link')).toHaveText(['For You', 'Requests', 'Settings'])
   await page.goto('/recordings')
   await expect(page.getByText('Recording has not been set up on this server.')).toBeVisible()
 })
@@ -325,5 +327,83 @@ test.describe('phone', () => {
     const box = (await page.getByTestId('record-dialog').boundingBox())!
     expect(box.x).toBeGreaterThanOrEqual(0)
     expect(box.x + box.width).toBeLessThanOrEqual(390)
+  })
+})
+
+test('conflicting guide recording offers priority and a second confirmation', async ({ page }) => {
+  await owner(page)
+  await page.addInitScript(() => sessionStorage.setItem('mock.recordings.plan', JSON.stringify({
+    conflict_count: 1, connection_limit: 1, source_name: 'Fixture tuner', overlapping_titles: ['Evening Edition'],
+  })))
+  await openGuide(page)
+  const { cell } = await upcoming(page, 'Harbor News 24')
+  await cell.click()
+  const dialog = page.getByTestId('record-dialog')
+  await expect(dialog.getByText(/Fixture tuner supports 1 simultaneous connection/)).toBeVisible()
+  await dialog.getByRole('button', { name: 'High priority' }).click()
+  await dialog.getByRole('button', { name: 'Keep this airing' }).click()
+  await expect(dialog).toHaveCount(0)
+  await page.goto('/recordings')
+  await expect(page.getByTestId('recording-row')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Recording plan' }).click()
+  await expect(page.getByRole('button', { name: 'High priority' })).toHaveAttribute('aria-pressed', 'true')
+})
+
+test('partial recording plays and can be protected through its actions', async ({ page }) => {
+  await owner(page, { demo: true })
+  await page.goto('/recordings')
+  await expect(page.getByTestId('recording-row').first()).toBeVisible()
+  await page.evaluate(() => {
+    const store = JSON.parse(sessionStorage.getItem('mock.recordings')!)
+    const row = store.recordings.find((r: {state: string}) => r.state === 'failed')
+    row.has_file = true
+    row.captured_from = new Date(Date.parse(row.starts_at) + 11 * 60000).toISOString()
+    row.captured_until = row.ends_at
+    sessionStorage.setItem('mock.recordings', JSON.stringify(store))
+  })
+  await page.reload()
+  await page.getByTestId('recordings-tab-recorded').click()
+  const row = page.getByTestId('recording-row').filter({ hasText: 'Recording failed' })
+  await expect(row.getByRole('button', { name: /^Play partial:/ })).toBeVisible()
+  await row.getByTestId('recording-more').click()
+  await page.getByText('Manage recording', { exact: true }).click()
+  await expect(page.getByText('11 programme minutes missed.')).toBeVisible()
+  await page.getByRole('button', { name: 'Protect from automatic deletion' }).click()
+  await expect(row.getByText('Protected', { exact: true })).toBeVisible()
+  await row.getByRole('button', { name: /^Play partial:/ }).click()
+  await expect(page).toHaveURL(/\/play\/rec/)
+})
+
+test('Sports event and channel tiles share a size across desktop and mobile widths', async ({ page }) => {
+  await owner(page)
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 840 })
+    await page.goto('/sports')
+    await expect(page.locator('.sports-tiles > .sports-tile').first()).toBeVisible()
+    await expect(page.locator('.sports-chan-row > .sports-chan').first()).toBeVisible()
+    const sizes = await page.locator('.sports-tiles > .sports-tile, .sports-chan-row > .sports-chan').evaluateAll(nodes =>
+      nodes.map(node => [(node as HTMLElement).offsetWidth, (node as HTMLElement).offsetHeight]))
+    expect(sizes.length).toBeGreaterThan(1)
+    expect(new Set(sizes.map(s => s.join('x'))).size, JSON.stringify([...new Set(sizes.map(s => s.join('x')))])).toBe(1)
+    expect(Math.abs(sizes[0]![0]! / sizes[0]![1]! - 16 / 9)).toBeLessThan(0.02)
+  }
+})
+
+test.describe('broadcast times at a clock change', () => {
+  test.use({ timezoneId: 'America/New_York', locale: 'en-US' })
+  test('repeated clock hour shows both offsets and midnight shows the next day', async ({ page }) => {
+    await owner(page, { demo: true })
+    await page.goto('/recordings')
+    await expect(page.getByTestId('recording-row').first()).toBeVisible()
+    await page.evaluate(() => {
+      const data = JSON.parse(sessionStorage.getItem('mock.recordings')!)
+      const rows = data.recordings.filter((r: {state: string}) => r.state === 'scheduled')
+      Object.assign(rows[0], { title: 'Clock change', starts_at: '2026-11-01T05:30:00Z', ends_at: '2026-11-01T06:15:00Z' })
+      Object.assign(rows[1], { title: 'Overnight', starts_at: '2026-11-05T04:45:00Z', ends_at: '2026-11-05T05:45:00Z' })
+      sessionStorage.setItem('mock.recordings', JSON.stringify(data))
+    })
+    await page.reload()
+    await expect(page.getByTestId('recording-row').filter({ hasText: 'Clock change' })).toContainText(/1:30 AM GMT-4 to 1:15 AM GMT-5/)
+    await expect(page.getByTestId('recording-row').filter({ hasText: 'Overnight' })).toContainText(/11:45 PM to Thu, Nov 5 12:45 AM/)
   })
 })

@@ -68,7 +68,7 @@ test('without odds there is no bar, and without art the two colours stand in', a
 
 test('a replay shows no clock, no score and no odds', async ({ page }) => {
   await open(page)
-  const game = card(page, 'Southgate')
+  const game = page.getByTestId('sports-also-on').getByTestId('sports-listing').filter({ hasText: 'Southgate' })
   await expect(game).toContainText('Replay')
   await expect(game).not.toContainText('LIVE')
   await expect(game.getByTestId('matchup-home').getByTestId('matchup-name')).toHaveText('Southgate')
@@ -83,7 +83,7 @@ test('a replay shows no clock, no score and no odds', async ({ page }) => {
 test('other games keep their cards, and the remote moves over matchup cards as before', async ({ page }) => {
   await open(page)
   const live = page.getByTestId('sports-live').getByTestId('sports-listing')
-  await expect(live).toHaveCount(5)
+  await expect(live).toHaveCount(4)
   // Not football: today's card, title and all.
   const rovers = listing(page, 'Riverton Rovers vs Harbor City')
   await expect(rovers).not.toHaveAttribute('data-matchup', 'true')

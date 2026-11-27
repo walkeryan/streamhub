@@ -169,6 +169,9 @@ class Capture:
         return viewer, record
 
     # ------------------------------------------------------------------ start
+    def can_share_now(self, recording: Recording) -> bool:
+        return self._proxy.can_tap_shared(recording.channel_id.removeprefix("ch:"))
+
     async def start(self, recording: Recording) -> None:
         if recording.id in self._runs:
             return

@@ -8,6 +8,7 @@ runs a single worker.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -65,6 +66,12 @@ class Member:
     # This spell of buffering already cost the room a full wait. It does not get a
     # second one until the member has recovered, or one bad connection stalls everyone.
     wait_spent: bool = False
+    session_id: str = ""
+    token_version: int = 0
+    consented_ref: str | None = None
+    progress_key: tuple[int, str, str] | None = None
+    progress_session: str | None = None
+    progress_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 class CommandRejected(Exception):
@@ -110,6 +117,10 @@ class Room:
         self.host_profile_id = host_profile_id
         self.host_name = host_name
         self.controls_locked = False
+        self.suggestions: list[str] = []
+        self.host_offer: str | None = None
+        self.switching = False
+        self.title_revision = 0
         self.live = live
         # Live channels have no position: their state is only ``playing``.
         self.state = RoomState(playing=live, position_ms=0, as_of_ms=now_ms)
@@ -148,6 +159,8 @@ class Room:
         member.last_seen_ms = max(member.last_seen_ms, now_ms)
 
     def _after_departure(self, now_ms: int) -> list[Event]:
+        if self.host_offer not in self.members:
+            self.host_offer = None
         if not self.members:
             # Nobody is watching: stop the clock where it is so whoever comes back
             # finds the film where the room left it, not hours further on.
@@ -283,6 +296,23 @@ class Room:
         member = self.members.get(self._wait.member_id)
         return member.name if member else None
 
+    def require_revision(self, revision: int) -> None:
+        if self.switching or self.title_revision != revision:
+            raise Conflict("The room is changing titles. Join again.")
+
+    def start_suggestion(self, ref: str, now: int) -> list[Event]:
+        self.ref = ref
+        self.series = self.variant_id = self.audio_track = None
+        self.live = ref.startswith("ch:")
+        self.state = RoomState(self.live, 0, now)
+        self.title_revision += 1
+        self._wait = None
+        for member in self.members.values():
+            member.buffering_since_ms = None
+            member.wait_spent = False
+        self.suggestions.remove(ref)
+        return [self._state_event(None)]
+
     def member_list(self) -> list[dict[str, Any]]:
         return [
             {
@@ -296,6 +326,7 @@ class Room:
 
     def state_data(self, by: str | None = None) -> dict[str, Any]:
         return {
+            **({"title_revision": self.title_revision} if self.title_revision else {}),
             "playing": self.state.playing,
             "position_ms": None if self.live else self.state.position_ms,
             "as_of_ms": self.state.as_of_ms,

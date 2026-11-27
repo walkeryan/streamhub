@@ -23,6 +23,8 @@ interface UiState {
   searchQuery: string
   setSearchQuery: (q: string) => void
   addSearch: (q: string) => void
+  removeSearch: (q: string) => void
+  restoreSearch: (q: string, index: number) => void
   clearSearches: () => void
   homePrefs: HomePrefs
   /** Last-loaded ordered channel list, used for zapping in the player (contract has no list_id lookup). */
@@ -86,6 +88,19 @@ export const useUi = create<UiState>((set, get) => ({
   },
   addSearch: (q) => {
     const next = [q, ...get().recentSearches.filter((s) => s !== q)].slice(0, 8)
+    set({ recentSearches: next })
+    lsSet(scopeKey(SEARCH_KEY), JSON.stringify(next))
+  },
+  removeSearch: (q) => {
+    const next = get().recentSearches.filter(item => item !== q)
+    set({ recentSearches: next })
+    lsSet(scopeKey(SEARCH_KEY), JSON.stringify(next))
+  },
+  restoreSearch: (q, index) => {
+    const next = [...get().recentSearches]
+    if (next.includes(q)) return
+    next.splice(index, 0, q)
+    next.splice(8)
     set({ recentSearches: next })
     lsSet(scopeKey(SEARCH_KEY), JSON.stringify(next))
   },

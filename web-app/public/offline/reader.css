@@ -1,0 +1,50 @@
+:root {
+  color-scheme: dark;
+  font:
+    100% system-ui,
+    sans-serif;
+  color: #f5f4f2;
+  background: #141419;
+}
+main {
+  max-width: 64rem;
+  margin: 3rem auto;
+  padding: 0 1.25rem;
+}
+button,
+a {
+  font: inherit;
+  color: inherit;
+}
+button {
+  min-height: 44px;
+  padding: 0.5rem 1rem;
+  border-radius: 0.6rem;
+  border: 1px solid #73737c;
+  background: #2c2b30;
+  margin: 0.3rem;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #ffac73;
+}
+article {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+article strong {
+  margin-right: auto;
+}
+video {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  margin-block: 1rem;
+  background: black;
+}
+[hidden] {
+  display: none;
+}

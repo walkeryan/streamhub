@@ -44,6 +44,11 @@ object PlayerLink {
     private val _commands = MutableSharedFlow<MiniPlayerCommand>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val commands: SharedFlow<MiniPlayerCommand> = _commands
 
+    var castControl: ((CastAction) -> Boolean)? = null
+        private set
+    fun registerCast(player: Any, control: (CastAction) -> Boolean) {
+        if (owner === player) castControl = control
+    }
     private var owner: Any? = null
 
     @Synchronized fun attach(player: Any) { owner = player; _state.value = NativePlayer.FullScreen }
@@ -52,7 +57,7 @@ object PlayerLink {
 
     @Synchronized fun owns(player: Any): Boolean = owner === player
 
-    @Synchronized fun detach(player: Any) { if (owner === player) { owner = null; _state.value = NativePlayer.None } }
+    @Synchronized fun detach(player: Any) { if (owner === player) { owner = null; castControl = null; CastReceiver.info = null; _state.value = NativePlayer.None } }
 
     /** From the web app's bar; dropped unless a player is in picture-in-picture. */
     fun command(c: MiniPlayerCommand): Boolean = state.value is NativePlayer.Mini && _commands.tryEmit(c)

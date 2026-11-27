@@ -307,7 +307,10 @@ def test_library_title_is_resolved_per_member_without_admission(rig: Rig, ffmpeg
         "POST", "/playback/resolve", json={"id": rig.film, "recovery_generation": rig.c.proxy.recovery_epoch}
     ).json()
     joined = rig.join(code)
-    assert joined["descriptor"] == resolved and joined["descriptor"]["url"] == FILM_URL
+    media = joined["descriptor"].copy()
+    seat_token = media.pop("progress_session_id")
+    assert seat_token and seat_token != resolved.pop("progress_session_id")
+    assert media == resolved and media["url"] == FILM_URL
     assert joined["descriptor"]["stream_epoch"] is None
     with rig.socket(code, joined["member_token"]) as ws:
         assert names(recv(ws)) == ["Admin"]

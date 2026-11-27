@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -198,6 +198,46 @@ class TmdbClient:
             and row.get("name")
         ][:12]
 
+    async def actor_filmography(self, actor: int) -> dict[str, Any] | None:
+        person = await self._get(f"/person/{actor}", TTL_SEARCH, append_to_response="combined_credits")
+        if not person or person.get("adult") or not person.get("name"):
+            return None
+        credits: dict[str, dict[str, Any]] = {}
+        for row in (person.get("combined_credits") or {}).get("cast") or []:
+            kind, tid = row.get("media_type"), row.get("id")
+            if kind not in ("movie", "tv") or not isinstance(tid, int) or tid <= 0 or row.get("adult"):
+                continue
+            title = row.get("title") or row.get("name")
+            if not isinstance(title, str) or not title.strip():
+                continue
+            key = f"tmdb:{kind}:{tid}"
+            item = credits.setdefault(
+                key,
+                {
+                    "id": key,
+                    "title": title,
+                    "kind": kind,
+                    "year": release_year(row.get("release_date") or row.get("first_air_date")),
+                    "poster": image_url(row.get("poster_path"), "w185"),
+                    "roles": [],
+                },
+            )
+            role = row.get("character")
+            if isinstance(role, str) and role.strip() and role.strip() not in item["roles"]:
+                item["roles"].append(role.strip())
+        # Known-for titles are supplied by person search. Verify the person id; names are not unique.
+        found = await self._get("/search/person", TTL_SEARCH, query=person["name"], include_adult="false")
+        match: dict[str, Any] = next(
+            (r for r in (found or {}).get("results", []) if r.get("id") == actor and not r.get("adult")), {}
+        )
+        known = [f"tmdb:{r.get('media_type')}:{r.get('id')}" for r in match.get("known_for", []) if not r.get("adult")]
+        return {
+            "name": person["name"],
+            "photo": image_url(person.get("profile_path"), "w185"),
+            "known_for": [credits[key] for key in dict.fromkeys(known) if key in credits],
+            "credits": sorted(credits.values(), key=lambda c: (-(c["year"] or 0), c["title"].casefold(), c["id"])),
+        }
+
     async def actor_titles(self, actor: int, media_type: str, page: int) -> tuple[list[MetaTitle], int]:
         data = await self._get(f"/person/{actor}/{media_type}_credits", TTL_SEARCH)
         if data is None:
@@ -298,6 +338,25 @@ class TmdbClient:
             if len(out) >= limit:
                 break
         return out
+
+    async def upcoming_episodes(self, tmdb_id: int, today: date) -> list[dict[str, Any]]:
+        detail = await self._get(f"/tv/{tmdb_id}", TTL_TRENDING)
+        next_ep = (detail or {}).get("next_episode_to_air") or {}
+        if not next_ep.get("air_date"):
+            return []
+        end = (today + timedelta(days=7)).isoformat()
+        if not today.isoformat() <= next_ep["air_date"] < end:
+            return []
+        season = next_ep.get("season_number")
+        data = await self.season(tmdb_id, season) if isinstance(season, int) else None
+        candidates = [next_ep, *((data or {}).get("episodes") or [])]
+        return list(
+            {
+                (e.get("season_number"), e.get("episode_number")): e
+                for e in candidates
+                if isinstance(e, dict) and today.isoformat() <= str(e.get("air_date") or "") < end
+            }.values()
+        )
 
     async def season(self, tmdb_id: int, season: int) -> dict[str, Any] | None:
         return await self._get(f"/tv/{tmdb_id}/season/{season}", TTL_DETAILS)

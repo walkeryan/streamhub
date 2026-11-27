@@ -46,7 +46,7 @@ export async function stubSports(page: Page, events: StubEvent[], networks: Stub
           replay: !!e.replay, live_evidence: e.live ?? (start <= now && stop > now), grouping_evidence: 'matching_title_and_time',
           feeds: e.feeds.map((f) => ({ programme_id: `prog:slot-${f.id}-${Math.floor(start / 1000)}`, channel_id: `ch:fixture:${f.id}`, channel_name: f.name ?? `Channel ${f.id}`, channel_number: f.number ?? null, quality: f.quality ?? null, source_id: 'fixture', source_name: 'Fixture', language: f.language ?? null, language_verified: false })),
         }
-      }).filter((e) => { const status = url.searchParams.get('status'); return status === 'upcoming' || status === 'current' ? e.status === status : true }).filter((e) => e.status !== 'ended' && (e.kind === 'channel' ? from <= now && now < to : Date.parse(e.stop) > from && Date.parse(e.start) < to))
+      }).filter((e) => { const status = url.searchParams.get('status'); return status === 'live' ? e.status === 'current' && e.live_evidence && !e.replay : status === 'upcoming' || status === 'current' ? e.status === status : true }).filter((e) => e.status !== 'ended' && (e.kind === 'channel' ? from <= now && now < to : Date.parse(e.stop) > from && Date.parse(e.start) < to))
         .filter((e) => !q || `${e.title} ${e.feeds.map((f) => f.channel_name).join(' ')}`.toLowerCase().includes(q))
         .sort((a, b) => Number(a.kind === 'channel') - Number(b.kind === 'channel') || Date.parse(a.start) - Date.parse(b.start))
       const counts = new Map<string, number>()

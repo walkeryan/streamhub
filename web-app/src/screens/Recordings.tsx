@@ -2,6 +2,7 @@ import { TabPanels } from '../components/ui'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useDeleteRecording, useDeleteRecordingRule, usePatchRecordingRule, useRecordingRules, useRecordings } from '../api/hooks'
+import { captureTime, DvrReview } from '../recordings/DvrPlan'
 import { automaticPadding, RulePadding } from '../recordings/RulePadding'
 import type { Recording, RecordingRule } from '../api/types'
 import { Button, Chip, Empty, ErrorState, GlassIconButton, Icon, Modal, OverflowMenu, PageHeader, SectionHeader, Skeleton } from '../ds'
@@ -12,7 +13,6 @@ import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial
 import { RecordingBadge } from '../recordings/RecordingBadge'
 import { useCan } from '../api/me'
 import { RULE_KIND_LABEL, episodeLabel, recordingSize, sidesLabel } from '../lib/recordings'
-import { fmtTime } from '../lib/util'
 import { useUi } from '../store/ui'
 
 type Tab = 'upcoming' | 'recorded' | 'rules'
@@ -24,7 +24,7 @@ const day = (iso: string) => {
   const days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86_400_000)
   return days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days === -1 ? 'Yesterday' : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
 }
-const when = (r: Recording) => `${day(r.starts_at)} · ${fmtTime(r.starts_at)} to ${fmtTime(r.ends_at)}`
+const when = (r: Recording) => `${day(r.starts_at)} · ${captureTime(r.starts_at, r.ends_at)}`
 
 export function Recordings() {
   const [sp] = useSearchParams()
@@ -42,6 +42,7 @@ export function Recordings() {
   const go = useGo()
   const [deleting, setDeleting] = useState<Recording | null>(null)
   const [deletingRule, setDeletingRule] = useState<RecordingRule | null>(null)
+  const [review, setReview] = useState<Recording | null>(null)
   const [editing, setEditing] = useState<RecordingRule | null>(null)
   const [draft, setDraft] = useState({ ...automaticPadding, match: '', new_only: false, keep: null as number | null })
   useRestoreFocus(!(allowed || isAdmin) || !!list.data || !!list.error, list.data?.enabled && allowed ? `rec:tab:${tab}` : 'rec:guide')
@@ -113,15 +114,16 @@ export function Recordings() {
         <Button focusKey="rec:guide" primary icon="guide" onEnter={() => go('/live?view=guide')}>Open the guide</Button>
       </Empty>
     ) : (
-      <FocusGroup focusKey="rec:list" className="lib-list">
+      <FocusGroup focusKey="rec:list" className="lib-list" preferred={mayChange && upcoming[0] ? `rec:${upcoming[0].id}:cancel` : undefined}>
         {upcoming.map((r) => (
           <div key={r.id} className="ds-panel lib-row rec-row" data-testid="recording-row" data-state={r.state}>
             <span className="rec-mark" data-state={r.state} aria-hidden="true"><Icon name="record" /></span>
             <div className="lib-row-copy">
-              <span className="lib-row-line"><span className="lib-row-title">{r.title}</span><RecordingBadge state={r.state} /></span>
-              <span className="label">{[r.subtitle, episodeLabel(r), sidesLabel(r.teams), r.channel_name, when(r), r.rule_id ? 'From a rule' : null].filter(Boolean).join(' · ')}</span>
+              <span className="lib-row-line"><span className="lib-row-title">{r.title}</span>{r.guide_review && <span className="badge">Guide changed</span>}{r.replacement_for && <span className="badge">Recovery airing</span>}<RecordingBadge state={r.state} /></span>
+              <span className="label">{[r.subtitle, episodeLabel(r), sidesLabel(r.teams), r.channel_name, when(r), r.rule_id ? 'From a rule' : null, r.state === 'scheduled' ? r.error : null].filter(Boolean).join(' · ')}</span>
             </div>
             {mayChange && <div className="lib-row-actions">
+              {r.state === 'scheduled' && <Button focusKey={`rec:${r.id}:plan`} onEnter={() => setReview(r)}>{r.guide_review ? 'Review airing' : 'Recording plan'}</Button>}
               <GlassIconButton focusKey={`rec:${r.id}:cancel`} icon="x" label={`${r.state === 'recording' ? 'Stop recording' : 'Cancel'}: ${r.title}`} tip={r.state === 'recording' ? 'Stop recording' : 'Cancel'} onEnter={() => cancel(r)} testId="recording-cancel" />
             </div>}
           </div>
@@ -134,15 +136,15 @@ export function Recordings() {
           <div key={r.id} className="ds-panel lib-row rec-row" data-testid="recording-row" data-state={r.state}>
             <span className="rec-mark" data-state={r.state} aria-hidden="true"><Icon name={r.state === 'done' ? 'play' : 'alert'} /></span>
             <div className="lib-row-copy">
-              <span className="lib-row-line"><span className="lib-row-title">{r.title}</span>{r.state !== 'done' && <RecordingBadge state={r.state} />}</span>
+              <span className="lib-row-line"><span className="lib-row-title">{r.title}</span>{r.protected && <span className="badge">Protected</span>}{r.recovered_at && <span className="badge">Full rerun available</span>}{r.state !== 'done' && <RecordingBadge state={r.state} />}</span>
               <span className="label">{[r.subtitle, episodeLabel(r), sidesLabel(r.teams), r.channel_name, when(r), recordingSize(r.size_bytes)].filter(Boolean).join(' · ')}</span>
               {r.state !== 'done' && <span className="muted" data-testid="recording-reason">{r.error ?? (r.state === 'missed' ? 'No connection was free when it started.' : 'The recording did not finish.')}</span>}
             </div>
             <div className="lib-row-actions">
-              {r.state === 'done' && <GlassIconButton focusKey={`rec:${r.id}:play`} icon="play" label={`Play: ${r.title}`} tip="Play" onEnter={() => go(`/play/${encodeURIComponent(`rec:${r.id}`)}`)} testId="recording-play" />}
+              {(r.has_file ?? r.state === 'done') && <GlassIconButton focusKey={`rec:${r.id}:play`} icon="play" label={`${r.state === 'failed' ? 'Play partial' : 'Play'}: ${r.title}`} tip="Play" onEnter={() => go(`/play/${encodeURIComponent(`rec:${r.id}`)}`)} testId="recording-play" />}
               {/* Deleting is seldom and final: behind ⋯, and it still asks. */}
               {mayChange && <OverflowMenu focusKey={`rec:${r.id}:more`} menuKey={`rec:${r.id}:menu`} title={r.title} label={`More actions: ${r.title}`} testId="recording-more"
-                items={[{ key: 'delete', icon: 'trash', label: r.state === 'done' ? 'Delete' : 'Remove', testId: 'recording-delete', onEnter: fromMenu(`rec:${r.id}:more`, () => setDeleting(r)) }]} />}
+                items={[{ key: 'delete', icon: 'trash', label: r.state === 'done' ? 'Delete' : 'Remove', testId: 'recording-delete', onEnter: fromMenu(`rec:${r.id}:more`, () => setDeleting(r)) }, ...(r.has_file ? [{ key: 'manage', icon: 'settings' as const, label: 'Manage recording', onEnter: fromMenu(`rec:${r.id}:more`, () => setReview(r)) }] : [])]} />}
             </div>
           </div>
         ))}
@@ -189,6 +191,7 @@ export function Recordings() {
           <Button focusKey="recdel:ok" danger icon="trash" onEnter={confirmDelete} testId="recording-delete-go">{deleting?.state === 'done' ? 'Delete recording' : 'Remove'}</Button>
         </div>
       </Modal>
+      {review && <DvrReview row={review} onClose={() => setReview(null)} />}
       <Modal open={!!deletingRule} onClose={() => setDeletingRule(null)} title={`Delete the rule for ${deletingRule?.match ?? ''}?`} firstFocusKey="ruledel:cancel" testId="rule-delete-confirm">
         <p className="muted">Deleting a rule also removes the upcoming recordings it scheduled. Recordings that are already finished stay.</p>
         <div className="lib-actions">

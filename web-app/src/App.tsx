@@ -14,8 +14,10 @@ import { Button, ErrorState, Skeleton, Toasts } from './components/ui'
 import { ControllerHint } from './components/PadHints'
 import { FocusGroup } from './nav/Focusable'
 import { useGlobalBack } from './nav/back'
+import { useIdleSignOut } from './session/useIdleSignOut'
 import { useViewingAppearance } from './api/viewingPreferences'
 import { bootTheme, useTheme } from './lib/theme'
+import { useOfflineSession } from './components/OfflineEpisodes'
 import { useSession } from './store/session'
 import { useReturnToRoom } from './room/returnToRoom'
 import { useWho } from './store/who'
@@ -39,6 +41,7 @@ import { ShortcutHelp } from './player/ShortcutHelp'
 import { PlayerHost } from './player/PlayerHost'
 
 const Sports = lazy(() => import('./screens/Sports').then((m) => ({ default: m.Sports })))
+const ForYou = lazy(() => import('./screens/ForYou').then(m => ({ default: m.ForYou })))
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })))
 // watch rooms and recordings
 const RoomScreen = lazy(() => import('./screens/Room').then((m) => ({ default: m.RoomScreen })))
@@ -103,6 +106,7 @@ export function App() {
   const pickNow = who.pick
   const personal = me.data ? !me.data.shared_device : me.data === null
   useEffect(() => { if (personal) pickNow() }, [personal, pickNow])
+  useOfflineSession()
   useCatalogFreshness(profile?.id)
   const disclaimer = useDisclaimer()
   const googleComplete = new URLSearchParams(window.location.search).has('google_complete')
@@ -123,6 +127,7 @@ export function App() {
   }, [current.data, setProfile])
   useTheme(profile?.theme_id)
   useViewingAppearance()
+  useIdleSignOut()
   useGlobalBack()
   // A room link opened signed out returns to the room once signed in.
   useReturnToRoom(!!profile && !googleComplete)
@@ -157,6 +162,7 @@ export function App() {
           <Route path="/room/:code" element={<RoomScreen />} />
           <Route element={<Shell />}>
             <Route index element={<Home />} />
+            <Route path="for-you" element={<ForYou />} />
             <Route path="search" element={<Search />} />
             <Route path="search/actor/:id" element={<SearchCollection kind="actor" />} />
             <Route path="search/service/:id" element={<SearchCollection kind="service" />} />

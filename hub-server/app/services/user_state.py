@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -17,7 +18,18 @@ from sqlalchemy.dialects.sqlite import insert
 from app.domain.entities import MediaKind
 from app.domain.ports import ProgressReporter, WatchStateProvider
 from app.infra.db import Database
-from app.infra.models import Favorite, PlaybackPreference, Profile, Progress, Title, User, Watchlist, utcnow
+from app.infra.models import (
+    EditionProgress,
+    Favorite,
+    PlaybackPreference,
+    Profile,
+    Progress,
+    Title,
+    User,
+    ViewingCursor,
+    Watchlist,
+    utcnow,
+)
 from app.services import ids
 from app.services.adult import adult_included, require_adult
 from app.services.errors import NotFound, PayloadTooLarge, ServiceError
@@ -288,6 +300,61 @@ class ProgressService:
                 local.updated_at = state.viewed_at
             await s.commit()
 
+    async def edition_resume(
+        self,
+        profile_id: str,
+        ref: str,
+        edition: str,
+        variant: str,
+        duration: int | None,
+        legacy: Progress | None,
+    ) -> int:
+        from app.services.editions import compatible_runtime, same_edition
+
+        async with self._db.session() as s:
+            previous = list(
+                await s.scalars(
+                    select(EditionProgress).where(
+                        EditionProgress.profile_id == profile_id, EditionProgress.ref_id == ref
+                    )
+                )
+            )
+        entry = next((p for p in previous if p.edition_id == edition), None)
+        if entry:
+            return 0 if entry.completed else entry.position_ms
+        # Unnamed runtime groups can gain a slightly shorter encode after a later sync.
+        if edition.startswith("runtime:"):
+            entry = next(
+                (p for p in previous if same_edition(p.edition_id, edition)),
+                None,
+            )
+            if entry:
+                return 0 if entry.completed else entry.position_ms
+        if previous or not legacy or legacy.completed:
+            return 0
+        if legacy.duration_ms and duration and not compatible_runtime(legacy.duration_ms, duration):
+            return 0
+        if legacy.ref_id != variant and not legacy.duration_ms and duration:
+            return 0
+        if legacy.ref_id.startswith("lib:") and legacy.ref_id != variant:
+            return 0
+        return legacy.position_ms
+
+    async def start_edition(self, profile_id: str, ref: str, edition: str, variant: str) -> str:
+        token = secrets.token_hex(16)
+        async with self._db.session() as s:
+            stmt = insert(ViewingCursor).values(
+                profile_id=profile_id, ref_id=ref, edition_id=edition, variant_id=variant, token=token
+            )
+            await s.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=["profile_id", "ref_id"],
+                    set_={"token": token, "edition_id": edition, "variant_id": variant},
+                )
+            )
+            await s.commit()
+        return token
+
     async def get(self, profile_id: str, *ref_ids: str) -> Progress | None:
         async with self._db.session() as s:
             for rid in ref_ids:
@@ -310,7 +377,8 @@ class ProgressService:
         forward_item: Any = None,
         aliases: list[str] | None = None,
         watched: bool | None = None,
-    ) -> Progress:
+        progress_session_id: str | None = None,
+    ) -> Progress | None:
         if state not in ("playing", "paused", "stopped"):
             raise ServiceError("invalid state")
         position_ms = max(0, int(position_ms))
@@ -331,6 +399,53 @@ class ProgressService:
             position_ms = (duration_ms or 0) if watched else 0
         async with self._db.session() as s:
             keys = [ref_id, *(aliases or [])]
+            if progress_session_id or watched is not None:
+                await s.execute(text("BEGIN IMMEDIATE"))
+            if progress_session_id:
+                cursor = await s.scalar(
+                    select(ViewingCursor).where(
+                        ViewingCursor.profile_id == profile_id, ViewingCursor.token == progress_session_id
+                    )
+                )
+                if not cursor or not ({cursor.ref_id, cursor.variant_id} & set(keys)):
+                    return None  # a newer playback session or an explicit watched action now owns this title
+                ref_id = cursor.ref_id
+                keys = [ref_id, cursor.variant_id, *keys]
+                # Catalog sync can shift an unnamed group's representative runtime by a few seconds.
+                # Keep one history row for equivalent encodes, even if the older file returns later.
+                if cursor.edition_id.startswith("runtime:"):
+                    from app.services.editions import same_edition
+
+                    existing = await s.scalars(
+                        select(EditionProgress).where(
+                            EditionProgress.profile_id == profile_id,
+                            EditionProgress.ref_id == ref_id,
+                            EditionProgress.edition_id != cursor.edition_id,
+                        )
+                    )
+                    for old in existing:
+                        if same_edition(old.edition_id, cursor.edition_id):
+                            await s.delete(old)
+                values = {
+                    "variant_id": cursor.variant_id,
+                    "position_ms": 0 if completed else position_ms,
+                    "duration_ms": duration_ms,
+                    "completed": completed,
+                }
+                await s.execute(
+                    insert(EditionProgress)
+                    .values(profile_id=profile_id, ref_id=ref_id, edition_id=cursor.edition_id, **values)
+                    .on_conflict_do_update(index_elements=["profile_id", "ref_id", "edition_id"], set_=values)
+                )
+            if watched is not None:
+                await s.execute(
+                    delete(ViewingCursor).where(ViewingCursor.profile_id == profile_id, ViewingCursor.ref_id.in_(keys))
+                )
+                await s.execute(
+                    delete(EditionProgress).where(
+                        EditionProgress.profile_id == profile_id, EditionProgress.ref_id.in_(keys)
+                    )
+                )
             row = None
             for k in keys:
                 row = (
@@ -341,6 +456,7 @@ class ProgressService:
             if row is None:
                 row = Progress(profile_id=profile_id, ref_id=ref_id)
                 s.add(row)
+            row.ref_id = ref_id if progress_session_id else row.ref_id
             row.position_ms = 0 if completed else position_ms
             row.duration_ms = duration_ms or row.duration_ms
             row.completed = completed
