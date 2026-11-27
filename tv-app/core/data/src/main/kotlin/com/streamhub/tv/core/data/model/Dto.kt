@@ -488,6 +488,8 @@ data class PlaybackRequest(
      * generation GET /playback/generation gave just before. Left out otherwise.
      */
     @SerialName("recovery_generation") val recoveryGeneration: String? = null,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("prefer_hls") val preferHls: Boolean = false,
     @SerialName("start_position_ms") val startPositionMs: Long? = null,
     @SerialName("audio_track") val audioTrack: Int? = null,
