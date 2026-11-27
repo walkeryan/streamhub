@@ -41,3 +41,28 @@ for (const section of ['Movies', 'Shows']) {
     await expect(page.getByTestId('browse-order')).toHaveText('Oldest first')
   })
 }
+
+for (const width of [1280, 1920]) {
+  test(`the date rail keeps the full selected marker visible at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: width * 9 / 16 })
+    await signIn(page)
+    await page.getByRole('link', { name: 'Movies', exact: true }).click()
+    await openFilters(page)
+    await page.getByTestId('browse-filters').getByRole('button', { name: 'Release date', exact: true }).click()
+    await closeFilters(page)
+    const stops = page.getByTestId('browse-jump')
+    await expect(stops.first()).toBeVisible()
+    const count = await stops.count()
+    expect(count).toBeGreaterThan(1)
+    for (const index of new Set([0, Math.floor(count / 2), count - 1])) {
+      const stop = stops.nth(index)
+      await stop.click()
+      await expect(stop).toHaveAttribute('aria-current', 'true')
+      await stop.scrollIntoViewIfNeeded()
+      expect(await stop.evaluate((el) => {
+        const r = el.getBoundingClientRect()
+        return [r.left + 2, r.right - 2].every(x => el.contains(document.elementFromPoint(x, r.top + r.height / 2)))
+      })).toBe(true)
+    }
+  })
+}

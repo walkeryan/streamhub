@@ -52,6 +52,7 @@ from app.services.plex_auth import PlexAuthService
 from app.services.public_address import PublicAddress
 from app.services.recorder import RecorderService
 from app.services.registry import SourceRegistry
+from app.services.release_dates import ReleaseDates
 from app.services.requests import RequestService
 from app.services.room_hub import RoomHub, RoomTokens
 from app.services.room_playback import RoomPlayback
@@ -165,7 +166,7 @@ def build_container(settings: AppSettings, http_factory: Any = None, cache: Cach
     auth.owner_pin = owner_pin
     content_policy.owner_pin = owner_pin
     language = LanguageChain(ctx, settings.iptv_org_channels_url)
-    tmdb = TmdbClient(ctx, app_settings.tmdb_key, ClassificationStore(db).record)
+    tmdb = TmdbClient(ctx, app_settings.tmdb_key, ClassificationStore(db).record, ReleaseDates(db).record)
     sources = SourceService(db, crypto, registry, disclaimer, language)
     availability = AvailabilityService(db, tmdb)
     catalog = CatalogService(db, crypto, sources, availability, tmdb)

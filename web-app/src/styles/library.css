@@ -80,18 +80,19 @@
 .browse-more { padding-block: var(--gap-md); }
 .browse-more-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-md); }
 .browse-jumps { position: sticky; top: calc(var(--bar-h) + 0.75rem); flex: none; display: flex; flex-direction: column; align-items: stretch; gap: 0.1rem;
-  max-height: calc(100dvh - var(--bar-h) - 1.5rem); overflow-y: auto; scrollbar-width: none; padding: 0.35rem 0.25rem; margin-top: 1rem;
-  border-radius: var(--r-pill); background: var(--glass-tint); border: 1px solid var(--glass-line);
+  max-height: calc(100dvh - var(--bar-h) - 1.5rem); overflow-y: auto; scrollbar-width: none; padding: 0.35rem; scroll-padding-block: 0.35rem; margin-top: 1rem;
+  border-radius: var(--r-md); background: var(--glass-tint); border: 1px solid var(--glass-line);
   backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); }
 .browse-jumps::-webkit-scrollbar { display: none; }
-.browse-jump { min-width: 2.4rem; padding: 0.15rem 0.45rem; border-radius: var(--r-pill); text-align: center; font-size: var(--fs-micro); line-height: 1.4;
+.browse-jump { flex: none; min-width: 2.4rem; padding: 0.15rem 0.45rem; border-radius: var(--r-sm); text-align: center; font-size: var(--fs-micro); line-height: 1.4;
   font-weight: 600; font-variant-numeric: tabular-nums; color: var(--t-text-muted); cursor: pointer; white-space: nowrap; }
 @media (hover: hover) { .browse-jump:hover { color: var(--t-text); background: var(--glass-tint-hi); } }
 .browse-jump[aria-current='true'] { color: var(--t-accent-text); background: var(--t-accent); }
-/* A letter is small: its remote focus is the accent ring with a little lift, never the page's big scale. */
-.browse-jump.fx[data-focused='true'] { transform: scale(1.08); outline-color: var(--t-accent); box-shadow: var(--glow-accent); }
+/* Keep the remote's focus ring inside the scrollport, including on the first and last dates. */
+.browse-jump.fx[data-focused='true'] { transform: none; outline: var(--focus-border) solid var(--t-text); outline-offset: calc(-1 * var(--focus-border)); box-shadow: none; }
+.browse-jump.fx[data-focused='true'][aria-current='true'] { outline-color: var(--t-accent-text); }
 @media (max-width: 720px) {
-  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - 6rem); padding-inline: 0.15rem; margin-top: 0.5rem; }
+  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - 6rem); padding-inline: 0.25rem; margin-top: 0.5rem; }
   .browse-jump { min-width: 2rem; padding-inline: 0.2rem; font-size: 0.6875rem; line-height: 1.55; }
 }
 
@@ -127,7 +128,10 @@
   color: var(--t-text-muted); font-size: var(--fs-small); font-weight: 650; font-variant-numeric: tabular-nums; }
 .search-grid { padding: 0.25rem 0 0; }
 .search-result { position: relative; min-width: 0; }
-.search-result-actions { position: absolute; top: .35rem; right: .35rem; z-index: 1; }
+.search-result-actions { position: absolute; top: .35rem; right: .35rem; z-index: 6; }
+.search-result .tile-check, .search-result .tile-badges { left: .375rem; right: auto; max-width: calc(100% - 3.5rem); }
+.search-result .tile-fav { inset: auto .375rem .375rem auto; }
+.search-result .tile:has(> .tile-fav) > .cap { padding-right: 2.45rem; }
 .search-result-actions .ds-glass { background: rgba(12, 14, 18, .85); color: white; }
 .search-more { display: flex; }
 .search-idle { display: flex; flex-direction: column; align-items: flex-start; gap: var(--gap-lg); padding: 0.5rem 0; }

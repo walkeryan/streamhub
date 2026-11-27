@@ -50,7 +50,7 @@ export function ShortcutHelp({ open, live, onClose }: { open: boolean; live?: bo
         {mode === 'Remote' && <div className="shortcut-instructions">
           <p><strong>Arrows</strong> move between controls. Press <strong>OK</strong> to select.</p>
           {live !== true && <p>In a movie or episode, select the timeline and use <strong>Left</strong> or <strong>Right</strong> to seek.</p>}
-          <p>Choose <strong>Type search</strong> for the on-screen keyboard or <strong>Search by voice</strong> when a microphone is available.</p>
+          <p>Select <strong>Search</strong> to speak. Select it again to type. If voice is unavailable, the keyboard opens immediately.</p>
           <p><strong>Back</strong> closes the open menu or returns to the previous screen.</p>
         </div>}
         {mode === 'Touch' && <div className="shortcut-instructions">

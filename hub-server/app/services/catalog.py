@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -20,6 +20,7 @@ from app.infra.crypto import Crypto
 from app.infra.db import Database
 from app.infra.models import (
     AgeClassification,
+    CatalogRelease,
     Channel,
     Favorite,
     Profile,
@@ -121,7 +122,7 @@ def title_sort_key() -> ColumnElement[str]:
     )
 
 
-def jump_label(sort: str, value: Any) -> str:
+def jump_label(sort: str, value: Any, *, today: date | None = None) -> str:
     """The side-rail label of a title's sort value: a letter, a year, a rating or a month."""
     if sort == "title":
         first = str(value or "")[:1].upper()
@@ -134,9 +135,18 @@ def jump_label(sort: str, value: Any) -> str:
         return f"{int(float(value))}+"
     text_value = value.isoformat() if isinstance(value, datetime) else str(value)
     try:
-        return f"{_MONTHS[int(text_value[5:7]) - 1]} {text_value[:4]}"
-    except (ValueError, IndexError):
+        day = date.fromisoformat(text_value[:10])
+    except ValueError:
         return "Unknown"
+    now = today or datetime.now(UTC).date()
+    months = (now.year - day.year) * 12 + now.month - day.month
+    if months < 0 and day.year == now.year:
+        # Keep scheduled dates separate from this year's year-only records, which sort
+        # on the other side of the current month and need their own reachable anchor.
+        return f"Later {day.year}"
+    if not 0 <= months < 12:
+        return str(day.year)
+    return f"{_MONTHS[day.month - 1]} {day.year}"
 
 
 NEW_RELEASES = "New Releases"
@@ -996,15 +1006,23 @@ class CatalogService:
         # Count and page identities before loading variants. Merging raw pages
         # allowed the same TMDB film to recur on later pages and inflated totals.
         key = self._canonical_key()
+        source_day = func.json_extract(Title.extra, "$.originally_available_at")
+        release_day = case((source_day == func.date(source_day, "+0 days"), source_day))
+        source_year = case((Title.year.between(1000, 9999), Title.year))
+        release_sort = func.coalesce(func.min(release_day), cast(func.max(source_year), String))
+        group_query = query
+        if sort in ("year", "release"):
+            media_type = "movie" if kinds[0] in ids.MOVIE_KINDS else "tv"
+            group_query = query.outerjoin(
+                CatalogRelease, (CatalogRelease.tmdb_id == Title.tmdb_id) & (CatalogRelease.media_type == media_type)
+            )
+            release_sort = func.coalesce(func.max(CatalogRelease.release_date), release_sort)
         grouped = (
-            query.with_only_columns(
+            group_query.with_only_columns(
                 key.label("hub"),
                 func.min(title_sort_key()).label("title_sort"),
-                func.max(Title.year).label("year_sort"),
-                func.coalesce(
-                    func.max(func.date(func.json_extract(Title.extra, "$.originally_available_at"))),
-                    cast(func.max(func.nullif(Title.year, 0)), String),
-                ).label("release_sort"),
+                func.substr(release_sort, 1, 4).label("year_sort"),
+                release_sort.label("release_sort"),
                 func.max(Title.rating).label("rating_sort"),
                 func.max(Title.added_at).label("added_sort"),
                 func.max(Title.id).label("id_sort"),
@@ -1039,7 +1057,7 @@ class CatalogService:
         order: str | None = None,
     ) -> dict[str, Any]:
         page = max(1, page)
-        ctx, enabled, query, key, grouped, ordering, _ = await self._browse_frame(
+        ctx, enabled, query, key, grouped, ordering, sort_used = await self._browse_frame(
             section,
             profile_id,
             source_id=source_id,
@@ -1054,13 +1072,18 @@ class CatalogService:
         lib_key = literal("lib:") + Title.source_id + ":" + Title.ext_id
         async with self._db.session() as session:
             total = int((await session.execute(select(func.count()).select_from(grouped))).scalar_one())
-            hubs = list(
-                (
-                    await session.execute(
-                        select(grouped.c.hub).order_by(*ordering).offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)
-                    )
-                ).scalars()
+            date_column = (
+                grouped.c.release_sort if sort_used in ("release", "year") else literal(None).label("release_sort")
             )
+            page_rows = (
+                await session.execute(
+                    select(grouped.c.hub, date_column)
+                    .order_by(*ordering)
+                    .offset((page - 1) * PAGE_SIZE)
+                    .limit(PAGE_SIZE)
+                )
+            ).all()
+            hubs = [r.hub for r in page_rows]
             if not hubs:
                 return {"tiles": [], "page": page, "total": total, "has_more": False}
             page_query = query.where(key.in_(hubs))
@@ -1094,6 +1117,11 @@ class CatalogService:
             tile["is_favorite"] = hub in ctx.favorites or any(ref in ctx.favorites for ref in matched_refs)
             tile["progress_pct"] = ctx.progress_pct(hub, *matched_refs)
         tiles = await self._enrich_page([merged[hub] for hub in hubs])
+        if sort_used in ("release", "year"):
+            for tile, record in zip(tiles, page_rows, strict=True):
+                # Use the snapshot that produced the offsets, including unknowns. A fresh
+                # metadata response can improve the index for the next browse.
+                tile["year"] = int(record.release_sort[:4]) if record.release_sort else None
         return {"tiles": tiles, "page": page, "total": total, "has_more": page * PAGE_SIZE < total}
 
     async def browse_jumps(
@@ -1126,8 +1154,9 @@ class CatalogService:
             values = (await session.execute(select(column).order_by(*ordering))).scalars()
             jumps: list[dict[str, Any]] = []
             seen: set[str] = set()
+            today = datetime.now(UTC).date()
             for offset, value in enumerate(values):
-                label = jump_label(sort_used, value)
+                label = jump_label(sort_used, value, today=today)
                 if label not in seen:
                     seen.add(label)
                     jumps.append({"label": label, "offset": offset})

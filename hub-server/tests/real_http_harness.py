@@ -17,7 +17,17 @@ from fastapi import FastAPI
 from app.adapters.language.inferrer import lang_from_category
 from app.container import build_container
 from app.infra.cache import MemoryCache
-from app.infra.models import Channel, ChannelGroup, DisclaimerAcceptance, Profile, Programme, Progress, Source, Title
+from app.infra.models import (
+    CatalogRelease,
+    Channel,
+    ChannelGroup,
+    DisclaimerAcceptance,
+    Profile,
+    Programme,
+    Progress,
+    Source,
+    Title,
+)
 from app.infra.settings import AppSettings
 from app.main import create_app
 
@@ -75,13 +85,14 @@ async def seed(c: Any, base: str) -> None:
                 Profile(id="fixture-english", name="Fixture English", languages=["eng"]),
                 Profile(id="fixture-french", name="Fixture French", languages=["fra"]),
                 Profile(id="fixture-clean", name="Fixture Clean", languages=["eng"]),
+                Profile(id="fixture-refresh", name="Fixture Refresh", languages=["eng"]),
             ]
         )
         await s.flush()
         s.add_all(
             [
                 DisclaimerAcceptance(profile_id=p, version=c.disclaimer.version)
-                for p in ("fixture-english", "fixture-french", "fixture-clean")
+                for p in ("fixture-english", "fixture-french", "fixture-clean", "fixture-refresh")
             ]
         )
         s.add(
@@ -160,6 +171,34 @@ async def seed(c: Any, base: str) -> None:
                 profile_id="fixture-french", ref_id="lib:fixture-iptv:fr", position_ms=600_000, duration_ms=7_200_000
             )
         )
+        # Dated synthetic titles span the monthly rail and its first annual bucket.
+        now = datetime.now(UTC)
+        for months_back in range(13):
+            year, month = divmod(now.year * 12 + now.month - 1 - months_back, 12)
+            day = datetime(year, month + 1, 1, tzinfo=UTC).date().isoformat()
+            s.add(
+                Title(
+                    source_id="fixture-iptv",
+                    ext_id=f"archive-{months_back}",
+                    kind="vod",
+                    title=f"Studio Archive {months_back + 1}",
+                    year=year,
+                    language="eng",
+                    extra={"originally_available_at": day},
+                )
+            )
+        s.add(
+            Title(
+                source_id="fixture-iptv",
+                ext_id="route-2050",
+                kind="vod",
+                title="Route 2050",
+                language="eng",
+                year=2050,
+                tmdb_id=9300001,
+            )
+        )
+        s.add(CatalogRelease(media_type="movie", tmdb_id=9300001, release_date="2017-01-17"))
         await s.commit()
 
 
@@ -193,6 +232,17 @@ def fixture_app(root: Path, dist: Path, base: str) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with original(app):
             await seed(c, base)
+            await c.watchlist.put("fixture-refresh", "tmdb:movie:140607", playable=False)
+            check_audio = c.home.watchlist_audio
+
+            async def audio_during_refresh(profile_id: str, ref: str) -> str | None:
+                result = await check_audio(profile_id, ref)
+                if profile_id == "fixture-refresh":
+                    # A catalog commit completes between the availability read and its revision check.
+                    c.db.catalog_revisions.catalog += 1
+                return result
+
+            c.home.watchlist_audio = audio_during_refresh
             yield
 
     app.router.lifespan_context = lifespan

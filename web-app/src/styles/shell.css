@@ -156,4 +156,3 @@
 
 /* The clear and voice buttons beside the top bar's search box (SearchBox.tsx). */
 .rail-search-action { flex: none; }
-.rail-search-action[data-listening] svg { color: var(--t-accent); }

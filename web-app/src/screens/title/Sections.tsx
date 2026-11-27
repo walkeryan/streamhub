@@ -4,7 +4,7 @@ import { SafeImg, initialsOf } from '../../components/SafeImg'
 import { Avatar } from '../../components/Avatar'
 import { MediaTile } from '../../components/Tile'
 import { ProgressBar } from '../../components/ui'
-import { Captioned, HRow, Section, StillCard, nameGradient as gradient } from '../../ds'
+import { HRow, Section, StillCard, nameGradient as gradient } from '../../ds'
 
 /** "S2 · E1" without the parts that are not known. */
 export function seLabel(season?: number | null, episode?: number | null): string {
@@ -84,12 +84,8 @@ export function SimilarRow({ tiles }: { tiles: Tile[] }) {
   if (!tiles.length) return null
   return (
     <Section className="tp-section" title="More like this" testId="title-similar">
-      <HRow focusKey="title:similar">
-        {tiles.map((t) => (
-          <Captioned key={t.id} className="tp-like" caption={t.title}>
-            <MediaTile tile={t} scope="similar" mark="availability" />
-          </Captioned>
-        ))}
+      <HRow focusKey="title:similar" className="tp-similar-row">
+        {tiles.map(t => <MediaTile key={t.id} tile={t} scope="similar" mark="availability" captionBelow />)}
       </HRow>
     </Section>
   )

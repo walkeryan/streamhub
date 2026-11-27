@@ -75,12 +75,17 @@ def as_epoch(v: Any) -> datetime | None:
 
 
 def year_from(*vals: Any) -> int | None:
-    for v in vals:
-        if v is None:
-            continue
-        m = re.search(r"(19|20)\d{2}", str(v))
-        if m:
-            return int(m.group(0))
+    """Accept an explicit year/date or an annotated release-year suffix. Numbers in names are titles."""
+    from app.domain.release import release_year
+
+    for value in vals:
+        year = release_year(value)
+        if year is not None:
+            return year
+        if isinstance(value, str):
+            suffix = re.search(r"\S.*\((\d{4})\)\s*$", value)
+            if suffix:
+                return int(suffix[1])
     return None
 
 

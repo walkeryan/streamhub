@@ -505,3 +505,22 @@ def test_config_summary_lists_presentation_settings(tmp_path: Path) -> None:
     assert summary.config_summary()["default_language"] == "eng"
     assert summary.config_summary()["hidden_groups"] == ["US| NFL PPV"]
     assert summary.config_summary()["shelf_map"] == {}  # malformed settings are ignored, never fatal
+
+
+def test_release_year_never_comes_from_story_title_or_invalid_panel_date(client: XtreamClient) -> None:
+    def movie(name, **metadata):
+        return map_vod({"name": name, "stream_id": "7", **metadata}, {}, client)
+
+    assert movie("Death Race 2050").year is None
+    assert movie("2001: A Space Odyssey (1968)").year == 1968
+    assert movie("Death Race 2050", year=2050, releasedate="2017-01-17").year == 2017
+    assert (
+        movie("Death Race 2050", releaseDate="bad", releasedate="2017-01-17").extra["originally_available_at"]
+        == "2017-01-17"
+    )
+    assert movie("Upcoming", year=2050).year == 2050
+    assert movie("Unknown", year="missing", release_date="2026-02-30").year is None
+    series = map_series(
+        {"series_id": "8", "name": "Space: 1999", "first_air_date": "1975-09-04", "releaseDate": "1999-10-01"}, {}
+    )
+    assert series.year == 1975 and series.extra["originally_available_at"] == "1975-09-04"

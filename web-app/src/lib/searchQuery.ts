@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router'
 
 export const SEARCH_PATH = '/search'
 /** The one search control: the field in the top bar, or the field on the results page of a phone. */
-export const SEARCH_BOX = { bar: 'rail:/search', page: 'search:input', clear: 'rail:/search:clear', voice: 'rail:/search:voice' } as const
+export const SEARCH_BOX = { bar: 'rail:/search', page: 'search:input', clear: 'rail:/search:clear' } as const
 /** Typing waits this long before it asks; Enter asks at once. */
 const DEBOUNCE_MS = 250
 /** Shorter than this the server looks nothing up, so neither does the page. */

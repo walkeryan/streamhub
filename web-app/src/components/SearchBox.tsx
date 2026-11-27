@@ -29,6 +29,7 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
   const input = useRef<HTMLInputElement>(null)
   const entry = useTextEntry(input, { inputMode: 'search' })
   const [typing, setTyping] = useState(false)
+  const [webKeyboard, setWebKeyboard] = useState(false)
   const voice = useVoice()
   const canVoice = inlineVoice()
   const listening = voice.status === 'listening'
@@ -37,7 +38,13 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
   const typeQuery = () => {
     voiceAttempted.current = true
     if (voice.status === 'listening') flushSync(() => voice.stop())
-    if (input.current?.readOnly || document.activeElement !== input.current) entry.start()
+    const el = input.current
+    if (!entry.shell && canVoice && el?.inputMode === 'none') {
+      // Change the input mode before refocusing so a second tap opens the phone keyboard.
+      if (document.activeElement === el) el.blur()
+      flushSync(() => setWebKeyboard(true))
+      entry.start()
+    } else if (el?.readOnly || document.activeElement !== el) entry.start()
   }
   const activate = () => {
     if (!box.onSearch) box.submit()
@@ -60,6 +67,7 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
   useEffect(() => {
     if (!box.onSearch) {
       voiceAttempted.current = false
+      setWebKeyboard(false)
       useVoice.getState().stop()
     }
   }, [box.onSearch, location.pathname])
@@ -112,19 +120,13 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
       data-open={typing || listening || undefined} data-listening={listening || undefined} data-filled={box.text ? true : undefined} aria-current={box.onSearch ? 'page' : undefined}
       onClick={() => { focusSelf(); activate() }}>
       <Icon name={listening ? "mic" : "search"} />
-      <input ref={input} type="text" inputMode={entry.inputProps.inputMode} readOnly={entry.inputProps.readOnly} enterKeyHint="search" tabIndex={-1} aria-label={label} autoComplete="off" spellCheck={false}
+      <input ref={input} type="text" inputMode={!entry.shell && canVoice && !webKeyboard ? 'none' : entry.inputProps.inputMode} readOnly={entry.inputProps.readOnly} enterKeyHint="search" tabIndex={-1} aria-label={label} autoComplete="off" spellCheck={false}
         value={listening ? voice.heard : box.text} placeholder={listening ? 'Listening…' : label}
         onChange={(e) => { voice.stop(); box.setText(e.target.value) }} onKeyDown={onKeyDown}
         onFocus={() => { setTyping(true); if (!focused) focusSelf() }} onBlur={() => { setTyping(false); entry.inputProps.onBlur() }} />
-      {/* Clearing is the stop beside the box (below), for the remote and the mouse alike. */}
     </div>
-    {/* The remote's stops beside the box: clear what is typed, and speak instead of typing. */}
     {box.text && <Focusable focusKey={SEARCH_BOX.clear} className="rail-item rail-icon fx-flat rail-search-action" label="Clear search" title="Clear search"
       data-testid={page ? "search-page-clear" : "nav-search-clear"} onEnter={clear}><Icon name="x" /></Focusable>}
-    {canVoice && <Focusable focusKey={SEARCH_BOX.voice} className="rail-item rail-icon fx-flat rail-search-action" label={listening ? 'Stop listening' : 'Search by voice'}
-      title={listening ? 'Stop listening' : 'Search by voice'} aria-pressed={listening} data-listening={listening || undefined} data-testid={page ? "search-page-voice" : "nav-search-voice"}
-      onEnter={() => { if (listening) voice.stop(); else { box.submit(); voice.start() } }}><Icon name="mic" /></Focusable>}
-    {entry.shell && <Focusable focusKey="search:type" className="rail-item fx-flat" label="Type search" onEnter={() => { if (!box.onSearch) box.submit(); focusSelf(); typeQuery() }}>Type</Focusable>}
     <span className="sr-only" role="status">{listening ? 'Listening…' : entry.editing || (typing && !entry.shell) ? 'Typing' : ''}</span>
     </>
   )
