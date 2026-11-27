@@ -183,11 +183,12 @@ test('an idle shared TV returns to the real profile picker without forgetting it
     await enterPin()
     await expect(receiver.getByTestId('home')).toBeVisible()
     await expect.poll(() => receiver.evaluate(() => localStorage.getItem(Object.keys(localStorage).find((k) => /^sh\.idle\.limit\.v1:/.test(k)) ?? ''))).toBe('1')
-    // Simulate a sleeping TV waking after the configured window using its real saved timestamp.
+    // Advance the receiver clock past the configured window, then wake its real idle hook.
     await receiver.evaluate(() => {
       const key = Object.keys(localStorage).find((k) => /^sh\.idle\.v1:/.test(k))
       if (!key) throw new Error('The configured receiver timeout was not loaded')
-      localStorage.setItem(key, String(Date.now() - 65_000))
+      const actualNow = Date.now
+      Date.now = () => actualNow() + 65_000
       window.dispatchEvent(new Event('pageshow'))
       window.dispatchEvent(new Event('sh:playback-activity'))
     })
