@@ -14,6 +14,7 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from datetime import date as calendar_date
 from functools import lru_cache
@@ -28,6 +29,7 @@ from app.services.errors import ServiceError
 from app.services.event_slots import (
     DEFAULT_SLOT_CONFIG,
     SLOT_NAME_LIKE,
+    SlotConfig,
     display_name,
     is_placeholder,
     network_name,
@@ -70,6 +72,12 @@ _REPLAY_DESCRIPTION = re.compile(
     r"encore presentation|highlights of|replay of)\b",
     re.IGNORECASE,
 )
+
+
+def _is_replay(title: str, category: str | None, description: str | None, broadcast_kind: str | None) -> bool:
+    return broadcast_kind == "replay" or bool(
+        REPLAY.search(f"{title} {category or ''}") or _REPLAY_DESCRIPTION.search(description or "")
+    )
 
 
 def classify_sport(title: str, category: str | None) -> str | None:
@@ -230,6 +238,7 @@ async def sports_on_now(
             Programme.start,
             Programme.stop,
             Programme.description,
+            Programme.broadcast_kind,
         )
         .join(Programme, (Programme.feed == ch.c.source_id) & (Programme.epg_channel == ch.c.epg_id))
         .join(Source, Source.id == ch.c.source_id)
@@ -241,16 +250,24 @@ async def sports_on_now(
     scheduled_channels: set[int] = set()
     total = 0
     term = (q or "").strip().casefold()
+    configs = await channels._sources.slot_configs()
     async with channels._db.session() as session:
         eligible_count = int((await session.execute(select(func.count()).select_from(ch))).scalar_one())
         rows = await session.stream(current.execution_options(yield_per=500))
         async for row in rows:
             scheduled_channels.add(row[0])
-            kind = classify_sport(row[7], row[8])
+            advertised = _advertised_game(row[3], row[7], row[9], row[10], configs.get(row[1], DEFAULT_SLOT_CONFIG))
+            if (
+                advertised
+                and not advertised.start <= now < advertised.stop
+                and not _is_replay(row[7], row[8], row[11], row[12])
+            ):
+                continue
+            kind = classify_sport(advertised.league if advertised else row[7], row[8])
             # Filler that repeats the channel's name would classify by the channel, not by a listing.
             if kind is None or is_placeholder(row[7], row[3]) or parse_event_slot(row[3]) is not None:
                 continue
-            shown, _, _ = listing_matchup(row[7], row[8], row[11])
+            shown, _, _ = listing_matchup(advertised.title if advertised else row[7], row[8], row[11])
             if term and term not in f"{row[7]} {shown} {row[3]}".casefold():
                 continue
             counts[kind] += 1
@@ -345,6 +362,39 @@ SCAN_CAP = 5000
 # its clock time, in a block that starts hours before it. Such a listing is an event channel's, not a
 # network's broadcast.
 _CLOCK_LEAD = re.compile(r"^(?:[A-Z]{2,5}\s+)?\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\s", re.IGNORECASE)
+
+
+# Dedicated league feeds put the advertised local kickoff in the programme name and
+# repeat that name over long guide blocks. Only trust a numbered game channel and a
+# weekday, time and two named teams together.
+_GAME_FEED = re.compile(r"^(NFL|NBA|WNBA|NHL|MLB) Game [0-9]{1,3}$", re.I)
+_KICKOFF = re.compile(
+    r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap])\.?m\.?\s+(.+)$",
+    re.I,
+)
+_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+@dataclass(frozen=True)
+class _GameFeed:
+    league: str
+    title: str
+    start: datetime
+    stop: datetime
+
+
+def _advertised_game(channel: str, title: str, start: datetime, stop: datetime, config: SlotConfig) -> _GameFeed | None:
+    feed = _GAME_FEED.fullmatch(channel.strip())
+    clock = _KICKOFF.fullmatch(title.strip()) if feed else None
+    if not feed or not clock or not split_matchup(clock[5]):
+        return None
+    local = start.astimezone(config.zone)
+    weekday = _WEEKDAYS.index(clock[1].lower())
+    # Nearest matching weekday to the guide block (including midnight crossings).
+    day = local.date() + timedelta(days=(weekday - local.weekday() + 3) % 7 - 3)
+    hour = int(clock[2]) % 12 + (12 if clock[4].lower() == "p" else 0)
+    kickoff = datetime.combine(day, time(hour, int(clock[3] or 0)), config.zone).astimezone(UTC)
+    return _GameFeed(feed[1].upper(), clock[5].strip(), max(start, kickoff), min(stop, kickoff + config.duration))
 
 
 def _event_id(*parts: str) -> str:
@@ -443,6 +493,9 @@ async def _grouped_events(
     eligible, _ = await channels._channel_query(profile_id, language=language)
     ch = eligible.subquery()
     text = func.lower(func.coalesce(Programme.category, "") + " " + Programme.title)
+    game_feed = or_(
+        *(func.lower(ch.c.name).like(f"{league} game %") for league in ("nfl", "nba", "wnba", "mlb", "nhl"))
+    )
     query = (
         select(
             ch.c.id,
@@ -466,7 +519,7 @@ async def _grouped_events(
         .where(
             Programme.stop > start,
             Programme.start < stop,
-            sport_listing_clause(),
+            or_(sport_listing_clause(), game_feed),
             # Filler rows are dropped before the cap; the exact comparison below collapses whitespace too.
             func.lower(func.trim(Programme.title)) != func.lower(func.trim(ch.c.name)),
         )
@@ -475,10 +528,11 @@ async def _grouped_events(
     # A slot names its own sport ("Field Hockey"); only the classifier's sports narrow the guide read.
     guide_sport = sport is None or sport in _SPORT_TERMS
     if sport and guide_sport:
-        query = query.where(or_(*(text.like(f"%{word}%") for word in _SPORT_TERMS[sport])))
+        query = query.where(or_(game_feed, *(text.like(f"%{word}%") for word in _SPORT_TERMS[sport])))
     if status == "live":
         query = query.where(
             or_(
+                game_feed,
                 Programme.broadcast_kind == "live",
                 text.like("%live%"),
                 func.lower(Programme.description).like("live coverage%"),
@@ -522,7 +576,7 @@ async def _grouped_events(
     if status in ("current", "live"):
         query = query.where(Programme.start <= now, Programme.stop > now)
     elif status == "upcoming":
-        query = query.where(Programme.start > now)
+        query = query.where(or_(Programme.start > now, game_feed & (Programme.stop > now)))
     elif status == "active":
         query = query.where(Programme.stop > now)
     squashed = func.replace(func.replace(ch.c.name, "  ", " "), "  ", " ")
@@ -538,7 +592,11 @@ async def _grouped_events(
         rows = list((await session.execute(query.limit(SCAN_CAP + 1))).all()) if guide_sport else []
         slot_rows = list((await session.execute(slot_query.limit(SCAN_CAP + 1))).all())
     truncated = len(rows) > SCAN_CAP or len(slot_rows) > SCAN_CAP
-    configs = await channels._sources.slot_configs() if slot_rows else {}
+    configs = (
+        await channels._sources.slot_configs()
+        if slot_rows or any(_GAME_FEED.fullmatch(r[3].strip()) for r in rows)
+        else {}
+    )
     grouped: dict[str, dict[str, Any]] = {}
     scheduled: set[int] = set()
     slotted: set[str] = set()  # events an event channel lists: by its name, or by a clock-time title
@@ -557,18 +615,37 @@ async def _grouped_events(
         }
 
     for row in rows[:SCAN_CAP]:
-        kind = classify_sport(row[7], row[8])
+        config = configs.get(row[1], DEFAULT_SLOT_CONFIG)
+        advertised = _advertised_game(row[3], row[7], row[9], row[10], config)
+        kind = classify_sport(advertised.league if advertised else row[7], row[8])
+        # A broad SQL prefilter admits game channels; apply the requested sport
+        # after reading their league. Other categories keep the ordinary filter.
+        if sport and advertised and sport != kind:
+            continue
         # A slot channel is scheduled by its name alone, and filler is no listing.
         if kind is None or is_placeholder(row[7], row[3]) or parse_event_slot(row[3]) is not None:
             continue
         scheduled.add(row[0])
-        shown, home, away = listing_matchup(row[7], row[8], row[13])
+        title = advertised.title if advertised else row[7]
+        shown, home, away = listing_matchup(title, row[8], row[13])
         if term and term.casefold() not in f"{row[7]} {shown}".casefold():
             continue
         label = f"{row[7]} {row[8] or ''}"
-        replay = row[14] == "replay" or bool(REPLAY.search(label) or _REPLAY_DESCRIPTION.search(row[13] or ""))
+        replay = _is_replay(row[7], row[8], row[13], row[14])
+        begins, ends = row[9], row[10]
+        if advertised and not replay:
+            # A game feed may repeat the same title overnight. Its advertised game
+            # is available only while the guide actually covers the kickoff window.
+            begins, ends = advertised.start, advertised.stop
+            if ends <= begins or begins >= stop or ends <= start:
+                continue
+        if status in ("current", "live") and not begins <= now < ends:
+            continue
+        if (status == "upcoming" and begins <= now) or (status == "active" and ends <= now):
+            continue
         verified_live = not replay and (
-            row[14] == "live"
+            advertised is not None
+            or row[14] == "live"
             or (row[8] or "").strip().lower() == "live"
             or bool(_LIVE_LABEL.search(label))
             or (row[13] or "").strip().casefold().startswith("live coverage ")
@@ -583,8 +660,8 @@ async def _grouped_events(
         event_id = _event_id(
             _same_title(shown),
             kind,
-            row[9].isoformat(),
-            row[10].isoformat(),
+            begins.isoformat(),
+            ends.isoformat(),
             str(replay),
             str(verified_live),
             "matchup" if matchup else f"{row[1]}:{row[11]}",
@@ -596,19 +673,22 @@ async def _grouped_events(
                 "kind": "event",
                 "title": shown,
                 "sport": kind,
-                "league": None,
+                "league": advertised.league if advertised else None,
                 "home": home,
                 "away": away,
-                "start": row[9],
-                "stop": row[10],
-                "status": "upcoming" if row[9] > now else "current" if row[10] > now else "ended",
+                "start": begins,
+                "stop": ends,
+                "status": "upcoming" if begins > now else "current" if ends > now else "ended",
                 "replay": replay,
                 "live_evidence": verified_live,
                 "grouping_evidence": "matching_title_and_time" if matchup else "same_source_programme",
                 "feeds": [],
             },
         )
-        event["feeds"].append(feed(row, ids.prog_id(row[6]), row[12]))
+        entry = feed(row, ids.prog_id(row[6]), row[12])
+        if begins != row[9]:
+            entry["programme_start"] = row[9]
+        event["feeds"].append(entry)
         if _CLOCK_LEAD.match(shown):
             slotted.add(event_id)
 
@@ -670,6 +750,8 @@ async def _grouped_events(
         # live; what is still to come stays in order of time.
         if event["status"] != "current":
             return (1, 0)
+        if event["league"] and event["live_evidence"] and event["id"] not in slotted:
+            return (0, -1)
         game = bool(event["home"] and event["away"])
         return (0, (0 if game else 2) + (event["id"] in slotted))
 

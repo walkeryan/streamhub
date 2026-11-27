@@ -2032,7 +2032,8 @@ components:
         quality: {type: string, nullable: true, enum: [4K, UHD, FHD, HD, SD, null], description: "Picture quality the provider's channel name advertises, in plain or superscript letters; null when it names none."}
         source_id: {type: string}
         source_name: {type: string}
-        programme_id: {type: string, description: "Programme.id of this event on this channel; pass it with channel_id and the event's start to POST /recordings."}
+        programme_id: {type: string, description: "Programme.id of this event on this channel."}
+        programme_start: {type: string, format: date-time, nullable: true, description: "Original guide start when a feed advertises a kickoff inside its guide block. Use this or the event start for DVR requests."}
         language: {type: string, nullable: true}
         language_verified: {type: boolean}
     SportsEvent:
