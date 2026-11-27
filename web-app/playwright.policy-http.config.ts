@@ -7,6 +7,6 @@ export default defineConfig({
   projects: [{ name: 'google-chrome-policy-http', use: { ...devices['Desktop Chrome'], channel: 'chrome' } }],
   webServer: {
     command: 'cd ../hub-server && ${STREAMHUB_TEST_PYTHON:-python3} -m tests.policy_http_harness --dist ../web-app/dist --port 5188',
-    url: 'http://127.0.0.1:5188/api/openapi.json', reuseExistingServer: false, timeout: 30_000,
+    url: 'http://127.0.0.1:5188/api/v1/health', reuseExistingServer: false, timeout: 30_000,
   },
 })

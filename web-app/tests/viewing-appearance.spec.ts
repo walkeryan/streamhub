@@ -60,7 +60,7 @@ test('caption sample plays timed captions and saves the selected text and backgr
   }
   expect(documents.p2?.['captions.v1']).toBeUndefined()
   await page.getByRole('button', { name: 'Save caption appearance' }).click()
-  await expect.poll(() => documents.p2['captions.v1']).toEqual({ size: 'large', color: 'yellow', background: 'solid' })
+  await expect.poll(() => documents.p2?.['captions.v1']).toEqual({ size: 'large', color: 'yellow', background: 'solid' })
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-caption-color', 'yellow')
 })
