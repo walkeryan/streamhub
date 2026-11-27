@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -411,7 +411,7 @@ class CaptureSlot:
     stop: Callable[[], Awaitable[None]] | None = None
 
 
-def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
+def _upstream_args(url: str, headers: dict[str, str], *, live: bool = False) -> list[str]:
     """Input options that make ffmpeg's request look like the proxy's own."""
     args: list[str] = []
     if headers:
@@ -423,6 +423,10 @@ def _upstream_args(url: str, headers: dict[str, str]) -> list[str]:
             args += ["-headers", other]
     if url.startswith("http"):
         args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
+        # A manifest and each of its segments must end normally for the demuxer to advance.
+        # Retry a clean EOF only on a known continuous transport stream.
+        if live and urlsplit(url).path.lower().endswith((".ts", ".m2ts", ".mts", ".mpegts")):
+            args += ["-reconnect_at_eof", "1"]
     return args
 
 
@@ -453,7 +457,7 @@ def canvas_args(
 ) -> list[str]:
     from app.proxy.canvas import COLUMNS, FPS, ROWS
 
-    args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *_upstream_args(url, headers)]
+    args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *_upstream_args(url, headers, live=live)]
     if vod and vod.start_s:
         args += ["-ss", str(vod.start_s)]
     if live:
@@ -463,8 +467,6 @@ def canvas_args(
         args += ["-readrate", "1", "-readrate_initial_burst", CANVAS_LIVE_BURST_S]
     else:
         args += ["-readrate", VOD_READRATE, "-readrate_initial_burst", VOD_BURST_S]
-    if live and url.startswith("http"):
-        args += ["-reconnect_at_eof", "1"]
     # Apply the input display aspect ratio before packing square-pixel tiles.
     height = vod.max_height if vod and vod.max_height in (720, 1080) else 480
     width = {480: 854, 720: 1280, 1080: 1920}[height]
@@ -545,9 +547,7 @@ def ffmpeg_args(
         args += ["-hwaccel", "qsv"]
     elif transcode == "nvenc":
         args += ["-hwaccel", "cuda"]
-    args += _upstream_args(url, headers)
-    if url.startswith("http") and live:
-        args += ["-reconnect_at_eof", "1"]
+    args += _upstream_args(url, headers, live=live)
     if buffered:
         # Bound DVR startup bursts to media time before the finite HLS writer
         # can roll away retained history. Ordinary live/VOD keeps its input policy.
