@@ -89,6 +89,7 @@ function SenderPanel() {
   }
   const pb = session?.playback
   const connected = session?.status === 'connected'
+  const waiting = !!outstanding && !problem
   const status = outstanding ? outstanding.payload.action === 'load' ? 'Starting playback on TV…' : 'Waiting for the TV…' : ''
   const seek = (delta: number) => {
     if (pb?.duration_ms) void sendCastCommand({ action: 'seek', position_ms: Math.max(0, Math.min(pb.duration_ms, pb.position_ms + delta)) })
@@ -102,10 +103,10 @@ function SenderPanel() {
           {pb.id ? <p>{pb.live ? 'Live TV' : clock(pb.position_ms) + (pb.duration_ms ? ' / ' + clock(pb.duration_ms) : '')} · {pb.playing ? 'Playing' : 'Paused'}</p> : <p>Choose something to play on this TV.</p>}
         </div></div>
         {pb.id && <FocusGroup focusKey="cast:transport" className="lib-chips" label="Playback controls">
-          {!!pb.duration_ms && !pb.live && <Button focusKey="cast:back" ghost disabled={!!outstanding} onEnter={() => seek(-10_000)}>Back 10 s</Button>}
-          <Button focusKey="cast:play" primary disabled={!!outstanding} onEnter={() => void sendCastCommand({ action: pb.playing ? 'pause' : 'play' })}>{pb.playing ? 'Pause' : 'Play'}</Button>
-          {!!pb.duration_ms && !pb.live && <Button focusKey="cast:forward" ghost disabled={!!outstanding} onEnter={() => seek(10_000)}>Forward 10 s</Button>}
-          <Button focusKey="cast:stop" ghost disabled={!!outstanding} onEnter={() => void sendCastCommand({ action: 'stop' })}>Stop playback</Button>
+          {!!pb.duration_ms && !pb.live && <Button focusKey="cast:back" ghost disabled={waiting} onEnter={() => seek(-10_000)}>Back 10 s</Button>}
+          <Button focusKey="cast:play" primary disabled={waiting} onEnter={() => void sendCastCommand({ action: pb.playing ? 'pause' : 'play' })}>{pb.playing ? 'Pause' : 'Play'}</Button>
+          {!!pb.duration_ms && !pb.live && <Button focusKey="cast:forward" ghost disabled={waiting} onEnter={() => seek(10_000)}>Forward 10 s</Button>}
+          <Button focusKey="cast:stop" ghost disabled={waiting} onEnter={() => void sendCastCommand({ action: 'stop' })}>Stop playback</Button>
         </FocusGroup>}
       </>}
       {(problem || error) && <div role="alert" className="recent-undo"><span>{problem || error}</span><Button focusKey="cast:retry" ghost onEnter={() => { if (outstanding) void sendCastCommand(outstanding.payload, true); else setRefresh(x => x + 1) }}>Retry</Button></div>}

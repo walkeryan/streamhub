@@ -1,6 +1,5 @@
 .appearance-field, .appearance-options { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; }
 .appearance-field { justify-content: space-between; margin-block: 1rem; }
-.appearance-options [aria-checked=true] { background: var(--t-accent); color: var(--t-on-accent, #101010); }
 .appearance-poster-preview { width: calc(var(--tile-poster-w) * var(--box-art-scale, 1)); aspect-ratio: 2/3; overflow: hidden; border-radius: .5rem; background: linear-gradient(145deg, #122739, #99845a); }
 .appearance-poster-preview img { width: 100%; height: 100%; object-fit: cover; }
 [data-poster-size=small], .appearance-poster-preview[data-size=small] { --box-art-scale: .78; }
@@ -19,14 +18,28 @@
 .caption-preview[data-caption-size=small] video::cue { font-size: 3cqw; }
 .caption-preview[data-caption-size=standard] video::cue { font-size: 4.5cqw; }
 .caption-preview[data-caption-size=large] video::cue { font-size: 6cqw; }
+/* Text size. Every step of the type scale grows from its own size (ds.css, tokens.css), so a heading stays
+   larger than the text under it; the largest headings grow by half as much, or a phone would show two words
+   a line. A custom property cannot be scaled from itself, so the sizes are repeated here: keep them in step. */
 :root[data-reading-size=large] { --reading-scale: 1.25; }
 :root[data-reading-size=largest] { --reading-scale: 1.55; }
 :root:is([data-reading-size=large], [data-reading-size=largest]) {
-  --fs-body: calc(1rem * var(--reading-scale)); --fs-meta: calc(.875rem * var(--reading-scale));
-  --fs-small: calc(.8125rem * var(--reading-scale)); --fs-micro: calc(.75rem * var(--reading-scale));
-  --text-body: var(--fs-body); --text-label: var(--fs-meta); --text-caption: var(--fs-small);
+  --reading-scale-head: calc(1 + (var(--reading-scale) - 1) / 2);
+  --fs-body: calc(.9rem * var(--reading-scale)); --fs-meta: calc(.8rem * var(--reading-scale));
+  --fs-small: calc(.75rem * var(--reading-scale)); --fs-micro: calc(.7rem * var(--reading-scale));
+  --fs-section: calc(1.2rem * var(--reading-scale)); --fs-sub: calc(1.3rem * var(--reading-scale));
+  --fs-page: calc(1.6rem * var(--reading-scale-head)); --fs-hero: calc(2.2rem * var(--reading-scale-head));
+  --text-body: calc(1rem * var(--reading-scale)); --text-label: calc(.8125rem * var(--reading-scale));
+  --text-heading: calc(1.25rem * var(--reading-scale)); --text-title: calc(1.75rem * var(--reading-scale-head));
 }
-[data-reading-size]:not([data-reading-size=standard]) :is(.rail .lbl, .chip, .btn, .appearance-field, .reading-sample, .acct-note) { font-size: var(--fs-meta); }
+@media (max-width: 720px) {
+  :root:is([data-reading-size=large], [data-reading-size=largest]) {
+    --fs-body: calc(1rem * var(--reading-scale)); --fs-meta: calc(.875rem * var(--reading-scale));
+    --fs-small: calc(.8125rem * var(--reading-scale)); --fs-micro: calc(.75rem * var(--reading-scale));
+  }
+}
+/* The top bar's names may not wrap, so they grow only as far as the row has room for. */
+@media (min-width: 721px) { :root:is([data-reading-size=large], [data-reading-size=largest]) .rail-item { font-size: calc(.85rem * min(var(--reading-scale), 1.15)); } }
 .reading-sample { font-size: var(--fs-body); }
 @media (max-width: 720px) {
   .acct-body, .acct-group, .glass-panel, .lib-page > [role=tabpanel] { min-width: 0; max-width: 100%; }
@@ -34,5 +47,4 @@
   .appearance-options, .appearance-poster-preview, .caption-preview, .chip-scroll, .search-page-field, .lib-search { max-width: 100%; min-width: 0; }
   .acct-group, .lib-page > [role=tabpanel] { overflow-wrap: anywhere; }
   .search-page-field .search-mobile-input input { min-width: 0; }
-  [data-reading-size=largest] .rail .lbl { font-size: .95rem; }
 }

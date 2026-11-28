@@ -56,15 +56,17 @@ test('from the show, an episode opens its page and Back returns to the show; the
   await expect(page).toHaveURL(/tmdb%3Aepisode%3A201%3A1%3A3$/)
   await expect(page.getByTestId('title-detail').locator('.tp-sub')).toHaveText('What the Net Held')
   await third.click()
-  await page.keyboard.press('ArrowUp')
+  // The arrows only move between cards: holding OK opens the card's menu, on an entry that changes nothing,
+  // and closing it puts focus back on the card.
   const opener = third.locator('..').getByTestId('media-card-actions')
-  await expect(opener).toBeFocused()
-  await page.keyboard.press('Enter')
+  await page.keyboard.down('Enter')
   await expect(page.getByRole('menuitem', { name: 'Thumbs up', exact: true })).toBeVisible()
+  await page.keyboard.up('Enter')
+  await expect(page.getByRole('menuitem', { name: 'Open', exact: true })).toHaveAttribute('data-focused', 'true')
+  await expect(opener).toHaveAttribute('aria-expanded', 'true')
   await page.keyboard.press('Escape')
-  await expect(opener).toBeFocused()
-  await page.keyboard.press('ArrowDown')
   await expect(third).toBeFocused()
+  await expect(opener).toHaveAttribute('aria-expanded', 'false')
   // Along the strip: the next episode replaces this one, so Back still returns to the show.
   await page.getByTestId('episodes').getByTestId('episode').nth(3).click()
   await expect(page).toHaveURL(/tmdb%3Aepisode%3A201%3A1%3A4$/)

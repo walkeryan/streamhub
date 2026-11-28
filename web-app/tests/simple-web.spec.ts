@@ -191,7 +191,7 @@ test('keyboard only: the bar to Movies, along a shelf to See all and back, then 
   // box and two icons with a name of their own.
   await expect(rail.locator('.rail-item .lbl')).toHaveText(['Home', 'Live TV', 'Sports', 'Movies', 'Shows', 'My List'])
   for (const label of await rail.locator('.rail-item .lbl').all()) await expect(label).toBeVisible()
-  await expect(rail.locator('.rail-icon')).toHaveCount(2)
+  await expect(rail.locator('.rail-icon:not(.rail-search-action)')).toHaveCount(2)
   await expect(rail.getByRole('textbox', { name: 'Search', exact: true })).toBeVisible()
   await expect(rail.getByRole('button', { name: 'More', exact: true })).toBeVisible()
   await expect(rail.getByRole('link', { name: 'Profile Guest', exact: true })).toBeVisible()

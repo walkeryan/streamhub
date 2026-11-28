@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ok, unwrap } from '../api/client'
 import { useChannels } from '../api/hooks'
 import type { Channel } from '../api/types'
 import { Button, Chip, ErrorState, Modal } from '../ds'
 import { FocusGroup, FocusableInput } from '../nav/Focusable'
+import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 import { useDebounced } from '../lib/util'
@@ -42,6 +43,19 @@ export function ChannelLineup({ onClose }: { onClose: () => void }) {
   const busy = change.isPending || load.isFetching
   const row = rows.find(c => c.id === selected)
   const selectTab = (value: boolean) => { setHidden(value); setPage(0); setSelected(null) }
+  // Hiding a channel, turning to the last page or confirming a restore removes the very control that was
+  // pressed. Focus then goes to the nearest thing that is still there, or the remote would have nowhere to
+  // move from.
+  const firstRow = rows[0]?.id
+  useEffect(() => {
+    const lost = getCurrentFocusKey()
+    if (doesFocusableExist(lost)) return
+    const next = lost === 'lineup:prev' || lost === 'lineup:next' ? ['lineup:next', 'lineup:prev', 'lineup:done']
+      : lost === 'lineup:confirm' || lost === 'lineup:cancel' ? ['lineup:reset']
+      : [selected && `lineup:${selected}`, firstRow && `lineup:${firstRow}`, 'lineup:search']
+    const target = next.find((key): key is string => !!key && doesFocusableExist(key))
+    if (target) void setFocus(target)
+  }, [firstRow, rows.length, page, total, selected, hidden, reset])
   return <Modal open onClose={onClose} title="My channel lineup" firstFocusKey="lineup:search" variant="sheet">
     <FocusableInput focusKey="lineup:search" label="Find a channel" placeholder="Channel name or number" value={term} onChange={v => { setTerm(v); setPage(0); setSelected(null) }} />
     <FocusGroup focusKey="lineup:tabs" className="lib-chips">

@@ -101,7 +101,7 @@ export function Home() {
               <Icon name="play" />{playable ? 'Play' : 'Open in app'}
             </Button>
             <GlassIconButton focusKey="hero:details" icon="info" label="Details" testId="hero-details" onEnter={() => go(`/title/${encodeURIComponent(active.id)}`)} />
-            {hero.length > 1 && <GlassIconButton focusKey="hero:rotate" icon={rotating ? 'pause' : 'play'} label={rotating ? 'Pause featured rotation' : 'Play featured rotation'} disabled={!rotation.ready} onEnter={toggleRotation} />}
+            {hero.length > 1 && <GlassIconButton focusKey="hero:rotate" icon={rotating ? 'pause' : 'refresh'} label={rotating ? 'Pause featured rotation' : 'Resume featured rotation'} disabled={!rotation.ready} onEnter={toggleRotation} />}
             {hero.length > 1 && (
               <div className="home-hero-dots" aria-hidden="true">
                 {hero.map((h, i) => <i key={h.id} data-on={i === shown} />)}

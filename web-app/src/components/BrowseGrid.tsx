@@ -4,6 +4,7 @@ import type { Tile } from '../api/types'
 import { FocusGroup, Focusable } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
 import { useHistoryState } from '../nav/historyState'
+import { usePhone } from '../lib/layout'
 import { Button, ErrorState, Skeleton } from './ui'
 import { MediaTile } from './Tile'
 
@@ -42,6 +43,14 @@ function firstVisible(grid: HTMLElement, top: number): number {
  * The browse grid: loads as it scrolls, both ways, with no page buttons. Beside it a rail of jumps for the
  * current sort (A-Z, years, ratings, months) moves straight to where each starts, loading that page first.
  */
+/** The most jump targets a phone's edge takes. */
+const PHONE_JUMPS = 28
+function thinned<T extends { label: string }>(jumps: T[]): T[] {
+  const years = jumps.every((j) => /^\d{4}$/.test(j.label))
+  const step = Math.ceil(jumps.length / PHONE_JUMPS)
+  return jumps.filter((j, i) => i === 0 || (years ? j.label.endsWith('0') : i % step === 0))
+}
+
 export function BrowseGrid(p: {
   section: string
   filters: BrowseFilters
@@ -50,6 +59,7 @@ export function BrowseGrid(p: {
   empty: ReactNode
   onTotal?: (total: number | null, fetching: boolean) => void
 }) {
+  const phone = usePhone()
   const [start, setStart] = useHistoryState(`browse:${p.section}:start`, 1)
   const [startKey, setStartKey] = useState(p.filterKey)
   if (startKey !== p.filterKey) { setStartKey(p.filterKey); setStart(1) }
@@ -121,7 +131,10 @@ export function BrowseGrid(p: {
     setStart(Math.floor(offset / pageSize) + 1)
   }
 
-  const rail = (jumps.data?.jumps ?? []).filter((j) => total === null || j.offset < total)
+  const every = (jumps.data?.jumps ?? []).filter((j) => total === null || j.offset < total)
+  // A phone has no room for a hundred years down its edge: there the rail is the decades (or, for any other
+  // long list, an even sample), each one large enough for a thumb.
+  const rail = phone && every.length > PHONE_JUMPS ? thinned(every) : every
   const current = rail.reduce<string | null>((label, j) => (j.offset <= at ? j.label : label), rail[0]?.label ?? null)
 
   if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />

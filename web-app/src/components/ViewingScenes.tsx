@@ -1,4 +1,4 @@
-import { useState, type RefObject } from 'react'
+import { useEffect, useState, type RefObject } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { useGo } from '../nav/back'
@@ -7,6 +7,7 @@ import type { components } from '../api/schema'
 import { Section, SectionHeader } from '../ds'
 import { fmtDuration } from '../lib/util'
 import { FocusableInput, FocusGroup } from '../nav/Focusable'
+import { doesFocusableExist, getCurrentFocusKey, setFocus } from '../nav/spatial'
 import { GlassButton } from '../player/MiniBar'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
@@ -139,6 +140,14 @@ export function SavedScenes({ id }: { id: string }) {
       toast(e instanceof Error ? e.message : 'Could not remove this scene.', 'error')
     }
   }
+  // A removed scene takes its buttons, and the focus on them, with it: the next scene gets the focus, or the
+  // page's own actions when that was the last one.
+  const firstScene = marks.data?.[0]?.id
+  const count = marks.data?.length
+  useEffect(() => {
+    if (count === undefined || doesFocusableExist(getCurrentFocusKey()) || document.querySelector('.scrim, .chip-menu-scrim')) return
+    void setFocus(firstScene ? 'scene:' + firstScene : 'title:watchlist')
+  }, [firstScene, count])
   if (!marks.data?.length) return null
   return (
     <Section className="tp-section" label="Saved scenes" testId="saved-scenes">

@@ -4,6 +4,7 @@ import { PadGlyphs } from '../components/PadHints'
 import { FocusGroup, Focusable, type FocusableHandle } from '../nav/Focusable'
 import { inShell } from '../shell'
 import { CONTROLLER_HELP, SHORTCUT_HELP, type ShortcutLine } from './shortcuts'
+import '../styles/shortcuts.css'
 
 export const helpTitle = () => 'Controls and shortcuts'
 const modes = ['Keyboard', 'Remote', 'Touch', 'Controller'] as const
@@ -36,9 +37,10 @@ export function ShortcutHelp({ open, live, onClose }: { open: boolean; live?: bo
       <Focusable ref={guide} id={`keys:tab:${mode}:panel`} focusKey="keys:guide" role="tabpanel" aria={{ labelledby: `keys:tab:${mode}` }} className="shortcut-guide" onArrow={scroll}>
         {mode === 'Keyboard' && <div className="keys">
           <section><h3 className="label">Browsing</h3>
-            <div className="keys-line"><kbd>Tab / Shift Tab</kbd><span>Next or previous control</span></div>
-            <div className="keys-line"><kbd>/</kbd><span>Type a search</span></div>
-            <div className="keys-line"><kbd>Esc</kbd><span>Close a menu or go back</span></div>
+            <div className="keys-line"><span><kbd className="kbd">Tab</kbd><kbd className="kbd">Shift Tab</kbd></span><span>Next or previous control</span></div>
+            <div className="keys-line"><span><kbd className="kbd">/</kbd></span><span>Type a search</span></div>
+            <div className="keys-line"><span><kbd className="kbd">Hold Enter</kbd></span><span>More actions for a poster or a channel</span></div>
+            <div className="keys-line"><span><kbd className="kbd">Esc</kbd></span><span>Close a menu or go back</span></div>
           </section>
           {SHORTCUT_HELP.map(group => <section key={group.title}>
             <h3 className="label">{group.title}</h3>
@@ -49,11 +51,13 @@ export function ShortcutHelp({ open, live, onClose }: { open: boolean; live?: bo
         </div>}
         {mode === 'Remote' && <div className="shortcut-instructions">
           <p><strong>Arrows</strong> move between controls. Press <strong>OK</strong> to select.</p>
+          <p><strong>Hold OK</strong> on a poster or a channel for more: My List, thumbs up or down.</p>
           {live !== true && <p>In a movie or episode, select the timeline and use <strong>Left</strong> or <strong>Right</strong> to seek.</p>}
           <p>Select <strong>Search</strong> to speak. Select it again to type. If voice is unavailable, the keyboard opens immediately.</p>
           <p><strong>Back</strong> closes the open menu or returns to the previous screen.</p>
         </div>}
         {mode === 'Touch' && <div className="shortcut-instructions">
+          <p><strong>Press and hold</strong> a poster or a channel for more: My List, thumbs up or down.</p>
           <p><strong>Tap the picture</strong> to show or hide playback controls.</p>
           {live !== true && <p>On seekable video, <strong>double-tap the left half</strong> to go back 10 seconds or <strong>the right half</strong> to go forward 10 seconds.</p>}
           <p>Use the player's <strong>Back</strong> control to return to browsing.</p>
