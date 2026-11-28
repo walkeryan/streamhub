@@ -92,8 +92,9 @@
 .browse-jump.fx[data-focused='true'] { transform: none; outline: var(--focus-border) solid var(--t-text); outline-offset: calc(-1 * var(--focus-border)); box-shadow: none; }
 .browse-jump.fx[data-focused='true'][aria-current='true'] { outline-color: var(--t-accent-text); }
 @media (max-width: 720px) {
-  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - 6rem); padding-inline: 0.25rem; margin-top: 0.5rem; }
-  .browse-jump { min-width: 2rem; padding-inline: 0.2rem; font-size: 0.6875rem; line-height: 1.55; }
+  /* Clear of the bottom bar; each target (BrowseGrid thins a long rail here) tall enough for a thumb. */
+  .browse-jumps { top: 0.5rem; max-height: calc(100dvh - var(--bottom-bar-h) - 1.5rem); padding-inline: 0.25rem; margin-top: 0.5rem; }
+  .browse-jump { display: grid; place-items: center; min-width: 2.25rem; min-height: 1.75rem; padding-inline: 0.2rem; font-size: 0.6875rem; line-height: 1.2; }
 }
 
 /* ---------- Discover ---------- */
@@ -193,10 +194,12 @@
 .actor-credit img { width: 3rem; aspect-ratio: 2/3; object-fit: cover; border-radius: .2rem; }
 .actor-credit span { min-width: 0; overflow-wrap: anywhere; }
 .actor-credit small { display: block; color: var(--t-text-muted); font-size: var(--fs-small); }
+/* A page that is being replaced (the next page of a collection is on its way) stays, dimmed. */
+.grid-tiles[data-stale='true'], .credit-grid[data-stale='true'] { opacity: .55; transition: opacity var(--dur-fast) var(--ease); }
 .recommendation-grid { align-items: start; }
 .recommendation { min-width: 0; }
 .recommendation-actions, .joint-invite { display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
 .recommendation-actions .chip, .recommendation-actions .btn { min-height: 2.75rem; min-width: 2.75rem; padding: .4rem; justify-content: center; }
 .recommendation-actions svg { width: 1.1rem; }
 .joint-invite { padding: var(--gap-md); justify-content: space-between; }
-.joint-invite strong { font-size: var(--fs-title); letter-spacing: .12em; }
+.joint-invite strong { font-size: var(--text-title); letter-spacing: .12em; }

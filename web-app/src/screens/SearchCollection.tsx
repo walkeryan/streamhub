@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useParams, useSearchParams } from 'react-router'
 import { api, ApiError, unwrap } from '../api/client'
 import type { paths } from '../api/types'
@@ -26,6 +26,8 @@ function Collection({ kind }: { kind: 'actor' | 'service' }) {
     queryFn: ({ signal }) => unwrap<Page>(api.GET('/discover/{section}', { signal, params: {
       path: { section }, query: { page, ...(kind === 'actor' ? { actor: Number(id) } : { service: id }) },
     } })),
+    // Turning the page keeps the page that is showing, and the pager under it, until the next one arrives.
+    placeholderData: keepPreviousData,
   })
   useRestoreFocus(true, 'collection:tabs')
   const change = (next: string, n: number) => {
@@ -42,13 +44,13 @@ function Collection({ kind }: { kind: 'actor' | 'service' }) {
     </FocusGroup>
     {query.error ? <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       : !query.data ? <SkeletonRow layout="poster" count={6} />
-      : query.data.tiles.length ? <FocusGroup focusKey="collection:titles" className="grid-tiles">
+      : query.data.tiles.length ? <FocusGroup focusKey="collection:titles" className="grid-tiles" data={{ stale: query.isPlaceholderData || undefined }}>
         {query.data.tiles.map(t => <MediaTile key={t.id} tile={t} scope="collection" titleAlways mark="availability" />)}
       </FocusGroup> : <Empty icon="film" title="No titles on this page" />}
     {query.data && (page > 1 || query.data.has_more) && <FocusGroup focusKey="collection:pages" className="lib-chips">
-      <Button focusKey="collection:prev" disabled={page === 1} onEnter={() => change(section, page - 1)}>Previous</Button>
+      <Button focusKey="collection:prev" disabled={page === 1 || query.isPlaceholderData} onEnter={() => change(section, page - 1)}>Previous</Button>
       <span className="label">Page {page}</span>
-      <Button focusKey="collection:next" disabled={!query.data.has_more} onEnter={() => change(section, page + 1)}>Next</Button>
+      <Button focusKey="collection:next" disabled={!query.data.has_more || query.isPlaceholderData} onEnter={() => change(section, page + 1)}>Next</Button>
     </FocusGroup>}
     {query.data && <Attribution text="Availability data by JustWatch" />}
   </div>
@@ -69,6 +71,7 @@ function ActorFilmography() {
       path: { person_id: Number(id) }, query: { kind, page },
     } })),
     retry: false,
+    placeholderData: keepPreviousData,
   })
   useRestoreFocus(true, 'credits:all')
   if (query.error instanceof ApiError && query.error.status === 404) return <Collection kind="actor" />
@@ -91,11 +94,11 @@ function ActorFilmography() {
       <FocusGroup focusKey="credits:filters" className="lib-chips">{([['all', 'All'], ['movies', 'Movies'], ['shows', 'TV series']] as const).map(([value, label]) =>
         <Chip key={value} focusKey={'credits:' + value} pressed={(section || 'all') === value} onEnter={() => change(value, 1)}>{label}</Chip>)}</FocusGroup>
       {query.error ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : !data ? <SkeletonRow layout="poster" count={4} />
-        : data.credits.length ? <FocusGroup className="credit-grid" focusKey="credits:list">{data.credits.map(item => credit(item, 'all'))}</FocusGroup>
+        : data.credits.length ? <FocusGroup className="credit-grid" focusKey="credits:list" data={{ stale: query.isPlaceholderData || undefined }}>{data.credits.map(item => credit(item, 'all'))}</FocusGroup>
         : <Empty icon="film" title="No acting credits available" />}
       {data && (page > 1 || data.has_more) && <div className="lib-chips">
-        <Button focusKey="credits:prev" disabled={page === 1} onEnter={() => change(section || 'all', page - 1)}>Previous</Button>
-        <span>Page {page}</span><Button focusKey="credits:next" disabled={!data.has_more} onEnter={() => change(section || 'all', page + 1)}>Next</Button>
+        <Button focusKey="credits:prev" disabled={page === 1 || query.isPlaceholderData} onEnter={() => change(section || 'all', page - 1)}>Previous</Button>
+        <span>Page {page}</span><Button focusKey="credits:next" disabled={!data.has_more || query.isPlaceholderData} onEnter={() => change(section || 'all', page + 1)}>Next</Button>
       </div>}
     </section>
   </div>
