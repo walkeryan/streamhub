@@ -43,11 +43,19 @@ test('the top bar has one search control; typing in it shows results and keeps t
   await expect(page.getByRole('textbox')).toHaveCount(1)
   await expect(bar.getByRole('link', { name: 'Search', exact: true })).toHaveCount(0)
   const box = searchBox(page)
+  // The box sits after the names, with More and the profile: using it takes room from the gap before it,
+  // and no name in the row moves.
   const field = await rect(page.getByTestId('nav-search'))
-  expect(field.x).toBeLessThan((await rect(page.getByTestId('nav-home'))).x)
+  expect(field.x).toBeGreaterThan((await rect(page.getByTestId('nav-my-list'))).x)
+  expect(field.x).toBeLessThan((await rect(page.getByTestId('nav-more'))).x)
+  const names = async () => Promise.all(['nav-home', 'nav-my-list'].map(async (id) => (await rect(page.getByTestId(id))).x))
+  const before = await names()
   await box.click()
   await expect(page).toHaveURL(/\/search$/)
   await expect(box).toBeFocused()
+  // A click puts the caret in the field. The microphone is its own button and stays off.
+  await expect(box).toHaveAttribute('placeholder', 'Search')
+  expect(await names()).toEqual(before)
   expect(await fits(page)).toBe(true)
 
   // Typing asks once the viewer pauses, not on every letter, and the caret stays in the box.
@@ -56,6 +64,8 @@ test('the top bar has one search control; typing in it shows results and keeps t
   await expect(page.getByTestId('search-titles').getByTestId('tile')).toHaveAttribute('aria-label', 'Harbor Lights')
   await expect(box).toBeFocused()
   await expect(box).toHaveValue('harbor')
+  await expect(page.getByTestId('nav-search-clear')).toBeVisible()
+  expect(await names()).toEqual(before)
   // Only the finished word was asked for: once for what the hub holds, once for what the provider adds
   // (the development build mounts twice, so each may be seen twice here).
   expect((await searches(page)).every((query) => query.includes('q=harbor&'))).toBe(true)
@@ -216,8 +226,8 @@ test('a title that can be requested says so on its tile, and shows its request o
   expect(await api('p1', 'PUT', '/settings/request_manager', { url: 'http://requests.example.test:5055', api_key: 'fixture-manager-key' })).toBe(200)
   expect(await api('p2', 'POST', '/requests', { media_type: 'movie', tmdb_id: 301 })).toBeLessThan(300)
   await page.reload()
-  await expect(cardAction.locator('.ds-glass-status')).toHaveAttribute('data-state', 'pending')
-  await expect(cardAction.locator('..')).toContainText(/Requested|Approved|Searching/)
+  await expect(cardAction.locator('.ds-glass-status')).toHaveCount(0)
+  await expect(tile.getByTestId('request-phase')).toHaveText(/Requested|Approved|Searching/)
   // Its page is where it is asked for and followed.
   await tile.click()
   await expect(page).toHaveURL(/\/title\/tmdb%3Amovie%3A301$/)
@@ -421,12 +431,12 @@ test('Tab walks the bar into the results in page order, and types in the box whe
   await expect(page.getByTestId('search-broadcast')).toHaveAttribute('data-focused', 'true')
   await expect(page.getByTestId('search-titles').getByTestId('tile')).toBeVisible()
   const stops: string[] = []
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 16; i++) {
     await page.keyboard.press('Tab')
     stops.push((await focused(page).getAttribute('data-testid')) ?? '')
     if (stops.at(-1) === 'nav-search') break
   }
-  expect(stops).toEqual(['search-channel', 'tile', 'media-card-actions', 'nav-search'])
+  expect(stops).toEqual(['search-channel', 'tile', 'media-card-actions', 'nav-home', 'nav-live-tv', 'nav-sports', 'nav-movies', 'nav-shows', 'nav-my-list', 'nav-search'])
   await expect(page.getByTestId('nav-search')).toHaveAttribute('data-focused', 'true')
   await expect(searchBox(page)).toBeFocused()
   await page.keyboard.press('Control+a')
@@ -578,15 +588,23 @@ test.describe('on a phone', () => {
 })
 
 for (const form of ['desktop', 'phone'] as const) {
-  test(`typing a phrase while browser voice search listens on ${form}`, async ({ page }) => {
+  test(`the search field types and its microphone button listens on ${form}`, async ({ page }) => {
     if (form === 'phone') await page.setViewportSize(PHONE.viewport)
     await page.addInitScript(() => {
       Object.assign(window, { SpeechRecognition: class { start() {} abort() {} } })
     })
     await enter(page)
     if (form === 'phone') await page.getByTestId('nav-search').click()
+    // The field is a text field: clicking it never turns the microphone on. Its button does.
     await searchBox(page).click()
+    await expect(searchBox(page)).toHaveAttribute('placeholder', 'Search')
+    await expect(searchBox(page)).toBeFocused()
+    await page.getByRole('button', { name: 'Search by voice', exact: true }).click()
     await expect(searchBox(page)).toHaveAttribute('placeholder', 'Listening…')
+    await expect(page.getByRole('button', { name: 'Stop listening', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    // Going back to the field to type turns the microphone off.
+    await searchBox(page).click()
+    await expect(searchBox(page)).toHaveAttribute('placeholder', 'Search')
     await page.keyboard.type('Harbor')
     await expect(page).toHaveURL(/search\?q=Harbor$/)
     await page.keyboard.type(' Lights')

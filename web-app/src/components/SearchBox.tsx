@@ -8,7 +8,7 @@ import { Focusable } from '../nav/Focusable'
 import { setFocus } from '../nav/spatial'
 import { useBackHandler } from '../nav/back'
 import { SEARCH_BOX, useSearchQuery, useSlashToSearch } from '../lib/searchQuery'
-import { inlineVoice, useVoice } from '../lib/voiceSearch'
+import { inlineVoice, useVoice, voiceSource } from '../lib/voiceSearch'
 import { useSession } from '../store/session'
 import { useUi } from '../store/ui'
 
@@ -29,14 +29,18 @@ interface SearchInteraction {
   selectionStart: number | null
   selectionEnd: number | null
   selectionDirection: 'forward' | 'backward' | 'none' | null
-  webKeyboard: boolean
   voiceAttempted: boolean
 }
 
 let interaction: SearchInteraction | null = null
 let handoff: SearchInteraction | null = null
 
-/** Activation starts a single voice query. Moving through the bar and the / shortcut keep the mic off. */
+/**
+ * In a browser the field is a text field: a click, a tap or Enter puts the caret in it, and the microphone
+ * is its own button beside it. Only a TV with a built-in recogniser listens when the field is selected,
+ * where speaking beats an on-screen keyboard; selecting it again types. Moving through the bar and the
+ * / shortcut keep the mic off everywhere.
+ */
 export function SearchBox({ label, page = false }: { label: string; page?: boolean }) {
   const box = useSearchQuery()
   const location = useLocation()
@@ -44,10 +48,10 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
   const input = useRef<HTMLInputElement>(null)
   const entry = useTextEntry(input, { inputMode: 'search' })
   const [typing, setTyping] = useState(prior?.typing ?? false)
-  const [webKeyboard, setWebKeyboardState] = useState(prior?.webKeyboard ?? false)
-  const webKeyboardRef = useRef(webKeyboard)
   const voice = useVoice()
-  const canVoice = inlineVoice()
+  // Selecting the field speaks only in the TV shell; a browser's microphone is the button beside the field.
+  const voiceFirst = entry.shell && inlineVoice()
+  const micButton = voiceSource() !== null && !voiceFirst
   const listening = voice.status === 'listening'
   const key = page ? SEARCH_BOX.page : SEARCH_BOX.bar
   const voiceAttempted = useRef(prior?.voiceAttempted ?? false)
@@ -62,15 +66,9 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
       selectionStart: current?.selectionStart ?? null,
       selectionEnd: current?.selectionEnd ?? null,
       selectionDirection: current?.selectionDirection ?? null,
-      webKeyboard: current?.webKeyboard ?? webKeyboardRef.current,
       voiceAttempted: current?.voiceAttempted ?? voiceAttempted.current,
       ...next,
     }
-  }
-  const setWebKeyboard = (value: boolean) => {
-    webKeyboardRef.current = value
-    remember({ webKeyboard: value })
-    setWebKeyboardState(value)
   }
   const rememberSelection = (el: HTMLInputElement, isFocused = document.activeElement === el) => remember({
     focused: isFocused,
@@ -83,16 +81,11 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
     remember({ voiceAttempted: true })
     if (voice.status === 'listening') flushSync(() => voice.stop())
     const el = input.current
-    if (!entry.shell && canVoice && el?.inputMode === 'none') {
-      // Change the input mode before refocusing so a second tap opens the phone keyboard.
-      if (document.activeElement === el) el.blur()
-      flushSync(() => setWebKeyboard(true))
-      entry.start()
-    } else if (el?.readOnly || document.activeElement !== el) entry.start()
+    if (el?.readOnly || document.activeElement !== el) entry.start()
   }
   const activate = () => {
     if (!box.onSearch) box.submit()
-    if (canVoice && !voiceAttempted.current && !listening && !entry.editing) {
+    if (voiceFirst && !voiceAttempted.current && !listening && !entry.editing) {
       voiceAttempted.current = true
       input.current?.focus({ preventScroll: true })
       voice.start()
@@ -111,8 +104,6 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
   useEffect(() => {
     if (!box.onSearch) {
       voiceAttempted.current = false
-      webKeyboardRef.current = false
-      setWebKeyboardState(false)
       interaction = null
       useVoice.getState().stop()
     }
@@ -140,7 +131,6 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
         selectionStart: el.selectionStart,
         selectionEnd: el.selectionEnd,
         selectionDirection: el.selectionDirection,
-        webKeyboard: webKeyboardRef.current,
         voiceAttempted: voiceAttempted.current,
       }
       handoff = interaction = saved
@@ -190,7 +180,6 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
         selectionStart: interaction?.pathname === pathname.current ? interaction.selectionStart : el.selectionStart,
         selectionEnd: interaction?.pathname === pathname.current ? interaction.selectionEnd : el.selectionEnd,
         selectionDirection: interaction?.pathname === pathname.current ? interaction.selectionDirection : el.selectionDirection,
-        webKeyboard: webKeyboardRef.current,
         voiceAttempted: voiceAttempted.current,
       }
       window.setTimeout(() => {
@@ -251,7 +240,7 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
       data-open={typing || listening || undefined} data-listening={listening || undefined} data-filled={box.text ? true : undefined} aria-current={box.onSearch ? 'page' : undefined}
       onClick={() => { focusSelf(); activate() }}>
       <Icon name={listening ? "mic" : "search"} />
-      <input ref={input} type="text" inputMode={!entry.shell && canVoice && !webKeyboard ? 'none' : entry.inputProps.inputMode} readOnly={entry.inputProps.readOnly} enterKeyHint="search" tabIndex={-1} aria-label={label} autoComplete="off" spellCheck={false}
+      <input ref={input} type="text" inputMode={entry.inputProps.inputMode} readOnly={entry.inputProps.readOnly} enterKeyHint="search" tabIndex={-1} aria-label={label} autoComplete="off" spellCheck={false}
         value={listening ? voice.heard : box.text} placeholder={listening ? 'Listening…' : label}
         onChange={(e) => { voice.stop(); box.setText(e.target.value); rememberSelection(e.target) }} onKeyDown={onKeyDown}
         onKeyUp={(e) => rememberSelection(e.currentTarget)} onPointerUp={(e) => rememberSelection(e.currentTarget)} onSelect={(e) => rememberSelection(e.currentTarget)}
@@ -269,6 +258,9 @@ export function SearchBox({ label, page = false }: { label: string; page?: boole
     </div>
     {box.text && <Focusable focusKey={SEARCH_BOX.clear} className="rail-item rail-icon fx-flat rail-search-action" label="Clear search" title="Clear search"
       data-testid={page ? "search-page-clear" : "nav-search-clear"} onEnter={clear}><Icon name="x" /></Focusable>}
+    {micButton && <Focusable focusKey={SEARCH_BOX.voice} className="rail-item rail-icon fx-flat rail-search-action" label={listening ? 'Stop listening' : 'Search by voice'}
+      title={listening ? 'Stop listening' : 'Search by voice'} aria-pressed={listening} data={{ listening: listening || undefined }} data-testid={page ? "search-page-voice" : "nav-search-voice"}
+      onEnter={() => (listening ? voice.stop() : voice.start())}><Icon name="mic" /></Focusable>}
     <span className="sr-only" role="status">{listening ? 'Listening…' : entry.editing || (typing && !entry.shell) ? 'Typing' : ''}</span>
     </>
   )
