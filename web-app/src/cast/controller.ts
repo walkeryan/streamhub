@@ -41,7 +41,8 @@ export function setCastSession(next: CastSession | null) {
   else if (outstanding && Date.now() - outstanding.at > (outstanding.payload.action === 'load' ? 100_000 : 30_000)) problem = 'The TV has not confirmed the command. Retry or disconnect.'
   else if (outstanding?.seq === null || (!next && !old.session)) problem = old.problem
   remember(next?.id ?? null)
-  useCastController.setState({ session: next, restoring: false, problem, outstanding: complete && !problem ? null : outstanding })
+  // An acknowledged command is over, whether it worked or not: only one still on its way holds the next one back.
+  useCastController.setState({ session: next, restoring: false, problem, outstanding: complete ? null : outstanding })
 }
 useSession.subscribe((next, prev) => {
   if (next.generation === prev.generation && next.profile?.id === prev.profile?.id) return
@@ -49,9 +50,10 @@ useSession.subscribe((next, prev) => {
   useCastController.setState({ session: null, restoring: false, outstanding: null, problem: null })
 })
 export async function sendCastCommand(payload: CommandBody, retry = false) {
-  const { session, outstanding } = useCastController.getState()
+  const { session, outstanding, problem } = useCastController.getState()
   if (!session || session.status !== 'connected') return
-  if (!retry && outstanding) {
+  // A command that was refused, failed or timed out is kept only so Retry can resend it: a new one replaces it.
+  if (!retry && outstanding && !problem) {
     useUi.getState().toast('Waiting for the TV. Open TV controls to retry or disconnect.')
     return
   }

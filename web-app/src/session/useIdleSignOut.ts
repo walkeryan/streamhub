@@ -4,7 +4,7 @@ import { useProfilePreference } from '../api/profilePreferences'
 import { queryClient } from '../api/queryClient'
 import { nativeCastAvailable, receiverPlayback } from '../player/castNative'
 import { useCastController } from '../cast/controller'
-import { shellBridge } from '../shell'
+import { inShell, shellBridge } from '../shell'
 import { useWho } from '../store/who'
 import { idleExpired, idleSessionId } from './idleClock'
 
@@ -81,7 +81,10 @@ export function useIdleSignOut(sharedDevice: boolean | undefined) {
       remember(Date.now())
       useWho.getState().reset()
     }
-    const expire = () => sharedDevice ? returnToPicker() : signOut()
+    // The limit is the profile's and follows it to every device. A TV that is one person's own is not a
+    // browser left open: signing it out would unpair it, so there the limit only starts again. A shared TV
+    // still returns to the picker.
+    const expire = () => sharedDevice ? returnToPicker() : inShell() ? remember(Date.now()) : signOut()
     function expired(now: number) {
       last = Math.max(last, Number(localStorage.getItem(key)) || 0)
       return idleExpired(last, limit, now)
