@@ -1,4 +1,5 @@
 import { init, setFocus, getCurrentFocusKey, doesFocusableExist } from '@noriginmedia/norigin-spatial-navigation-core'
+import { watchHeldEnter } from './hold'
 
 let started = false
 
@@ -50,6 +51,7 @@ function tabThroughControls(event: KeyboardEvent): void {
 export function startSpatialNavigation(): void {
   if (started) return
   started = true
+  watchHeldEnter()
   window.addEventListener('keydown', preserveBrowserHistoryShortcut, true)
   window.addEventListener('keydown', tabThroughControls, true)
   window.addEventListener('keyup', preserveBrowserHistoryShortcut, true)

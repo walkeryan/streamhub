@@ -1,19 +1,17 @@
 import type { ReactNode } from 'react'
-import { AvailabilityCorner } from '../ds/Tiles'
 import { Focusable } from '../nav/Focusable'
 import { SafeImg, Initials } from './SafeImg'
 import { ProgressBar } from './ui'
 
 /** A single remote target: real artwork above, persistent programme metadata below. */
-export function FeatureCard({ focusKey, href, label, title, eyebrow, art, logo, fallbackName, badge, available, progress, onEnter, onFocus, testId, children, role = 'link' }: {
+export function FeatureCard({ focusKey, href, label, title, eyebrow, art, logo, fallbackName, badge, progress, onEnter, onFocus, testId, children, role = 'link' }: {
   focusKey: string; href?: string; label: string; title: string; eyebrow: string; art?: string | null; logo?: string | null;
-  fallbackName: string; badge?: string; available?: boolean; progress?: number | null; onEnter: () => void; onFocus?: () => void; testId?: string; children?: ReactNode; role?: 'link' | 'button';
+  fallbackName: string; badge?: string; progress?: number | null; onEnter: () => void; onFocus?: () => void; testId?: string; children?: ReactNode; role?: 'link' | 'button';
 }) {
   const fallback = logo ? <SafeImg className="feature-logo" src={logo} alt="" loading="lazy" fallback={<Initials name={fallbackName} />} /> : <Initials name={fallbackName} />
   return <Focusable focusKey={focusKey} href={href} className="feature-card fx-flat" role={role} label={label} onEnter={onEnter} onFocus={onFocus} data-testid={testId}>
     <div className="feature-art">
       <SafeImg className="feature-image" src={art} alt="" loading="lazy" decoding="async" fallback={fallback} />
-      {available && <AvailabilityCorner />}
       {badge && <span className="feature-status">{badge}</span>}
       {typeof progress === 'number' && <div className="feature-progress"><ProgressBar label={`Programme progress · ${title}`} pct={progress} /></div>}
     </div>

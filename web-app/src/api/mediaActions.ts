@@ -43,7 +43,8 @@ export function useMediaActions(tile: Tile, enabled = true) {
   }
   return {
     vote: state.data?.vote ?? null, saved: state.data?.saved ?? false,
-    canRemove: me.data?.role?.id === 'owner' && tile.sources.some(source => source.playable_in_app),
+    // A channel is taken off screens in the channel lineup, never out of the library.
+    canRemove: me.data?.role?.id === 'owner' && tile.kind !== 'channel' && tile.sources.some(source => source.playable_in_app),
     ready: state.isSuccess, busy: perform.isPending, error: state.error, retry: () => void state.refetch(),
     rate: (vote: MediaVote) => run(async () => {
       const previous = state.data?.vote ?? null

@@ -1,0 +1,23 @@
+/* The "Controls and shortcuts" dialog (player/ShortcutHelp.tsx). It opens from Settings as well as from
+   the player, so its styles load with the component, not with the player. */
+.shortcut-guide { min-height: 0; max-height: clamp(6rem, 48dvh, 28rem); overflow: auto; padding: .6rem; }
+.shortcut-instructions { display: grid; gap: .75rem; }
+.keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem 2rem; }
+.keys section { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.keys section:first-child { grid-row: span 2; }
+.keys-line { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); gap: 0.75rem; align-items: center; font-size: var(--text-label); }
+.keys-line > span:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; }
+/* The controller's buttons: the whole width, its lines in two columns where there is room. */
+.keys .keys-pad { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem 2rem; }
+.keys-pad > h3 { grid-column: 1 / -1; }
+.kbd {
+  font-family: inherit; display: inline-flex; align-items: center; justify-content: center; min-width: 1.625rem; height: 1.625rem; padding: 0 0.4375rem;
+  border-radius: var(--radius-sm); background: var(--t-surface-alt); border: 1px solid color-mix(in srgb, var(--t-text) 24%, transparent);
+  font-size: var(--text-label); font-weight: 600; white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .keys { grid-template-columns: minmax(0, 1fr); }
+  .keys section:first-child { grid-row: auto; }
+  .keys .keys-pad { grid-template-columns: minmax(0, 1fr); }
+}

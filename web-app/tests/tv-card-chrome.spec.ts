@@ -55,35 +55,47 @@ for (const width of [1920, 390]) {
     const available = first.getByRole('img', { name: 'Available to watch' })
     await expect(available).toBeVisible()
     await expect(second.getByTestId('tile-available')).toHaveCount(0)
-    await expect(second.getByTestId('request-phase')).toHaveCount(0)
+    // A request says where it is on the tile itself; the menu button carries no status of its own.
+    const phase = second.getByTestId('request-phase')
+    await expect(phase).toHaveText('Searching')
     await expect(action.locator('.ds-glass-status')).toHaveCount(0)
-    await expect(available).toHaveCSS('background-color', 'rgb(237, 155, 22)')
-    await expect(available).toHaveCSS('clip-path', 'polygon(0px 0px, 100% 0px, 100% 100%)')
+    await expect(requestAction.locator('.ds-glass-status')).toHaveCount(0)
+    // "Plays here" is the green tick inside the art's top right corner, never the accent of focus and progress.
+    await expect(available).not.toHaveCSS('background-color', 'rgb(237, 155, 22)')
     const corner = await bounds(available), art = await bounds(first.getByTestId('tile'))
-    expect(Math.abs(corner.x + corner.width - art.x - art.width)).toBeLessThanOrEqual(2)
-    expect(Math.abs(corner.y - art.y)).toBeLessThanOrEqual(2)
-    await expect(requestAction.locator('.ds-glass-status')).toHaveAttribute('data-state', 'pending')
+    expect(art.x + art.width - corner.x - corner.width).toBeGreaterThanOrEqual(0)
+    expect(art.x + art.width - corner.x - corner.width).toBeLessThanOrEqual(12)
+    expect(corner.y - art.y).toBeGreaterThanOrEqual(0)
+    expect(corner.y - art.y).toBeLessThanOrEqual(12)
+    // The button stays out of the picture until the card has the pointer or the focus.
+    const idle = cards.nth(2)
+    await expect(idle.getByTestId('tile')).toHaveAttribute('data-focused', 'false')
+    await expect(idle.locator('.media-card-menu')).toHaveCSS('opacity', '0')
     const libraryOverlap = intersects(await bounds(action), corner)
-    const pending = await bounds(requestAction.locator('.ds-glass-status'))
-    const requestButton = await bounds(requestAction)
-    const requestOverlap = pending.x < requestButton.x || pending.y < requestButton.y
-      || pending.x + pending.width > requestButton.x + requestButton.width
-      || pending.y + pending.height > requestButton.y + requestButton.height
+    const requestOverlap = intersects(await bounds(requestAction), await bounds(phase))
     await focus(page, 'search::tmdb:movie:103')
     if (dir) await page.screenshot({ path: `${dir}/${stage}-search-${width}.png` })
     if (stage !== 'before') {
+      await expect(first.locator('.media-card-menu')).toHaveCSS('opacity', '1')
       if (width === 1920) {
+        // Up leaves the card for whatever is above it, never for the card's own button.
         await page.keyboard.press('ArrowUp')
-        await expect(action).toHaveAttribute('data-focused', 'true')
-        await page.keyboard.press('ArrowDown')
-        await expect(first.getByTestId('tile')).toHaveAttribute('data-focused', 'true')
-        await page.keyboard.press('ArrowUp')
-        await page.keyboard.press('Enter')
+        await expect(action).toHaveAttribute('data-focused', 'false')
+        await expect(first.getByTestId('tile')).toHaveAttribute('data-focused', 'false')
+        await focus(page, 'search::tmdb:movie:103')
+        // Holding OK opens the menu; the key coming up afterwards presses nothing in it.
+        await page.keyboard.down('Enter')
+        await expect(page.getByText('Add to My List', { exact: true })).toBeVisible()
+        await page.keyboard.up('Enter')
+        await expect(page).toHaveURL(/\/search\?q=north$/)
       } else {
         await action.click()
       }
       await expect(page.getByText('Add to My List', { exact: true })).toBeVisible()
+      await expect(page.getByRole('menuitem', { name: 'Open', exact: true })).toHaveAttribute('data-focused', 'true')
       await page.keyboard.press('Escape')
+      // Focus goes back to what opened the menu: the card after a hold, the button after a click.
+      await expect(width === 1920 ? first.getByTestId('tile') : action).toHaveAttribute('data-focused', 'true')
     }
     await page.goto('/title/tmdb%3Amovie%3A104')
     const watch = page.getByTestId('title-watchlist')
@@ -139,3 +151,39 @@ for (const width of [1920, 390]) {
     expect(caption.y + caption.height).toBeLessThanOrEqual((await page.evaluate(() => innerHeight)) + 1)
   })
 }
+
+test.describe('a finger', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+
+  test('pressing and holding a card opens its menu, a tap opens the card, and no button sits on the picture', async ({ page }) => {
+    await fixtures(page)
+    await page.goto('/search?q=north')
+    const card = page.locator('.search-grid > .media-card').nth(2), tile = card.getByTestId('tile')
+    await expect(tile).toBeVisible()
+    await expect(card.locator('.media-card-menu')).toHaveCSS('opacity', '0')
+    await expect(card.locator('.media-card-menu')).toHaveCSS('pointer-events', 'none')
+    const at = await bounds(tile)
+    const point = { clientX: at.x + at.width / 2, clientY: at.y + at.height / 2, pointerType: 'touch', bubbles: true }
+    const entry = page.getByRole('menuitem', { name: 'Thumbs up', exact: true })
+
+    // A finger that moves is scrolling: nothing opens.
+    await tile.dispatchEvent('pointerdown', point)
+    await tile.dispatchEvent('pointermove', { ...point, clientY: point.clientY + 40 })
+    await page.waitForTimeout(800)
+    await expect(entry).toBeHidden()
+    await tile.dispatchEvent('pointerup', point)
+
+    // Held still, the menu opens, and lifting the finger afterwards is not a tap on the card.
+    await tile.dispatchEvent('pointerdown', point)
+    await expect(entry).toBeVisible()
+    await tile.dispatchEvent('pointerup', point)
+    await tile.dispatchEvent('click', { bubbles: true, cancelable: true })
+    await expect(entry).toBeVisible()
+    await expect(page).toHaveURL(/\/search\?q=north$/)
+    await page.keyboard.press('Escape')
+    await expect(entry).toBeHidden()
+
+    await tile.tap()
+    await expect(page).toHaveURL(/\/title\/tmdb%3Amovie%3A105$/)
+  })
+})

@@ -106,7 +106,7 @@ export function EpisodeCard({ e, current, onOpen }: { e: EpisodeTile; current: b
     <MediaCardActions tile={e} className="media-card-landscape" cardKey={cardKey} menuKey={`episodes:actions:${e.id}`}>
       <StillCard focusKey={cardKey} href={openPath(e)} className="tp-ep" current={current} testId="episode" onEnter={onOpen}
         label={`${number}${name}${e.runtime_min ? `, ${e.runtime_min} min` : ''}${pct >= 100 ? ', watched' : ''}`}
-        image={e.backdrop ?? e.poster} fallbackName={name} progressPct={pct} watched={pct >= 100} available={e.sources.some(s => s.playable_in_app)}
+        image={e.backdrop ?? e.poster} fallbackName={name} progressPct={pct} watched={pct >= 100}
         title={`${number}${name}`} meta={e.runtime_min ? `${e.runtime_min} min` : undefined} />
     </MediaCardActions>
   )

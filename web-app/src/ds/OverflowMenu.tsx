@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { FocusGroup, Focusable, type FocusableHandle } from '../nav/Focusable'
 import { Popover } from '../components/ChipMenu'
 import { Button, Modal } from '../components/ui'
@@ -15,7 +15,12 @@ export interface OverflowItem {
   keepOpen?: boolean
   /** Filled glyph while pressed (the heart). */
   fillWhenPressed?: boolean
+  /** Removes or deletes: drawn in the danger colour. Keep these in a last group of their own. */
+  danger?: boolean
 }
+
+/** For an owner that opens the menu another way than its button (a card: holding OK, the Menu key). */
+export interface OverflowMenuHandle { open: () => void }
 
 /**
  * The ⋯ button and the seldom-used actions behind it. A short list under the button on a TV or a desktop
@@ -23,17 +28,19 @@ export interface OverflowItem {
  * from the bottom edge, with Close, on a phone. Focus keys: the button is `focusKey`, the list
  * `${menuKey}`, each item `${menuKey}:${item.key}`. Renders nothing when there are no items.
  */
-export function OverflowMenu({ focusKey, menuKey, items, title, label = 'More actions', tip = 'More', icon = 'dots', status, testId, menuTestId, size, onOpenChange }: {
+export function OverflowMenu({ focusKey, menuKey, items, title, label = 'More actions', tip = 'More', icon = 'dots', status, testId, menuTestId, size, onOpenChange, controls }: {
   focusKey: string; menuKey: string; items: OverflowItem[]
   /** The sheet's heading on a phone (usually the title's name). */
   title: string
   label?: string; tip?: string; icon?: IconName; status?: 'active' | 'pending' | 'busy' | 'error'; testId?: string; menuTestId?: string; size?: GlassSize; onOpenChange?: (open: boolean) => void
+  controls?: Ref<OverflowMenuHandle>
 }) {
   const phone = usePhone()
   const [open, setOpen] = useState(false)
   const button = useRef<FocusableHandle>(null)
-  if (!items.length) return null
   const changeOpen = (next: boolean) => { setOpen(next); onOpenChange?.(next) }
+  useImperativeHandle(controls, () => ({ open: () => changeOpen(true) }))
+  if (!items.length) return null
   const run = (item: OverflowItem) => {
     if (item.keepOpen) return item.onEnter()
     changeOpen(false)
@@ -44,7 +51,7 @@ export function OverflowMenu({ focusKey, menuKey, items, title, label = 'More ac
     <FocusGroup focusKey={menuKey} boundary className="ds-menu-list" role="menu" label={label} data-testid={menuTestId}>
       {items.map((item, i) => <span key={item.key} style={{ display: 'contents' }}>
         {i > 0 && (item.group ?? 0) !== (items[i - 1]!.group ?? 0) && <hr className="ds-menu-sep" />}
-        <Focusable focusKey={`${menuKey}:${item.key}`} className="ds-menu-item" role="menuitem" label={item.label} aria-pressed={item.pressed} disabled={item.disabled}
+        <Focusable focusKey={`${menuKey}:${item.key}`} className="ds-menu-item" data={{ danger: item.danger || undefined }} role="menuitem" label={item.label} aria-pressed={item.pressed} disabled={item.disabled}
           data-testid={item.testId} onEnter={() => run(item)}>
           <Icon name={item.icon} filled={item.fillWhenPressed && item.pressed ? true : undefined} /><span>{item.label}</span>
         </Focusable>

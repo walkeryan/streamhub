@@ -84,8 +84,11 @@ export function Popover({ anchor, firstFocusKey, onClose, children, className }:
     }
     place()
     window.addEventListener('resize', place)
+    // A list that fills in after it opens (a card's actions load then) is placed again at its real size.
+    const grown = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place)
+    if (box.current) grown?.observe(box.current)
     document.body.classList.add('no-scroll')
-    return () => { window.removeEventListener('resize', place); document.body.classList.remove('no-scroll') }
+    return () => { window.removeEventListener('resize', place); grown?.disconnect(); document.body.classList.remove('no-scroll') }
   }, [anchor])
   return createPortal(
     <div className="chip-menu-scrim" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
